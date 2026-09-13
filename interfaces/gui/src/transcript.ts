@@ -211,7 +211,7 @@ function itemParts(item: TranscriptItem, results: Map<string, ToolOutcome>): Par
  * accumulate into one message and share one avatar. A user item starts
  * the next group.
  */
-export function toMessages(items: TranscriptItem[]): ThreadMessageLike[] {
+export function toMessages(items: TranscriptItem[], sessionId?: string): ThreadMessageLike[] {
   const results = new Map(
     items
       .filter(
@@ -225,7 +225,16 @@ export function toMessages(items: TranscriptItem[]): ThreadMessageLike[] {
 
   items.forEach((item, index) => {
     if (item.role === "tool") return;
-    const parts = itemParts(item, results);
+    const parts = itemParts(item, results).map((part) => {
+      if ((part as any).type === "image" && sessionId) {
+        const image = (part as any).image as string;
+        const marker = "/api/attachments/";
+        if (image.startsWith(marker) && !image.includes("session_id=")) {
+          return { ...(part as any), image: `${image}?session_id=${encodeURIComponent(sessionId)}` } as Part;
+        }
+      }
+      return part;
+    });
 
     if (item.role === "assistant" && open) {
       open.content.push(...parts);

@@ -84,6 +84,6 @@
 
 ## Session 与附件
 
-成功轮次会追加到 `~/.nosis/sessions/<SESSION_ID>/<SESSION_ID>.jsonl`，完整上下文、Tool Result 和模型响应均可恢复。超过回灌上限的 Tool Result 保存为同目录下的 `<TOOL_CALL_ID>.txt`；使用 `nosis --session SESSION_ID` 恢复。
+成功轮次会追加到 `~/.nosis/sessions/<SESSION_ID>/<SESSION_ID>.jsonl`，完整上下文、Tool Result 和模型响应均可恢复。同目录的 `session.json` 保存该 Session 绑定的绝对 Workspace，TUI/GUI 恢复时始终使用这个目录。超过回灌上限的 Tool Result 保存为同目录下的 `<TOOL_CALL_ID>.txt`；使用 `nosis --session SESSION_ID` 恢复。
 
 GUI 上传的图片保存在 Workspace 的 `.nosis/attachments/<id>.<ext>`，Session 只记录路径和 MIME 类型。Runtime 请求 Provider 时才读取图片，并通过 `LLMRequest(media_root=workspace.path)` 解析工作区路径。

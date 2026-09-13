@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent } from "react";
 import {
   AssistantRuntimeProvider, ComposerPrimitive, MessagePrimitive,
   ThreadPrimitive, useAuiState, useExternalStoreRuntime,
@@ -78,7 +78,7 @@ export function Chat({ session, disabled, models, model, onModelChange, onBusyCh
   const noticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const turnCounter = useRef(0);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const messages = useMemo(() => toMessages(items), [items]);
+  const messages = useMemo(() => toMessages(items, session.session_id), [items, session.session_id]);
 
   // Socket callbacks fire outside React's render, so the transcript and
   // turn state they fold onto are kept in refs.
@@ -95,12 +95,16 @@ export function Chat({ session, disabled, models, model, onModelChange, onBusyCh
   useEffect(() => {
     socketRef.current?.close();
     socketRef.current = null;
+    // Establish the bridge as soon as the session is mounted.  The GUI and
+    // runtime therefore come up together; sending a prompt is no longer what
+    // starts the agent process.
+    if (!disabled && model) connect();
     return () => {
       socketRef.current?.close();
       socketRef.current = null;
       if (noticeTimeoutRef.current) clearTimeout(noticeTimeoutRef.current);
     };
-  }, [model]);
+  }, [model, disabled, session.session_id]);
 
   const showNotice = useCallback((next: Notice, transient = false) => {
     if (noticeTimeoutRef.current) clearTimeout(noticeTimeoutRef.current);
@@ -189,7 +193,7 @@ export function Chat({ session, disabled, models, model, onModelChange, onBusyCh
     let attachments: ImageAttachment[] = [];
     if (pendingFiles.length) {
       try {
-        attachments = await uploadAttachments(pendingFiles);
+      attachments = await uploadAttachments(pendingFiles, session.session_id);
       } catch (error) {
         showNotice({ level: "error", text: String(error) });
         return;
@@ -230,6 +234,23 @@ export function Chat({ session, disabled, models, model, onModelChange, onBusyCh
     setApproval(null);
   }
 
+  /**
+   * Browsers expose pasted screenshots/images through clipboardData.items,
+   * rather than the textarea's value.  Capture those files and feed them
+   * through the same pending-attachment queue used by the paperclip picker.
+   * Keep normal text paste untouched; only suppress the browser default when
+   * the clipboard contains an image and no textual payload.
+   */
+  function onPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
+    const files = Array.from(event.clipboardData.items)
+      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => file !== null);
+    if (files.length === 0) return;
+    setPendingFiles((previous) => [...previous, ...files]);
+    if (!event.clipboardData.getData("text/plain")) event.preventDefault();
+  }
+
   const runtime = useExternalStoreRuntime({ messages, convertMessage: (message) => message, isRunning: running, isDisabled: disabled, onNew });
 
   return <AssistantRuntimeProvider runtime={runtime}>
@@ -247,7 +268,7 @@ export function Chat({ session, disabled, models, model, onModelChange, onBusyCh
           {!approval && <button className="stop-button" aria-label="停止执行" onClick={() => socketRef.current?.send({ type: "cancel" })}><Square size={11} /> 停止</button>}
         </div>}
         {pendingFiles.length > 0 && <div className="attachment-list" aria-label="待发送图片">{pendingFiles.map((file) => <span key={`${file.name}-${file.lastModified}`} className="attachment-chip"><ImagePlus size={13} />{file.name}</span>)}</div>}
-        <ComposerPrimitive.Root className="composer"><ComposerPrimitive.Input placeholder="Ask Nosis…" aria-label="消息" rows={2} autoFocus /><div className="composer-bottom">
+        <ComposerPrimitive.Root className="composer"><ComposerPrimitive.Input placeholder="Ask Nosis…" aria-label="消息" rows={2} autoFocus onPaste={onPaste} /><div className="composer-bottom">
           <button type="button" className="attachment-button" aria-label="添加图片" title="添加图片" disabled={disabled || running} onClick={() => fileInputRef.current?.click()}><Paperclip size={15} /></button>
           <input ref={fileInputRef} className="attachment-input" type="file" accept="image/*" multiple onChange={(event) => { setPendingFiles((files) => [...files, ...Array.from(event.target.files ?? [])]); event.currentTarget.value = ""; }} />
           <label className="model-selector" title={models.find((option) => option.id === model)?.model}>

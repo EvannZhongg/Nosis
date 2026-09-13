@@ -5,7 +5,7 @@ from pathlib import Path
 from .llm import LLMRequest, LLMResponse
 from .session import Message, Session
 from .content import ImagePart, TextPart
-from .session_paths import default_sessions_directory, session_log_path
+from .session_paths import default_sessions_directory, session_directory, session_log_path
 from .tools import ToolCall
 
 
@@ -43,8 +43,9 @@ class JsonlSessionStore:
 
     def load(self, session_id: str) -> Session:
         path = self._session_path(session_id)
+        workspace = self.workspace_for(session_id)
         if not path.exists():
-            return Session(session_id=session_id)
+            return Session(session_id=session_id, workspace=workspace)
 
         items = []
         archived_summary = None
@@ -68,9 +69,31 @@ class JsonlSessionStore:
         return Session(
             session_id=session_id,
             items=items,
+            workspace=workspace,
             archived_summary=archived_summary,
             archived_item_count=min(max(archived_item_count, 0), len(items)),
         )
+
+    def bind_workspace(self, session_id: str, workspace: Path) -> None:
+        """Persist the workspace associated with a session."""
+        path = self._metadata_path(session_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        resolved = workspace.expanduser().resolve()
+        path.write_text(
+            json.dumps({"session_id": session_id, "workspace": str(resolved)}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    def workspace_for(self, session_id: str) -> str | None:
+        path = self._metadata_path(session_id)
+        if not path.is_file():
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise ValueError(f"invalid session metadata: {session_id!r}") from error
+        value = data.get("workspace") if isinstance(data, dict) else None
+        return value if isinstance(value, str) and value else None
 
     def append_turn(
         self,
@@ -140,6 +163,9 @@ class JsonlSessionStore:
 
     def _session_path(self, session_id: str) -> Path:
         return session_log_path(self._directory, session_id)
+
+    def _metadata_path(self, session_id: str) -> Path:
+        return session_directory(self._directory, session_id) / "session.json"
 
 
 def _session_title(path: Path, session_id: str) -> str:

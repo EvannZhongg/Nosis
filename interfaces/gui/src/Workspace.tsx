@@ -2,14 +2,15 @@ import { useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, File, Folder, FolderOpen, RefreshCw } from "lucide-react";
 import { get, type Directory } from "./api";
 
-function DirectoryTree({ path, version }: { path: string; version: number }) {
+function DirectoryTree({ path, version, sessionId }: { path: string; version: number; sessionId?: string }) {
   const [directory, setDirectory] = useState<Directory>();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [error, setError] = useState("");
 
   useEffect(() => {
     let active = true;
-    get<Directory>(`/api/workspace?path=${encodeURIComponent(path)}`).then((data) => {
+    const query = `path=${encodeURIComponent(path)}${sessionId ? `&session_id=${encodeURIComponent(sessionId)}` : ""}`;
+    get<Directory>(`/api/workspace?${query}`).then((data) => {
       if (active) { setDirectory(data); setError(""); }
     }).catch((error) => { if (active) setError(String(error)); });
     return () => { active = false; };
@@ -39,7 +40,7 @@ function DirectoryTree({ path, version }: { path: string; version: number }) {
                 {isOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
                 {isOpen ? <FolderOpen size={15} /> : <Folder size={15} />}<span>{entry.name}</span>
               </button>
-              {isOpen && <DirectoryTree path={childPath} version={version} />}
+              {isOpen && <DirectoryTree path={childPath} version={version} sessionId={sessionId} />}
             </> : <div className="tree-entry file-entry" title={childPath}><File size={15} /><span>{entry.name}</span>{entry.type === "symlink" && <span>↗</span>}</div>}
           </li>;
         })}
@@ -49,11 +50,11 @@ function DirectoryTree({ path, version }: { path: string; version: number }) {
   );
 }
 
-export function Workspace({ version }: { version: number }) {
+export function Workspace({ version, sessionId }: { version: number; sessionId?: string }) {
   const [refresh, setRefresh] = useState(0);
   return <aside className="workspace-panel" aria-label="Workspace">
     <header className="workspace-header"><span>Workspace</span><button className="icon-button" aria-label="刷新目录" onClick={() => setRefresh((value) => value + 1)}><RefreshCw size={14} /></button></header>
-    <div className="workspace-files"><DirectoryTree path="." version={version + refresh} /></div>
+    <div className="workspace-files"><DirectoryTree path="." version={version + refresh} sessionId={sessionId} /></div>
     <div className="workspace-footer"><Folder size={13} /> 项目文件</div>
   </aside>;
 }

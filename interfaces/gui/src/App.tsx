@@ -8,7 +8,8 @@ import { get, sessionUrl, type ModelOption, type ModelOptions, type Session, typ
 export function App() {
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [session, setSession] = useState<Session>(() => ({ session_id: crypto.randomUUID(), items: [] }));
-  const [busy, setBusy] = useState(false);
+  const [chatSessions, setChatSessions] = useState<Session[]>([]);
+  const [busyBySession, setBusyBySession] = useState<Record<string, boolean>>({});
   const [usage, setUsage] = useState<Usage | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -38,7 +39,9 @@ export function App() {
     setLoading(true);
     setError("");
     try {
-      setSession(await get<Session>(sessionUrl(id)));
+      const loaded = await get<Session>(sessionUrl(id));
+      setSession(loaded);
+      setChatSessions((all) => all.some((item) => item.session_id === id) ? all.map((item) => item.session_id === id ? loaded : item) : [...all, loaded]);
     } catch (error) {
       setError(String(error));
     } finally {
@@ -47,20 +50,23 @@ export function App() {
   }
 
   const selectedTitle = sessions.find((item) => item.session_id === session.session_id)?.title ?? "New chat";
+  const busy = Boolean(busyBySession[session.session_id]);
 
   return (
     <div className="app-shell">
       <aside className="sessions-panel" aria-label="Sessions">
         <div className="brand"><span>Nosis<span className="brand-dot">.</span></span></div>
-        <button className="new-chat" disabled={busy || loading} onClick={() => {
-          setSession({ session_id: crypto.randomUUID(), items: [] });
+        <button className="new-chat" disabled={loading} onClick={() => {
+          const fresh = { session_id: crypto.randomUUID(), items: [] };
+          setSession(fresh);
+          setChatSessions((all) => [...all, fresh]);
           setError("");
         }}><Plus size={17} /> New chat</button>
         <div className="section-label">Sessions <span>{sessions.length}</span></div>
         <nav className="session-list">
           {sessions.map((item) => (
             <button key={item.session_id} className={`session-button ${item.session_id === session.session_id ? "selected" : ""}`}
-              title={item.title} disabled={busy || loading} onClick={() => void selectSession(item.session_id)}>
+              title={item.title} disabled={loading} onClick={() => void selectSession(item.session_id)}>
               <MessageSquare size={15} /><span>{item.title}</span>
             </button>
           ))}
@@ -72,13 +78,14 @@ export function App() {
       <main className="chat-panel">
         <header className="chat-header"><div className="breadcrumb">Chat <ChevronRight size={14} /><span>{selectedTitle}</span></div><span className="status-label"><span className={`status-dot ${busy ? "working" : ""}`} />{busy ? "Working" : "Ready"}{usage?.total_tokens ? ` · ${usage.total_tokens} tokens` : ""}</span></header>
         {error && <div className="error-banner" role="alert">{error}</div>}
-        <Chat key={session.session_id} session={session} disabled={loading || !model}
-          models={models} model={model} onModelChange={setModel} onBusyChange={setBusy} onUsageChange={setUsage} onTurnEnd={() => {
+        {/** Keep every mounted chat/socket alive so switching sessions does not cancel work. */}
+        {(chatSessions.length ? chatSessions : [session]).map((current) => <div key={current.session_id} style={{ display: current.session_id === session.session_id ? "contents" : "none" }}><Chat session={current} disabled={loading || !model}
+          models={models} model={model} onModelChange={setModel} onBusyChange={(value) => setBusyBySession((all) => ({ ...all, [current.session_id]: value }))} onUsageChange={(value) => { if (current.session_id === session.session_id) setUsage(value); }} onTurnEnd={() => {
           void refreshSessions();
           setWorkspaceVersion((value) => value + 1);
-        }} />
+        }} /></div>)}
       </main>
-      <Workspace version={workspaceVersion} />
+      <Workspace version={workspaceVersion} sessionId={session.session_id} />
     </div>
   );
 }

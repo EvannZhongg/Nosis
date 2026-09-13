@@ -140,18 +140,36 @@ def create_app(
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
 
+    def session_workspace(session_id: str | None) -> Workspace:
+        """Resolve the workspace bound to a session, falling back for new sessions."""
+        if session_id:
+            bound = store.workspace_for(session_id)
+            if bound:
+                try:
+                    return Workspace(Path(bound))
+                except (OSError, ValueError) as error:
+                    raise HTTPException(status_code=400, detail=str(error)) from error
+            # Bind a newly-created session before any attachment or turn is sent.
+            store.bind_workspace(session_id, workspace.path)
+        return workspace
+
     @app.get("/api/workspace")
-    def get_workspace(path: str = ".") -> dict[str, object]:
+    def get_workspace(path: str = ".", session_id: str | None = None) -> dict[str, object]:
+        current_workspace = session_workspace(session_id)
         try:
-            listing = ListDirectoryTool(workspace).execute({"path": path})
+            listing = ListDirectoryTool(current_workspace).execute({"path": path})
         except (OSError, ValueError) as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
-        return {"root": str(workspace.path), **listing}
+        return {"root": str(current_workspace.path), **listing}
 
     @app.post("/api/attachments")
-    async def upload_attachments(files: list[UploadFile] = File(...)) -> dict[str, object]:
+    async def upload_attachments(
+        files: list[UploadFile] = File(...),
+        session_id: str | None = None,
+    ) -> dict[str, object]:
         """Persist browser images as workspace-relative attachment paths."""
-        attachment_root = (workspace.path / ".nosis" / "attachments").resolve()
+        current_workspace = session_workspace(session_id)
+        attachment_root = (current_workspace.path / ".nosis" / "attachments").resolve()
         attachment_root.mkdir(parents=True, exist_ok=True)
         attachments = []
         for upload in files:
@@ -179,8 +197,8 @@ def create_app(
         return {"attachments": attachments}
 
     @app.get("/api/attachments/{filename}")
-    def get_attachment(filename: str) -> FileResponse:
-        attachment_root = (workspace.path / ".nosis" / "attachments").resolve()
+    def get_attachment(filename: str, session_id: str | None = None) -> FileResponse:
+        attachment_root = (session_workspace(session_id).path / ".nosis" / "attachments").resolve()
         path = (attachment_root / filename).resolve()
         try:
             path.relative_to(attachment_root)
@@ -209,9 +227,13 @@ def create_app(
         # connection a private key and let the bridge allocate its id.
         try:
             opening = await websocket.receive_json()
+            opening_session_id = opening.get("session_id") if isinstance(opening, dict) else None
+            if opening_session_id is not None and not isinstance(opening_session_id, str):
+                opening_session_id = None
+            current_workspace = session_workspace(opening_session_id)
             start = _start_message(
                 opening,
-                workspace,
+                current_workspace,
                 provider_config_path,
                 agent_config_path,
                 models,
@@ -255,7 +277,7 @@ def create_app(
                 await websocket.close()
                 return
 
-            bridge = await BridgeProcess.spawn(workspace)
+            bridge = await BridgeProcess.spawn(current_workspace)
             bridge.send(start)
             try:
                 await _relay(websocket, bridge)

@@ -28,6 +28,10 @@ class Message:
 class Session:
     session_id: str = field(default_factory=lambda: str(uuid4()))
     items: list[Message] = field(default_factory=list)
+    # Absolute workspace directory bound to this session.  Kept as metadata
+    # separate from transcript items so switching sessions never changes the
+    # runtime's working directory.
+    workspace: str | None = None
     # Number of transcript items represented by ``archived_summary``.
     # Keeping the complete transcript here lets UIs render history while the
     # agent sends only the unarchived tail to the model.

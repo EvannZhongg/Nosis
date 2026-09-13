@@ -10,7 +10,7 @@ export type SessionItem = {
   reasoning?: string | null;
 };
 
-export type Session = { session_id: string; items: SessionItem[] };
+export type Session = { session_id: string; items: SessionItem[]; workspace?: string | null };
 export type SessionSummary = { session_id: string; title: string };
 export type ModelOption = { id: string; model: string };
 export type ModelOptions = { default: string; models: ModelOption[] };
@@ -34,10 +34,11 @@ export function sessionUrl(sessionId: string): string {
   return `/api/sessions/${encodeURIComponent(sessionId)}`;
 }
 
-export async function uploadAttachments(files: File[]): Promise<ImageAttachment[]> {
+export async function uploadAttachments(files: File[], sessionId?: string): Promise<ImageAttachment[]> {
   const body = new FormData();
   for (const file of files) body.append("files", file, file.name);
-  const response = await fetch("/api/attachments", { method: "POST", body });
+  const query = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : "";
+  const response = await fetch(`/api/attachments${query}`, { method: "POST", body });
   if (!response.ok) {
     const error = await response.json();
     throw new Error(error.detail ?? `上传失败 (${response.status})`);
@@ -46,9 +47,9 @@ export async function uploadAttachments(files: File[]): Promise<ImageAttachment[
   return data.attachments;
 }
 
-export function attachmentUrl(path: string): string {
+export function attachmentUrl(path: string, sessionId?: string): string {
   const prefix = ".nosis/attachments/";
   return path.startsWith(prefix)
-    ? `/api/attachments/${encodeURIComponent(path.slice(prefix.length))}`
+    ? `/api/attachments/${encodeURIComponent(path.slice(prefix.length))}${sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ""}`
     : path;
 }

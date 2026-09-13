@@ -124,7 +124,6 @@ class Bridge:
         load_dotenv(config_path.parent / ".env")
 
         workspace = Workspace(Path(str(message["workspace"])))
-        self._workspace = workspace
         provider = message.get("provider")
         main_provider_name, config = load_config_with_name(
             config_path,
@@ -136,9 +135,17 @@ class Bridge:
         sessions_directory = config_path.parent / "sessions"
         self._store = JsonlSessionStore(sessions_directory)
         resumed = isinstance(session_id, str) and bool(session_id)
+        if resumed:
+            bound_workspace = self._store.workspace_for(str(session_id))
+            if bound_workspace:
+                workspace = Workspace(Path(bound_workspace))
         self._session = (
             self._store.load(str(session_id)) if resumed else Session()
         )
+        # Every session owns its workspace. Persist this outside the JSONL
+        # transcript so GUI/TUI can resume safely from any directory.
+        self._store.bind_workspace(self._session.session_id, workspace.path)
+        self._workspace = workspace
 
         main_provider = LiteLLMProvider(
             model=config.model,
