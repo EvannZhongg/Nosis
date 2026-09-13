@@ -15,8 +15,6 @@ import signal
 import shutil
 import subprocess
 import sys
-import threading
-import webbrowser
 from uuid import uuid4
 from pathlib import Path
 
@@ -463,11 +461,4 @@ def main(argv: list[str] | None = None) -> None:
             "The interface is not built. Run 'npm install && npm run build' "
             "in interfaces/gui."
         )
-    # Give uvicorn a moment to bind before opening the browser tab.
-    browser_timer = threading.Timer(
-        0.2,
-        lambda: webbrowser.open_new_tab(f"http://{HOST}:{PORT}"),
-    )
-    browser_timer.daemon = True
-    browser_timer.start()
     uvicorn.run(app, host=HOST, port=PORT)
