@@ -98,16 +98,12 @@ def load_model_options(path: Path) -> tuple[str, dict[str, str]]:
     }
 
 
-def configured_subagent_provider(path: Path, fallback: str) -> str:
-    """Return the effective subagent provider name."""
-    _, _, settings = _read_config(path)
-    configured = settings.get("provider", "")
-    if isinstance(configured, str) and configured.strip():
-        return configured.strip()
-    return fallback
-
-
-def load_config(path: Path, provider: str | None = None, *, subagent: bool = False) -> ModelConfig:
+def load_config_with_name(
+    path: Path,
+    provider: str | None = None,
+    *,
+    subagent: bool = False,
+) -> tuple[str, ModelConfig]:
     default, providers, subagent_config = _read_config(path)
     if subagent:
         configured = subagent_config.get("provider", "")
@@ -140,12 +136,21 @@ def load_config(path: Path, provider: str | None = None, *, subagent: bool = Fal
                 f"for provider '{provider}'"
             )
 
-    return ModelConfig(
+    return provider, ModelConfig(
         model=model,
         url=url,
         key=key,
         max_context_tokens=max_context_tokens,
     )
+
+
+def load_config(
+    path: Path,
+    provider: str | None = None,
+    *,
+    subagent: bool = False,
+) -> ModelConfig:
+    return load_config_with_name(path, provider, subagent=subagent)[1]
 
 
 def load_vision_config(

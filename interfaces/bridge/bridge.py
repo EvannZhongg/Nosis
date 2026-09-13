@@ -32,12 +32,7 @@ from agent_core.prompts import load_system_prompt
 from agent_core.providers import LiteLLMProvider
 from agent_core.mcp.manager import McpClientManager, McpServerStatus
 
-from .config import (
-    configured_subagent_provider,
-    load_config,
-    load_model_options,
-    load_vision_config,
-)
+from .config import load_config_with_name, load_vision_config
 from .protocol import decode, encode, event_to_message, usage_to_dict
 
 
@@ -131,7 +126,7 @@ class Bridge:
         workspace = Workspace(Path(str(message["workspace"])))
         self._workspace = workspace
         provider = message.get("provider")
-        config = load_config(
+        main_provider_name, config = load_config_with_name(
             config_path,
             provider if isinstance(provider, str) and provider else None,
         )
@@ -152,11 +147,6 @@ class Bridge:
             max_context_tokens=config.max_context_tokens,
             media_root=workspace.path,
         )
-        main_provider_name = (
-            provider
-            if isinstance(provider, str) and provider
-            else load_model_options(config_path)[0]
-        )
         vision_config = load_vision_config(config_path, main_provider_name)
         vision_provider = (
             LiteLLMProvider(
@@ -173,7 +163,7 @@ class Bridge:
         subagent_registry = SubagentRegistry()
         if agent_config.tools.is_enabled("subagent"):
             # Sub-agents run with an isolated session and their own tool config.
-            subagent_provider_config = load_config(
+            subagent_provider_name, subagent_provider_config = load_config_with_name(
                 config_path,
                 provider if isinstance(provider, str) and provider else None,
                 subagent=True,
@@ -184,10 +174,6 @@ class Bridge:
                 api_key=subagent_provider_config.key,
                 max_context_tokens=subagent_provider_config.max_context_tokens,
                 media_root=workspace.path,
-            )
-            subagent_provider_name = configured_subagent_provider(
-                config_path,
-                main_provider_name,
             )
             subagent_vision_config = load_vision_config(
                 config_path,
