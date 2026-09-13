@@ -6,8 +6,13 @@ otherwise corrupt the newline-delimited JSON stream.
 """
 
 import os
+import signal
 import sys
 from typing import TextIO
+
+
+def _interrupt(_signum: int, _frame: object) -> None:
+    raise KeyboardInterrupt
 
 
 def _claim_stdout() -> TextIO:
@@ -22,6 +27,10 @@ def main() -> None:
     # non-ASCII paths before JSON decoding.
     if hasattr(sys.stdin, "reconfigure"):
         sys.stdin.reconfigure(encoding="utf-8", errors="strict")
+    if hasattr(signal, "SIGBREAK"):
+        # A Windows child has no usable SIGINT, so the GUI cancels a turn
+        # with CTRL_BREAK: unwind the agent loop exactly as Ctrl+C would.
+        signal.signal(signal.SIGBREAK, _interrupt)
     protocol_out = _claim_stdout()
 
     from .bridge import Bridge

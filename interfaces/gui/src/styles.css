@@ -23,6 +23,9 @@ svg { flex-shrink: 0; }
 .session-button span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .session-button:hover { background: #eceef3; }
 .session-button.selected { background: #e9edf6; color: #40568a; }
+.workspace-group { margin: 8px 0 14px; }
+.workspace-group-title { display: flex; align-items: center; gap: 7px; padding: 6px 9px; color: #8a94a6; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .3px; }
+.workspace-group-title small { display: none; }
 .session-empty { font-size: 12px; margin: 16px 10px; color: #999fab; }
 .sidebar-footer { display: flex; align-items: center; gap: 8px; height: 54px; border-top: 1px solid #e6e8ed; font-size: 10px; color: #9198a4; padding: 0 9px; }
 .status-dot { display: inline-block; height: 6px; width: 6px; background: #6f9f87; border-radius: 50%; flex-shrink: 0; }
@@ -77,11 +80,20 @@ pre { overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-famil
 .tool-body pre { margin: 5px 0 10px; max-height: 280px; }
 .composer-area { width: 100%; max-width: 820px; margin: 0 auto; padding: 5px 32px 0; }
 .composer { border: 1px solid #dfe4ed; border-radius: 12px; padding: 15px 15px 10px; background: #fff; box-shadow: 0 3px 15px #20385c04; }
+.workspace-picker { display: flex; align-items: center; gap: 9px; width: 100%; border: 0; padding: 0 0 12px; background: transparent; color: #66728a; text-align: left; font-size: 12px; cursor: pointer; }
+.workspace-picker-icon { font-size: 16px; color: #4e5e78; }
+.workspace-picker-value { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .composer:focus-within { border-color: #a7b5d2; box-shadow: 0 0 0 3px #687fab08; }
 .composer textarea { resize: none; width: 100%; min-height: 48px; max-height: 180px; border: 0; outline: none; background: transparent; padding: 0 2px; font-size: 13px; line-height: 1.7; color: #343d4d; }
 .composer textarea::placeholder { color: #a5adba; }
 .attachment-list { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 7px; }
-.attachment-chip { display: inline-flex; align-items: center; gap: 5px; max-width: 220px; padding: 4px 8px; border: 1px solid #e2e6ee; border-radius: 5px; background: #f7f8fb; color: #7a8496; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attachment-chip { position: relative; display: inline-flex; align-items: flex-end; max-width: 150px; padding: 3px; border: 1px solid #e2e6ee; border-radius: 8px; background: #f7f8fb; color: #7a8496; font-size: 10px; overflow: hidden; white-space: nowrap; }
+.attachment-chip img { width: 96px; height: 72px; border-radius: 5px; object-fit: cover; background: #e8ebf1; }
+.attachment-chip > span { display: none; }
+.attachment-chip button { position: absolute; top: 5px; right: 5px; display: grid; place-items: center; width: 19px; height: 19px; border: 0; border-radius: 50%; padding: 0; background: #ffffffdd; color: #536078; cursor: pointer; }
+.workspace-editor { display: flex; align-items: center; gap: 8px; margin: -3px 0 10px; padding-bottom: 8px; border-bottom: 1px solid #eef0f4; color: #788399; font-size: 10px; }
+.workspace-editor input { flex: 1; min-width: 0; border: 1px solid #e1e5ec; border-radius: 5px; padding: 5px 7px; background: #fff; color: #4f5b70; font-size: 10px; }
+.workspace-editor button { border: 1px solid #dbe1eb; border-radius: 5px; padding: 5px 9px; background: #f8f9fb; color: #657392; font-size: 10px; cursor: pointer; }
 .attachment-button { display: grid; place-items: center; width: 27px; height: 27px; border: 0; border-radius: 6px; background: transparent; color: #8b96a9; cursor: pointer; }
 .attachment-button:hover { background: #f1f3f7; color: #5d709e; }
 .attachment-button:disabled { opacity: .5; cursor: default; }

@@ -32,7 +32,7 @@ npm run dev
 
 访问 Vite 输出的 <http://127.0.0.1:5173>；API 和 WebSocket 会代理到 Python 服务。界面代码在 `src/`，构建产物在 `static/`（不提交）。
 
-上传图片会保存到当前 Session 绑定 Workspace 的 `.nosis/attachments/`，具体存储和解析规则见 [`agent_core/README.md`](../../agent_core/README.md#session-与附件)。每个 Session 目录下的 `session.json` 保存其 Workspace；切换 Session 不会改变其他会话的工作区，多个会话可以同时运行。
+上传图片会保存到当前 Session 绑定 Workspace 的 `.nosis/attachments/`，具体存储和解析规则见 [`agent_core/README.md`](../../agent_core/README.md#session-与附件)。Session 按 Workspace 分组存储在 `~/.nosis/sessions/<workspace-key>/<session-id>/`；切换 Session 不会改变其他会话的工作区，多个会话可以同时运行。
 
 ```bash
 npm run typecheck

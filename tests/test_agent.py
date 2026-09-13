@@ -4,6 +4,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
+from agent_core.session_paths import workspace_key
 from agent_core import (
     Agent,
     AgentConfig,
@@ -701,7 +702,10 @@ class AgentTest(unittest.TestCase):
 
             tool_message = provider.requests[1].messages[-1]
             feedback = json.loads(tool_message.content)
-            artifact_path = ".nosis/sessions/session-1/call-1.txt"
+            artifact_path = (
+                f".nosis/sessions/{workspace_key(workspace.path)}"
+                "/session-1/call-1.txt"
+            )
             self.assertEqual(feedback["artifact_path"], artifact_path)
             self.assertEqual(
                 feedback["read_instruction"],

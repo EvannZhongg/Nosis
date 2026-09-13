@@ -3,10 +3,10 @@ import { ChevronRight, MessageSquare, Plus } from "lucide-react";
 import { Chat } from "./Chat";
 import { Workspace } from "./Workspace";
 import type { Usage } from "@nosis/protocol";
-import { get, sessionUrl, type ModelOption, type ModelOptions, type Session, type SessionSummary } from "./api";
+import { get, sessionUrl, type ModelOption, type ModelOptions, type Session, type WorkspaceSessions } from "./api";
 
 export function App() {
-  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [sessionGroups, setSessionGroups] = useState<WorkspaceSessions[]>([]);
   const [session, setSession] = useState<Session>(() => ({ session_id: crypto.randomUUID(), items: [] }));
   const [chatSessions, setChatSessions] = useState<Session[]>([]);
   const [busyBySession, setBusyBySession] = useState<Record<string, boolean>>({});
@@ -19,13 +19,18 @@ export function App() {
 
   const refreshSessions = useCallback(async () => {
     try {
-      setSessions(await get<SessionSummary[]>("/api/sessions"));
+      setSessionGroups(await get<WorkspaceSessions[]>("/api/sessions"));
     } catch (error) {
       setError(String(error));
     }
   }, []);
 
   useEffect(() => { void refreshSessions(); }, [refreshSessions]);
+  useEffect(() => {
+    get<{ root: string }>("/api/workspace").then(({ root }) => {
+      setSession((current) => current.workspace ? current : { ...current, workspace: root });
+    }).catch(() => undefined);
+  }, []);
   // Usage belongs to the shown conversation, so switching sessions clears it.
   useEffect(() => { setUsage(null); }, [session.session_id]);
   useEffect(() => {
@@ -49,6 +54,7 @@ export function App() {
     }
   }
 
+  const sessions = sessionGroups.flatMap((group) => group.sessions);
   const selectedTitle = sessions.find((item) => item.session_id === session.session_id)?.title ?? "New chat";
   const busy = Boolean(busyBySession[session.session_id]);
 
@@ -57,20 +63,18 @@ export function App() {
       <aside className="sessions-panel" aria-label="Sessions">
         <div className="brand"><span>Nosis<span className="brand-dot">.</span></span></div>
         <button className="new-chat" disabled={loading} onClick={() => {
-          const fresh = { session_id: crypto.randomUUID(), items: [] };
+          const fresh = { session_id: crypto.randomUUID(), items: [], workspace: session.workspace };
           setSession(fresh);
           setChatSessions((all) => [...all, fresh]);
           setError("");
         }}><Plus size={17} /> New chat</button>
-        <div className="section-label">Sessions <span>{sessions.length}</span></div>
+        <div className="section-label">Projects <span>{sessionGroups.length}</span></div>
         <nav className="session-list">
-          {sessions.map((item) => (
-            <button key={item.session_id} className={`session-button ${item.session_id === session.session_id ? "selected" : ""}`}
-              title={item.title} disabled={loading} onClick={() => void selectSession(item.session_id)}>
-              <MessageSquare size={15} /><span>{item.title}</span>
-            </button>
-          ))}
-          {sessions.length === 0 && <p className="session-empty">从一段对话开始。</p>}
+          {sessionGroups.map((group) => <section className="workspace-group" key={group.workspace}>
+            <div className="workspace-group-title" title={group.workspace}>▰ <span>{group.workspace.split(/[\\/]/).pop() || group.workspace}</span><small>{group.workspace}</small></div>
+            {group.sessions.map((item) => <button key={item.session_id} className={`session-button ${item.session_id === session.session_id ? "selected" : ""}`} title={item.title} disabled={loading} onClick={() => void selectSession(item.session_id)}><MessageSquare size={15} /><span>{item.title}</span></button>)}
+          </section>)}
+          {sessionGroups.length === 0 && <p className="session-empty">从一段对话开始。</p>}
         </nav>
         <div className="sidebar-footer"><span className="status-dot" /> Personal workspace</div>
       </aside>
@@ -82,6 +86,10 @@ export function App() {
         {(chatSessions.length ? chatSessions : [session]).map((current) => <div key={current.session_id} style={{ display: current.session_id === session.session_id ? "contents" : "none" }}><Chat session={current} disabled={loading || !model}
           models={models} model={model} onModelChange={setModel} onBusyChange={(value) => setBusyBySession((all) => ({ ...all, [current.session_id]: value }))} onUsageChange={(value) => { if (current.session_id === session.session_id) setUsage(value); }} onTurnEnd={() => {
           void refreshSessions();
+          setWorkspaceVersion((value) => value + 1);
+        }} onWorkspaceChange={(workspace) => {
+          setChatSessions((all) => all.map((item) => item.session_id === current.session_id ? { ...item, workspace } : item));
+          if (current.session_id === session.session_id) setSession((item) => ({ ...item, workspace }));
           setWorkspaceVersion((value) => value + 1);
         }} /></div>)}
       </main>

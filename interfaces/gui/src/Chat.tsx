@@ -5,9 +5,9 @@ import {
   type AppendMessage, type ReasoningMessagePartProps, type ToolCallMessagePartProps,
 } from "@assistant-ui/react";
 import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
-import { ArrowUp, Check, ChevronDown, ChevronRight, ImagePlus, LoaderCircle, Paperclip, ShieldCheck, Square, Terminal, X } from "lucide-react";
+import { ArrowUp, Check, ChevronDown, ChevronRight, LoaderCircle, Paperclip, ShieldCheck, Square, Terminal, X } from "lucide-react";
 import remarkGfm from "remark-gfm";
-import { get, sessionUrl, uploadAttachments, type ImageAttachment, type ModelOption, type Session } from "./api";
+import { get, sessionUrl, updateSessionWorkspace, uploadAttachments, type ImageAttachment, type ModelOption, type Session } from "./api";
 import { SessionSocket } from "./session";
 import { applyMessage, toMessages, type Notice, type TranscriptItem } from "./transcript";
 import type { Usage } from "@nosis/protocol";
@@ -64,16 +64,30 @@ function AssistantMessage() {
   </MessagePrimitive.Root>;
 }
 
-export function Chat({ session, disabled, models, model, onModelChange, onBusyChange, onUsageChange, onTurnEnd }: {
+function PendingAttachment({ file, onRemove }: { file: File; onRemove: () => void }) {
+  const [url, setUrl] = useState("");
+  useEffect(() => {
+    const next = URL.createObjectURL(file);
+    setUrl(next);
+    return () => URL.revokeObjectURL(next);
+  }, [file]);
+  return <span className="attachment-chip"><img src={url} alt={file.name} /><span>{file.name}</span><button type="button" aria-label={`移除 ${file.name}`} onClick={onRemove}><X size={12} /></button></span>;
+}
+
+export function Chat({ session, disabled, models, model, onModelChange, onBusyChange, onUsageChange, onTurnEnd, onWorkspaceChange }: {
   session: Session; disabled: boolean; onBusyChange: (busy: boolean) => void; onTurnEnd: () => void;
   onUsageChange: (usage: Usage | null) => void;
   models: ModelOption[]; model: string; onModelChange: (model: string) => void;
+  onWorkspaceChange?: (workspace: string) => void;
 }) {
   const [items, setItems] = useState<TranscriptItem[]>(session.items);
   const [running, setRunning] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [approval, setApproval] = useState<Approval | null>(null);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [workspaceDraft, setWorkspaceDraft] = useState(session.workspace ?? "");
+  const [workspaceSaving, setWorkspaceSaving] = useState(false);
+  const [workspaceEditing, setWorkspaceEditing] = useState(false);
   const socketRef = useRef<SessionSocket | null>(null);
   const noticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const turnCounter = useRef(0);
@@ -84,6 +98,10 @@ export function Chat({ session, disabled, models, model, onModelChange, onBusyCh
   // turn state they fold onto are kept in refs.
   const itemsRef = useRef(items);
   const runningRef = useRef(false);
+
+  useEffect(() => {
+    if (session.workspace) setWorkspaceDraft(session.workspace);
+  }, [session.workspace]);
 
   const showItems = useCallback((next: TranscriptItem[]) => {
     itemsRef.current = next;
@@ -125,7 +143,8 @@ export function Chat({ session, disabled, models, model, onModelChange, onBusyCh
     try {
       // The protocol omits tool output; the stored session has it.
       const stored = await get<Session>(sessionUrl(session.session_id));
-      showItems(stored.items);
+      // A session without stored items would erase the live transcript.
+      if (stored.items.length) showItems(stored.items);
     } catch {
       // A turn that never persisted keeps the live transcript.
     }
@@ -234,6 +253,26 @@ export function Chat({ session, disabled, models, model, onModelChange, onBusyCh
     setApproval(null);
   }
 
+  async function saveWorkspace() {
+    if (!workspaceDraft.trim() || workspaceDraft.trim() === session.workspace) return;
+    setWorkspaceSaving(true);
+    try {
+      const value = await updateSessionWorkspace(session.session_id, workspaceDraft.trim());
+      setWorkspaceDraft(value);
+      onWorkspaceChange?.(value);
+      // Restart the bridge so prompts, tools and vision provider all use the
+      // newly selected workspace for subsequent turns.
+      socketRef.current?.close();
+      socketRef.current = null;
+      if (!disabled && model) connect();
+      showNotice({ level: "info", text: `工作区已切换为 ${value}` }, true);
+    } catch (error) {
+      showNotice({ level: "error", text: String(error) });
+    } finally {
+      setWorkspaceSaving(false);
+    }
+  }
+
   /**
    * Browsers expose pasted screenshots/images through clipboardData.items,
    * rather than the textarea's value.  Capture those files and feed them
@@ -267,8 +306,8 @@ export function Chat({ session, disabled, models, model, onModelChange, onBusyCh
         {running && <div className="activity" role="status"><LoaderCircle size={13} className="spin" />{approval ? "等待你的确认" : "Nosis 正在处理…"}
           {!approval && <button className="stop-button" aria-label="停止执行" onClick={() => socketRef.current?.send({ type: "cancel" })}><Square size={11} /> 停止</button>}
         </div>}
-        {pendingFiles.length > 0 && <div className="attachment-list" aria-label="待发送图片">{pendingFiles.map((file) => <span key={`${file.name}-${file.lastModified}`} className="attachment-chip"><ImagePlus size={13} />{file.name}</span>)}</div>}
-        <ComposerPrimitive.Root className="composer"><ComposerPrimitive.Input placeholder="Ask Nosis…" aria-label="消息" rows={2} autoFocus onPaste={onPaste} /><div className="composer-bottom">
+        {pendingFiles.length > 0 && <div className="attachment-list" aria-label="待发送图片">{pendingFiles.map((file, index) => <PendingAttachment key={`${file.name}-${file.lastModified}-${index}`} file={file} onRemove={() => setPendingFiles((files) => files.filter((_, itemIndex) => itemIndex !== index))} />)}</div>}
+        <ComposerPrimitive.Root className="composer"><button type="button" className="workspace-picker" onClick={() => setWorkspaceEditing((value) => !value)} disabled={disabled || running}><span className="workspace-picker-icon">⌂</span><span className="workspace-picker-value">{workspaceDraft || "选择项目"}</span><ChevronDown size={14} /></button>{workspaceEditing && <div className="workspace-editor"><input aria-label="当前工作区" value={workspaceDraft} onChange={(event) => setWorkspaceDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { void saveWorkspace(); setWorkspaceEditing(false); } }} disabled={disabled || running || workspaceSaving} /><button type="button" onClick={() => { void saveWorkspace(); setWorkspaceEditing(false); }} disabled={disabled || running || workspaceSaving}>保存</button></div>}<ComposerPrimitive.Input placeholder="Ask Nosis…" aria-label="消息" rows={2} autoFocus onPaste={onPaste} /><div className="composer-bottom">
           <button type="button" className="attachment-button" aria-label="添加图片" title="添加图片" disabled={disabled || running} onClick={() => fileInputRef.current?.click()}><Paperclip size={15} /></button>
           <input ref={fileInputRef} className="attachment-input" type="file" accept="image/*" multiple onChange={(event) => { setPendingFiles((files) => [...files, ...Array.from(event.target.files ?? [])]); event.currentTarget.value = ""; }} />
           <label className="model-selector" title={models.find((option) => option.id === model)?.model}>

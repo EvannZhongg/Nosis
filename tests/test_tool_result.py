@@ -8,6 +8,7 @@ from agent_core import (
     ToolResultNormalizer,
     Workspace,
 )
+from agent_core.session_paths import workspace_key
 
 
 class ToolResultNormalizerTest(unittest.TestCase):
@@ -50,7 +51,10 @@ class ToolResultNormalizerTest(unittest.TestCase):
 
             normalized = normalizer.normalize(result)
 
-            artifact_path = ".nosis/sessions/session-1/call%2F1.txt"
+            artifact_path = (
+                f".nosis/sessions/{workspace_key(workspace.path)}"
+                "/session-1/call%2F1.txt"
+            )
             self.assertEqual(
                 (workspace.path / artifact_path).read_text(
                     encoding="utf-8"

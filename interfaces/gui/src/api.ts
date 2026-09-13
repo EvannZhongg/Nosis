@@ -12,6 +12,7 @@ export type SessionItem = {
 
 export type Session = { session_id: string; items: SessionItem[]; workspace?: string | null };
 export type SessionSummary = { session_id: string; title: string };
+export type WorkspaceSessions = { workspace: string; sessions: SessionSummary[] };
 export type ModelOption = { id: string; model: string };
 export type ModelOptions = { default: string; models: ModelOption[] };
 export type ImageAttachment = { type: "image"; path: string; mime_type: string };
@@ -32,6 +33,19 @@ export async function get<T>(path: string): Promise<T> {
 
 export function sessionUrl(sessionId: string): string {
   return `/api/sessions/${encodeURIComponent(sessionId)}`;
+}
+
+export async function updateSessionWorkspace(sessionId: string, workspace: string): Promise<string> {
+  const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/workspace`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ workspace }),
+  });
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail ?? `工作区更新失败 (${response.status})`);
+  }
+  return (await response.json() as { workspace: string }).workspace;
 }
 
 export async function uploadAttachments(files: File[], sessionId?: string): Promise<ImageAttachment[]> {

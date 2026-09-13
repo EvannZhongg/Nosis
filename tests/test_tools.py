@@ -8,13 +8,19 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from agent_core import (
+    AgentConfig,
     CommandExecutionResult,
     EditFileTool,
+    JsonlSessionStore,
     ListDirectoryTool,
+    LLMProvider,
+    LLMResponse,
     ReadFileTool,
     SearchFilesTool,
+    Session,
     ShellApprovalPolicy,
     ShellTool,
+    SubagentTool,
     Tool,
     ToolCall,
     ToolConfig,
@@ -26,6 +32,8 @@ from agent_core import (
     SubagentRegistry,
     create_builtin_tools,
 )
+from agent_core.llm import LLMRequest
+from agent_core.session_paths import session_directory
 from agent_core.tools.builtin.search_files import MAX_OUTPUT_CHARS
 from agent_core.tools.builtin.read_file import (
     MAX_FILE_SIZE_BYTES as MAX_READ_FILE_SIZE_BYTES,
@@ -226,6 +234,95 @@ class ToolFactoryTest(unittest.TestCase):
             )
 
         self.assertEqual(tools, ())
+
+
+class StaticProvider(LLMProvider):
+    """Answers every request with the same text, enough to run a child loop."""
+
+    def __init__(self, answer: str) -> None:
+        self._answer = answer
+
+    @property
+    def max_context_tokens(self) -> int:
+        return 1000
+
+    def count_input_tokens(self, request: LLMRequest) -> int:
+        return 1
+
+    def stream(
+        self,
+        request: LLMRequest,
+        on_text_delta,
+        on_reasoning_delta=None,
+    ) -> LLMResponse:
+        on_text_delta(self._answer)
+        return LLMResponse(content=self._answer)
+
+
+class SubagentTranscriptTest(unittest.TestCase):
+    def test_keeps_a_child_transcript_out_of_the_session_list(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = Workspace(root)
+            sessions_directory = root / ".nosis" / "sessions"
+            parent = Session()
+            tool = SubagentTool(
+                provider=StaticProvider("child answer"),
+                config=AgentConfig(
+                    max_same_tool_calls=5,
+                    max_output_tokens=100,
+                    tools=ToolConfig(enabled=frozenset()),
+                ),
+                workspace=workspace,
+                sessions_directory=sessions_directory,
+                parent_session_id=parent.session_id,
+                parent_session=parent,
+            )
+
+            self.assertEqual(
+                tool.execute({"task": "write the quarterly summary"}),
+                "child answer",
+            )
+
+            # The child transcript is stored, but the session list only shows
+            # sessions that a user can open and continue.
+            subagents = (
+                session_directory(
+                    sessions_directory,
+                    workspace.path,
+                    parent.session_id,
+                )
+                / "subagents"
+            )
+            transcripts = list(subagents.rglob("*.jsonl"))
+            self.assertEqual(len(transcripts), 1)
+            relative = transcripts[0].relative_to(subagents)
+            # Nested under the parent without repeating its workspace key.
+            self.assertEqual(len(relative.parts), 2)
+            self.assertEqual(relative.name, f"{relative.parts[0]}.jsonl")
+            record = json.loads(transcripts[0].read_text(encoding="utf-8"))
+            self.assertEqual(
+                [item["content"] for item in record["items"]],
+                ["write the quarterly summary", "child answer"],
+            )
+            self.assertEqual(
+                JsonlSessionStore(sessions_directory).list_sessions(),
+                [],
+            )
+
+    def test_requires_a_parent_session_id(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, "parent_session_id"):
+                SubagentTool(
+                    provider=StaticProvider("child answer"),
+                    config=AgentConfig(
+                        max_same_tool_calls=5,
+                        max_output_tokens=100,
+                        tools=ToolConfig(enabled=frozenset()),
+                    ),
+                    workspace=Workspace(Path(directory)),
+                    sessions_directory=Path(directory) / "sessions",
+                )
 
 
 class FakeExa:

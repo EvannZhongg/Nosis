@@ -10,9 +10,13 @@ import argparse
 import asyncio
 import json
 import mimetypes
+import os
 import signal
 import shutil
+import subprocess
 import sys
+import threading
+import webbrowser
 from uuid import uuid4
 from pathlib import Path
 
@@ -60,6 +64,11 @@ class BridgeProcess:
             cwd=workspace.path,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
+            # Its own process group keeps a cancel interrupt aimed at this
+            # child instead of at the console every process shares.
+            creationflags=(
+                subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+            ),
         )
         return cls(process)
 
@@ -87,9 +96,17 @@ class BridgeProcess:
     def cancel_turn(self) -> None:
         """Interrupt the running turn, as Esc does in the TUI."""
         if self._process.returncode is None:
-            self._process.send_signal(signal.SIGINT)
+            # Windows has no SIGINT for a child: CTRL_BREAK is the signal
+            # that reaches the bridge, which turns it into KeyboardInterrupt.
+            self._process.send_signal(
+                signal.CTRL_BREAK_EVENT if os.name == "nt" else signal.SIGINT
+            )
 
     async def close(self) -> None:
+        # A page that goes away mid-turn would otherwise take the running
+        # turn down with the process; the interrupt lets the bridge store
+        # what the turn already produced before it shuts down.
+        self.cancel_turn()
         self.send({"type": "shutdown"})
         if self._process.stdin is not None:
             self._process.stdin.close()
@@ -99,9 +116,26 @@ class BridgeProcess:
                 timeout=SHUTDOWN_TIMEOUT_SECONDS,
             )
         except (asyncio.TimeoutError, ConnectionResetError):
-            if self._process.returncode is None:
-                self._process.kill()
-                await self._process.wait()
+            self._kill()
+            await self._process.wait()
+
+    def _kill(self) -> None:
+        """Kill the bridge together with the processes it started.
+
+        A venv ``python.exe`` is a launcher, so terminating only the process
+        that was spawned would leave the real bridge running on the session
+        and holding its MCP servers open.
+        """
+        if self._process.returncode is not None:
+            return
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(self._process.pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return
+        self._process.kill()
 
 
 def create_app(
@@ -118,6 +152,7 @@ def create_app(
     # Serialize connections for the same session. Different sessions have
     # independent bridge processes and may run concurrently.
     session_locks: dict[str, asyncio.Lock] = {}
+    pending_workspaces: dict[str, Path] = {}
 
     @app.get("/api/models")
     def list_models() -> dict[str, object]:
@@ -130,7 +165,7 @@ def create_app(
         }
 
     @app.get("/api/sessions")
-    def list_sessions() -> list[dict[str, str]]:
+    def list_sessions() -> list[dict[str, object]]:
         return store.list_sessions()
 
     @app.get("/api/sessions/{session_id}")
@@ -145,13 +180,33 @@ def create_app(
         if session_id:
             bound = store.workspace_for(session_id)
             if bound:
+                pending_workspaces.pop(session_id, None)
                 try:
                     return Workspace(Path(bound))
                 except (OSError, ValueError) as error:
                     raise HTTPException(status_code=400, detail=str(error)) from error
-            # Bind a newly-created session before any attachment or turn is sent.
-            store.bind_workspace(session_id, workspace.path)
+            pending = pending_workspaces.get(session_id)
+            if pending is not None:
+                return Workspace(pending)
         return workspace
+
+    @app.put("/api/sessions/{session_id}/workspace")
+    def update_session_workspace(session_id: str, payload: dict[str, object]) -> dict[str, str]:
+        value = payload.get("workspace")
+        if not isinstance(value, str) or not value.strip():
+            raise HTTPException(status_code=400, detail="workspace 必须是非空路径。")
+        try:
+            selected = Workspace(Path(value.strip()))
+        except (OSError, ValueError) as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        try:
+            if store.has_transcript(session_id):
+                store.bind_workspace(session_id, selected.path)
+            else:
+                pending_workspaces[session_id] = selected.path
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return {"workspace": str(selected.path)}
 
     @app.get("/api/workspace")
     def get_workspace(path: str = ".", session_id: str | None = None) -> dict[str, object]:
@@ -408,4 +463,11 @@ def main(argv: list[str] | None = None) -> None:
             "The interface is not built. Run 'npm install && npm run build' "
             "in interfaces/gui."
         )
+    # Give uvicorn a moment to bind before opening the browser tab.
+    browser_timer = threading.Timer(
+        0.2,
+        lambda: webbrowser.open_new_tab(f"http://{HOST}:{PORT}"),
+    )
+    browser_timer.daemon = True
+    browser_timer.start()
     uvicorn.run(app, host=HOST, port=PORT)

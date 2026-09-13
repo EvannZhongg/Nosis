@@ -47,25 +47,31 @@ class SubagentTool(Tool):
         self._workspace = workspace
         self._tools = tuple(tools)
         self._system_prompt = system_prompt
-        if sessions_directory is None:
-            if not parent_session_id:
-                raise ValueError(
-                    "parent_session_id is required when sessions_directory is not provided"
-                )
-            sessions_directory = default_sessions_directory()
-        sessions_root = sessions_directory.expanduser().resolve()
-        # Keep artifacts addressable from the shared Session root; only the
-        # child transcript is nested under its parent's ``subagents`` folder.
-        self._artifact_sessions_directory = sessions_root
-        if parent_session_id:
-            sessions_directory = (
-                session_directory(
-                    sessions_root,
-                    parent_session_id,
-                )
-                / "subagents"
+        if not parent_session_id:
+            raise ValueError(
+                "parent_session_id is required to nest the child transcript"
             )
-        self._store = JsonlSessionStore(sessions_directory)
+        sessions_root = (
+            sessions_directory
+            if sessions_directory is not None
+            else default_sessions_directory()
+        ).expanduser().resolve()
+        # Tool Result artifacts stay addressable from the shared Session root,
+        # so the child's ``.nosis/sessions/...`` pseudo-paths keep resolving.
+        self._artifact_sessions_directory = sessions_root
+        # Only the transcript is nested, under the parent session's
+        # ``subagents`` directory, which keeps child transcripts out of the
+        # user-visible session list. That root already belongs to the parent's
+        # workspace, so it does not group its sessions by workspace again.
+        self._store = JsonlSessionStore(
+            session_directory(
+                sessions_root,
+                workspace.path,
+                parent_session_id,
+            )
+            / "subagents",
+            group_by_workspace=False,
+        )
         self._tool_policy = tool_policy
         self._parent_session = parent_session
 
@@ -132,6 +138,7 @@ class SubagentTool(Tool):
             result.request,
             result.response,
             result.items,
+            workspace=self._workspace.path,
             **context_fields,
         )
         # Parent receives only the final assistant response, never child

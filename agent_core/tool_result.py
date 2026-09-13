@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 from urllib.parse import quote
 
-from .session_paths import session_directory
+from .session_paths import session_directory, workspace_key
 from .session_paths import default_sessions_directory
 from .tools import ToolResult
 from .workspace import Workspace
@@ -35,6 +35,7 @@ class ToolResultNormalizer:
         ).expanduser().resolve()
         session_directory(
             self._sessions_directory,
+            self._workspace.path,
             self._session_id,
         )
 
@@ -46,10 +47,13 @@ class ToolResultNormalizer:
 
         artifact_path = (
             Path(".nosis", "sessions")
+            / workspace_key(self._workspace.path)
             / self._session_id
             / f"{quote(result.tool_call_id, safe='')}.txt"
         )
-        absolute_path = self._sessions_directory / self._session_id / artifact_path.name
+        absolute_path = session_directory(
+            self._sessions_directory, self._workspace.path, self._session_id
+        ) / artifact_path.name
         absolute_path = absolute_path.resolve()
         try:
             absolute_path.relative_to(self._sessions_directory)

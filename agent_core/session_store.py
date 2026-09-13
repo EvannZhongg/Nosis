@@ -1,51 +1,82 @@
 import json
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Sequence
 
 from .llm import LLMRequest, LLMResponse
 from .session import Message, Session
 from .content import ImagePart, TextPart
-from .session_paths import default_sessions_directory, session_directory, session_log_path
+from .session_paths import default_sessions_directory, session_log_path, workspace_directory, _validate_session_id
 from .tools import ToolCall
 
 
 class JsonlSessionStore:
-    def __init__(self, directory: Path | None = None) -> None:
+    """Store session transcripts as newline-delimited JSON records.
+
+    Sessions are grouped by workspace, so one root can hold the sessions of
+    several workspaces: ``<root>/<WORKSPACE_KEY>/<SESSION_ID>/<SESSION_ID>.jsonl``.
+    A store rooted inside a single session, which holds that session's
+    sub-agent transcripts, passes ``group_by_workspace=False``: its root
+    already belongs to one workspace, so grouping would only repeat the
+    workspace key in every path.
+    """
+
+    def __init__(
+        self,
+        directory: Path | None = None,
+        *,
+        group_by_workspace: bool = True,
+    ) -> None:
         self._directory = (
             directory.expanduser().resolve()
             if directory is not None
             else default_sessions_directory()
         )
+        self._group_by_workspace = group_by_workspace
 
     @property
     def directory(self) -> Path:
         return self._directory
 
-    def list_sessions(self) -> list[dict[str, str]]:
-        """Summarize stored sessions, most recently updated first."""
+    def has_transcript(self, session_id: str) -> bool:
+        path = self._session_path(session_id)
+        return path is not None and path.is_file()
+
+    def list_sessions(self) -> list[dict[str, object]]:
+        """Summarize sessions grouped by their workspace."""
         if not self._directory.is_dir():
             return []
-
-        entries = []
-        for directory in self._directory.iterdir():
-            if not directory.is_dir():
+        groups: list[dict[str, object]] = []
+        for workspace_dir in self._directory.iterdir():
+            if not workspace_dir.is_dir():
                 continue
-            path = session_log_path(self._directory, directory.name)
-            if not path.is_file():
+            sessions = []
+            for session_dir in workspace_dir.iterdir():
+                if not session_dir.is_dir():
+                    continue
+                path = session_dir / f"{session_dir.name}.jsonl"
+                if path.is_file():
+                    sessions.append((path.stat().st_mtime_ns, session_dir.name, path))
+            if not sessions:
                 continue
-            entries.append((path.stat().st_mtime_ns, directory.name, path))
+            sessions.sort(key=lambda entry: (entry[0], entry[1]), reverse=True)
+            workspace = _workspace_from_metadata(sessions[0][2].parent.parent / "workspace.json")
+            groups.append({
+                "workspace": workspace or workspace_dir.name,
+                "sessions": [{"session_id": sid, "title": _session_title(path, sid)} for _, sid, path in sessions],
+                "updated": max(item[0] for item in sessions),
+            })
+        groups.sort(key=lambda group: int(group["updated"]), reverse=True)
+        for group in groups:
+            group.pop("updated", None)
+        return groups
 
-        entries.sort(key=lambda entry: (entry[0], entry[1]), reverse=True)
-        return [
-            {"session_id": session_id, "title": _session_title(path, session_id)}
-            for _, session_id, path in entries
-        ]
-
-    def load(self, session_id: str) -> Session:
-        path = self._session_path(session_id)
-        workspace = self.workspace_for(session_id)
-        if not path.exists():
-            return Session(session_id=session_id, workspace=workspace)
+    def load(self, session_id: str, workspace: Path | str | None = None) -> Session:
+        path = self._session_path(session_id, workspace)
+        if path is None or not path.is_file():
+            return Session(session_id=session_id)
+        workspace_value = self.workspace_for(session_id)
 
         items = []
         archived_summary = None
@@ -69,31 +100,62 @@ class JsonlSessionStore:
         return Session(
             session_id=session_id,
             items=items,
-            workspace=workspace,
+            workspace=workspace_value,
             archived_summary=archived_summary,
             archived_item_count=min(max(archived_item_count, 0), len(items)),
         )
 
     def bind_workspace(self, session_id: str, workspace: Path) -> None:
-        """Persist the workspace associated with a session."""
-        path = self._metadata_path(session_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
+        """Bind a session to a workspace, moving it between workspace groups."""
         resolved = workspace.expanduser().resolve()
-        path.write_text(
-            json.dumps({"session_id": session_id, "workspace": str(resolved)}, ensure_ascii=False),
-            encoding="utf-8",
+        target_group = workspace_directory(self._directory, resolved)
+        target_group.mkdir(parents=True, exist_ok=True)
+        current_dir = self._find_session_directory(session_id)
+        target_dir = target_group / session_id
+        if current_dir is not None and current_dir != target_dir:
+            if target_dir.exists():
+                raise ValueError(f"session already exists in workspace: {session_id!r}")
+            shutil.move(str(current_dir), str(target_dir))
+        (target_group / "workspace.json").write_text(
+            json.dumps({"workspace": str(resolved)}, ensure_ascii=False), encoding="utf-8"
         )
 
     def workspace_for(self, session_id: str) -> str | None:
-        path = self._metadata_path(session_id)
-        if not path.is_file():
+        _validate_session_id(session_id)
+        current = self._find_session_directory(session_id)
+        if current is not None:
+            return _workspace_from_metadata(current.parent / "workspace.json")
+        return None
+
+    def _find_session_directory(self, session_id: str) -> Path | None:
+        """Return the directory holding a session's transcript, if it has one."""
+        if not self._directory.is_dir():
             return None
-        try:
-            data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as error:
-            raise ValueError(f"invalid session metadata: {session_id!r}") from error
-        value = data.get("workspace") if isinstance(data, dict) else None
-        return value if isinstance(value, str) and value else None
+        for workspace_dir in self._directory.iterdir():
+            candidate = workspace_dir / session_id
+            if (candidate / f"{session_id}.jsonl").is_file():
+                return candidate
+        return None
+
+    def append_items(
+        self,
+        session_id: str,
+        items: Sequence[Message],
+        archived_summary: str | None = None,
+        archived_item_count: int | None = None,
+        workspace: Path | str | None = None,
+    ) -> None:
+        """Append items from a turn that ended without a model response."""
+        self._append(
+            session_id,
+            {
+                "session_id": session_id,
+                "items": [_message_to_dict(item) for item in items],
+            },
+            archived_summary,
+            archived_item_count,
+            workspace,
+        )
 
     def append_turn(
         self,
@@ -103,6 +165,7 @@ class JsonlSessionStore:
         items: tuple[Message, ...],
         archived_summary: str | None = None,
         archived_item_count: int | None = None,
+        workspace: Path | str | None = None,
     ) -> None:
         record = {
             "session_id": session_id,
@@ -151,21 +214,54 @@ class JsonlSessionStore:
                 }
                 for tool in request.tools
             ]
+        self._append(
+            session_id,
+            record,
+            archived_summary,
+            archived_item_count,
+            workspace,
+        )
+
+    def _append(
+        self,
+        session_id: str,
+        record: dict[str, object],
+        archived_summary: str | None,
+        archived_item_count: int | None,
+        workspace: Path | str | None,
+    ) -> None:
         if archived_summary is not None or archived_item_count is not None:
             record["context"] = {
                 "archived_summary": archived_summary,
                 "archived_item_count": archived_item_count or 0,
             }
-        path = self._session_path(session_id)
+        if workspace is None:
+            workspace = self.workspace_for(session_id)
+        if workspace is None and self._group_by_workspace:
+            raise ValueError(f"workspace is required for a new session: {session_id!r}")
+        path = self._session_path(session_id, workspace)
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as file:
             file.write(json.dumps(record, ensure_ascii=False) + "\n")
 
-    def _session_path(self, session_id: str) -> Path:
-        return session_log_path(self._directory, session_id)
+    def _session_path(self, session_id: str, workspace: Path | str | None = None) -> Path | None:
+        if not self._group_by_workspace:
+            return self._directory / session_id / f"{session_id}.jsonl"
+        if workspace is not None:
+            return session_log_path(self._directory, workspace, session_id)
+        bound = self.workspace_for(session_id)
+        if bound is None:
+            return None
+        return session_log_path(self._directory, bound, session_id)
 
-    def _metadata_path(self, session_id: str) -> Path:
-        return session_directory(self._directory, session_id) / "session.json"
+
+def _workspace_from_metadata(path: Path) -> str | None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    value = data.get("workspace") if isinstance(data, dict) else None
+    return value if isinstance(value, str) and value else None
 
 
 def _session_title(path: Path, session_id: str) -> str:

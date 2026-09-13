@@ -4,11 +4,15 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from agent_core import (
     AssistantMessageDeltaEvent,
     AssistantMessageEvent,
+    JsonlSessionStore,
+    Message,
     ReasoningDeltaEvent,
+    Session,
     ToolBatchStartedEvent,
     ToolCall,
     ToolCallEvent,
@@ -246,54 +250,240 @@ class BridgeServeTest(unittest.TestCase):
         self.assertEqual(emitted(stdout)[0]["type"], "fatal")
 
 
+def start_message(directory: Path, **extra: object) -> dict:
+    provider_config_path = directory / "provider_config.json"
+    provider_config_path.write_text(
+        json.dumps(
+            {
+                "main_agent": {"provider": "first"},
+                "subagent": {"provider": ""},
+                "providers": {
+                    "first": {
+                        "model": "openai/first",
+                        "max_context_tokens": 1000,
+                    },
+                    "second": {
+                        "model": "openai/second",
+                        "max_context_tokens": 1000,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    agent_config_path = directory / "agent_config.json"
+    agent_config_path.write_text(
+        json.dumps(
+            {
+                "max_same_tool_calls": 5,
+                "max_output_tokens": 100,
+                "tools": {name: False for name in TOOL_NAMES},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return {
+        "type": "start",
+        "workspace": str(directory),
+        "session_id": None,
+        "provider_config_path": str(provider_config_path),
+        "agent_config_path": str(agent_config_path),
+        **extra,
+    }
+
+
+class ScriptedAgent:
+    """Stands in for the agent loop: it edits the session, then stops."""
+
+    def __init__(
+        self,
+        session: Session,
+        tail: tuple[Message, ...] = (),
+        error: BaseException | None = None,
+    ) -> None:
+        self._session = session
+        self._tail = tail
+        self._error = error
+
+    def run(
+        self,
+        user_input: str,
+        on_event: object = None,
+        attachments: object = (),
+    ) -> None:
+        self._session.add_item("user", user_input)
+        self._session.items.extend(self._tail)
+        if self._error is not None:
+            raise self._error
+
+
+class FailingAgent:
+    """Stands in for a provider that fails before the agent loop runs."""
+
+    def run(
+        self,
+        user_input: str,
+        on_event: object = None,
+        attachments: object = (),
+    ) -> None:
+        raise ValueError("provider refused the request")
+
+
+class InterruptedTurnTest(unittest.TestCase):
+    """A turn keeps the transcript it produced before it ended early."""
+
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        self.bridge, self.stdout = make_bridge([])
+        self.bridge.start(start_message(self.root))
+        self.session_id = next(
+            message["session_id"]
+            for message in emitted(self.stdout)
+            if message["type"] == "ready"
+        )
+        self.store = JsonlSessionStore(self.root / "sessions")
+        session = self.bridge._session
+        assert session is not None
+        self.session = session
+
+    def start_turn(self, agent: object, text: str = "do the work") -> None:
+        patcher = patch.object(self.bridge, "_agent", agent)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.bridge.run_turn({"turn_id": "t1", "text": text})
+
+    def stored_items(self) -> list[Message]:
+        return self.store.load(self.session_id).items
+
+    def test_stores_a_cancelled_turn(self) -> None:
+        self.start_turn(
+            ScriptedAgent(
+                self.session,
+                tail=(Message(role="assistant", content="half an answer"),),
+                error=KeyboardInterrupt(),
+            )
+        )
+
+        self.assertEqual(emitted(self.stdout)[-1]["type"], "turn_cancelled")
+        self.assertTrue(emitted(self.stdout)[-1]["persisted"])
+        self.assertEqual(
+            [message.content for message in self.stored_items()],
+            ["do the work", "half an answer"],
+        )
+
+    def test_stores_a_failed_turn(self) -> None:
+        self.start_turn(
+            ScriptedAgent(
+                self.session,
+                error=ValueError("provider refused the request"),
+            )
+        )
+
+        failure = emitted(self.stdout)[-1]
+        self.assertEqual(failure["type"], "turn_failed")
+        self.assertEqual(failure["error"]["type"], "ValueError")
+        self.assertEqual(
+            [message.content for message in self.stored_items()],
+            ["do the work"],
+        )
+
+    def test_does_not_store_a_turn_that_produced_nothing(self) -> None:
+        self.start_turn(FailingAgent())
+
+        failure = emitted(self.stdout)[-1]
+        self.assertEqual(failure["type"], "turn_failed")
+        self.assertEqual(failure["error"]["type"], "ValueError")
+        # An empty transcript would list as a session with no items.
+        self.assertEqual(self.stored_items(), [])
+        self.assertFalse(self.store.has_transcript(self.session_id))
+        self.assertEqual(self.store.list_sessions(), [])
+
+    def test_drops_a_tool_call_whose_result_never_arrived(self) -> None:
+        self.start_turn(
+            ScriptedAgent(
+                self.session,
+                tail=(
+                    Message(
+                        role="assistant",
+                        content=None,
+                        tool_calls=(TOOL_CALL,),
+                    ),
+                ),
+                error=KeyboardInterrupt(),
+            )
+        )
+
+        self.assertEqual(
+            [message.role for message in self.stored_items()],
+            ["user"],
+        )
+        # The next turn must not send the unanswered call to the provider.
+        self.assertEqual(
+            [message.role for message in self.session.items],
+            ["user"],
+        )
+
+    def test_keeps_a_tool_step_that_received_its_result(self) -> None:
+        self.start_turn(
+            ScriptedAgent(
+                self.session,
+                tail=(
+                    Message(
+                        role="assistant",
+                        content=None,
+                        tool_calls=(TOOL_CALL,),
+                    ),
+                    Message(
+                        role="tool",
+                        content='{"ok": true}',
+                        tool_call_id=TOOL_CALL.id,
+                    ),
+                ),
+                error=KeyboardInterrupt(),
+            )
+        )
+
+        self.assertEqual(
+            [message.role for message in self.stored_items()],
+            ["user", "assistant", "tool"],
+        )
+
+    def test_reports_a_storage_failure_without_ending_the_bridge(self) -> None:
+        storage = patch.object(
+            self.bridge._store,
+            "bind_workspace",
+            side_effect=ValueError("session already exists in workspace: 'x'"),
+        )
+        storage.start()
+
+        self.start_turn(ScriptedAgent(self.session, error=KeyboardInterrupt()))
+
+        cancelled = emitted(self.stdout)[-1]
+        self.assertEqual(cancelled["type"], "turn_cancelled")
+        self.assertFalse(cancelled["persisted"])
+
+        # The bridge keeps serving turns once storage recovers.
+        storage.stop()
+        self.start_turn(
+            ScriptedAgent(self.session, error=KeyboardInterrupt()),
+            text="second try",
+        )
+        self.assertTrue(emitted(self.stdout)[-1]["persisted"])
+        self.assertEqual(
+            [message.content for message in self.stored_items()],
+            ["second try"],
+        )
+
+
 class BridgeStartTest(unittest.TestCase):
     """The bridge selects the provider the interface asked for."""
-
-    def start_message(self, directory: Path, **extra: object) -> dict:
-        provider_config_path = directory / "provider_config.json"
-        provider_config_path.write_text(
-            json.dumps(
-                {
-                    "main_agent": {"provider": "first"},
-                    "subagent": {"provider": ""},
-                    "providers": {
-                        "first": {
-                            "model": "openai/first",
-                            "max_context_tokens": 1000,
-                        },
-                        "second": {
-                            "model": "openai/second",
-                            "max_context_tokens": 1000,
-                        },
-                    },
-                }
-            ),
-            encoding="utf-8",
-        )
-        agent_config_path = directory / "agent_config.json"
-        agent_config_path.write_text(
-            json.dumps(
-                {
-                    "max_same_tool_calls": 5,
-                    "max_output_tokens": 100,
-                    "tools": {name: False for name in TOOL_NAMES},
-                }
-            ),
-            encoding="utf-8",
-        )
-        return {
-            "type": "start",
-            "workspace": str(directory),
-            "session_id": None,
-            "provider_config_path": str(provider_config_path),
-            "agent_config_path": str(agent_config_path),
-            **extra,
-        }
 
     def started_model(self, **extra: object) -> str:
         with tempfile.TemporaryDirectory() as directory:
             bridge, stdout = make_bridge([])
-            bridge.start(self.start_message(Path(directory), **extra))
+            bridge.start(start_message(Path(directory), **extra))
             return str(emitted(stdout)[0]["model"])
 
     def test_uses_the_configured_provider_by_default(self) -> None:

@@ -14,7 +14,7 @@ function DirectoryTree({ path, version, sessionId }: { path: string; version: nu
       if (active) { setDirectory(data); setError(""); }
     }).catch((error) => { if (active) setError(String(error)); });
     return () => { active = false; };
-  }, [path, version]);
+  }, [path, version, sessionId]);
 
   if (error) return <p className="tree-error" role="alert">{error}</p>;
   if (!directory) return <p className="tree-loading">加载中…</p>;

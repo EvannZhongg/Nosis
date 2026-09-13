@@ -351,16 +351,25 @@ class GuiTest(unittest.TestCase):
             )
 
     def test_reads_history_written_by_the_tui(self) -> None:
+        self.store.bind_workspace("from-tui", self.root)
         self.store.append_turn(
             "from-tui",
             LLMRequest("private prompt", ()),
             LLMResponse("你好"),
             (Message("user", "TUI 对话"), Message("assistant", "你好")),
+            workspace=self.root,
         )
         with self.client() as client:
             self.assertEqual(
                 client.get("/api/sessions").json(),
-                [{"session_id": "from-tui", "title": "TUI 对话"}],
+                [
+                    {
+                        "workspace": str(self.root.resolve()),
+                        "sessions": [
+                            {"session_id": "from-tui", "title": "TUI 对话"}
+                        ],
+                    }
+                ],
             )
             data = client.get("/api/sessions/from-tui").json()
 
