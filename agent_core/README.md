@@ -41,8 +41,8 @@
 
 ```json
 {
-  "main_agent": {"provider": "deepseek"},
-  "subagent": {"provider": ""},
+  "main_agent": {"provider": "deepseek", "vision_provider": "gemini"},
+  "subagent": {"provider": "", "vision_provider": ""},
   "providers": {
     "deepseek": {
       "model": "deepseek/deepseek-chat",
@@ -54,7 +54,7 @@
 }
 ```
 
-`key` 支持直接填写或 `${ENV_NAME}`；Ollama 等无密钥 Provider 可以省略。`max_context_tokens` 省略时从 LiteLLM 元数据读取，元数据缺失时必须填写。视觉能力依据 LiteLLM 的 `supports_vision` 自动识别；主模型不支持视觉且未指定覆盖时，Runtime 会从已配置且凭据可用的视觉 Provider 中选择第一个。需要时可用 `main_agent.vision_provider` 覆盖自动选择。OpenAI 兼容服务的 `model` 需要带 LiteLLM 接口前缀，例如 `openai/glm-5.3`。
+`key` 支持直接填写或 `${ENV_NAME}`；Ollama 等无密钥 Provider 可以省略。`max_context_tokens` 省略时从 LiteLLM 元数据读取，元数据缺失时必须填写。视觉能力依据 LiteLLM 的 `supports_vision` 自动识别；主模型不支持视觉且未指定覆盖时，Runtime 会从已配置且凭据可用的视觉 Provider 中选择第一个。需要时可用 `main_agent.vision_provider` 覆盖自动选择。Subagent 默认继承主 Agent 已解析的视觉 Provider，也可以通过 `subagent.vision_provider` 独立指定；显式指定的视觉 Provider 会在启动时校验图片输入能力。OpenAI 兼容服务的 `model` 需要带 LiteLLM 接口前缀，例如 `openai/glm-5.3`。
 
 ### MCP
 
@@ -80,7 +80,7 @@
 
 ## 内置 Tool
 
-`read_file`、`edit_file`、`search_files`、`list_directory`、`shell`、`web_search`、`analyze_image` 和 `subagent` 由统一 Tool 注册机制管理。文件 Tool 只接受 Workspace 内的相对路径；`search_files` 默认跳过超大文件、非文本文件以及 `.git`、`node_modules`、`build` 等目录。`shell` 每次执行前需要授权，并返回退出码、标准输出、标准错误和超时信息。`web_search` 默认关闭，通过 [Exa](https://exa.ai) 检索公网内容，单次最多返回 10 条结果，启用时需要 `EXA_API_KEY`（可在 [Exa Search](https://exa.ai/products/search) 申请）。单个 Tool Result 回灌模型最多 16K 字符，较大的结果会保存为 Session Artifact。
+`read_file`、`edit_file`、`search_files`、`list_directory`、`shell`、`web_search`、`analyze_image` 和 `subagent` 由统一 Tool 注册机制管理。Main Agent 与 Subagent 分别按各自的 `tools`/`subagent.tools` 开关注册工具；Subagent 默认配置已启用 `analyze_image`。文件 Tool 只接受 Workspace 内的相对路径；`search_files` 默认跳过超大文件、非文本文件以及 `.git`、`node_modules`、`build` 等目录。`shell` 每次执行前需要授权，并返回退出码、标准输出、标准错误和超时信息。`web_search` 默认关闭，通过 [Exa](https://exa.ai) 检索公网内容，单次最多返回 10 条结果，启用时需要 `EXA_API_KEY`（可在 [Exa Search](https://exa.ai/products/search) 申请）。单个 Tool Result 回灌模型最多 16K 字符，较大的结果会保存为 Session Artifact。
 
 ## Session 与附件
 

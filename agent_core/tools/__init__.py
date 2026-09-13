@@ -44,6 +44,7 @@ __all__ = [
     "WebSearchTool",
     "SubagentTool",
     "SubagentRegistry",
+    "AnalyzeImageTool",
     "create_builtin_tools",
     "load_tool_config",
 ]

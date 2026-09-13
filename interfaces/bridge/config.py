@@ -98,6 +98,15 @@ def load_model_options(path: Path) -> tuple[str, dict[str, str]]:
     }
 
 
+def configured_subagent_provider(path: Path, fallback: str) -> str:
+    """Return the effective subagent provider name."""
+    _, _, settings = _read_config(path)
+    configured = settings.get("provider", "")
+    if isinstance(configured, str) and configured.strip():
+        return configured.strip()
+    return fallback
+
+
 def load_config(path: Path, provider: str | None = None, *, subagent: bool = False) -> ModelConfig:
     default, providers, subagent_config = _read_config(path)
     if subagent:
@@ -139,27 +148,45 @@ def load_config(path: Path, provider: str | None = None, *, subagent: bool = Fal
     )
 
 
-def load_vision_config(path: Path, main_provider: str) -> ModelConfig | None:
-    """Load the optional vision provider used by ``analyze_image``.
+def load_vision_config(
+    path: Path,
+    agent_provider: str,
+    *,
+    agent: str = "main_agent",
+    inherited: ModelConfig | None = None,
+) -> ModelConfig | None:
+    """Resolve the vision provider for an agent role.
 
-    Native multimodal main models do not need this setting.  A text-only
-    main model can opt into a vision model by setting
-    ``main_agent.vision_provider`` to a configured provider name.
+    An explicit ``<agent>.vision_provider`` always wins.  Subagents inherit
+    the already-resolved main vision provider by default; otherwise the
+    agent's own provider or the first configured vision-capable provider is
+    selected.  Explicit providers are validated during startup.
     """
     with path.open(encoding="utf-8") as file:
         data = json.load(file)
-    main_agent = data.get("main_agent")
-    if not isinstance(main_agent, dict):
-        raise ValueError("config field 'main_agent' must be an object")
-    configured = main_agent.get("vision_provider")
+    settings = data.get(agent, {})
+    if not isinstance(settings, dict):
+        raise ValueError(f"config field '{agent}' must be an object")
+    configured = settings.get("vision_provider")
     if configured is not None and configured != "":
         if not isinstance(configured, str) or not configured.strip():
-            raise ValueError("config field 'main_agent.vision_provider' must be a non-empty string")
-        return load_config(path, configured.strip())
+            raise ValueError(
+                f"config field '{agent}.vision_provider' must be a non-empty string"
+            )
+        result = load_config(path, configured.strip())
+        _ensure_vision_capable(result, configured.strip(), agent)
+        return result
+
+    if agent == "subagent" and inherited is not None:
+        return inherited
+
+    current = load_config(path, agent_provider)
+    if _is_vision_capable(current):
+        return current
 
     _, providers, _ = _read_config(path)
     for name, selected in providers.items():
-        if name == main_provider or not isinstance(selected, dict):
+        if name == agent_provider or not isinstance(selected, dict):
             continue
         if not _provider_credentials_available(selected):
             continue
@@ -171,6 +198,25 @@ def load_vision_config(path: Path, main_provider: str) -> ModelConfig | None:
         if "image" in capabilities.input_modalities:
             return load_config(path, name)
     return None
+
+
+def _is_vision_capable(config: ModelConfig) -> bool:
+    return "image" in LiteLLMProvider.capabilities_for_model(
+        config.model,
+        config.url,
+    ).input_modalities
+
+
+def _ensure_vision_capable(
+    config: ModelConfig,
+    provider: str,
+    agent: str,
+) -> None:
+    if not _is_vision_capable(config):
+        raise ValueError(
+            f"provider '{provider}' configured as {agent}.vision_provider "
+            "does not support image input"
+        )
 
 
 def _optional_string(

@@ -32,7 +32,12 @@ from agent_core.prompts import load_system_prompt
 from agent_core.providers import LiteLLMProvider
 from agent_core.mcp.manager import McpClientManager, McpServerStatus
 
-from .config import load_config, load_model_options, load_vision_config
+from .config import (
+    configured_subagent_provider,
+    load_config,
+    load_model_options,
+    load_vision_config,
+)
 from .protocol import decode, encode, event_to_message, usage_to_dict
 
 
@@ -140,38 +145,6 @@ class Bridge:
             self._store.load(str(session_id)) if resumed else Session()
         )
 
-        subagent_registry = SubagentRegistry()
-        if agent_config.tools.is_enabled("subagent"):
-            # Sub-agents run with an isolated session and their own tool config.
-            subagent_provider_config = load_config(
-                config_path,
-                provider if isinstance(provider, str) and provider else None,
-                subagent=True,
-            )
-            child_tools = create_builtin_tools(
-                agent_config.subagent_tools,
-                workspace,
-                SubprocessCommandExecutor(workspace.path),
-                shell_timeout_seconds=agent_config.shell_timeout_seconds,
-                sessions_directory=sessions_directory,
-            )
-            subagent_registry.register(
-                SubagentTool(
-                    provider=LiteLLMProvider(
-                        model=subagent_provider_config.model,
-                        base_url=subagent_provider_config.url,
-                        api_key=subagent_provider_config.key,
-                        max_context_tokens=subagent_provider_config.max_context_tokens,
-                        media_root=workspace.path,
-                    ),
-                    config=agent_config,
-                    workspace=workspace,
-                    tools=child_tools,
-                    parent_session_id=self._session.session_id,
-                    sessions_directory=sessions_directory,
-                    tool_policy=ShellApprovalPolicy(self.request_permission),
-                )
-            )
         main_provider = LiteLLMProvider(
             model=config.model,
             base_url=config.url,
@@ -184,11 +157,7 @@ class Bridge:
             if isinstance(provider, str) and provider
             else load_model_options(config_path)[0]
         )
-        vision_config = (
-            load_vision_config(config_path, main_provider_name)
-            if "image" not in main_provider.capabilities.input_modalities
-            else None
-        )
+        vision_config = load_vision_config(config_path, main_provider_name)
         vision_provider = (
             LiteLLMProvider(
                 model=vision_config.model,
@@ -200,6 +169,63 @@ class Bridge:
             if vision_config is not None
             else None
         )
+
+        subagent_registry = SubagentRegistry()
+        if agent_config.tools.is_enabled("subagent"):
+            # Sub-agents run with an isolated session and their own tool config.
+            subagent_provider_config = load_config(
+                config_path,
+                provider if isinstance(provider, str) and provider else None,
+                subagent=True,
+            )
+            subagent_provider = LiteLLMProvider(
+                model=subagent_provider_config.model,
+                base_url=subagent_provider_config.url,
+                api_key=subagent_provider_config.key,
+                max_context_tokens=subagent_provider_config.max_context_tokens,
+                media_root=workspace.path,
+            )
+            subagent_provider_name = configured_subagent_provider(
+                config_path,
+                main_provider_name,
+            )
+            subagent_vision_config = load_vision_config(
+                config_path,
+                subagent_provider_name,
+                agent="subagent",
+                inherited=vision_config,
+            )
+            subagent_vision_provider = (
+                LiteLLMProvider(
+                    model=subagent_vision_config.model,
+                    base_url=subagent_vision_config.url,
+                    api_key=subagent_vision_config.key,
+                    max_context_tokens=subagent_vision_config.max_context_tokens,
+                    media_root=workspace.path,
+                )
+                if subagent_vision_config is not None
+                else None
+            )
+            child_tools = create_builtin_tools(
+                agent_config.subagent_tools,
+                workspace,
+                SubprocessCommandExecutor(workspace.path),
+                shell_timeout_seconds=agent_config.shell_timeout_seconds,
+                vision_provider=subagent_vision_provider,
+                sessions_directory=sessions_directory,
+            )
+            subagent_registry.register(
+                SubagentTool(
+                    provider=subagent_provider,
+                    config=agent_config,
+                    workspace=workspace,
+                    tools=child_tools,
+                    parent_session=self._session,
+                    parent_session_id=self._session.session_id,
+                    sessions_directory=sessions_directory,
+                    tool_policy=ShellApprovalPolicy(self.request_permission),
+                )
+            )
         builtin_tools = create_builtin_tools(
             agent_config.tools,
             workspace,

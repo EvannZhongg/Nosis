@@ -17,6 +17,33 @@ uv tool install --editable ".[gui]"
 
 该命令会安装 `nosis` 和 `nosis-gui`；仓库新增依赖后重新执行即可更新安装环境。
 
+## 初始化后的最小模型配置
+
+首次启动会在 `~/.nosis/` 生成配置文件。要使用 OpenAI 兼容模型，可将
+`~/.nosis/provider_config.json` 精简为下面的最小配置（保留其他 Provider 也可以）：
+
+```json
+{
+  "main_agent": {"provider": "openai"},
+  "providers": {
+    "openai": {
+      "model": "openai/gpt-5",
+      "url": "https://api.openai.com/v1",
+      "key": "${OPENAI_KEY}"
+    }
+  }
+}
+```
+
+再在 `~/.nosis/.env` 写入 API Key：
+
+```dotenv
+OPENAI_KEY=your-api-key
+```
+
+`model` 使用 LiteLLM 的模型名称；也可以把 `key` 直接填写在 JSON 中。其他 Provider
+（包括 Ollama）以及完整的配置字段说明见 [Agent Core 配置文档](agent_core/README.md#配置文件)。
+
 在任意 Workspace 中启动 TUI：
 
 ```bash

@@ -1,6 +1,6 @@
 {
-  "main_agent": {"provider": "openai"},
-  "subagent": {"provider": ""},
+  "main_agent": {"provider": "openai", "vision_provider": ""},
+  "subagent": {"provider": "", "vision_provider": ""},
   "providers": {
     "openai": {
       "model": "openai/gpt-5",

@@ -13,6 +13,7 @@ from ...session_store import JsonlSessionStore
 from ...session_paths import session_directory
 from ...session_paths import default_sessions_directory
 from ...workspace import Workspace
+from ...content import ImagePart
 from ..base import JSONValue, Tool, ToolDefinition
 from ..base import ToolPolicy
 if TYPE_CHECKING:
@@ -38,6 +39,7 @@ class SubagentTool(Tool):
         system_prompt: str | None = None,
         sessions_directory: Path | None = None,
         parent_session_id: str | None = None,
+        parent_session: Session | None = None,
         tool_policy: ToolPolicy | None = None,
     ) -> None:
         self._provider = provider
@@ -65,6 +67,7 @@ class SubagentTool(Tool):
             )
         self._store = JsonlSessionStore(sessions_directory)
         self._tool_policy = tool_policy
+        self._parent_session = parent_session
 
     @property
     def definition(self) -> ToolDefinition:
@@ -108,7 +111,16 @@ class SubagentTool(Tool):
             tool_policy=self._tool_policy,
             sessions_directory=self._artifact_sessions_directory,
         )
-        result = child.run(task.strip())
+        attachments: tuple[ImagePart, ...] = ()
+        if self._parent_session is not None:
+            for item in reversed(self._parent_session.items):
+                if item.role != "user":
+                    continue
+                attachments = tuple(
+                    part for part in item.parts if isinstance(part, ImagePart)
+                )
+                break
+        result = child.run(task.strip(), attachments=attachments)
         context_fields = {}
         if session.archived_summary is not None:
             context_fields = {
