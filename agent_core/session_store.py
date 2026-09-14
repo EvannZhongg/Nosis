@@ -43,6 +43,20 @@ class JsonlSessionStore:
         path = self._session_path(session_id)
         return path is not None and path.is_file()
 
+    def delete_session(self, session_id: str) -> bool:
+        """Delete a persisted session and return whether it existed."""
+        _validate_session_id(session_id)
+        if self._group_by_workspace:
+            session_dir = self._find_session_directory(session_id)
+        else:
+            session_dir = self._directory / session_id
+            if not (session_dir / f"{session_id}.jsonl").is_file():
+                session_dir = None
+        if session_dir is None or not session_dir.is_dir():
+            return False
+        shutil.rmtree(session_dir)
+        return True
+
     def list_sessions(self) -> list[dict[str, object]]:
         """Summarize sessions grouped by their workspace."""
         if not self._directory.is_dir():

@@ -18,7 +18,7 @@ from agent_core.providers import LiteLLMProvider
 
 
 def chunk(
-    content: str | None = None,
+    content: object | None = None,
     tool_calls: list[dict] | None = None,
     usage: object | None = None,
 ) -> object:
@@ -279,6 +279,32 @@ class LiteLLMProviderTest(unittest.TestCase):
             stream_options={"include_usage": True},
             max_tokens=100,
         )
+
+    @patch("agent_core.providers.litellm_provider.completion")
+    def test_parses_structured_text_content_blocks(self, completion_mock) -> None:
+        """Adapters may expose streamed text as OpenAI-style blocks."""
+        completion_mock.return_value = iter(
+            [
+                chunk(content=[{"type": "text", "text": "first "}]),
+                chunk(content=[{"type": "text", "text": "second"}]),
+            ]
+        )
+        provider = LiteLLMProvider(
+            model="openai/test-model",
+            max_context_tokens=1000,
+        )
+
+        deltas: list[str] = []
+        response = provider.stream(
+            LLMRequest(
+                system_prompt="Answer.",
+                messages=(Message(role="user", content="hello"),),
+            ),
+            deltas.append,
+        )
+
+        self.assertEqual(response.content, "first second")
+        self.assertEqual(deltas, ["first ", "second"])
 
     @patch("agent_core.providers.litellm_provider.completion")
     def test_serializes_tools_and_parses_tool_calls(

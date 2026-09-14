@@ -39,6 +39,23 @@ export function sessionUrl(sessionId: string): string {
   return `/api/sessions/${encodeURIComponent(sessionId)}`;
 }
 
+export async function deleteSession(sessionId: string): Promise<void> {
+  const response = await fetch(sessionUrl(sessionId), { method: "DELETE" });
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail ?? `会话删除失败 (${response.status})`);
+  }
+}
+
+export async function selectWorkspace(): Promise<string | null> {
+  const response = await fetch("/api/select-workspace");
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail ?? `选择工作区失败 (${response.status})`);
+  }
+  return (await response.json() as { workspace: string | null }).workspace;
+}
+
 export async function updateSessionWorkspace(sessionId: string, workspace: string): Promise<string> {
   const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/workspace`, {
     method: "PUT",

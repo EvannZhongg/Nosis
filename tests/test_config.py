@@ -111,6 +111,14 @@ class ConfigTest(unittest.TestCase):
             )
             self.assertEqual(provider_config["subagent"]["provider"], "")
             self.assertIn("openai", provider_config["providers"])
+            self.assertEqual(
+                provider_config["providers"]["qwen"],
+                {
+                    "model": "dashscope/qwen-plus",
+                    "url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                    "key": "${DASHSCOPE_API_KEY}",
+                },
+            )
             self.assertEqual(agent_config["max_same_tool_calls"], 5)
             self.assertEqual(agent_config["shell_timeout_seconds"], 60)
             self.assertTrue(agent_config["main_agent"]["tools"]["read_file"])

@@ -19,12 +19,21 @@ svg { flex-shrink: 0; }
 .section-label { display: flex; justify-content: space-between; margin: 31px 10px 12px; font-size: 11px; color: #9399a6; letter-spacing: .5px; }
 .section-label span { font-size: 10px; }
 .session-list { flex: 1; overflow-y: auto; }
-.session-button { display: flex; align-items: center; gap: 10px; width: 100%; margin-bottom: 4px; padding: 11px 10px; border: 0; border-radius: 6px; background: transparent; color: #737b8b; text-align: left; font-size: 12px; }
+.session-row { display: flex; align-items: center; margin-bottom: 4px; border-radius: 6px; }
+.session-button { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; width: 100%; padding: 11px 10px; border: 0; border-radius: 6px; background: transparent; color: #737b8b; text-align: left; font-size: 12px; }
 .session-button span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.session-button:hover { background: #eceef3; }
-.session-button.selected { background: #e9edf6; color: #40568a; }
+.session-row:hover, .session-row.selected { background: #eceef3; }
+.session-row.selected { background: #e9edf6; }
+.session-row:hover .session-button, .session-row.selected .session-button { color: #40568a; }
+.delete-session { display: grid; place-items: center; width: 28px; height: 28px; margin-right: 5px; border: 0; border-radius: 5px; background: transparent; color: #9da5b3; opacity: 0; }
+.session-row:hover .delete-session, .session-row.selected .delete-session, .delete-session:focus-visible { opacity: 1; }
+.delete-session:hover { background: #f9e9e8; color: #ad6262; }
 .workspace-group { margin: 8px 0 14px; }
-.workspace-group-title { display: flex; align-items: center; gap: 7px; padding: 6px 9px; color: #8a94a6; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .3px; }
+.workspace-group-title { display: flex; align-items: center; gap: 5px; width: 100%; padding: 6px 7px; border: 0; border-radius: 5px; background: transparent; color: #8a94a6; text-align: left; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .3px; }
+.workspace-group-title:hover { background: #eceef3; color: #63708a; }
+.workspace-chevron { display: grid; place-items: center; color: #a3abba; }
+.workspace-group-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-session-count { margin-left: auto; font-size: 10px; color: #abb2bf; font-weight: 500; }
 .workspace-group-title small { display: none; }
 .session-empty { font-size: 12px; margin: 16px 10px; color: #999fab; }
 .sidebar-footer { display: flex; align-items: center; gap: 8px; height: 54px; border-top: 1px solid #e6e8ed; font-size: 10px; color: #9198a4; padding: 0 9px; }
@@ -80,9 +89,10 @@ pre { overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-famil
 .tool-body pre { margin: 5px 0 10px; max-height: 280px; }
 .composer-area { width: 100%; max-width: 820px; margin: 0 auto; padding: 5px 32px 0; }
 .composer { border: 1px solid #dfe4ed; border-radius: 12px; padding: 15px 15px 10px; background: #fff; box-shadow: 0 3px 15px #20385c04; }
-.workspace-picker { display: flex; align-items: center; gap: 9px; width: 100%; border: 0; padding: 0 0 12px; background: transparent; color: #66728a; text-align: left; font-size: 12px; cursor: pointer; }
+.workspace-picker-wrap { position: relative; display: inline-block; width: fit-content; max-width: 100%; }
+.workspace-picker { display: inline-flex; align-items: center; gap: 9px; width: fit-content; max-width: 100%; border: 0; padding: 0 0 12px; background: transparent; color: #66728a; text-align: left; font-size: 12px; cursor: pointer; }
 .workspace-picker-icon { font-size: 16px; color: #4e5e78; }
-.workspace-picker-value { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-picker-value { flex: 0 1 auto; max-width: 55ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .composer:focus-within { border-color: #a7b5d2; box-shadow: 0 0 0 3px #687fab08; }
 .composer textarea { resize: none; width: 100%; min-height: 48px; max-height: 180px; border: 0; outline: none; background: transparent; padding: 0 2px; font-size: 13px; line-height: 1.7; color: #343d4d; }
 .composer textarea::placeholder { color: #a5adba; }
@@ -91,9 +101,14 @@ pre { overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-famil
 .attachment-chip img { width: 96px; height: 72px; border-radius: 5px; object-fit: cover; background: #e8ebf1; }
 .attachment-chip > span { display: none; }
 .attachment-chip button { position: absolute; top: 5px; right: 5px; display: grid; place-items: center; width: 19px; height: 19px; border: 0; border-radius: 50%; padding: 0; background: #ffffffdd; color: #536078; cursor: pointer; }
-.workspace-editor { display: flex; align-items: center; gap: 8px; margin: -3px 0 10px; padding-bottom: 8px; border-bottom: 1px solid #eef0f4; color: #788399; font-size: 10px; }
-.workspace-editor input { flex: 1; min-width: 0; border: 1px solid #e1e5ec; border-radius: 5px; padding: 5px 7px; background: #fff; color: #4f5b70; font-size: 10px; }
-.workspace-editor button { border: 1px solid #dbe1eb; border-radius: 5px; padding: 5px 9px; background: #f8f9fb; color: #657392; font-size: 10px; cursor: pointer; }
+.workspace-menu { position: absolute; z-index: 5; left: 0; bottom: calc(100% - 2px); width: 280px; max-width: min(280px, calc(100vw - 48px)); padding: 8px; border: 1px solid #dfe4ed; border-radius: 9px; background: #fff; box-shadow: 0 8px 24px #20385c18; }
+.workspace-menu-heading { padding: 3px 8px 7px; color: #9aa3b1; font-size: 10px; }
+.workspace-option { display: flex; align-items: center; width: 100%; padding: 7px 8px; border: 0; border-radius: 5px; background: transparent; color: #687387; text-align: left; cursor: pointer; }
+.workspace-option:hover, .workspace-option.selected { background: #f1f3f8; color: #40568a; }
+.workspace-option-path { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.workspace-menu-divider { height: 1px; margin: 7px 3px; background: #edf0f4; }
+.workspace-new-option { width: 100%; padding: 7px 8px; border: 0; border-radius: 5px; background: transparent; color: #7b879b; text-align: left; font-size: 11px; cursor: pointer; }
+.workspace-new-option:hover { background: #f5f6f9; color: #53688f; }
 .attachment-button { display: grid; place-items: center; width: 27px; height: 27px; border: 0; border-radius: 6px; background: transparent; color: #8b96a9; cursor: pointer; }
 .attachment-button:hover { background: #f1f3f7; color: #5d709e; }
 .attachment-button:disabled { opacity: .5; cursor: default; }

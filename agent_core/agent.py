@@ -371,6 +371,12 @@ class Agent:
                 continue
 
             if response.content is None:
+                if response.reasoning:
+                    raise ValueError(
+                        "LLM response contained reasoning but no final content "
+                        "or tool calls; the model may have exhausted its output "
+                        "token limit before producing an answer"
+                    )
                 raise ValueError(
                     "LLM response must contain content or tool calls"
                 )

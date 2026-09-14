@@ -204,6 +204,17 @@ def create_app(
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
 
+    @app.delete("/api/sessions/{session_id}")
+    def delete_session(session_id: str) -> dict[str, bool]:
+        try:
+            deleted = store.delete_session(session_id)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        if not deleted:
+            raise HTTPException(status_code=404, detail="会话不存在。")
+        pending_workspaces.pop(session_id, None)
+        return {"deleted": True}
+
     def session_workspace(session_id: str | None) -> Workspace:
         """Resolve the workspace bound to a session, falling back for new sessions."""
         if session_id:
@@ -236,6 +247,22 @@ def create_app(
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         return {"workspace": str(selected.path)}
+
+    @app.get("/api/select-workspace")
+    def select_workspace() -> dict[str, str | None]:
+        """Open a native folder picker for the local GUI server."""
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+
+            root = tk.Tk()
+            root.withdraw()
+            root.attributes("-topmost", True)
+            selected = filedialog.askdirectory(title="选择工作区")
+            root.destroy()
+        except Exception as error:
+            raise HTTPException(status_code=500, detail=f"无法打开文件夹选择器：{error}") from error
+        return {"workspace": selected or None}
 
     @app.get("/api/workspace")
     def get_workspace(path: str = ".", session_id: str | None = None) -> dict[str, object]:

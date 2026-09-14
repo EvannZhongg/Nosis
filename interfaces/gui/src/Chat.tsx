@@ -7,7 +7,7 @@ import {
 import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
 import { ArrowUp, Check, ChevronDown, ChevronRight, LoaderCircle, Paperclip, ShieldCheck, Square, Terminal, X } from "lucide-react";
 import remarkGfm from "remark-gfm";
-import { get, sessionUrl, updateSessionWorkspace, uploadAttachments, type ImageAttachment, type ModelOption, type Session } from "./api";
+import { get, selectWorkspace, sessionUrl, updateSessionWorkspace, uploadAttachments, type ImageAttachment, type ModelOption, type Session } from "./api";
 import { SessionSocket } from "./session";
 import { applyMessage, toMessages, type Notice, type TranscriptItem } from "./transcript";
 import type { Usage } from "@nosis/protocol";
@@ -74,10 +74,11 @@ function PendingAttachment({ file, onRemove }: { file: File; onRemove: () => voi
   return <span className="attachment-chip"><img src={url} alt={file.name} /><span>{file.name}</span><button type="button" aria-label={`移除 ${file.name}`} onClick={onRemove}><X size={12} /></button></span>;
 }
 
-export function Chat({ session, disabled, models, model, onModelChange, onBusyChange, onUsageChange, onTurnEnd, onWorkspaceChange }: {
+export function Chat({ session, workspaceOptions = [], disabled, models, model, onModelChange, onBusyChange, onUsageChange, onTurnEnd, onWorkspaceChange }: {
   session: Session; disabled: boolean; onBusyChange: (busy: boolean) => void; onTurnEnd: () => void;
   onUsageChange: (usage: Usage | null) => void;
   models: ModelOption[]; model: string; onModelChange: (model: string) => void;
+  workspaceOptions?: string[];
   onWorkspaceChange?: (workspace: string) => void;
 }) {
   const [items, setItems] = useState<TranscriptItem[]>(session.items);
@@ -88,6 +89,7 @@ export function Chat({ session, disabled, models, model, onModelChange, onBusyCh
   const [workspaceDraft, setWorkspaceDraft] = useState(session.workspace ?? "");
   const [workspaceSaving, setWorkspaceSaving] = useState(false);
   const [workspaceEditing, setWorkspaceEditing] = useState(false);
+  const workspacePickerRef = useRef<HTMLDivElement | null>(null);
   const socketRef = useRef<SessionSocket | null>(null);
   const noticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const turnCounter = useRef(0);
@@ -102,6 +104,17 @@ export function Chat({ session, disabled, models, model, onModelChange, onBusyCh
   useEffect(() => {
     if (session.workspace) setWorkspaceDraft(session.workspace);
   }, [session.workspace]);
+
+  useEffect(() => {
+    if (!workspaceEditing) return;
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (workspacePickerRef.current?.contains(event.target as Node)) return;
+      setWorkspaceEditing(false);
+      if (!workspaceDraft.trim()) setWorkspaceDraft(session.workspace ?? "");
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    return () => document.removeEventListener("pointerdown", closeOnOutsidePointer);
+  }, [workspaceEditing, workspaceDraft, session.workspace]);
 
   const showItems = useCallback((next: TranscriptItem[]) => {
     itemsRef.current = next;
@@ -261,23 +274,35 @@ export function Chat({ session, disabled, models, model, onModelChange, onBusyCh
     setApproval(null);
   }
 
-  async function saveWorkspace() {
-    if (!workspaceDraft.trim() || workspaceDraft.trim() === session.workspace) return;
+  async function saveWorkspace(value = workspaceDraft) {
+    const nextWorkspace = value.trim();
+    if (!nextWorkspace || nextWorkspace === session.workspace) return;
     setWorkspaceSaving(true);
     try {
-      const value = await updateSessionWorkspace(session.session_id, workspaceDraft.trim());
-      setWorkspaceDraft(value);
-      onWorkspaceChange?.(value);
+      const savedWorkspace = await updateSessionWorkspace(session.session_id, nextWorkspace);
+      setWorkspaceDraft(savedWorkspace);
+      onWorkspaceChange?.(savedWorkspace);
       // Restart the bridge so prompts, tools and vision provider all use the
       // newly selected workspace for subsequent turns.
       socketRef.current?.close();
       socketRef.current = null;
       if (!disabled && model) connect();
-      showNotice({ level: "info", text: `工作区已切换为 ${value}` }, true);
+      showNotice({ level: "info", text: `工作区已切换为 ${savedWorkspace}` }, true);
     } catch (error) {
       showNotice({ level: "error", text: String(error) });
     } finally {
       setWorkspaceSaving(false);
+    }
+  }
+
+  async function chooseNewWorkspace() {
+    try {
+      const selected = await selectWorkspace();
+      if (!selected) return;
+      setWorkspaceEditing(false);
+      await saveWorkspace(selected);
+    } catch (error) {
+      showNotice({ level: "error", text: String(error) });
     }
   }
 
@@ -299,6 +324,7 @@ export function Chat({ session, disabled, models, model, onModelChange, onBusyCh
   }
 
   const runtime = useExternalStoreRuntime({ messages, convertMessage: (message) => message, isRunning: running, isDisabled: disabled, onNew });
+  const availableWorkspaces = Array.from(new Set([...workspaceOptions, workspaceDraft].filter(Boolean)));
 
   return <AssistantRuntimeProvider runtime={runtime}>
     <ThreadPrimitive.Root className="thread">
@@ -315,7 +341,7 @@ export function Chat({ session, disabled, models, model, onModelChange, onBusyCh
           {!approval && <button className="stop-button" aria-label="停止执行" onClick={() => socketRef.current?.send({ type: "cancel" })}><Square size={11} /> 停止</button>}
         </div>}
         {pendingFiles.length > 0 && <div className="attachment-list" aria-label="待发送图片">{pendingFiles.map((file, index) => <PendingAttachment key={`${file.name}-${file.lastModified}-${index}`} file={file} onRemove={() => setPendingFiles((files) => files.filter((_, itemIndex) => itemIndex !== index))} />)}</div>}
-        <ComposerPrimitive.Root className="composer"><button type="button" className="workspace-picker" onClick={() => setWorkspaceEditing((value) => !value)} disabled={disabled || running}><span className="workspace-picker-icon">⌂</span><span className="workspace-picker-value">{workspaceDraft || "选择项目"}</span><ChevronDown size={14} /></button>{workspaceEditing && <div className="workspace-editor"><input aria-label="当前工作区" value={workspaceDraft} onChange={(event) => setWorkspaceDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { void saveWorkspace(); setWorkspaceEditing(false); } }} disabled={disabled || running || workspaceSaving} /><button type="button" onClick={() => { void saveWorkspace(); setWorkspaceEditing(false); }} disabled={disabled || running || workspaceSaving}>保存</button></div>}<ComposerPrimitive.Input placeholder="Ask Nosis…" aria-label="消息" rows={2} autoFocus onPaste={onPaste} /><div className="composer-bottom">
+        <ComposerPrimitive.Root className="composer"><div ref={workspacePickerRef} className="workspace-picker-wrap"><button type="button" className="workspace-picker" onClick={() => setWorkspaceEditing((value) => { if (value && !workspaceDraft.trim()) setWorkspaceDraft(session.workspace ?? ""); return !value; })} disabled={disabled || running} aria-expanded={workspaceEditing}><span className="workspace-picker-icon">⌂</span><span className="workspace-picker-value">{workspaceDraft || "选择项目"}</span><ChevronDown size={14} /></button>{workspaceEditing && <div className="workspace-menu" role="menu"><div className="workspace-menu-heading">选择工作区</div>{availableWorkspaces.map((path) => <button type="button" role="menuitem" className={`workspace-option ${path === workspaceDraft ? "selected" : ""}`} key={path} onClick={() => { void saveWorkspace(path); setWorkspaceEditing(false); }} disabled={disabled || running || workspaceSaving} title={path}><span className="workspace-option-path">{path}</span></button>)}<div className="workspace-menu-divider" /><button type="button" role="menuitem" className="workspace-new-option" onClick={() => { void chooseNewWorkspace(); }} disabled={disabled || running || workspaceSaving}>＋ 新建工作区</button></div>}</div><ComposerPrimitive.Input placeholder="Ask Nosis…" aria-label="消息" rows={2} autoFocus onPaste={onPaste} /><div className="composer-bottom">
           <button type="button" className="attachment-button" aria-label="添加图片" title="添加图片" disabled={disabled || running} onClick={() => fileInputRef.current?.click()}><Paperclip size={15} /></button>
           <input ref={fileInputRef} className="attachment-input" type="file" accept="image/*" multiple onChange={(event) => { setPendingFiles((files) => [...files, ...Array.from(event.target.files ?? [])]); event.currentTarget.value = ""; }} />
           <label className="model-selector" title={models.find((option) => option.id === model)?.model}>

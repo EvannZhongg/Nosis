@@ -141,8 +141,15 @@ class LiteLLMProvider(LLMProvider):
             if delta is None:
                 continue
 
-            text = _get_field(delta, "content")
-            if isinstance(text, str) and text:
+            # Most OpenAI-compatible providers stream ``content`` as a
+            # string.  Some LiteLLM adapters (notably multimodal providers)
+            # return the same text as structured content blocks instead,
+            # e.g. ``[{"type": "text", "text": "..."}]``.  Normalise both
+            # forms before deciding that the response is empty; otherwise a
+            # perfectly valid streamed answer is discarded and Agent raises
+            # ``LLM response must contain content or tool calls``.
+            text = _text_from_content(_get_field(delta, "content"))
+            if text:
                 content += text
                 on_text_delta(text)
 
@@ -458,3 +465,19 @@ def _get_field(value: object, name: str) -> object:
     if isinstance(value, dict):
         return value.get(name)
     return getattr(value, name, None)
+
+
+def _text_from_content(value: object) -> str:
+    """Extract text from string or OpenAI-style content blocks.
+
+    LiteLLM normally exposes streamed deltas as strings, but adapters for
+    some providers expose a list of typed blocks.  Only the text field is
+    considered so metadata or image blocks cannot accidentally become part
+    of the assistant message.
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (list, tuple)):
+        return "".join(_text_from_content(item) for item in value)
+    text = _get_field(value, "text")
+    return text if isinstance(text, str) else ""
