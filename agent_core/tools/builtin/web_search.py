@@ -1,6 +1,7 @@
 from exa_py import Exa
 
 from ..base import JSONValue, Tool, ToolDefinition
+from ..context import ToolExecutionContext
 
 
 DEFAULT_NUM_RESULTS = 5
@@ -11,13 +12,11 @@ MAX_HIGHLIGHT_CHARACTERS = 1000
 
 
 class WebSearchTool(Tool):
-    def __init__(self) -> None:
-        self._client: Exa | None = None
+    name = "web_search"
 
-    @property
-    def definition(self) -> ToolDefinition:
+    def definition(self, context: ToolExecutionContext) -> ToolDefinition:
         return ToolDefinition(
-            name="web_search",
+            name=self.name,
             description=(
                 "Search the web for current information and return ranked "
                 "results, each with its title, URL, publication date and the "
@@ -56,7 +55,11 @@ class WebSearchTool(Tool):
             },
         )
 
-    def execute(self, arguments: dict[str, JSONValue]) -> JSONValue:
+    def execute(
+        self,
+        arguments: dict[str, JSONValue],
+        context: ToolExecutionContext,
+    ) -> JSONValue:
         query = arguments.get("query")
         num_results = arguments.get("num_results", DEFAULT_NUM_RESULTS)
         include_domains = _parse_domains(
@@ -91,14 +94,11 @@ class WebSearchTool(Tool):
                 "'include_domains', and 'exclude_domains'"
             )
 
-        client = self._client
-        if client is None:
-            # Built on first use so a missing EXA_API_KEY fails this call
-            # instead of preventing the agent from starting.
-            client = Exa()
-            self._client = client
-
-        response = client.search(
+        # Built per call: the tool instance is shared by every Agent of
+        # the Runtime and may run on several threads, so it caches nothing.
+        # A missing EXA_API_KEY therefore fails this call rather than
+        # preventing the agent from starting.
+        response = Exa().search(
             query,
             type="auto",
             num_results=num_results,

@@ -12,6 +12,9 @@ TOOL_NAMES = (
     "analyze_image",
 )
 
+# A role runs inside a sub-agent, so it can never delegate again.
+ROLE_TOOL_NAMES = tuple(name for name in TOOL_NAMES if name != "subagent")
+
 
 @dataclass(frozen=True)
 class ToolConfig:
@@ -21,22 +24,17 @@ class ToolConfig:
         return name in self.enabled
 
 
-def load_tool_config(data: object, *, allow_subagent: bool = True) -> ToolConfig:
+def load_tool_config(data: object, *, allowed: tuple[str, ...] = TOOL_NAMES) -> ToolConfig:
     if not isinstance(data, dict):
         raise ValueError("config field 'tools' must be an object")
 
-    allowed_names = set(TOOL_NAMES)
-    if not allow_subagent:
-        allowed_names.discard("subagent")
-    unknown_names = set(data) - allowed_names
+    unknown_names = set(data) - set(allowed)
     if unknown_names:
         names = ", ".join(sorted(unknown_names))
         raise ValueError(f"unknown tool config field(s): {names}")
 
     enabled = []
-    for name in TOOL_NAMES:
-        if name not in allowed_names:
-            continue
+    for name in allowed:
         value = data.get(name, False)
         if not isinstance(value, bool):
             raise ValueError(

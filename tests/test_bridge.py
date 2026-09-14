@@ -1,6 +1,8 @@
 import io
 import json
 import tempfile
+import threading
+import time
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -172,6 +174,22 @@ def emitted(stdout: io.StringIO) -> list[dict]:
     ]
 
 
+class _SlowStdin:
+    """A stdin whose readline yields the GIL mid-call.
+
+    A real pipe blocks in readline while other threads run, which is what
+    lets two unsynchronized approvals interleave. StringIO returns without
+    ever yielding and would hide the race.
+    """
+
+    def __init__(self, lines: list[str]) -> None:
+        self._lines = iter(f"{line}\n" for line in lines)
+
+    def readline(self) -> str:
+        time.sleep(0.01)
+        return next(self._lines, "")
+
+
 class BridgeApprovalTest(unittest.TestCase):
     def test_approves_matching_request(self) -> None:
         bridge, stdout = make_bridge(
@@ -226,6 +244,52 @@ class BridgeApprovalTest(unittest.TestCase):
         with self.assertRaises(Cancelled):
             bridge.request_permission("ls")
 
+    def test_serializes_approvals_from_parallel_tool_calls(self) -> None:
+        """Concurrent sub-agents share one protocol channel.
+
+        Without serialization two threads interleave their read-modify-write
+        on stdin: each can consume the other's response, so a request never
+        sees its answer and both wait forever.
+        """
+        approvals = 4
+        responses = [
+            '{"type": "approval_response", "request_id": "None:%d",'
+            ' "approved": true}' % index
+            for index in range(1, approvals + 1)
+        ]
+        stdout = io.StringIO()
+        bridge = Bridge(_SlowStdin(responses), stdout)
+        results: list[bool] = []
+        lock = threading.Lock()
+        barrier = threading.Barrier(approvals, timeout=5)
+
+        def approve(index: int) -> None:
+            barrier.wait()
+            approved = bridge.request_permission(f"command {index}")
+            with lock:
+                results.append(approved)
+
+        threads = [
+            threading.Thread(target=approve, args=(index,), daemon=True)
+            for index in range(approvals)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            # An answer consumed by the wrong thread would hang here.
+            thread.join(timeout=10)
+            self.assertFalse(thread.is_alive(), "an approval never returned")
+
+        self.assertEqual(results, [True] * approvals)
+        # Each request got its own id, and each was answered exactly once.
+        request_ids = [
+            message["request_id"]
+            for message in emitted(stdout)
+            if message["type"] == "approval_request"
+        ]
+        self.assertEqual(len(request_ids), approvals)
+        self.assertEqual(len(set(request_ids)), approvals)
+
 
 class BridgeServeTest(unittest.TestCase):
     def test_stops_on_shutdown(self) -> None:
@@ -250,7 +314,11 @@ class BridgeServeTest(unittest.TestCase):
         self.assertEqual(emitted(stdout)[0]["type"], "fatal")
 
 
-def start_message(directory: Path, **extra: object) -> dict:
+def start_message(
+    directory: Path,
+    agent_config: dict | None = None,
+    **extra: object,
+) -> dict:
     provider_config_path = directory / "provider_config.json"
     provider_config_path.write_text(
         json.dumps(
@@ -274,10 +342,12 @@ def start_message(directory: Path, **extra: object) -> dict:
     agent_config_path = directory / "agent_config.json"
     agent_config_path.write_text(
         json.dumps(
-            {
+            agent_config
+            if agent_config is not None
+            else {
                 "max_same_tool_calls": 5,
                 "max_output_tokens": 100,
-                "tools": {name: False for name in TOOL_NAMES},
+                "main_agent": {"tools": {name: False for name in TOOL_NAMES}},
             }
         ),
         encoding="utf-8",
@@ -501,6 +571,83 @@ class BridgeStartTest(unittest.TestCase):
     def test_rejects_an_unconfigured_provider(self) -> None:
         with self.assertRaisesRegex(ValueError, "not configured"):
             self.started_model(provider="unknown")
+
+
+class SubagentRoleStartTest(unittest.TestCase):
+    """Only enabled roles reach the model's subagent schema."""
+
+    def offered_roles(self, roles: dict) -> list[str]:
+        with tempfile.TemporaryDirectory() as directory:
+            bridge, _ = make_bridge([])
+            bridge.start(
+                start_message(
+                    Path(directory),
+                    agent_config={
+                        "max_same_tool_calls": 5,
+                        "max_output_tokens": 100,
+                        "main_agent": {"tools": {"subagent": True}},
+                        "subagent_roles": roles,
+                    },
+                )
+            )
+            subagents = bridge._agent._tools._context.subagents
+            if subagents is None:
+                return []
+            return [role.name for role in subagents.roles]
+
+    def test_offers_every_enabled_role(self) -> None:
+        self.assertEqual(
+            self.offered_roles(
+                {
+                    "researcher": {"description": "Reads.", "tools": {}},
+                    "coder": {
+                        "enabled": True,
+                        "description": "Writes.",
+                        "tools": {},
+                    },
+                }
+            ),
+            ["researcher", "coder"],
+        )
+
+    def test_omits_a_disabled_role(self) -> None:
+        self.assertEqual(
+            self.offered_roles(
+                {
+                    "researcher": {"description": "Reads.", "tools": {}},
+                    "coder": {
+                        "enabled": False,
+                        "description": "Writes.",
+                        "tools": {},
+                    },
+                }
+            ),
+            ["researcher"],
+        )
+
+    def test_disabling_every_role_removes_the_subagent_tool(self) -> None:
+        """With no role left there is nothing to delegate to."""
+        with tempfile.TemporaryDirectory() as directory:
+            bridge, _ = make_bridge([])
+            bridge.start(
+                start_message(
+                    Path(directory),
+                    agent_config={
+                        "max_same_tool_calls": 5,
+                        "max_output_tokens": 100,
+                        "main_agent": {"tools": {"subagent": True}},
+                        "subagent_roles": {
+                            "researcher": {
+                                "enabled": False,
+                                "description": "Reads.",
+                                "tools": {},
+                            }
+                        },
+                    },
+                )
+            )
+
+            self.assertEqual(bridge._agent._tools.definitions, ())
 
 
 if __name__ == "__main__":

@@ -1,7 +1,10 @@
 import json
 from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass
-from typing import Iterable, Protocol, TypeAlias
+from typing import TYPE_CHECKING, ClassVar, Protocol, TypeAlias
+
+if TYPE_CHECKING:
+    from .context import ToolExecutionContext
 
 
 JSONValue: TypeAlias = (
@@ -57,67 +60,39 @@ class ToolResult:
 
 
 class Tool(ABC):
-    @property
-    @abstractmethod
-    def definition(self) -> ToolDefinition:
-        raise NotImplementedError
+    """A stateless capability shared by every Agent of a Runtime.
+
+    One instance serves all Agents and may run on several threads at once,
+    so a Tool must hold no invocation state: everything a call needs comes
+    from ``arguments`` and the :class:`ToolExecutionContext`. Both the
+    schema and the execution therefore take the context, which lets one
+    shared instance describe itself differently per Runtime.
+    """
+
+    #: Catalog key. Instances may override it when the name is discovered
+    #: at runtime, as MCP tools do.
+    name: ClassVar[str]
+
+    #: Whether a batch of calls to this tool may run on separate threads.
+    concurrent: ClassVar[bool] = False
 
     @abstractmethod
-    def execute(self, arguments: dict[str, JSONValue]) -> JSONValue:
+    def definition(self, context: "ToolExecutionContext") -> ToolDefinition:
+        raise NotImplementedError
+
+    def available(self, context: "ToolExecutionContext") -> bool:
+        """Whether this Runtime supplies the dependencies the tool needs."""
+        return True
+
+    @abstractmethod
+    def execute(
+        self,
+        arguments: dict[str, JSONValue],
+        context: "ToolExecutionContext",
+    ) -> JSONValue:
         raise NotImplementedError
 
 
 class ToolPolicy(Protocol):
     def authorize(self, call: ToolCall) -> None:
         raise NotImplementedError
-
-
-class ToolRegistry:
-    def __init__(
-        self,
-        tools: Iterable[Tool] = (),
-        policy: ToolPolicy | None = None,
-    ) -> None:
-        self._tools: dict[str, Tool] = {}
-        self._policy = policy
-        for tool in tools:
-            name = tool.definition.name
-            if name in self._tools:
-                raise ValueError(f"tool '{name}' is already registered")
-            self._tools[name] = tool
-
-    @property
-    def definitions(self) -> tuple[ToolDefinition, ...]:
-        return tuple(tool.definition for tool in self._tools.values())
-
-    def execute(self, call: ToolCall) -> ToolResult:
-        tool = self._tools.get(call.name)
-        if tool is None:
-            return ToolResult(
-                tool_call_id=call.id,
-                name=call.name,
-                error=ToolError(
-                    type="tool_not_found",
-                    message=f"tool '{call.name}' is not registered",
-                ),
-            )
-
-        try:
-            if self._policy is not None:
-                self._policy.authorize(call)
-            output = tool.execute(call.arguments)
-        except Exception as error:
-            return ToolResult(
-                tool_call_id=call.id,
-                name=call.name,
-                error=ToolError(
-                    type=type(error).__name__,
-                    message=str(error),
-                ),
-            )
-
-        return ToolResult(
-            tool_call_id=call.id,
-            name=call.name,
-            output=output,
-        )

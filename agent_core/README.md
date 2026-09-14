@@ -13,14 +13,16 @@
   "max_same_tool_calls": 5,
   "max_output_tokens": 8192,
   "shell_timeout_seconds": 60,
-  "tools": {
-    "read_file": true,
-    "edit_file": true,
-    "search_files": true,
-    "list_directory": true,
-    "shell": true,
-    "web_search": false,
-    "analyze_image": true
+  "main_agent": {
+    "tools": {
+      "read_file": true,
+      "edit_file": true,
+      "search_files": true,
+      "list_directory": true,
+      "shell": true,
+      "web_search": false,
+      "analyze_image": true
+    }
   }
 }
 ```
@@ -33,7 +35,8 @@
 | `max_output_tokens` | 每次回答预留的输出 token 数；其余为模型 hard limit |
 | `context.compression` | 可选上下文压缩设置：`enabled`、`trigger_ratio`、`target_ratio`；`target` 必须小于 `trigger` |
 | `shell_timeout_seconds` | shell 默认超时，默认 60 秒、上限 900 秒 |
-| `tools` | 内置 Tool 开关；显式写 `true` 才启用 |
+| `main_agent.tools` | 主 Agent 的内置 Tool 开关；显式写 `true` 才启用 |
+| `subagent_roles` | 子 Agent 角色表；每个角色有 `enabled`、`description` 和自己的 `tools` |
 
 ### Provider
 
@@ -86,7 +89,25 @@
 
 ## 内置 Tool
 
-`read_file`、`edit_file`、`search_files`、`list_directory`、`shell`、`web_search`、`analyze_image` 和 `subagent` 由统一 Tool 注册机制管理。Main Agent 与 Subagent 分别按各自的 `tools`/`subagent.tools` 开关注册工具；Subagent 默认配置已启用 `analyze_image`。文件 Tool 只接受 Workspace 内的相对路径；`search_files` 默认跳过超大文件、非文本文件以及 `.git`、`node_modules`、`build` 等目录。`shell` 每次执行前需要授权，并返回退出码、标准输出、标准错误和超时信息。`web_search` 默认关闭，通过 [Exa](https://exa.ai) 检索公网内容，单次最多返回 10 条结果，启用时需要 `EXA_API_KEY`（可在 [Exa Search](https://exa.ai/products/search) 申请）。单个 Tool Result 回灌模型最多 16K 字符，较大的结果会保存为 Session Artifact。
+`read_file`、`edit_file`、`search_files`、`list_directory`、`shell`、`web_search`、`analyze_image` 和 `subagent` 构成共享的 Tool Catalog。Catalog 中的 Tool 实例无状态，由 Runtime 内所有 Agent 共用；每个角色按名字从 Catalog 中筛选出自己的 ToolSet，不重复创建实例。Runtime 依赖（Workspace、Command Executor、Session 根目录、视觉 Provider、MCP、子 Agent Runtime）通过 `ToolExecutionContext` 在调用时传入；缺少依赖的 Tool 不会出现在 ToolSet 中，而不是在调用时报错。文件 Tool 只接受 Workspace 内的相对路径；`search_files` 默认跳过超大文件、非文本文件以及 `.git`、`node_modules`、`build` 等目录。`shell` 每次执行前需要授权，并返回退出码、标准输出、标准错误和超时信息。`web_search` 默认关闭，通过 [Exa](https://exa.ai) 检索公网内容，单次最多返回 10 条结果，启用时需要 `EXA_API_KEY`（可在 [Exa Search](https://exa.ai/products/search) 申请）。单个 Tool Result 回灌模型最多 16K 字符，较大的结果会保存为 Session Artifact。
+
+## 子 Agent 角色
+
+`subagent` 是唯一的委派入口，调用形式为 `subagent(role, task)`。角色在 `agent_config.json` 的 `subagent_roles` 中定义，角色名会写进 Tool Schema 的 `role` 枚举，新增角色只需加一段配置：
+
+```json
+{
+  "subagent_roles": {
+    "researcher": {
+      "enabled": true,
+      "description": "Read and search the workspace to answer a question. Cannot modify files.",
+      "tools": {"read_file": true, "search_files": true, "list_directory": true}
+    }
+  }
+}
+```
+
+`enabled` 可以省略，默认为 `true`；写 `false` 时该角色保留在配置里但不会提供给模型。角色的 `tools` 不接受 `subagent`：子 Agent 的 Context 不携带子 Agent Runtime，因此无法再次委派。每次委派都会创建独立的 Session，父 Agent 只收到子 Agent 的最终报告。同一批 `subagent` 调用并行执行，共享的 Tool 实例不持有任何调用状态。
 
 ## Session 与附件
 

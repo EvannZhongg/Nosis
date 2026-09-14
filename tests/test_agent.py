@@ -1,5 +1,6 @@
 import json
 import tempfile
+import threading
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,6 +32,8 @@ from agent_core import (
     Workspace,
     ImagePart,
     TextPart,
+    ToolCatalog,
+    ToolExecutionContext,
 )
 
 REQUEST_TIME = datetime(2026, 9, 9, 8, 0, tzinfo=timezone.utc)
@@ -43,6 +46,17 @@ AGENT_CONFIG = AgentConfig(
     tools=ToolConfig(enabled=frozenset()),
 )
 TEST_WORKSPACE = Workspace(Path(__file__).parent)
+
+
+def tool_set(*tools, session=None, workspace=TEST_WORKSPACE, policy=None, **context_fields):
+    """Select every given Tool, as a Runtime would from its catalog."""
+    context = ToolExecutionContext(
+        workspace=workspace,
+        session=session if session is not None else Session(),
+        **context_fields,
+    )
+    catalog = ToolCatalog(tools)
+    return catalog.select(catalog.names, context, policy=policy)
 
 
 class MockProvider(LLMProvider):
@@ -84,10 +98,11 @@ class MockProvider(LLMProvider):
 
 
 class EchoTool(Tool):
-    @property
-    def definition(self) -> ToolDefinition:
+    name = "echo"
+
+    def definition(self, context) -> ToolDefinition:
         return ToolDefinition(
-            name="echo",
+            name=self.name,
             description="Echo the provided text.",
             parameters={
                 "type": "object",
@@ -99,7 +114,7 @@ class EchoTool(Tool):
             },
         )
 
-    def execute(self, arguments):
+    def execute(self, arguments, context):
         return {"text": arguments["text"]}
 
 
@@ -117,7 +132,10 @@ class AgentTest(unittest.TestCase):
             session=session,
             system_prompt="You are helpful.",
             config=AGENT_CONFIG,
-            workspace=TEST_WORKSPACE,
+            tools=tool_set(session=session),
+            context=ToolExecutionContext(
+                workspace=TEST_WORKSPACE, session=session
+            ),
             now=clock(REQUEST_TIME, RESPONSE_TIME),
         )
 
@@ -158,7 +176,10 @@ class AgentTest(unittest.TestCase):
             session=session,
             system_prompt="You are helpful.",
             config=AGENT_CONFIG,
-            workspace=TEST_WORKSPACE,
+            tools=tool_set(session=session),
+            context=ToolExecutionContext(
+                workspace=TEST_WORKSPACE, session=session
+            ),
             now=clock(REQUEST_TIME),
         )
 
@@ -174,14 +195,18 @@ class AgentTest(unittest.TestCase):
 
     def test_rejects_output_limit_not_smaller_than_context_limit(self) -> None:
         provider = MockProvider(["unused"], max_context_tokens=100)
+        session = Session(session_id="session-1")
 
         with self.assertRaises(ValueError):
             Agent(
                 provider=provider,
-                session=Session(session_id="session-1"),
+                session=session,
                 system_prompt="You are helpful.",
                 config=AGENT_CONFIG,
-                workspace=TEST_WORKSPACE,
+                tools=tool_set(session=session),
+                context=ToolExecutionContext(
+                    workspace=TEST_WORKSPACE, session=session
+                ),
             )
 
     def test_mock_provider_receives_complete_multi_turn_context(self) -> None:
@@ -192,7 +217,10 @@ class AgentTest(unittest.TestCase):
             session=session,
             system_prompt="You are helpful.",
             config=AGENT_CONFIG,
-            workspace=TEST_WORKSPACE,
+            tools=tool_set(session=session),
+            context=ToolExecutionContext(
+                workspace=TEST_WORKSPACE, session=session
+            ),
             now=clock(
                 datetime(2026, 9, 9, 8, 0, tzinfo=timezone.utc),
                 datetime(2026, 9, 9, 8, 1, tzinfo=timezone.utc),
@@ -280,14 +308,16 @@ class AgentTest(unittest.TestCase):
             session=session,
             system_prompt="You are helpful.",
             config=AGENT_CONFIG,
-            workspace=TEST_WORKSPACE,
             now=clock(
                 REQUEST_TIME,
                 TOOL_CALL_TIME,
                 TOOL_RESULT_TIME,
                 RESPONSE_TIME,
             ),
-            tools=(EchoTool(),),
+            tools=tool_set(EchoTool(), session=session),
+            context=ToolExecutionContext(
+                workspace=TEST_WORKSPACE, session=session
+            ),
         )
         events = []
 
@@ -298,7 +328,13 @@ class AgentTest(unittest.TestCase):
         self.assertEqual(result.request, provider.requests[1])
         self.assertEqual(
             provider.requests[0].tools,
-            (EchoTool().definition,),
+            (
+                EchoTool().definition(
+                    ToolExecutionContext(
+                        workspace=TEST_WORKSPACE, session=session
+                    )
+                ),
+            ),
         )
         second_request_messages = provider.requests[1].messages
         self.assertEqual(
@@ -446,7 +482,10 @@ class AgentTest(unittest.TestCase):
             session=session,
             system_prompt="You are helpful.",
             config=AGENT_CONFIG,
-            workspace=TEST_WORKSPACE,
+            tools=tool_set(EchoTool(), session=session),
+            context=ToolExecutionContext(
+                workspace=TEST_WORKSPACE, session=session
+            ),
             now=clock(
                 REQUEST_TIME,
                 TOOL_CALL_TIME,
@@ -455,7 +494,6 @@ class AgentTest(unittest.TestCase):
                 datetime(2026, 9, 9, 9, 0, tzinfo=timezone.utc),
                 datetime(2026, 9, 9, 9, 1, tzinfo=timezone.utc),
             ),
-            tools=(EchoTool(),),
         )
 
         agent.run("first question")
@@ -503,7 +541,10 @@ class AgentTest(unittest.TestCase):
             session=session,
             system_prompt="Be helpful.",
             config=AGENT_CONFIG,
-            workspace=TEST_WORKSPACE,
+            tools=tool_set(session=session),
+            context=ToolExecutionContext(
+                workspace=TEST_WORKSPACE, session=session
+            ),
         )
         agent.run("follow up")
 
@@ -574,7 +615,10 @@ class AgentTest(unittest.TestCase):
             session=session,
             system_prompt="You are helpful.",
             config=AGENT_CONFIG,
-            workspace=TEST_WORKSPACE,
+            tools=tool_set(session=session),
+            context=ToolExecutionContext(
+                workspace=TEST_WORKSPACE, session=session
+            ),
         )
 
         agent._context.begin_turn(len(session.items))
@@ -630,12 +674,16 @@ class AgentTest(unittest.TestCase):
                 LLMResponse(content="cannot use that tool"),
             ]
         )
+        session = Session(session_id="session-1")
         agent = Agent(
             provider=provider,
-            session=Session(session_id="session-1"),
+            session=session,
             system_prompt="You are helpful.",
             config=AGENT_CONFIG,
-            workspace=TEST_WORKSPACE,
+            tools=tool_set(session=session),
+            context=ToolExecutionContext(
+                workspace=TEST_WORKSPACE, session=session
+            ),
             now=clock(
                 REQUEST_TIME,
                 TOOL_CALL_TIME,
@@ -680,14 +728,18 @@ class AgentTest(unittest.TestCase):
                 session=session,
                 system_prompt="You are helpful.",
                 config=AGENT_CONFIG,
-                workspace=workspace,
                 now=clock(
                     REQUEST_TIME,
                     TOOL_CALL_TIME,
                     TOOL_RESULT_TIME,
                     RESPONSE_TIME,
                 ),
-                tools=(EchoTool(),),
+                tools=tool_set(
+                    EchoTool(), session=session, workspace=workspace
+                ),
+                context=ToolExecutionContext(
+                    workspace=workspace, session=session
+                ),
                 tool_result_normalizer=ToolResultNormalizer(
                     workspace,
                     session.session_id,
@@ -760,9 +812,11 @@ class AgentTest(unittest.TestCase):
             session=session,
             system_prompt="You are helpful.",
             config=AGENT_CONFIG,
-            workspace=TEST_WORKSPACE,
+            tools=tool_set(EchoTool(), session=session),
+            context=ToolExecutionContext(
+                workspace=TEST_WORKSPACE, session=session
+            ),
             now=clock(*timestamps),
-            tools=(EchoTool(),),
         )
 
         with self.assertRaises(ToolCallLimitExceededError) as context:
@@ -826,9 +880,11 @@ class AgentTest(unittest.TestCase):
             session=session,
             system_prompt="You are helpful.",
             config=AGENT_CONFIG,
-            workspace=TEST_WORKSPACE,
+            tools=tool_set(EchoTool(), session=session),
+            context=ToolExecutionContext(
+                workspace=TEST_WORKSPACE, session=session
+            ),
             now=lambda: REQUEST_TIME,
-            tools=(EchoTool(),),
         )
 
         result = agent.run("repeat echo with different arguments in between")
@@ -864,18 +920,174 @@ class AgentTest(unittest.TestCase):
                 )
             ]
         )
+        session = Session(session_id="session-1")
         agent = Agent(
             provider=provider,
-            session=Session(session_id="session-1"),
+            session=session,
             system_prompt="You are helpful.",
             config=AGENT_CONFIG,
-            workspace=TEST_WORKSPACE,
+            tools=tool_set(EchoTool(), session=session),
+            context=ToolExecutionContext(
+                workspace=TEST_WORKSPACE, session=session
+            ),
             now=lambda: REQUEST_TIME,
-            tools=(EchoTool(),),
         )
 
         with self.assertRaises(ToolCallLimitExceededError):
             agent.run("repeat the exact same call")
+
+
+class ConcurrentToolBatchTest(unittest.TestCase):
+    """A batch runs in parallel only when every tool declares it is safe."""
+
+    def test_runs_a_concurrent_tool_batch_on_separate_threads(self) -> None:
+        tool = BlockingTool(concurrent=True, expected=3)
+        session = Session(session_id="session-1")
+        provider = MockProvider(
+            [
+                LLMResponse(
+                    content=None,
+                    tool_calls=tuple(
+                        ToolCall(
+                            id=f"call-{index}",
+                            name="blocking",
+                            arguments={"index": index},
+                        )
+                        for index in range(3)
+                    ),
+                ),
+                LLMResponse(content="done"),
+            ]
+        )
+        agent = Agent(
+            provider=provider,
+            session=session,
+            system_prompt="You are helpful.",
+            config=AGENT_CONFIG,
+            tools=tool_set(tool, session=session),
+            context=ToolExecutionContext(
+                workspace=TEST_WORKSPACE, session=session
+            ),
+            now=lambda: REQUEST_TIME,
+        )
+
+        agent.run("run three at once")
+
+        # All three were inside execute() simultaneously, which only the
+        # thread pool allows; a sequential run would deadlock on the barrier.
+        self.assertEqual(tool.peak_concurrency, 3)
+
+    def test_runs_a_non_concurrent_tool_batch_sequentially(self) -> None:
+        tool = BlockingTool(concurrent=False, expected=1)
+        session = Session(session_id="session-1")
+        provider = MockProvider(
+            [
+                LLMResponse(
+                    content=None,
+                    tool_calls=tuple(
+                        ToolCall(
+                            id=f"call-{index}",
+                            name="blocking",
+                            arguments={"index": index},
+                        )
+                        for index in range(3)
+                    ),
+                ),
+                LLMResponse(content="done"),
+            ]
+        )
+        agent = Agent(
+            provider=provider,
+            session=session,
+            system_prompt="You are helpful.",
+            config=AGENT_CONFIG,
+            tools=tool_set(tool, session=session),
+            context=ToolExecutionContext(
+                workspace=TEST_WORKSPACE, session=session
+            ),
+            now=lambda: REQUEST_TIME,
+        )
+
+        agent.run("run three in order")
+
+        self.assertEqual(tool.peak_concurrency, 1)
+
+    def test_a_mixed_batch_stays_sequential(self) -> None:
+        """One non-concurrent call keeps the whole batch on one thread."""
+        blocking = BlockingTool(concurrent=True, expected=1)
+        session = Session(session_id="session-1")
+        provider = MockProvider(
+            [
+                LLMResponse(
+                    content=None,
+                    tool_calls=(
+                        ToolCall(
+                            id="call-1",
+                            name="blocking",
+                            arguments={"index": 0},
+                        ),
+                        ToolCall(
+                            id="call-2",
+                            name="echo",
+                            arguments={"text": "hi"},
+                        ),
+                    ),
+                ),
+                LLMResponse(content="done"),
+            ]
+        )
+        agent = Agent(
+            provider=provider,
+            session=session,
+            system_prompt="You are helpful.",
+            config=AGENT_CONFIG,
+            tools=tool_set(blocking, EchoTool(), session=session),
+            context=ToolExecutionContext(
+                workspace=TEST_WORKSPACE, session=session
+            ),
+            now=lambda: REQUEST_TIME,
+        )
+
+        agent.run("one of each")
+
+        self.assertEqual(blocking.peak_concurrency, 1)
+
+
+class BlockingTool(Tool):
+    """Records how many calls are inside execute() at the same time.
+
+    ``expected`` callers must arrive before any of them returns, so a
+    parallel batch is observable and a sequential one cannot fake it.
+    """
+
+    name = "blocking"
+
+    def __init__(self, *, concurrent: bool, expected: int) -> None:
+        self.concurrent = concurrent
+        self._barrier = threading.Barrier(expected, timeout=5)
+        self._lock = threading.Lock()
+        self._active = 0
+        self.peak_concurrency = 0
+
+    def definition(self, context) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description="Block until the batch has arrived.",
+            parameters={
+                "type": "object",
+                "properties": {"index": {"type": "integer"}},
+                "required": ["index"],
+            },
+        )
+
+    def execute(self, arguments, context):
+        with self._lock:
+            self._active += 1
+            self.peak_concurrency = max(self.peak_concurrency, self._active)
+        self._barrier.wait()
+        with self._lock:
+            self._active -= 1
+        return {"index": arguments["index"]}
 
 
 if __name__ == "__main__":

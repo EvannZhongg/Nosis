@@ -2,7 +2,7 @@ import json
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Callable, Iterable, TypeAlias
+from typing import Callable, TypeAlias
 
 from .config import AgentConfig
 from .context_manager import ContextManager, ContextWindowExceededError
@@ -10,10 +10,8 @@ from .llm import LLMProvider, LLMRequest
 from .llm import LLMResponse
 from .session import Message, Session
 from .content import ImagePart
-from .session_paths import default_sessions_directory
 from .tool_result import ToolResultNormalizer
-from .tools import Tool, ToolCall, ToolPolicy, ToolRegistry, ToolResult
-from .workspace import Workspace
+from .tools import ToolCall, ToolExecutionContext, ToolResult, ToolSet
 
 
 class ToolCallLimitExceededError(RuntimeError):
@@ -91,32 +89,35 @@ AgentEvent: TypeAlias = (
 
 
 class Agent:
+    """One conversation loop over one Session and one ToolSet.
+
+    An Agent owns nothing shared: its ToolSet is a view of the Runtime's
+    catalog, and its context carries the Runtime dependencies that the
+    tools need.
+    """
+
     def __init__(
         self,
         provider: LLMProvider,
         session: Session,
         system_prompt: str,
         config: AgentConfig,
-        workspace: Workspace,
+        tools: ToolSet,
+        context: ToolExecutionContext,
         now: Callable[[], datetime] | None = None,
-        tools: Iterable[Tool] = (),
-        tool_policy: ToolPolicy | None = None,
         tool_result_normalizer: ToolResultNormalizer | None = None,
-        sessions_directory=None,
     ) -> None:
         self._provider = provider
         self._session = session
         self._config = config
         self._now = now or (lambda: datetime.now(timezone.utc))
-        self._tools = ToolRegistry(tools, policy=tool_policy)
+        self._tools = tools
         self._tool_result_normalizer = (
             tool_result_normalizer
             or ToolResultNormalizer(
-                workspace,
+                context.workspace,
                 session.session_id,
-                sessions_directory=(
-                    sessions_directory or default_sessions_directory()
-                ),
+                sessions_directory=context.sessions_directory,
             )
         )
         self._context = ContextManager(
@@ -124,7 +125,7 @@ class Agent:
             session=session,
             system_prompt=system_prompt,
             config=config,
-            media_root=workspace.path,
+            media_root=context.workspace.path,
         )
 
     def run(
@@ -239,7 +240,13 @@ class Agent:
                     return index, call, result
 
                 indexed_calls = list(enumerate(response.tool_calls, start=1))
-                if len(indexed_calls) > 1 and all(call.name == "subagent" for _, call in indexed_calls):
+                # Only tools that declare themselves concurrent may share a
+                # batch across threads; they hold no invocation state, so
+                # parallel calls cannot observe each other.
+                if len(indexed_calls) > 1 and all(
+                    self._tools.is_concurrent(call.name)
+                    for _, call in indexed_calls
+                ):
                     with ThreadPoolExecutor(max_workers=len(indexed_calls)) as executor:
                         executed = list(executor.map(execute_call, indexed_calls))
                 else:

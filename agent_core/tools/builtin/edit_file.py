@@ -1,15 +1,13 @@
 from ..base import JSONValue, Tool, ToolDefinition
-from ...workspace import Workspace
+from ..context import ToolExecutionContext
 
 
 class EditFileTool(Tool):
-    def __init__(self, workspace: Workspace) -> None:
-        self._workspace = workspace
+    name = "edit_file"
 
-    @property
-    def definition(self) -> ToolDefinition:
+    def definition(self, context: ToolExecutionContext) -> ToolDefinition:
         return ToolDefinition(
-            name="edit_file",
+            name=self.name,
             description=(
                 "Replace one exact text occurrence in a UTF-8 workspace file."
             ),
@@ -34,7 +32,11 @@ class EditFileTool(Tool):
             },
         )
 
-    def execute(self, arguments: dict[str, JSONValue]) -> JSONValue:
+    def execute(
+        self,
+        arguments: dict[str, JSONValue],
+        context: ToolExecutionContext,
+    ) -> JSONValue:
         path = arguments.get("path")
         old_text = arguments.get("old_text")
         new_text = arguments.get("new_text")
@@ -52,7 +54,8 @@ class EditFileTool(Tool):
                 "edit_file accepts only 'path', 'old_text', and 'new_text'"
             )
 
-        file_path = self._workspace.resolve_path(path)
+        workspace = context.workspace
+        file_path = workspace.resolve_path(path)
         content = file_path.read_bytes().decode("utf-8")
         occurrences = content.count(old_text)
         if occurrences == 0:
@@ -66,6 +69,6 @@ class EditFileTool(Tool):
             content.replace(old_text, new_text, 1).encode("utf-8")
         )
         return {
-            "path": file_path.relative_to(self._workspace.path).as_posix(),
+            "path": file_path.relative_to(workspace.path).as_posix(),
             "replacements": 1,
         }

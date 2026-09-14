@@ -1,8 +1,10 @@
 import json
 import os
 import subprocess
+import threading
 import unittest
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -20,17 +22,20 @@ from agent_core import (
     Session,
     ShellApprovalPolicy,
     ShellTool,
+    SubagentRole,
+    SubagentRoleRegistry,
+    SubagentRuntime,
     SubagentTool,
     Tool,
     ToolCall,
+    ToolCatalog,
     ToolConfig,
     ToolDefinition,
-    ToolRegistry,
+    ToolExecutionContext,
     ToolResult,
     WebSearchTool,
     Workspace,
-    SubagentRegistry,
-    create_builtin_tools,
+    builtin_catalog,
 )
 from agent_core.llm import LLMRequest
 from agent_core.session_paths import session_directory
@@ -58,27 +63,150 @@ def _symlinks_available() -> bool:
 
 SYMLINKS_AVAILABLE = _symlinks_available()
 
+# Tools that never touch the filesystem still need a workspace in their
+# context; the test package directory is a stable, existing one.
+_TMP_WORKSPACE = Workspace(Path(__file__).parent)
+
+
+class _Bound:
+    """A Tool plus the context a test calls it with.
+
+    Production code reaches tools through a ToolSet; these per-tool tests
+    exercise one implementation directly, so they bind a context once.
+    """
+
+    def __init__(self, tool, workspace, **fields):
+        self._tool = tool
+        self._context = context_for(workspace, **fields)
+
+    @property
+    def definition(self):
+        return self._tool.definition(self._context)
+
+    def execute(self, arguments):
+        return self._tool.execute(arguments, self._context)
+
+
+def context_for(workspace, **fields):
+    return ToolExecutionContext(
+        workspace=workspace,
+        session=fields.pop("session", None) or Session(),
+        **fields,
+    )
+
 
 class FailingTool(Tool):
-    @property
-    def definition(self) -> ToolDefinition:
+    name = "failing"
+
+    def definition(self, context) -> ToolDefinition:
         return ToolDefinition(
-            name="failing",
+            name=self.name,
             description="Always fails.",
             parameters={"type": "object", "properties": {}},
         )
 
-    def execute(self, arguments):
+    def execute(self, arguments, context):
         raise ValueError("bad input")
 
 
-class ToolRegistryTest(unittest.TestCase):
-    def test_returns_structured_execution_error(self) -> None:
-        registry = ToolRegistry((FailingTool(),))
+class NeedsExecutorTool(Tool):
+    name = "needs_executor"
 
-        result = registry.execute(
-            ToolCall(id="call-1", name="failing", arguments={})
+    def available(self, context) -> bool:
+        return context.command_executor is not None
+
+    def definition(self, context) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description="Needs a command executor.",
+            parameters={"type": "object", "properties": {}},
         )
+
+    def execute(self, arguments, context):
+        return "ran"
+
+
+class ToolCatalogTest(unittest.TestCase):
+    def test_rejects_duplicate_tool_names(self) -> None:
+        with self.assertRaisesRegex(ValueError, "already registered"):
+            ToolCatalog((FailingTool(), FailingTool()))
+
+    def test_selects_only_the_names_a_role_asks_for(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            context = context_for(Workspace(Path(directory)))
+            catalog = builtin_catalog()
+
+            tools = catalog.select(("read_file", "list_directory"), context)
+
+            self.assertEqual(
+                [definition.name for definition in tools.definitions],
+                ["read_file", "list_directory"],
+            )
+
+    def test_skips_names_the_catalog_does_not_know(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            context = context_for(Workspace(Path(directory)))
+
+            tools = builtin_catalog().select(("read_file", "nope"), context)
+
+            self.assertEqual(
+                [definition.name for definition in tools.definitions],
+                ["read_file"],
+            )
+
+    def test_omits_tools_whose_runtime_dependency_is_absent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+            catalog = ToolCatalog((NeedsExecutorTool(),))
+
+            without = catalog.select(
+                ("needs_executor",), context_for(workspace)
+            )
+            with_executor = catalog.select(
+                ("needs_executor",),
+                context_for(workspace, command_executor=UnusedExecutor()),
+            )
+
+            self.assertEqual(without.definitions, ())
+            self.assertEqual(
+                [d.name for d in with_executor.definitions],
+                ["needs_executor"],
+            )
+
+    def test_two_roles_share_one_tool_instance(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            context = context_for(Workspace(Path(directory)))
+            catalog = builtin_catalog()
+
+            reader = catalog.select(("read_file", "list_directory"), context)
+            writer = catalog.select(("read_file", "edit_file"), context)
+
+            self.assertIs(
+                reader._tools["read_file"],
+                writer._tools["read_file"],
+            )
+
+    def test_extend_keeps_the_original_catalog_unchanged(self) -> None:
+        base = ToolCatalog((FailingTool(),))
+
+        extended = base.extend((NeedsExecutorTool(),))
+
+        self.assertEqual(base.names, ("failing",))
+        self.assertEqual(
+            extended.names, ("failing", "needs_executor")
+        )
+
+
+class ToolSetTest(unittest.TestCase):
+    def test_returns_structured_execution_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            tools = ToolCatalog((FailingTool(),)).select(
+                ("failing",), context_for(Workspace(Path(directory)))
+            )
+
+            result = tools.execute(
+                ToolCall(id="call-1", name="failing", arguments={})
+            )
 
         self.assertEqual(
             json.loads(result.to_content()),
@@ -91,9 +219,20 @@ class ToolRegistryTest(unittest.TestCase):
             },
         )
 
-    def test_rejects_duplicate_tool_names(self) -> None:
-        with self.assertRaisesRegex(ValueError, "already registered"):
-            ToolRegistry((FailingTool(), FailingTool()))
+    def test_returns_tool_not_found_for_an_unselected_tool(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            tools = builtin_catalog().select(
+                ("read_file",), context_for(Workspace(Path(directory)))
+            )
+
+            result = tools.execute(
+                ToolCall(id="call-1", name="shell", arguments={})
+            )
+
+        self.assertEqual(
+            json.loads(result.to_content())["error"]["type"],
+            "tool_not_found",
+        )
 
     def test_returns_structured_policy_error_before_tool_execution(
         self,
@@ -101,15 +240,16 @@ class ToolRegistryTest(unittest.TestCase):
         executed = []
 
         class RecordingTool(Tool):
-            @property
-            def definition(self) -> ToolDefinition:
+            name = "recording"
+
+            def definition(self, context) -> ToolDefinition:
                 return ToolDefinition(
-                    name="recording",
+                    name=self.name,
                     description="Record execution.",
                     parameters={"type": "object", "properties": {}},
                 )
 
-            def execute(self, arguments):
+            def execute(self, arguments, context):
                 executed.append(arguments)
                 return None
 
@@ -117,11 +257,16 @@ class ToolRegistryTest(unittest.TestCase):
             def authorize(self, call):
                 raise PermissionError(f"{call.name} was denied")
 
-        registry = ToolRegistry((RecordingTool(),), policy=DenyPolicy())
+        with tempfile.TemporaryDirectory() as directory:
+            tools = ToolCatalog((RecordingTool(),)).select(
+                ("recording",),
+                context_for(Workspace(Path(directory))),
+                policy=DenyPolicy(),
+            )
 
-        result = registry.execute(
-            ToolCall(id="call-1", name="recording", arguments={})
-        )
+            result = tools.execute(
+                ToolCall(id="call-1", name="recording", arguments={})
+            )
 
         self.assertEqual(executed, [])
         self.assertEqual(
@@ -135,105 +280,128 @@ class ToolRegistryTest(unittest.TestCase):
             },
         )
 
-
-class ToolFactoryTest(unittest.TestCase):
-    def test_creates_only_enabled_tools(self) -> None:
-        class UnusedExecutor:
-            def execute(self, command, timeout_seconds=60):
-                raise AssertionError("executor should not be called")
-
+    def test_only_subagent_is_marked_concurrent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            tools = create_builtin_tools(
-                ToolConfig(
-                    enabled=frozenset(
-                        {
-                            "read_file",
-                            "list_directory",
-                        }
-                    )
+            catalog = builtin_catalog()
+            tools = catalog.select(
+                catalog.names,
+                context_for(
+                    Workspace(Path(directory)),
+                    command_executor=UnusedExecutor(),
+                    vision_provider=VisionProvider(),
+                    subagents=SubagentRuntime(
+                        provider=StaticProvider("x"),
+                        config=SUBAGENT_CONFIG,
+                        catalog=catalog,
+                        roles=SubagentRoleRegistry(
+                            (
+                                SubagentRole(
+                                    "researcher", "Reads.", frozenset()
+                                ),
+                            )
+                        ),
+                    ),
                 ),
-                Workspace(Path(directory)),
-                UnusedExecutor(),
             )
 
-        self.assertEqual(
-            [tool.definition.name for tool in tools],
-            ["read_file", "list_directory"],
-        )
+            self.assertTrue(tools.is_concurrent("subagent"))
+            for name in ("read_file", "edit_file", "shell", "web_search"):
+                self.assertFalse(tools.is_concurrent(name), name)
 
-    def test_creates_enabled_web_search_tool(self) -> None:
-        class UnusedExecutor:
-            def execute(self, command, timeout_seconds=60):
-                raise AssertionError("executor should not be called")
-
+    def test_reports_an_unknown_tool_as_not_concurrent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            tools = create_builtin_tools(
-                ToolConfig(enabled=frozenset({"web_search"})),
-                Workspace(Path(directory)),
-                UnusedExecutor(),
+            tools = builtin_catalog().select(
+                (), context_for(Workspace(Path(directory)))
             )
 
-        self.assertEqual(
-            [tool.definition.name for tool in tools],
-            ["web_search"],
-        )
+            self.assertFalse(tools.is_concurrent("subagent"))
 
-    def test_creates_enabled_registered_subagents(self) -> None:
-        class RegisteredSubagent(Tool):
-            @property
-            def definition(self) -> ToolDefinition:
-                return ToolDefinition(
-                    name="reviewer_agent",
-                    description="A registered subagent.",
-                    parameters={"type": "object", "properties": {}},
+
+class ToolStatelessnessTest(unittest.TestCase):
+    """A shared Tool must keep nothing from one invocation to the next."""
+
+    def test_no_builtin_tool_holds_instance_state(self) -> None:
+        for tool in _catalog_tools(builtin_catalog()):
+            with self.subTest(tool=tool.name):
+                self.assertEqual(
+                    vars(tool),
+                    {},
+                    f"{type(tool).__name__} stores per-instance state",
                 )
 
-            def execute(self, arguments):
-                return "done"
-
-        class UnusedExecutor:
-            def execute(self, command, timeout_seconds=60):
-                raise AssertionError("executor should not be called")
-
-        with tempfile.TemporaryDirectory() as directory:
-            tools = create_builtin_tools(
-                ToolConfig(enabled=frozenset({"subagent"})),
-                Workspace(Path(directory)),
-                UnusedExecutor(),
-                subagent_registry=SubagentRegistry((RegisteredSubagent(),)),
-            )
-
-        self.assertEqual(
-            [tool.definition.name for tool in tools],
-            ["reviewer_agent"],
-        )
-
-    def test_does_not_create_disabled_registered_subagents(self) -> None:
-        class RegisteredSubagent(Tool):
-            @property
-            def definition(self) -> ToolDefinition:
-                return ToolDefinition(
-                    name="reviewer_agent",
-                    description="A registered subagent.",
-                    parameters={"type": "object", "properties": {}},
+    def test_one_instance_serves_two_workspaces_at_once(self) -> None:
+        """A shared Tool reads its workspace from the call, not from self."""
+        with (
+            tempfile.TemporaryDirectory() as first,
+            tempfile.TemporaryDirectory() as second,
+        ):
+            (Path(first) / "note.txt").write_text("first", encoding="utf-8")
+            (Path(second) / "note.txt").write_text("second", encoding="utf-8")
+            catalog = builtin_catalog()
+            sets = {
+                name: catalog.select(
+                    ("read_file",), context_for(Workspace(Path(root)))
                 )
+                for name, root in (("first", first), ("second", second))
+            }
 
-            def execute(self, arguments):
-                return "done"
+            results = {}
+            barrier = threading.Barrier(2)
 
-        class UnusedExecutor:
-            def execute(self, command, timeout_seconds=60):
-                raise AssertionError("executor should not be called")
+            def read(name):
+                barrier.wait()
+                for _ in range(20):
+                    results[name] = sets[name].execute(
+                        ToolCall(
+                            id=name,
+                            name="read_file",
+                            arguments={"path": "note.txt"},
+                        )
+                    )
 
-        with tempfile.TemporaryDirectory() as directory:
-            tools = create_builtin_tools(
-                ToolConfig(enabled=frozenset()),
-                Workspace(Path(directory)),
-                UnusedExecutor(),
-                subagent_registry=SubagentRegistry((RegisteredSubagent(),)),
-            )
+            threads = [
+                threading.Thread(target=read, args=(name,))
+                for name in sets
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
 
-        self.assertEqual(tools, ())
+            self.assertIn("1| first", results["first"].output["content"])
+            self.assertIn("1| second", results["second"].output["content"])
+
+
+def _catalog_tools(catalog):
+    return [catalog._tools[name] for name in catalog.names]
+
+
+class UnusedExecutor:
+    def execute(self, command, timeout_seconds=60):
+        raise AssertionError("executor should not be called")
+
+
+class VisionProvider(LLMProvider):
+    @property
+    def max_context_tokens(self) -> int:
+        return 1000
+
+    @property
+    def capabilities(self):
+        return SimpleNamespace(input_modalities=("text", "image"))
+
+    def count_input_tokens(self, request) -> int:
+        return 1
+
+    def stream(self, request, on_text_delta, on_reasoning_delta=None):
+        return LLMResponse(content="an image")
+
+
+SUBAGENT_CONFIG = AgentConfig(
+    max_same_tool_calls=5,
+    max_output_tokens=100,
+    tools=ToolConfig(enabled=frozenset()),
+)
 
 
 class StaticProvider(LLMProvider):
@@ -259,28 +427,135 @@ class StaticProvider(LLMProvider):
         return LLMResponse(content=self._answer)
 
 
-class SubagentTranscriptTest(unittest.TestCase):
+def subagent_runtime(catalog, roles, answer="child answer", **fields):
+    return SubagentRuntime(
+        provider=StaticProvider(answer),
+        config=SUBAGENT_CONFIG,
+        catalog=catalog,
+        roles=SubagentRoleRegistry(roles),
+        **fields,
+    )
+
+
+RESEARCHER = SubagentRole(
+    name="researcher",
+    description="Read the workspace and report findings.",
+    tools=frozenset({"read_file", "list_directory"}),
+)
+CODER = SubagentRole(
+    name="coder",
+    description="Implement a change.",
+    tools=frozenset({"read_file", "edit_file"}),
+)
+
+
+class SubagentRoleRegistryTest(unittest.TestCase):
+    def test_rejects_duplicate_role_names(self) -> None:
+        with self.assertRaisesRegex(ValueError, "already registered"):
+            SubagentRoleRegistry((RESEARCHER, RESEARCHER))
+
+    def test_reports_available_roles_for_an_unknown_name(self) -> None:
+        registry = SubagentRoleRegistry((RESEARCHER, CODER))
+
+        with self.assertRaisesRegex(
+            ValueError, "unknown subagent role 'writer'.*researcher, coder"
+        ):
+            registry.get("writer")
+
+
+class SubagentToolTest(unittest.TestCase):
+    def test_one_tool_exposes_every_role_in_its_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            catalog = builtin_catalog()
+            context = context_for(
+                Workspace(Path(directory)),
+                subagents=subagent_runtime(catalog, (RESEARCHER, CODER)),
+            )
+
+            definition = SubagentTool().definition(context)
+
+            self.assertEqual(definition.name, "subagent")
+            self.assertEqual(
+                definition.parameters["properties"]["role"]["enum"],
+                ["researcher", "coder"],
+            )
+            self.assertEqual(
+                set(definition.parameters["required"]), {"role", "task"}
+            )
+            self.assertIn(RESEARCHER.description, definition.description)
+            self.assertIn(CODER.description, definition.description)
+
+    def test_is_unavailable_without_roles(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+            catalog = builtin_catalog()
+
+            self.assertFalse(SubagentTool().available(context_for(workspace)))
+            self.assertFalse(
+                SubagentTool().available(
+                    context_for(
+                        workspace,
+                        subagents=subagent_runtime(catalog, ()),
+                    )
+                )
+            )
+
+    def test_rejects_an_unknown_role(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            catalog = builtin_catalog()
+            context = context_for(
+                Workspace(Path(directory)),
+                sessions_directory=Path(directory) / "sessions",
+                subagents=subagent_runtime(catalog, (RESEARCHER,)),
+            )
+
+            with self.assertRaisesRegex(ValueError, "unknown subagent role"):
+                SubagentTool().execute(
+                    {"role": "writer", "task": "do it"}, context
+                )
+
+    def test_validates_arguments(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            catalog = builtin_catalog()
+            context = context_for(
+                Workspace(Path(directory)),
+                subagents=subagent_runtime(catalog, (RESEARCHER,)),
+            )
+            tool = SubagentTool()
+
+            with self.assertRaisesRegex(ValueError, "'role'"):
+                tool.execute({"task": "do it"}, context)
+            with self.assertRaisesRegex(ValueError, "'task'"):
+                tool.execute({"role": "researcher", "task": " "}, context)
+            with self.assertRaisesRegex(ValueError, "accepts only"):
+                tool.execute(
+                    {"role": "researcher", "task": "x", "extra": 1}, context
+                )
+
+
+class SubagentRuntimeTest(unittest.TestCase):
     def test_keeps_a_child_transcript_out_of_the_session_list(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             workspace = Workspace(root)
             sessions_directory = root / ".nosis" / "sessions"
             parent = Session()
-            tool = SubagentTool(
-                provider=StaticProvider("child answer"),
-                config=AgentConfig(
-                    max_same_tool_calls=5,
-                    max_output_tokens=100,
-                    tools=ToolConfig(enabled=frozenset()),
-                ),
-                workspace=workspace,
+            catalog = builtin_catalog()
+            context = context_for(
+                workspace,
+                session=parent,
                 sessions_directory=sessions_directory,
-                parent_session_id=parent.session_id,
-                parent_session=parent,
+                subagents=subagent_runtime(catalog, (RESEARCHER,)),
             )
 
             self.assertEqual(
-                tool.execute({"task": "write the quarterly summary"}),
+                SubagentTool().execute(
+                    {
+                        "role": "researcher",
+                        "task": "write the quarterly summary",
+                    },
+                    context,
+                ),
                 "child answer",
             )
 
@@ -310,19 +585,189 @@ class SubagentTranscriptTest(unittest.TestCase):
                 [],
             )
 
-    def test_requires_a_parent_session_id(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            with self.assertRaisesRegex(ValueError, "parent_session_id"):
-                SubagentTool(
-                    provider=StaticProvider("child answer"),
-                    config=AgentConfig(
-                        max_same_tool_calls=5,
-                        max_output_tokens=100,
-                        tools=ToolConfig(enabled=frozenset()),
-                    ),
-                    workspace=Workspace(Path(directory)),
-                    sessions_directory=Path(directory) / "sessions",
+    def test_a_role_only_receives_the_tools_it_declares(self) -> None:
+        selected = []
+
+        class RecordingRuntime(SubagentRuntime):
+            def run(self, role_name, task, parent):
+                role = self.roles.get(role_name)
+                tools = self._catalog.select(role.tools, parent)
+                selected.append(
+                    sorted(d.name for d in tools.definitions)
                 )
+                return "done"
+
+        with tempfile.TemporaryDirectory() as directory:
+            catalog = builtin_catalog()
+            runtime = RecordingRuntime(
+                provider=StaticProvider("x"),
+                config=SUBAGENT_CONFIG,
+                catalog=catalog,
+                roles=SubagentRoleRegistry((RESEARCHER, CODER)),
+            )
+            context = context_for(
+                Workspace(Path(directory)), subagents=runtime
+            )
+
+            SubagentTool().execute(
+                {"role": "researcher", "task": "look"}, context
+            )
+            SubagentTool().execute(
+                {"role": "coder", "task": "change"}, context
+            )
+
+        self.assertEqual(
+            selected,
+            [
+                ["list_directory", "read_file"],
+                ["edit_file", "read_file"],
+            ],
+        )
+
+    def test_a_child_cannot_delegate_again(self) -> None:
+        captured = []
+
+        class CapturingRuntime(SubagentRuntime):
+            def run(self, role_name, task, parent):
+                result = super().run(role_name, task, parent)
+                return result
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            catalog = builtin_catalog()
+            recursive_role = SubagentRole(
+                name="recursive",
+                description="Tries to delegate again.",
+                tools=frozenset({"subagent", "read_file"}),
+            )
+            runtime = CapturingRuntime(
+                provider=StaticProvider("child answer"),
+                config=SUBAGENT_CONFIG,
+                catalog=catalog,
+                roles=SubagentRoleRegistry((recursive_role,)),
+            )
+            parent = Session()
+            context = context_for(
+                Workspace(root),
+                session=parent,
+                sessions_directory=root / "sessions",
+                subagents=runtime,
+            )
+
+            original_select = catalog.select
+
+            def record_select(names, ctx, **kwargs):
+                tools = original_select(names, ctx, **kwargs)
+                captured.append(
+                    (sorted(d.name for d in tools.definitions), ctx.subagents)
+                )
+                return tools
+
+            catalog.select = record_select
+            SubagentTool().execute(
+                {"role": "recursive", "task": "delegate again"}, context
+            )
+
+        child_tools, child_subagents = captured[0]
+        # The child's context carries no sub-agent runtime, so the
+        # subagent tool is unavailable to it however it is configured.
+        self.assertIsNone(child_subagents)
+        self.assertEqual(child_tools, ["read_file"])
+
+
+class ParallelSubagentIsolationTest(unittest.TestCase):
+    """Parallel delegations must not observe each other through the tools."""
+
+    def test_concurrent_roles_get_separate_sessions_and_transcripts(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = Workspace(root)
+            sessions_directory = root / "sessions"
+            parent = Session()
+            catalog = builtin_catalog()
+            runtime = subagent_runtime(catalog, (RESEARCHER, CODER))
+            context = context_for(
+                workspace,
+                session=parent,
+                sessions_directory=sessions_directory,
+                subagents=runtime,
+            )
+            # One shared Tool instance, exactly as the catalog hands it to
+            # every Agent of a Runtime.
+            tool = SubagentTool()
+            contexts = []
+            original_run = runtime.run
+            lock = threading.Lock()
+            barrier = threading.Barrier(8)
+
+            def recording_run(role_name, task, parent_context):
+                barrier.wait()
+                result = original_run(role_name, task, parent_context)
+                with lock:
+                    contexts.append(parent_context)
+                return result
+
+            runtime.run = recording_run
+
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                results = list(
+                    executor.map(
+                        lambda index: tool.execute(
+                            {
+                                "role": "researcher" if index % 2 else "coder",
+                                "task": f"task {index}",
+                            },
+                            context,
+                        ),
+                        range(8),
+                    )
+                )
+
+            self.assertEqual(results, ["child answer"] * 8)
+            # Every call saw the same parent context object; nothing was
+            # written into the shared Tool.
+            self.assertEqual(len(contexts), 8)
+            for seen in contexts:
+                self.assertIs(seen, context)
+            self.assertEqual(vars(tool), {})
+
+            # Each delegation produced its own child session transcript.
+            transcripts = list(
+                (
+                    session_directory(
+                        sessions_directory, workspace.path, parent.session_id
+                    )
+                    / "subagents"
+                ).rglob("*.jsonl")
+            )
+            self.assertEqual(len(transcripts), 8)
+            tasks = []
+            for transcript in transcripts:
+                record = json.loads(transcript.read_text(encoding="utf-8"))
+                tasks.append(record["items"][0]["content"])
+            self.assertEqual(
+                sorted(tasks), sorted(f"task {index}" for index in range(8))
+            )
+
+    def test_parent_session_is_never_mutated_by_a_child(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            parent = Session()
+            catalog = builtin_catalog()
+            context = context_for(
+                Workspace(root),
+                session=parent,
+                sessions_directory=root / "sessions",
+                subagents=subagent_runtime(catalog, (RESEARCHER,)),
+            )
+
+            SubagentTool().execute(
+                {"role": "researcher", "task": "look around"}, context
+            )
+
+            self.assertEqual(parent.items, [])
 
 
 class FakeExa:
@@ -351,7 +796,7 @@ class FakeExa:
 class WebSearchToolTest(unittest.TestCase):
     def test_returns_ranked_results_with_highlights(self) -> None:
         client = FakeExa()
-        tool = WebSearchTool()
+        tool = _Bound(WebSearchTool(), _TMP_WORKSPACE)
 
         with patch(
             "agent_core.tools.builtin.web_search.Exa",
@@ -401,7 +846,7 @@ class WebSearchToolTest(unittest.TestCase):
 
     def test_passes_result_limit_and_domain_filters(self) -> None:
         client = FakeExa()
-        tool = WebSearchTool()
+        tool = _Bound(WebSearchTool(), _TMP_WORKSPACE)
 
         with patch(
             "agent_core.tools.builtin.web_search.Exa",
@@ -434,13 +879,13 @@ class WebSearchToolTest(unittest.TestCase):
 
     def test_missing_api_key_fails_the_call_not_the_tool(self) -> None:
         with patch.dict("os.environ", {}, clear=True):
-            tool = WebSearchTool()
+            tool = _Bound(WebSearchTool(), _TMP_WORKSPACE)
 
             with self.assertRaisesRegex(ValueError, "EXA_API_KEY"):
                 tool.execute({"query": "exa"})
 
     def test_rejects_invalid_arguments(self) -> None:
-        tool = WebSearchTool()
+        tool = _Bound(WebSearchTool(), _TMP_WORKSPACE)
 
         with patch(
             "agent_core.tools.builtin.web_search.Exa",
@@ -483,7 +928,7 @@ class ReadFileToolTest(unittest.TestCase):
                 newline="\n",
             )
 
-            result = ReadFileTool(workspace).execute({"path": "notes.txt"})
+            result = _Bound(ReadFileTool(), workspace).execute({"path": "notes.txt"})
 
             self.assertEqual(
                 result,
@@ -509,7 +954,7 @@ class ReadFileToolTest(unittest.TestCase):
                 newline="\n",
             )
 
-            result = ReadFileTool(workspace).execute(
+            result = _Bound(ReadFileTool(), workspace).execute(
                 {
                     "path": "notes.txt",
                     "offset": 2,
@@ -550,7 +995,7 @@ class ReadFileToolTest(unittest.TestCase):
                     "read_file must not load the whole file"
                 ),
             ):
-                result = ReadFileTool(workspace).execute(
+                result = _Bound(ReadFileTool(), workspace).execute(
                     {
                         "path": "notes.txt",
                         "offset": 2,
@@ -574,7 +1019,7 @@ class ReadFileToolTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = ReadFileTool(workspace).execute({"path": "notes.txt"})
+            result = _Bound(ReadFileTool(), workspace).execute({"path": "notes.txt"})
 
             content_lines = result["content"].splitlines()
             self.assertEqual(content_lines[0], "1| line 1")
@@ -595,7 +1040,7 @@ class ReadFileToolTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = ReadFileTool(workspace).execute(
+            result = _Bound(ReadFileTool(), workspace).execute(
                 {
                     "path": "notes.txt",
                     "offset": 3,
@@ -616,7 +1061,7 @@ class ReadFileToolTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = ReadFileTool(workspace).execute(
+            result = _Bound(ReadFileTool(), workspace).execute(
                 {"path": "notes.txt", "offset": 2}
             )
 
@@ -636,7 +1081,7 @@ class ReadFileToolTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = ReadFileTool(workspace).execute(
+            result = _Bound(ReadFileTool(), workspace).execute(
                 {
                     "path": "notes.txt",
                     "offset": 1,
@@ -662,7 +1107,7 @@ class ReadFileToolTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = ReadFileTool(workspace).execute(
+            result = _Bound(ReadFileTool(), workspace).execute(
                 {"path": "notes.txt"}
             )
 
@@ -687,7 +1132,7 @@ class ReadFileToolTest(unittest.TestCase):
                     ValueError,
                     "size is 11 bytes.*maximum of 10 bytes",
                 ):
-                    ReadFileTool(workspace).execute(
+                    _Bound(ReadFileTool(), workspace).execute(
                         {"path": "large.txt"}
                     )
 
@@ -701,7 +1146,7 @@ class ReadFileToolTest(unittest.TestCase):
                 ValueError,
                 "must stay within the workspace",
             ):
-                ReadFileTool(workspace).execute({"path": "../outside.txt"})
+                _Bound(ReadFileTool(), workspace).execute({"path": "../outside.txt"})
 
     @unittest.skipUnless(
         SYMLINKS_AVAILABLE,
@@ -722,11 +1167,11 @@ class ReadFileToolTest(unittest.TestCase):
                 ValueError,
                 "must stay within the workspace",
             ):
-                ReadFileTool(workspace).execute({"path": "link.txt"})
+                _Bound(ReadFileTool(), workspace).execute({"path": "link.txt"})
 
     def test_validates_arguments(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            tool = ReadFileTool(Workspace(Path(directory)))
+            tool = _Bound(ReadFileTool(), Workspace(Path(directory)))
 
             with self.assertRaisesRegex(ValueError, "non-empty string"):
                 tool.execute({})
@@ -756,7 +1201,7 @@ class EditFileToolTest(unittest.TestCase):
             file_path = workspace.path / "notes.txt"
             file_path.write_text("hello world\n", encoding="utf-8")
 
-            result = EditFileTool(workspace).execute(
+            result = _Bound(EditFileTool(), workspace).execute(
                 {
                     "path": "notes.txt",
                     "old_text": "world",
@@ -783,7 +1228,7 @@ class EditFileToolTest(unittest.TestCase):
             file_path.write_text("hello\n", encoding="utf-8")
 
             with self.assertRaisesRegex(ValueError, "was not found"):
-                EditFileTool(workspace).execute(
+                _Bound(EditFileTool(), workspace).execute(
                     {
                         "path": "notes.txt",
                         "old_text": "missing",
@@ -800,7 +1245,7 @@ class EditFileToolTest(unittest.TestCase):
             file_path.write_text("same same", encoding="utf-8")
 
             with self.assertRaisesRegex(ValueError, "appears 2 times"):
-                EditFileTool(workspace).execute(
+                _Bound(EditFileTool(), workspace).execute(
                     {
                         "path": "notes.txt",
                         "old_text": "same",
@@ -819,7 +1264,7 @@ class EditFileToolTest(unittest.TestCase):
             file_path = workspace.path / "notes.txt"
             file_path.write_text("remove me", encoding="utf-8")
 
-            EditFileTool(workspace).execute(
+            _Bound(EditFileTool(), workspace).execute(
                 {
                     "path": "notes.txt",
                     "old_text": "remove",
@@ -831,7 +1276,7 @@ class EditFileToolTest(unittest.TestCase):
 
     def test_requires_exact_arguments(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            tool = EditFileTool(Workspace(Path(directory)))
+            tool = _Bound(EditFileTool(), Workspace(Path(directory)))
 
             with self.assertRaisesRegex(ValueError, "non-empty string 'path'"):
                 tool.execute({})
@@ -853,7 +1298,7 @@ class ListDirectoryToolTest(unittest.TestCase):
             (workspace.path / "z.txt").write_text("z", encoding="utf-8")
             (workspace.path / "a").mkdir()
 
-            result = ListDirectoryTool(workspace).execute({"path": "."})
+            result = _Bound(ListDirectoryTool(), workspace).execute({"path": "."})
 
             self.assertEqual(
                 result,
@@ -880,7 +1325,7 @@ class ListDirectoryToolTest(unittest.TestCase):
                 workspace.path / "link.txt",
             )
 
-            result = ListDirectoryTool(workspace).execute({"path": "."})
+            result = _Bound(ListDirectoryTool(), workspace).execute({"path": "."})
 
             self.assertEqual(
                 result,
@@ -902,11 +1347,11 @@ class ListDirectoryToolTest(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(ValueError, "must be a directory"):
-                ListDirectoryTool(workspace).execute({"path": "notes.txt"})
+                _Bound(ListDirectoryTool(), workspace).execute({"path": "notes.txt"})
 
     def test_rejects_path_outside_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            tool = ListDirectoryTool(Workspace(Path(directory)))
+            tool = _Bound(ListDirectoryTool(), Workspace(Path(directory)))
 
             with self.assertRaisesRegex(
                 ValueError,
@@ -930,7 +1375,7 @@ class SearchFilesToolTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = SearchFilesTool(workspace).execute(
+            result = _Bound(SearchFilesTool(), workspace).execute(
                 {"path": ".", "pattern": r"Nosis"}
             )
 
@@ -964,7 +1409,7 @@ class SearchFilesToolTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = SearchFilesTool(workspace).execute(
+            result = _Bound(SearchFilesTool(), workspace).execute(
                 {"path": ".", "pattern": r"item-\d+"}
             )
 
@@ -989,7 +1434,7 @@ class SearchFilesToolTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = SearchFilesTool(workspace).execute(
+            result = _Bound(SearchFilesTool(), workspace).execute(
                 {
                     "path": ".",
                     "pattern": "nosis.",
@@ -1012,7 +1457,7 @@ class SearchFilesToolTest(unittest.TestCase):
                 "\n".join(f"Nosis {index}" for index in range(5)),
                 encoding="utf-8",
             )
-            tool = SearchFilesTool(workspace)
+            tool = _Bound(SearchFilesTool(), workspace)
 
             first_page = tool.execute(
                 {
@@ -1052,7 +1497,7 @@ class SearchFilesToolTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = SearchFilesTool(workspace).execute(
+            result = _Bound(SearchFilesTool(), workspace).execute(
                 {"path": ".", "pattern": "Nosis"}
             )
 
@@ -1075,7 +1520,7 @@ class SearchFilesToolTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = SearchFilesTool(workspace).execute(
+            result = _Bound(SearchFilesTool(), workspace).execute(
                 {"path": ".", "pattern": "Nosis"}
             )
 
@@ -1098,7 +1543,7 @@ class SearchFilesToolTest(unittest.TestCase):
                 "MAX_FILE_SIZE_BYTES",
                 3,
             ):
-                result = SearchFilesTool(workspace).execute(
+                result = _Bound(SearchFilesTool(), workspace).execute(
                     {"path": ".", "pattern": "Nosis"}
                 )
 
@@ -1120,7 +1565,7 @@ class SearchFilesToolTest(unittest.TestCase):
                 "MAX_SCANNED_PATHS",
                 2,
             ):
-                result = SearchFilesTool(workspace).execute(
+                result = _Bound(SearchFilesTool(), workspace).execute(
                     {"path": ".", "pattern": "Nosis"}
                 )
 
@@ -1136,7 +1581,7 @@ class SearchFilesToolTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            result = SearchFilesTool(workspace).execute(
+            result = _Bound(SearchFilesTool(), workspace).execute(
                 {"path": ".", "pattern": "Nosis"}
             )
 
@@ -1153,7 +1598,7 @@ class SearchFilesToolTest(unittest.TestCase):
             workspace = Workspace(Path(directory))
             (workspace.path / "binary.bin").write_bytes(b"\xffNosis")
 
-            result = SearchFilesTool(workspace).execute(
+            result = _Bound(SearchFilesTool(), workspace).execute(
                 {"path": ".", "pattern": "Nosis"}
             )
 
@@ -1175,7 +1620,7 @@ class SearchFilesToolTest(unittest.TestCase):
             outside_file.write_text("Nosis", encoding="utf-8")
             os.symlink(outside_file, workspace.path / "link.txt")
 
-            result = SearchFilesTool(workspace).execute(
+            result = _Bound(SearchFilesTool(), workspace).execute(
                 {"path": ".", "pattern": "Nosis"}
             )
 
@@ -1207,7 +1652,7 @@ class SearchFilesToolTest(unittest.TestCase):
                 capture_output=True,
             )
 
-            result = SearchFilesTool(workspace).execute(
+            result = _Bound(SearchFilesTool(), workspace).execute(
                 {"path": ".", "pattern": "Nosis"}
             )
 
@@ -1216,7 +1661,7 @@ class SearchFilesToolTest(unittest.TestCase):
 
     def test_rejects_path_outside_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            tool = SearchFilesTool(Workspace(Path(directory)))
+            tool = _Bound(SearchFilesTool(), Workspace(Path(directory)))
 
             with self.assertRaisesRegex(
                 ValueError,
@@ -1233,20 +1678,20 @@ class SearchFilesToolTest(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(ValueError, "must be a directory"):
-                SearchFilesTool(workspace).execute(
+                _Bound(SearchFilesTool(), workspace).execute(
                     {"path": "notes.txt", "pattern": "Nosis"}
                 )
 
     def test_rejects_invalid_regular_expression(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            tool = SearchFilesTool(Workspace(Path(directory)))
+            tool = _Bound(SearchFilesTool(), Workspace(Path(directory)))
 
             with self.assertRaisesRegex(Exception, "unterminated"):
                 tool.execute({"path": ".", "pattern": "["})
 
     def test_validates_optional_arguments(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            tool = SearchFilesTool(Workspace(Path(directory)))
+            tool = _Bound(SearchFilesTool(), Workspace(Path(directory)))
 
             invalid_arguments = (
                 {"path": ".", "pattern": "x", "glob": ""},
@@ -1284,7 +1729,9 @@ class ShellToolTest(unittest.TestCase):
                 )
 
         executor = RecordingExecutor()
-        tool = ShellTool(executor)
+        tool = _Bound(
+            ShellTool(), _TMP_WORKSPACE, command_executor=executor
+        )
 
         result = tool.execute({"command": "example command"})
 
@@ -1317,7 +1764,12 @@ class ShellToolTest(unittest.TestCase):
                 )
 
         executor = RecordingExecutor()
-        tool = ShellTool(executor, default_timeout_seconds=60)
+        tool = _Bound(
+            ShellTool(),
+            _TMP_WORKSPACE,
+            command_executor=executor,
+            shell_timeout_seconds=60,
+        )
 
         tool.execute({"command": "pwd", "timeout_seconds": 10})
 
@@ -1328,9 +1780,11 @@ class ShellToolTest(unittest.TestCase):
             def execute(self, command, timeout_seconds=60):
                 raise AssertionError("executor should not be called")
 
-        tool = ShellTool(
-            UnusedExecutor(),
-            default_timeout_seconds=60,
+        tool = _Bound(
+            ShellTool(),
+            _TMP_WORKSPACE,
+            command_executor=UnusedExecutor(),
+            shell_timeout_seconds=60,
         )
 
         with self.assertRaisesRegex(
@@ -1344,7 +1798,12 @@ class ShellToolTest(unittest.TestCase):
             def execute(self, command, timeout_seconds=60):
                 raise AssertionError("executor should not be called")
 
-        tool = ShellTool(UnusedExecutor(), default_timeout_seconds=90)
+        tool = _Bound(
+            ShellTool(),
+            _TMP_WORKSPACE,
+            command_executor=UnusedExecutor(),
+            shell_timeout_seconds=90,
+        )
 
         definition = tool.definition
         timeout_schema = definition.parameters["properties"][
@@ -1363,7 +1822,9 @@ class ShellToolTest(unittest.TestCase):
             def execute(self, command, timeout_seconds=60):
                 raise AssertionError("executor should not be called")
 
-        tool = ShellTool(UnusedExecutor())
+        tool = _Bound(
+            ShellTool(), _TMP_WORKSPACE, command_executor=UnusedExecutor()
+        )
 
         with self.assertRaisesRegex(ValueError, "non-empty string"):
             tool.execute({})

@@ -1,15 +1,13 @@
 from ..base import JSONValue, Tool, ToolDefinition
-from ...workspace import Workspace
+from ..context import ToolExecutionContext
 
 
 class ListDirectoryTool(Tool):
-    def __init__(self, workspace: Workspace) -> None:
-        self._workspace = workspace
+    name = "list_directory"
 
-    @property
-    def definition(self) -> ToolDefinition:
+    def definition(self, context: ToolExecutionContext) -> ToolDefinition:
         return ToolDefinition(
-            name="list_directory",
+            name=self.name,
             description="List the immediate entries in a workspace directory.",
             parameters={
                 "type": "object",
@@ -24,7 +22,11 @@ class ListDirectoryTool(Tool):
             },
         )
 
-    def execute(self, arguments: dict[str, JSONValue]) -> JSONValue:
+    def execute(
+        self,
+        arguments: dict[str, JSONValue],
+        context: ToolExecutionContext,
+    ) -> JSONValue:
         path = arguments.get("path")
         if not isinstance(path, str) or not path:
             raise ValueError(
@@ -35,7 +37,8 @@ class ListDirectoryTool(Tool):
                 "list_directory accepts only the 'path' argument"
             )
 
-        directory_path = self._workspace.resolve_path(path)
+        workspace = context.workspace
+        directory_path = workspace.resolve_path(path)
         if not directory_path.is_dir():
             raise ValueError("list_directory path must be a directory")
 
@@ -61,8 +64,6 @@ class ListDirectoryTool(Tool):
             )
 
         return {
-            "path": directory_path.relative_to(
-                self._workspace.path
-            ).as_posix(),
+            "path": directory_path.relative_to(workspace.path).as_posix(),
             "entries": entries,
         }

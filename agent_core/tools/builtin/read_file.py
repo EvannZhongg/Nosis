@@ -2,8 +2,7 @@ from pathlib import Path
 from typing import TextIO
 
 from ..base import JSONValue, Tool, ToolDefinition
-from ...session_paths import default_sessions_directory
-from ...workspace import Workspace
+from ..context import ToolExecutionContext
 
 
 DEFAULT_READ_LIMIT = 2000
@@ -15,23 +14,11 @@ TRUNCATED_LINE_NOTICE = " …（该行被截断）"
 
 
 class ReadFileTool(Tool):
-    def __init__(
-        self,
-        workspace: Workspace,
-        *,
-        sessions_directory: Path | None = None,
-    ) -> None:
-        self._workspace = workspace
-        self._sessions_directory = (
-            sessions_directory.expanduser().resolve()
-            if sessions_directory is not None
-            else default_sessions_directory().resolve()
-        )
+    name = "read_file"
 
-    @property
-    def definition(self) -> ToolDefinition:
+    def definition(self, context: ToolExecutionContext) -> ToolDefinition:
         return ToolDefinition(
-            name="read_file",
+            name=self.name,
             description=(
                 "Read a range of lines from a UTF-8 workspace file with "
                 "line numbers. Refuses files larger than 50 MiB and limits "
@@ -63,9 +50,13 @@ class ReadFileTool(Tool):
             },
         )
 
-    def execute(self, arguments: dict[str, JSONValue]) -> JSONValue:
+    def execute(
+        self,
+        arguments: dict[str, JSONValue],
+        context: ToolExecutionContext,
+    ) -> JSONValue:
         path, offset, limit = _parse_arguments(arguments)
-        file_path, display_path = self._resolve_path(path)
+        file_path, display_path = _resolve_path(path, context)
         file_size_bytes = file_path.stat().st_size
         if file_size_bytes > MAX_FILE_SIZE_BYTES:
             raise ValueError(
@@ -93,23 +84,34 @@ class ReadFileTool(Tool):
             "content": content,
         }
 
-    def _resolve_path(self, path: str) -> tuple[Path, str]:
-        marker = Path(".nosis", "sessions")
-        relative = Path(path)
-        if self._sessions_directory is not None and (
-            relative == marker or marker in relative.parents
-        ):
-            suffix = relative.relative_to(marker)
-            resolved = (self._sessions_directory / suffix).resolve()
-            try:
-                resolved.relative_to(self._sessions_directory)
-            except ValueError as error:
-                raise ValueError(
-                    "session artifact path must stay within sessions"
-                ) from error
-            return resolved, relative.as_posix()
-        resolved = self._workspace.resolve_path(path)
-        return resolved, resolved.relative_to(self._workspace.path).as_posix()
+
+def _resolve_path(
+    path: str,
+    context: ToolExecutionContext,
+) -> tuple[Path, str]:
+    """Resolve a workspace path, or a Session artifact pseudo-path.
+
+    Tool Result artifacts are addressed as ``.nosis/sessions/...`` even
+    though they live under the Runtime's Session root rather than in the
+    workspace.
+    """
+    marker = Path(".nosis", "sessions")
+    relative = Path(path)
+    if relative == marker or marker in relative.parents:
+        sessions_directory = context.sessions_directory
+        resolved = (
+            sessions_directory / relative.relative_to(marker)
+        ).resolve()
+        try:
+            resolved.relative_to(sessions_directory)
+        except ValueError as error:
+            raise ValueError(
+                "session artifact path must stay within sessions"
+            ) from error
+        return resolved, relative.as_posix()
+    workspace = context.workspace
+    resolved = workspace.resolve_path(path)
+    return resolved, resolved.relative_to(workspace.path).as_posix()
 
 
 def _parse_arguments(

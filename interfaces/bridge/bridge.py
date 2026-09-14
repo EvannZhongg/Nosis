@@ -9,6 +9,7 @@ import json
 from collections import deque
 from itertools import count
 from pathlib import Path
+from threading import Lock
 from typing import Sequence, TextIO
 
 from dotenv import load_dotenv
@@ -23,12 +24,14 @@ from agent_core import (
     CompositeToolPolicy,
     McpApprovalPolicy,
     ShellApprovalPolicy,
+    SubagentRole,
+    SubagentRoleRegistry,
+    SubagentRuntime,
     SubprocessCommandExecutor,
-    SubagentRegistry,
+    ToolExecutionContext,
     Workspace,
     ImagePart,
-    create_builtin_tools,
-    SubagentTool,
+    builtin_catalog,
     load_agent_config,
 )
 from agent_core.prompts import load_system_prompt
@@ -49,6 +52,10 @@ class Bridge:
         self._stdout = stdout
         self._deferred: deque[dict[str, object]] = deque()
         self._approval_ids = count(1)
+        # Parallel tool calls share this one protocol channel. An approval
+        # is a read-modify-write on it, so two of them must not interleave:
+        # one thread would consume the other's response and both would hang.
+        self._approval_lock = Lock()
         self._turn_id: str | None = None
         self._agent: Agent | None = None
         self._session: Session | None = None
@@ -87,29 +94,32 @@ class Bridge:
         server: str | None = None,
         tool_name: str | None = None,
     ) -> bool:
-        request_id = f"{self._turn_id}:{next(self._approval_ids)}"
-        self.emit(
-            "approval_request",
-            turn_id=self._turn_id,
-            request_id=request_id,
-            command=command,
-            kind=kind,
-            server=server,
-            tool_name=tool_name,
-        )
-        while True:
-            # Read fresh input only: replaying the deferred queue here
-            # would spin, since non-matching messages go back onto it.
-            message = self._read_incoming()
-            if message is None or message["type"] == "shutdown":
-                # The UI is gone; never run an unapproved command.
-                raise Cancelled
-            if (
-                message["type"] == "approval_response"
-                and message.get("request_id") == request_id
-            ):
-                return bool(message.get("approved"))
-            self._deferred.append(message)
+        # Serialized so concurrent tool calls queue their prompts instead of
+        # racing for each other's answers; the user still answers one at a time.
+        with self._approval_lock:
+            request_id = f"{self._turn_id}:{next(self._approval_ids)}"
+            self.emit(
+                "approval_request",
+                turn_id=self._turn_id,
+                request_id=request_id,
+                command=command,
+                kind=kind,
+                server=server,
+                tool_name=tool_name,
+            )
+            while True:
+                # Read fresh input only: replaying the deferred queue here
+                # would spin, since non-matching messages go back onto it.
+                message = self._read_incoming()
+                if message is None or message["type"] == "shutdown":
+                    # The UI is gone; never run an unapproved command.
+                    raise Cancelled
+                if (
+                    message["type"] == "approval_response"
+                    and message.get("request_id") == request_id
+                ):
+                    return bool(message.get("approved"))
+                self._deferred.append(message)
 
     def request_mcp_permission(self, call) -> bool:
         identity = (
@@ -173,88 +183,53 @@ class Bridge:
             else None
         )
 
-        subagent_registry = SubagentRegistry()
-        if agent_config.tools.is_enabled("subagent"):
-            # Sub-agents run with an isolated session and their own tool config.
-            subagent_provider_name, subagent_provider_config = load_config_with_name(
-                config_path,
-                provider if isinstance(provider, str) and provider else None,
-                subagent=True,
-            )
-            subagent_provider = LiteLLMProvider(
-                model=subagent_provider_config.model,
-                base_url=subagent_provider_config.url,
-                api_key=subagent_provider_config.key,
-                max_context_tokens=subagent_provider_config.max_context_tokens,
-                media_root=workspace.path,
-            )
-            subagent_vision_config = load_vision_config(
-                config_path,
-                subagent_provider_name,
-                agent="subagent",
-                inherited=vision_config,
-            )
-            subagent_vision_provider = (
-                LiteLLMProvider(
-                    model=subagent_vision_config.model,
-                    base_url=subagent_vision_config.url,
-                    api_key=subagent_vision_config.key,
-                    max_context_tokens=subagent_vision_config.max_context_tokens,
-                    media_root=workspace.path,
-                )
-                if subagent_vision_config is not None
-                else None
-            )
-            child_tools = create_builtin_tools(
-                agent_config.subagent_tools,
-                workspace,
-                SubprocessCommandExecutor(workspace.path),
-                shell_timeout_seconds=agent_config.shell_timeout_seconds,
-                vision_provider=subagent_vision_provider,
-                sessions_directory=sessions_directory,
-            )
-            subagent_registry.register(
-                SubagentTool(
-                    provider=subagent_provider,
-                    config=agent_config,
-                    workspace=workspace,
-                    tools=child_tools,
-                    parent_session=self._session,
-                    parent_session_id=self._session.session_id,
-                    sessions_directory=sessions_directory,
-                    tool_policy=ShellApprovalPolicy(self.request_permission),
-                )
-            )
-        builtin_tools = create_builtin_tools(
-            agent_config.tools,
-            workspace,
-            SubprocessCommandExecutor(workspace.path),
-            shell_timeout_seconds=agent_config.shell_timeout_seconds,
-            subagent_registry=subagent_registry,
-            vision_provider=vision_provider,
-            sessions_directory=sessions_directory,
-        )
+        # One catalog of stateless Tool instances is shared by the main
+        # Agent and by every sub-agent role.
+        catalog = builtin_catalog()
         self._mcp = McpClientManager(
             agent_config.mcp,
             workspace.path,
             on_status=self._emit_mcp_status,
         )
-        mcp_tools = self._mcp.start()
+        catalog = catalog.extend(self._mcp.start())
+
+        shell_policy = ShellApprovalPolicy(self.request_permission)
+        subagents = self._subagent_runtime(
+            agent_config,
+            catalog,
+            config_path,
+            provider if isinstance(provider, str) and provider else None,
+            workspace,
+            vision_config,
+            shell_policy,
+        )
+        context = ToolExecutionContext(
+            workspace=workspace,
+            session=self._session,
+            sessions_directory=sessions_directory,
+            command_executor=SubprocessCommandExecutor(workspace.path),
+            shell_timeout_seconds=agent_config.shell_timeout_seconds,
+            vision_provider=vision_provider,
+            mcp=self._mcp,
+            subagents=subagents,
+        )
         self._agent = Agent(
             provider=main_provider,
             session=self._session,
             system_prompt=load_system_prompt(workspace),
             config=agent_config,
-            workspace=workspace,
-            tools=(*builtin_tools, *mcp_tools),
-            tool_policy=CompositeToolPolicy(
-                ShellApprovalPolicy(self.request_permission),
-                McpApprovalPolicy(
-                    self.request_mcp_permission,
-                    self._mcp.requires_approval,
+            tools=catalog.select(
+                (*agent_config.tools.enabled, *self._mcp.tool_names),
+                context,
+                policy=CompositeToolPolicy(
+                    shell_policy,
+                    McpApprovalPolicy(
+                        self.request_mcp_permission,
+                        self._mcp.requires_approval,
+                    ),
                 ),
             ),
-            sessions_directory=sessions_directory,
+            context=context,
         )
 
         self.emit(
@@ -264,6 +239,70 @@ class Bridge:
             model=config.model,
             resumed=resumed,
             message_count=len(self._session.items),
+        )
+
+    def _subagent_runtime(
+        self,
+        agent_config,
+        catalog,
+        config_path: Path,
+        provider: str | None,
+        workspace: Workspace,
+        vision_config,
+        shell_policy: ShellApprovalPolicy,
+    ) -> SubagentRuntime | None:
+        """Build the sub-agent runtime, or None when no role is configured."""
+        if not agent_config.tools.is_enabled("subagent"):
+            return None
+        roles = SubagentRoleRegistry(
+            SubagentRole(
+                name=name,
+                description=role.description,
+                tools=role.tools.enabled,
+            )
+            for name, role in agent_config.subagent_roles.items()
+            if role.enabled
+        )
+        if not roles:
+            return None
+
+        # Sub-agents may run on their own provider; they share the
+        # parent's workspace, executor and session root through the
+        # context the tool call hands them.
+        provider_name, provider_config = load_config_with_name(
+            config_path,
+            provider,
+            subagent=True,
+        )
+        subagent_vision_config = load_vision_config(
+            config_path,
+            provider_name,
+            agent="subagent",
+            inherited=vision_config,
+        )
+        return SubagentRuntime(
+            provider=LiteLLMProvider(
+                model=provider_config.model,
+                base_url=provider_config.url,
+                api_key=provider_config.key,
+                max_context_tokens=provider_config.max_context_tokens,
+                media_root=workspace.path,
+            ),
+            config=agent_config,
+            catalog=catalog,
+            roles=roles,
+            vision_provider=(
+                LiteLLMProvider(
+                    model=subagent_vision_config.model,
+                    base_url=subagent_vision_config.url,
+                    api_key=subagent_vision_config.key,
+                    max_context_tokens=subagent_vision_config.max_context_tokens,
+                    media_root=workspace.path,
+                )
+                if subagent_vision_config is not None
+                else None
+            ),
+            tool_policy=shell_policy,
         )
 
     def _emit_mcp_status(self, status: McpServerStatus) -> None:

@@ -9,25 +9,39 @@
       "target_ratio": null
     }
   },
-  "tools": {
-    "read_file": true,
-    "edit_file": true,
-    "search_files": true,
-    "list_directory": true,
-    "shell": true,
-    "web_search": false,
-    "subagent": true,
-    "analyze_image": true
-  },
-  "subagent": {
+  "main_agent": {
     "tools": {
       "read_file": true,
-      "edit_file": false,
+      "edit_file": true,
       "search_files": true,
       "list_directory": true,
-      "shell": false,
+      "shell": true,
       "web_search": false,
+      "subagent": true,
       "analyze_image": true
+    }
+  },
+  "subagent_roles": {
+    "researcher": {
+      "enabled": true,
+      "description": "Read and search the workspace to answer a question. Cannot modify files.",
+      "tools": {
+        "read_file": true,
+        "search_files": true,
+        "list_directory": true,
+        "analyze_image": true
+      }
+    },
+    "coder": {
+      "enabled": true,
+      "description": "Implement a self-contained change in the workspace.",
+      "tools": {
+        "read_file": true,
+        "edit_file": true,
+        "search_files": true,
+        "list_directory": true,
+        "shell": true
+      }
     }
   },
   "mcp": {

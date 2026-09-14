@@ -1,21 +1,21 @@
 from ...content import ImagePart, TextPart
 from ...session import Message
-from ...llm import LLMProvider, LLMRequest
-from ...workspace import Workspace
+from ...llm import LLMRequest
 from ..base import JSONValue, Tool, ToolDefinition
+from ..context import ToolExecutionContext
 
 
 class AnalyzeImageTool(Tool):
     """Ask a vision-capable provider about an image stored in the workspace."""
 
-    def __init__(self, provider: LLMProvider, workspace: Workspace) -> None:
-        self._provider = provider
-        self._workspace = workspace
+    name = "analyze_image"
 
-    @property
-    def definition(self) -> ToolDefinition:
+    def available(self, context: ToolExecutionContext) -> bool:
+        return context.vision_provider is not None
+
+    def definition(self, context: ToolExecutionContext) -> ToolDefinition:
         return ToolDefinition(
-            name="analyze_image",
+            name=self.name,
             description="Analyze an image attachment and answer a question about it.",
             parameters={
                 "type": "object",
@@ -27,19 +27,27 @@ class AnalyzeImageTool(Tool):
             },
         )
 
-    def execute(self, arguments: dict[str, JSONValue]) -> JSONValue:
+    def execute(
+        self,
+        arguments: dict[str, JSONValue],
+        context: ToolExecutionContext,
+    ) -> JSONValue:
         path = arguments.get("path")
         question = arguments.get("question")
         if not isinstance(path, str) or not path:
             raise ValueError("path must be a non-empty string")
         if not isinstance(question, str) or not question:
             raise ValueError("question must be a non-empty string")
-        resolved = self._workspace.resolve_path(path)
+        provider = context.vision_provider
+        if provider is None:
+            raise ValueError("this runtime has no vision provider")
+        workspace = context.workspace
+        resolved = workspace.resolve_path(path)
         if not resolved.is_file():
             raise ValueError(f"image does not exist: {path}")
-        if "image" not in self._provider.capabilities.input_modalities:
+        if "image" not in provider.capabilities.input_modalities:
             raise ValueError("the configured provider does not support image input")
-        response = self._provider.stream(
+        response = provider.stream(
             LLMRequest(
                 system_prompt="Analyze the supplied image and answer the user's question.",
                 messages=(
@@ -51,7 +59,7 @@ class AnalyzeImageTool(Tool):
                         ),
                     ),
                 ),
-                media_root=self._workspace.path,
+                media_root=workspace.path,
             ),
             lambda _text: None,
         )

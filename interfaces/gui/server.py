@@ -24,7 +24,13 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from agent_core import JsonlSessionStore, ListDirectoryTool, Workspace
+from agent_core import (
+    JsonlSessionStore,
+    ListDirectoryTool,
+    Session,
+    ToolExecutionContext,
+    Workspace,
+)
 
 from ..bridge.config import (
     default_config_directory,
@@ -210,7 +216,13 @@ def create_app(
     def get_workspace(path: str = ".", session_id: str | None = None) -> dict[str, object]:
         current_workspace = session_workspace(session_id)
         try:
-            listing = ListDirectoryTool(current_workspace).execute({"path": path})
+            listing = ListDirectoryTool().execute(
+                {"path": path},
+                ToolExecutionContext(
+                    workspace=current_workspace,
+                    session=Session(),
+                ),
+            )
         except (OSError, ValueError) as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         return {"root": str(current_workspace.path), **listing}

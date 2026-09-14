@@ -3,7 +3,7 @@ import re
 from pathlib import Path
 
 from ..base import JSONValue, Tool, ToolDefinition
-from ...workspace import Workspace
+from ..context import ToolExecutionContext
 
 
 DEFAULT_SEARCH_LIMIT = 200
@@ -34,13 +34,11 @@ DEFAULT_EXCLUDED_DIRECTORIES = frozenset(
 
 
 class SearchFilesTool(Tool):
-    def __init__(self, workspace: Workspace) -> None:
-        self._workspace = workspace
+    name = "search_files"
 
-    @property
-    def definition(self) -> ToolDefinition:
+    def definition(self, context: ToolExecutionContext) -> ToolDefinition:
         return ToolDefinition(
-            name="search_files",
+            name=self.name,
             description=(
                 "Search matching UTF-8 workspace files recursively. Supports "
                 "regular expressions, fixed strings, glob filtering, and "
@@ -102,9 +100,14 @@ class SearchFilesTool(Tool):
             },
         )
 
-    def execute(self, arguments: dict[str, JSONValue]) -> JSONValue:
+    def execute(
+        self,
+        arguments: dict[str, JSONValue],
+        context: ToolExecutionContext,
+    ) -> JSONValue:
         options = _parse_arguments(arguments)
-        directory_path = self._workspace.resolve_path(options["path"])
+        workspace = context.workspace
+        directory_path = workspace.resolve_path(options["path"])
         if not directory_path.is_dir():
             raise ValueError("search_files path must be a directory")
 
@@ -149,7 +152,7 @@ class SearchFilesTool(Tool):
 
                 match = {
                     "path": file_path.relative_to(
-                        self._workspace.path
+                        workspace.path
                     ).as_posix(),
                     "line_number": line_number,
                     "line": line,

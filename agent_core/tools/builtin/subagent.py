@@ -1,168 +1,70 @@
-"""Tool for delegating a task to an independent Agent session."""
-from __future__ import annotations
-
-from collections.abc import Callable, Iterable
-from pathlib import Path
-from typing import TYPE_CHECKING
-
-from ...tools.config import ToolConfig
-from ...llm import LLMProvider
-from ...prompts import load_subagent_prompt
-from ...session import Session
-from ...session_store import JsonlSessionStore
-from ...session_paths import session_directory
-from ...session_paths import default_sessions_directory
-from ...workspace import Workspace
-from ...content import ImagePart
+"""Tool for delegating a task to a sub-agent role."""
 from ..base import JSONValue, Tool, ToolDefinition
-from ..base import ToolPolicy
-if TYPE_CHECKING:
-    from ...config import AgentConfig
+from ..context import ToolExecutionContext
 
 
 class SubagentTool(Tool):
-    """Run a complete child-agent loop and return only its final answer.
+    """Delegate a task to one of the Runtime's sub-agent roles.
 
-    A fresh :class:`Session` is created for every invocation.  The complete
-    child transcript is persisted under the parent session's ``subagents``
-    directory, while the parent receives a plain string containing the final
-    assistant response.
+    A single entry point for every role: the role list is part of the
+    schema, so new roles arrive as configuration instead of as new tools.
     """
 
-    def __init__(
-        self,
-        provider: LLMProvider | Callable[[], LLMProvider],
-        config: AgentConfig,
-        workspace: Workspace,
-        *,
-        tools: Iterable[Tool] = (),
-        system_prompt: str | None = None,
-        sessions_directory: Path | None = None,
-        parent_session_id: str | None = None,
-        parent_session: Session | None = None,
-        tool_policy: ToolPolicy | None = None,
-    ) -> None:
-        self._provider = provider
-        self._config = config
-        self._workspace = workspace
-        self._tools = tuple(tools)
-        self._system_prompt = system_prompt
-        if not parent_session_id:
-            raise ValueError(
-                "parent_session_id is required to nest the child transcript"
-            )
-        sessions_root = (
-            sessions_directory
-            if sessions_directory is not None
-            else default_sessions_directory()
-        ).expanduser().resolve()
-        # Tool Result artifacts stay addressable from the shared Session root,
-        # so the child's ``.nosis/sessions/...`` pseudo-paths keep resolving.
-        self._artifact_sessions_directory = sessions_root
-        # Only the transcript is nested, under the parent session's
-        # ``subagents`` directory, which keeps child transcripts out of the
-        # user-visible session list. That root already belongs to the parent's
-        # workspace, so it does not group its sessions by workspace again.
-        self._store = JsonlSessionStore(
-            session_directory(
-                sessions_root,
-                workspace.path,
-                parent_session_id,
-            )
-            / "subagents",
-            group_by_workspace=False,
-        )
-        self._tool_policy = tool_policy
-        self._parent_session = parent_session
+    name = "subagent"
+    # Independent child sessions share no state, so a batch of
+    # delegations runs in parallel.
+    concurrent = True
 
-    @property
-    def definition(self) -> ToolDefinition:
+    def available(self, context: ToolExecutionContext) -> bool:
+        return context.subagents is not None and bool(
+            context.subagents.roles
+        )
+
+    def definition(self, context: ToolExecutionContext) -> ToolDefinition:
+        roles = list(context.subagents.roles) if context.subagents else []
+        described = "; ".join(
+            f"{role.name}: {role.description}" for role in roles
+        )
         return ToolDefinition(
-            name="subagent",
+            name=self.name,
             description=(
-                "Delegate a task to an independent sub-agent. "
-                "Returns only the sub-agent's final report."
+                "Delegate a task to an independent sub-agent role. Returns "
+                f"only the sub-agent's final report. Roles — {described}"
             ),
             parameters={
                 "type": "object",
-                "properties": {"task": {"type": "string"}},
-                "required": ["task"],
+                "properties": {
+                    "role": {
+                        "type": "string",
+                        "enum": [role.name for role in roles],
+                        "description": "Which sub-agent role to run.",
+                    },
+                    "task": {
+                        "type": "string",
+                        "description": (
+                            "Self-contained description of the task; the "
+                            "sub-agent does not see this conversation."
+                        ),
+                    },
+                },
+                "required": ["role", "task"],
                 "additionalProperties": False,
             },
         )
 
-    def execute(self, arguments: dict[str, JSONValue]) -> JSONValue:
+    def execute(
+        self,
+        arguments: dict[str, JSONValue],
+        context: ToolExecutionContext,
+    ) -> JSONValue:
+        role = arguments.get("role")
         task = arguments.get("task")
+        if not isinstance(role, str) or not role.strip():
+            raise ValueError("subagent requires a non-empty string 'role'")
         if not isinstance(task, str) or not task.strip():
-            raise ValueError("subagent task must be a non-empty string")
-
-        provider = self._provider() if callable(self._provider) else self._provider
-        from ...agent import Agent
-        # Deliberately do not pass the parent session: child context is fully
-        # isolated and receives only the task description as user input.
-        session = Session()
-        from dataclasses import replace
-        child_config = replace(
-            self._config,
-            tools=self._config.subagent_tools,
-            subagent_tools=ToolConfig(enabled=frozenset()),
-        )
-        child = Agent(
-            provider=provider,
-            session=session,
-            system_prompt=self._system_prompt or load_subagent_prompt(self._workspace),
-            config=child_config,
-            workspace=self._workspace,
-            tools=self._tools,
-            tool_policy=self._tool_policy,
-            sessions_directory=self._artifact_sessions_directory,
-        )
-        attachments: tuple[ImagePart, ...] = ()
-        if self._parent_session is not None:
-            for item in reversed(self._parent_session.items):
-                if item.role != "user":
-                    continue
-                attachments = tuple(
-                    part for part in item.parts if isinstance(part, ImagePart)
-                )
-                break
-        result = child.run(task.strip(), attachments=attachments)
-        context_fields = {}
-        if session.archived_summary is not None:
-            context_fields = {
-                "archived_summary": session.archived_summary,
-                "archived_item_count": session.archived_item_count,
-            }
-        self._store.append_turn(
-            session.session_id,
-            result.request,
-            result.response,
-            result.items,
-            workspace=self._workspace.path,
-            **context_fields,
-        )
-        # Parent receives only the final assistant response, never child
-        # reasoning or intermediate tool calls.
-        return result.response.content or ""
-
-
-class SubagentRegistry:
-    """Registry for extensible sub-agent tool implementations."""
-
-    def __init__(self, tools: Iterable[Tool] = ()) -> None:
-        self._tools: dict[str, Tool] = {}
-        for tool in tools:
-            self.register(tool)
-
-    def register(self, tool: Tool) -> None:
-        name = tool.definition.name
-        if name in self._tools:
-            raise ValueError(f"subagent '{name}' is already registered")
-        self._tools[name] = tool
-
-    def get(self, name: str) -> Tool | None:
-        return self._tools.get(name)
-
-    @property
-    def tools(self) -> tuple[Tool, ...]:
-        return tuple(self._tools.values())
+            raise ValueError("subagent requires a non-empty string 'task'")
+        if set(arguments) != {"role", "task"}:
+            raise ValueError("subagent accepts only 'role' and 'task'")
+        if context.subagents is None:
+            raise ValueError("this runtime has no sub-agent roles")
+        return context.subagents.run(role.strip(), task.strip(), context)

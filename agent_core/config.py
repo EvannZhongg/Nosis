@@ -6,7 +6,7 @@ from .execution import (
     DEFAULT_COMMAND_TIMEOUT_SECONDS,
     MAX_COMMAND_TIMEOUT_SECONDS,
 )
-from .tools.config import ToolConfig, load_tool_config
+from .tools.config import ROLE_TOOL_NAMES, ToolConfig, load_tool_config
 from .mcp.config import McpConfig, load_mcp_config
 
 
@@ -22,6 +22,18 @@ class ContextCompressionConfig:
 
 
 @dataclass(frozen=True)
+class SubagentRoleConfig:
+    """A sub-agent role: what it is for, and which tools it may use.
+
+    A disabled role stays in the file but is not offered to the model.
+    """
+
+    description: str
+    tools: ToolConfig
+    enabled: bool = True
+
+
+@dataclass(frozen=True)
 class AgentConfig:
     max_same_tool_calls: int
     max_output_tokens: int
@@ -31,8 +43,8 @@ class AgentConfig:
         default_factory=ContextCompressionConfig
     )
     mcp: McpConfig = field(default_factory=McpConfig)
-    subagent_tools: ToolConfig = field(
-        default_factory=lambda: ToolConfig(enabled=frozenset())
+    subagent_roles: dict[str, SubagentRoleConfig] = field(
+        default_factory=dict
     )
 
 
@@ -62,16 +74,8 @@ def load_agent_config(path: Path) -> AgentConfig:
             "config field 'shell_timeout_seconds' must be an integer "
             f"between 1 and {MAX_SHELL_TIMEOUT_SECONDS}"
         )
-    tools = load_tool_config(data.get("tools"))
-    subagent_value = data.get("subagent")
-    if subagent_value is None:
-        subagent_tools = ToolConfig(enabled=frozenset())
-    elif isinstance(subagent_value, dict):
-        subagent_tools = load_tool_config(
-            subagent_value.get("tools", {}), allow_subagent=False
-        )
-    else:
-        raise ValueError("config field 'subagent' must be an object")
+    tools = _main_agent_tools(data.get("main_agent"))
+    subagent_roles = _subagent_roles(data.get("subagent_roles"))
     context = _context_config(data.get("context"))
     mcp = load_mcp_config(data.get("mcp"))
 
@@ -79,11 +83,64 @@ def load_agent_config(path: Path) -> AgentConfig:
         max_same_tool_calls=max_same_tool_calls,
         max_output_tokens=max_output_tokens,
         tools=tools,
-        subagent_tools=subagent_tools,
+        subagent_roles=subagent_roles,
         shell_timeout_seconds=shell_timeout_seconds,
         context=context,
         mcp=mcp,
     )
+
+
+def _main_agent_tools(value: object) -> ToolConfig:
+    if not isinstance(value, dict):
+        raise ValueError("config field 'main_agent' must be an object")
+    unknown = set(value) - {"tools"}
+    if unknown:
+        fields = ", ".join(sorted(unknown))
+        raise ValueError(f"unknown field(s) in 'main_agent': {fields}")
+    return load_tool_config(value.get("tools"))
+
+
+def _subagent_roles(value: object) -> dict[str, SubagentRoleConfig]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError("config field 'subagent_roles' must be an object")
+
+    roles: dict[str, SubagentRoleConfig] = {}
+    for name, settings in value.items():
+        if not name.strip():
+            raise ValueError("a subagent role name must not be empty")
+        if not isinstance(settings, dict):
+            raise ValueError(
+                f"config field 'subagent_roles.{name}' must be an object"
+            )
+        description = settings.get("description")
+        if not isinstance(description, str) or not description.strip():
+            raise ValueError(
+                f"config field 'subagent_roles.{name}.description' must be "
+                "a non-empty string"
+            )
+        enabled = settings.get("enabled", True)
+        if not isinstance(enabled, bool):
+            raise ValueError(
+                f"config field 'subagent_roles.{name}.enabled' must be "
+                "a boolean"
+            )
+        unknown = set(settings) - {"description", "enabled", "tools"}
+        if unknown:
+            fields = ", ".join(sorted(unknown))
+            raise ValueError(
+                f"unknown field(s) in 'subagent_roles.{name}': {fields}"
+            )
+        roles[name] = SubagentRoleConfig(
+            description=description.strip(),
+            enabled=enabled,
+            tools=load_tool_config(
+                settings.get("tools", {}),
+                allowed=ROLE_TOOL_NAMES,
+            ),
+        )
+    return roles
 
 
 def _context_config(value: object) -> ContextCompressionConfig:

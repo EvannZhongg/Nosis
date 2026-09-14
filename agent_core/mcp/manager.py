@@ -62,8 +62,9 @@ class McpClientManager:
         }
 
     @property
-    def tools(self) -> tuple[Tool, ...]:
-        return self._tools
+    def tool_names(self) -> tuple[str, ...]:
+        """Qualified names of every discovered tool, for catalog selection."""
+        return tuple(tool.name for tool in self._tools)
 
     def requires_approval(self, qualified_name: str) -> bool:
         origin = self._tool_origins.get(qualified_name)
@@ -164,7 +165,7 @@ class McpClientManager:
                         continue
                     sessions[config.name] = session
                     for tool in server_tools:
-                        name = tool.definition.name
+                        name = tool.name
                         if name in names:
                             raise ValueError(
                                 f"duplicate MCP tool name '{name}'"
@@ -255,7 +256,6 @@ class McpClientManager:
                     input_schema = getattr(remote, "inputSchema")
                 discovered.append(
                     McpTool(
-                        self,
                         config.name,
                         remote.name,
                         remote.description,

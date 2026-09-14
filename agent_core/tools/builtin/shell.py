@@ -1,12 +1,9 @@
 import os
 from dataclasses import asdict
 
-from ...execution import (
-    DEFAULT_COMMAND_TIMEOUT_SECONDS,
-    MAX_COMMAND_TIMEOUT_SECONDS,
-    CommandExecutor,
-)
+from ...execution import MAX_COMMAND_TIMEOUT_SECONDS
 from ..base import JSONValue, Tool, ToolDefinition
+from ..context import ToolExecutionContext
 
 
 WINDOWS_SHELL_NOTE = (
@@ -34,29 +31,16 @@ def _describe(default_timeout_seconds: int) -> str:
 
 
 class ShellTool(Tool):
-    def __init__(
-        self,
-        executor: CommandExecutor,
-        default_timeout_seconds: int = DEFAULT_COMMAND_TIMEOUT_SECONDS,
-    ) -> None:
-        if (
-            isinstance(default_timeout_seconds, bool)
-            or not isinstance(default_timeout_seconds, int)
-            or default_timeout_seconds < 1
-            or default_timeout_seconds > MAX_COMMAND_TIMEOUT_SECONDS
-        ):
-            raise ValueError(
-                "default shell timeout must be an integer between 1 and "
-                f"{MAX_COMMAND_TIMEOUT_SECONDS} seconds"
-            )
-        self._executor = executor
-        self._default_timeout_seconds = default_timeout_seconds
+    name = "shell"
 
-    @property
-    def definition(self) -> ToolDefinition:
+    def available(self, context: ToolExecutionContext) -> bool:
+        return context.command_executor is not None
+
+    def definition(self, context: ToolExecutionContext) -> ToolDefinition:
+        default_timeout_seconds = _default_timeout(context)
         return ToolDefinition(
-            name="shell",
-            description=_describe(self._default_timeout_seconds),
+            name=self.name,
+            description=_describe(default_timeout_seconds),
             parameters={
                 "type": "object",
                 "properties": {
@@ -70,11 +54,11 @@ class ShellTool(Tool):
                     "timeout_seconds": {
                         "type": "integer",
                         "minimum": 1,
-                        "maximum": self._default_timeout_seconds,
+                        "maximum": default_timeout_seconds,
                         "description": (
                             "Optional timeout in seconds, at most the "
                             "configured default of "
-                            f"{self._default_timeout_seconds}."
+                            f"{default_timeout_seconds}."
                         ),
                     },
                 },
@@ -83,11 +67,16 @@ class ShellTool(Tool):
             },
         )
 
-    def execute(self, arguments: dict[str, JSONValue]) -> JSONValue:
+    def execute(
+        self,
+        arguments: dict[str, JSONValue],
+        context: ToolExecutionContext,
+    ) -> JSONValue:
+        default_timeout_seconds = _default_timeout(context)
         command = arguments.get("command")
         timeout_seconds = arguments.get(
             "timeout_seconds",
-            self._default_timeout_seconds,
+            default_timeout_seconds,
         )
         if not isinstance(command, str) or not command:
             raise ValueError("shell requires a non-empty string 'command'")
@@ -101,15 +90,31 @@ class ShellTool(Tool):
                 "shell requires 'timeout_seconds' to be an integer "
                 f"between 1 and {MAX_COMMAND_TIMEOUT_SECONDS}"
             )
-        if timeout_seconds > self._default_timeout_seconds:
+        if timeout_seconds > default_timeout_seconds:
             raise ValueError(
                 "shell 'timeout_seconds' cannot exceed the configured "
-                f"default of {self._default_timeout_seconds} seconds"
+                f"default of {default_timeout_seconds} seconds"
             )
         if not set(arguments) <= {"command", "timeout_seconds"}:
             raise ValueError(
                 "shell accepts only 'command' and 'timeout_seconds'"
             )
-        return asdict(
-            self._executor.execute(command, timeout_seconds)
+        executor = context.command_executor
+        if executor is None:
+            raise ValueError("this runtime has no command executor")
+        return asdict(executor.execute(command, timeout_seconds))
+
+
+def _default_timeout(context: ToolExecutionContext) -> int:
+    timeout_seconds = context.shell_timeout_seconds
+    if (
+        isinstance(timeout_seconds, bool)
+        or not isinstance(timeout_seconds, int)
+        or timeout_seconds < 1
+        or timeout_seconds > MAX_COMMAND_TIMEOUT_SECONDS
+    ):
+        raise ValueError(
+            "default shell timeout must be an integer between 1 and "
+            f"{MAX_COMMAND_TIMEOUT_SECONDS} seconds"
         )
+    return timeout_seconds

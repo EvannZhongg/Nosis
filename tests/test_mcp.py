@@ -3,7 +3,7 @@ import sys
 import unittest
 from pathlib import Path
 
-from agent_core import ToolCall
+from agent_core import Session, ToolCall, ToolExecutionContext, Workspace
 from agent_core.mcp.config import load_mcp_config
 from agent_core.mcp.tool import McpTool, qualified_tool_name
 from agent_core.mcp.manager import McpClientManager
@@ -201,7 +201,7 @@ class McpConfigTest(unittest.TestCase):
 
 
 class McpToolTest(unittest.TestCase):
-    def test_qualifies_remote_name_and_delegates(self) -> None:
+    def test_qualifies_remote_name_and_delegates_through_context(self) -> None:
         calls = []
 
         class Manager:
@@ -209,13 +209,29 @@ class McpToolTest(unittest.TestCase):
                 calls.append((server, tool, arguments))
                 return {"ok": True}
 
-        adapted = McpTool(
-            Manager(), "demo", "echo.text", "Echo", {"type": "object"}
+        adapted = McpTool("demo", "echo.text", "Echo", {"type": "object"})
+        context = ToolExecutionContext(
+            workspace=Workspace(Path.cwd()),
+            session=Session(),
+            mcp=Manager(),
         )
-        self.assertEqual(adapted.definition.name, "mcp__demo__echo_text")
-        self.assertEqual(adapted.execute({"text": "hi"}), {"ok": True})
+
+        self.assertEqual(adapted.name, "mcp__demo__echo_text")
+        self.assertEqual(adapted.definition(context).name, "mcp__demo__echo_text")
+        self.assertEqual(adapted.execute({"text": "hi"}, context), {"ok": True})
         self.assertEqual(calls, [("demo", "echo.text", {"text": "hi"})])
         self.assertEqual(qualified_tool_name("demo", "echo.text"), "mcp__demo__echo_text")
+
+    def test_is_unavailable_without_a_manager(self) -> None:
+        adapted = McpTool("demo", "echo", "Echo", {"type": "object"})
+
+        self.assertFalse(
+            adapted.available(
+                ToolExecutionContext(
+                    workspace=Workspace(Path.cwd()), session=Session()
+                )
+            )
+        )
 
     def test_approval_policy_only_prompts_required_tools(self) -> None:
         prompts = []
@@ -252,7 +268,7 @@ class McpClientManagerTest(unittest.TestCase):
         try:
             tools = manager.start()
             self.assertEqual(
-                [tool.definition.name for tool in tools],
+                [tool.name for tool in tools],
                 ["mcp__fake__echo"],
             )
             self.assertEqual(
@@ -260,7 +276,14 @@ class McpClientManagerTest(unittest.TestCase):
                 ("fake", "echo"),
             )
             self.assertFalse(manager.requires_approval("mcp__fake__echo"))
-            result = tools[0].execute({"text": "hello"})
+            result = tools[0].execute(
+                {"text": "hello"},
+                ToolExecutionContext(
+                    workspace=Workspace(Path.cwd()),
+                    session=Session(),
+                    mcp=manager,
+                ),
+            )
             self.assertFalse(result["is_error"])
             self.assertEqual(result["structured_content"], {"echo": "hello"})
         finally:

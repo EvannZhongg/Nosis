@@ -109,7 +109,10 @@ class ConfigTest(unittest.TestCase):
             self.assertIn("openai", provider_config["providers"])
             self.assertEqual(agent_config["max_same_tool_calls"], 5)
             self.assertEqual(agent_config["shell_timeout_seconds"], 60)
-            self.assertTrue(agent_config["tools"]["read_file"])
+            self.assertTrue(agent_config["main_agent"]["tools"]["read_file"])
+            # Every shipped role carries an explicit enable switch.
+            for name, role in agent_config["subagent_roles"].items():
+                self.assertIsInstance(role["enabled"], bool, name)
 
     def test_initialization_does_not_overwrite_existing_config(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
