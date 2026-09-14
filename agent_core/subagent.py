@@ -50,7 +50,7 @@ class SubagentRole:
 
     name: str
     description: str
-    tools: frozenset[str]
+    tools: tuple[str, ...]
     provider: LLMProvider
     vision_provider: LLMProvider | None = None
 

@@ -293,7 +293,7 @@ class ToolSetTest(unittest.TestCase):
                         config=SUBAGENT_CONFIG,
                         catalog=catalog,
                         roles=SubagentRoleRegistry(
-                            (role("researcher", "Reads.", frozenset()),)
+                            (role("researcher", "Reads.", ()),)
                         ),
                     ),
                 ),
@@ -395,7 +395,7 @@ class VisionProvider(LLMProvider):
 SUBAGENT_CONFIG = AgentConfig(
     max_same_tool_calls=5,
     max_output_tokens=100,
-    tools=ToolConfig(enabled=frozenset()),
+    tools=ToolConfig(enabled=()),
 )
 
 
@@ -436,7 +436,7 @@ def role(name, description, tools, answer="child answer", **fields):
     return SubagentRole(
         name=name,
         description=description,
-        tools=frozenset(tools),
+        tools=tuple(tools),
         provider=StaticProvider(answer),
         **fields,
     )
@@ -445,9 +445,9 @@ def role(name, description, tools, answer="child answer", **fields):
 RESEARCHER = role(
     "researcher",
     "Read the workspace and report findings.",
-    {"read_file", "list_directory"},
+    ("read_file", "list_directory"),
 )
-CODER = role("coder", "Implement a change.", {"read_file", "edit_file"})
+CODER = role("coder", "Implement a change.", ("read_file", "edit_file"))
 
 
 class SubagentRoleRegistryTest(unittest.TestCase):
@@ -593,9 +593,7 @@ class SubagentRuntimeTest(unittest.TestCase):
             def run(self, role_name, task, parent):
                 role = self.roles.get(role_name)
                 tools = self._catalog.select(role.tools, parent)
-                selected.append(
-                    sorted(d.name for d in tools.definitions)
-                )
+                selected.append([d.name for d in tools.definitions])
                 return "done"
 
         with tempfile.TemporaryDirectory() as directory:
@@ -619,8 +617,8 @@ class SubagentRuntimeTest(unittest.TestCase):
         self.assertEqual(
             selected,
             [
-                ["list_directory", "read_file"],
-                ["edit_file", "read_file"],
+                ["read_file", "list_directory"],
+                ["read_file", "edit_file"],
             ],
         )
 
@@ -638,7 +636,7 @@ class SubagentRuntimeTest(unittest.TestCase):
             recursive_role = role(
                 "recursive",
                 "Tries to delegate again.",
-                {"subagent", "read_file"},
+                ("subagent", "read_file"),
             )
             runtime = CapturingRuntime(
                 config=SUBAGENT_CONFIG,
@@ -681,8 +679,8 @@ class RoleProviderTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             catalog = builtin_catalog()
-            cheap = role("cheap", "Reads.", set(), answer="cheap report")
-            strong = role("strong", "Writes.", set(), answer="strong report")
+            cheap = role("cheap", "Reads.", (), answer="cheap report")
+            strong = role("strong", "Writes.", (), answer="strong report")
             context = context_for(
                 Workspace(root),
                 sessions_directory=root / "sessions",
@@ -716,11 +714,11 @@ class RoleProviderTest(unittest.TestCase):
                 catalog=catalog,
                 roles=SubagentRoleRegistry(
                     (
-                        role("blind", "No vision.", set()),
+                        role("blind", "No vision.", ()),
                         role(
                             "seeing",
                             "Has vision.",
-                            set(),
+                            (),
                             vision_provider=seeing,
                         ),
                     )

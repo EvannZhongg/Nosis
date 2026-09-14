@@ -60,12 +60,10 @@ class AgentConfigTest(unittest.TestCase):
                     max_output_tokens=100,
                     shell_timeout_seconds=30,
                     tools=ToolConfig(
-                        enabled=frozenset(
-                            {
-                                "read_file",
-                                "search_files",
-                                "list_directory",
-                            }
+                        enabled=(
+                            "read_file",
+                            "search_files",
+                            "list_directory",
                         )
                     ),
                 ),
@@ -196,7 +194,37 @@ class AgentConfigTest(unittest.TestCase):
 
             self.assertEqual(
                 load_agent_config(path).tools,
-                ToolConfig(enabled=frozenset({"read_file"})),
+                ToolConfig(enabled=("read_file",)),
+            )
+
+    def test_orders_enabled_tools_by_the_canonical_tool_list(self) -> None:
+        """Tool schemas are a prompt-cache prefix, so their order is fixed.
+
+        The order follows TOOL_NAMES rather than the config's key order, so
+        two configs that enable the same tools produce the same prefix.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "agent_config.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "max_same_tool_calls": 5,
+                        "max_output_tokens": 100,
+                        "main_agent": {
+                            "tools": {
+                                "shell": True,
+                                "read_file": True,
+                                "list_directory": True,
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                load_agent_config(path).tools.enabled,
+                ("read_file", "list_directory", "shell"),
             )
 
     def test_rejects_non_boolean_tool_setting(self) -> None:
@@ -296,7 +324,7 @@ class SubagentRoleConfigTest(unittest.TestCase):
 
         role = config.subagent_roles["researcher"]
         self.assertFalse(role.enabled)
-        self.assertEqual(role.tools.enabled, frozenset({"read_file"}))
+        self.assertEqual(role.tools.enabled, ("read_file",))
 
     def test_rejects_a_non_boolean_enabled(self) -> None:
         with self.assertRaisesRegex(

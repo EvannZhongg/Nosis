@@ -36,7 +36,7 @@ class PromptsTest(unittest.TestCase):
         role = SubagentRole(
             name="researcher",
             description="Read the workspace and report findings.",
-            tools=frozenset({"read_file"}),
+            tools=("read_file",),
             provider=_TextOnlyProvider(),
         )
         with tempfile.TemporaryDirectory() as directory:
