@@ -17,13 +17,42 @@ from .session_store import JsonlSessionStore
 from .tools.catalog import ToolCatalog
 from .tools.context import ToolExecutionContext
 from .tools.base import ToolPolicy
+from .tools.builtin import AnalyzeImageTool
+
+
+def vision_aware_tool_names(
+    configured: Iterable[str],
+    provider: LLMProvider,
+    vision_provider: LLMProvider | None,
+) -> tuple[str, ...]:
+    """Add ``analyze_image`` only when this agent needs it to see an image.
+
+    A vision-capable model receives images inline, so the tool would be a
+    second, redundant model call. A text-only model has images stripped
+    from its context, so the tool is the only way it can look at one —
+    provided the Runtime resolved a vision provider to hand them to.
+    """
+    names = tuple(configured)
+    if "image" in provider.capabilities.input_modalities:
+        return names
+    if vision_provider is None:
+        return names
+    return (*names, AnalyzeImageTool.name)
 
 
 @dataclass(frozen=True)
 class SubagentRole:
+    """A sub-agent role: its purpose, its tools, and the models it runs on.
+
+    Each role carries its own providers, so one runtime can host a cheap
+    read-only role and an expensive editing role side by side.
+    """
+
     name: str
     description: str
     tools: frozenset[str]
+    provider: LLMProvider
+    vision_provider: LLMProvider | None = None
 
 
 class SubagentRoleRegistry:
@@ -57,28 +86,24 @@ class SubagentRoleRegistry:
 class SubagentRuntime:
     """Runs a child Agent for a role, isolated from the parent.
 
-    The Runtime owns only Runtime-level dependencies. Everything that
-    belongs to one invocation — which Session is the parent, which
-    workspace, where transcripts go — arrives with the parent's
-    :class:`ToolExecutionContext`, so a single instance is shared by the
-    main Agent and by parallel sub-agent calls.
+    The Runtime owns only Runtime-level dependencies; each role brings its
+    own providers. Everything that belongs to one invocation — which
+    Session is the parent, which workspace, where transcripts go — arrives
+    with the parent's :class:`ToolExecutionContext`, so a single instance
+    is shared by the main Agent and by parallel sub-agent calls.
     """
 
     def __init__(
         self,
-        provider: LLMProvider,
         config: AgentConfig,
         catalog: ToolCatalog,
         roles: SubagentRoleRegistry,
         *,
-        vision_provider: LLMProvider | None = None,
         tool_policy: ToolPolicy | None = None,
     ) -> None:
-        self._provider = provider
         self._config = config
         self._catalog = catalog
         self._roles = roles
-        self._vision_provider = vision_provider
         self._tool_policy = tool_policy
 
     @property
@@ -101,16 +126,18 @@ class SubagentRuntime:
         context = replace(
             parent,
             session=session,
-            vision_provider=self._vision_provider,
+            vision_provider=role.vision_provider,
             subagents=None,
         )
         child = Agent(
-            provider=self._provider,
+            provider=role.provider,
             session=session,
             system_prompt=load_subagent_prompt(parent.workspace, role),
             config=self._config,
             tools=self._catalog.select(
-                role.tools,
+                vision_aware_tool_names(
+                    role.tools, role.provider, role.vision_provider
+                ),
                 context,
                 policy=self._tool_policy,
             ),

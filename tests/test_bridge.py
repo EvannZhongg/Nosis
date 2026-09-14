@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from agent_core import (
     AssistantMessageDeltaEvent,
+    ProviderCapabilities,
     AssistantMessageEvent,
     JsonlSessionStore,
     Message,
@@ -23,6 +24,8 @@ from agent_core import (
     ToolResultEvent,
 )
 from agent_core.llm import TokenUsage
+from agent_core.providers import LiteLLMProvider
+from agent_core.subagent import vision_aware_tool_names
 from agent_core.tools.config import TOOL_NAMES
 from interfaces.bridge.bridge import Bridge, Cancelled
 from interfaces.bridge.protocol import (
@@ -317,12 +320,15 @@ class BridgeServeTest(unittest.TestCase):
 def start_message(
     directory: Path,
     agent_config: dict | None = None,
+    provider_config: dict | None = None,
     **extra: object,
 ) -> dict:
     provider_config_path = directory / "provider_config.json"
     provider_config_path.write_text(
         json.dumps(
-            {
+            provider_config
+            if provider_config is not None
+            else {
                 "main_agent": {"provider": "first"},
                 "subagent": {"provider": ""},
                 "providers": {
@@ -648,6 +654,179 @@ class SubagentRoleStartTest(unittest.TestCase):
             )
 
             self.assertEqual(bridge._agent._tools.definitions, ())
+
+
+VISION_MODEL = "vision/model"
+TEXT_MODEL = "text/model"
+
+
+def _capabilities(model: str, base_url: str | None = None):
+    """Report only VISION_MODEL as image-capable, without touching LiteLLM."""
+    modalities = {"text"}
+    if model == VISION_MODEL:
+        modalities.add("image")
+    return ProviderCapabilities(frozenset(modalities))
+
+
+# capabilities_for_model is a classmethod, so the patch must absorb `cls`.
+_CAPABILITIES_PATCH = classmethod(
+    lambda cls, model, base_url=None: _capabilities(model, base_url)
+)
+
+
+class AnalyzeImageDerivationTest(unittest.TestCase):
+    """`analyze_image` is derived from capability, never configured.
+
+    It is registered exactly when the agent's own model cannot read an
+    image and the Runtime resolved somewhere to send it instead.
+    """
+
+    def tool_names(
+        self,
+        main_model: str,
+        vision_provider: str | None,
+        role_blocks: dict | None = None,
+        role_tools: dict | None = None,
+    ) -> tuple[list[str], list[str]]:
+        """Return (main agent tool names, 'researcher' role tool names)."""
+        main_agent: dict[str, object] = {"provider": "main"}
+        if vision_provider is not None:
+            main_agent["vision_provider"] = vision_provider
+        with tempfile.TemporaryDirectory() as directory:
+            bridge, _ = make_bridge([])
+            with patch.object(
+                LiteLLMProvider, "capabilities_for_model", _CAPABILITIES_PATCH
+            ):
+                bridge.start(
+                    start_message(
+                        Path(directory),
+                        provider_config={
+                            "main_agent": main_agent,
+                            "subagent": {"provider": ""},
+                            "subagent_roles": role_blocks or {},
+                            "providers": {
+                                "main": {
+                                    "model": main_model,
+                                    "max_context_tokens": 1000,
+                                },
+                                "seeing": {
+                                    "model": VISION_MODEL,
+                                    "max_context_tokens": 1000,
+                                },
+                                "blind": {
+                                    "model": TEXT_MODEL,
+                                    "max_context_tokens": 1000,
+                                },
+                            },
+                        },
+                        agent_config={
+                            "max_same_tool_calls": 5,
+                            "max_output_tokens": 100,
+                            "main_agent": {"tools": {"subagent": True}},
+                            "subagent_roles": {
+                                "researcher": {
+                                    "description": "Reads.",
+                                    "tools": role_tools or {},
+                                }
+                            },
+                        },
+                    )
+                )
+                main_names = sorted(
+                    d.name for d in bridge._agent._tools.definitions
+                )
+                role = bridge._agent._tools._context.subagents.roles.get(
+                    "researcher"
+                )
+                role_names = sorted(
+                    vision_aware_tool_names(
+                        role.tools, role.provider, role.vision_provider
+                    )
+                )
+        return main_names, role_names
+
+    def test_a_vision_model_does_not_get_the_tool(self) -> None:
+        """Images inline, so the tool would be a second, redundant call."""
+        main, role = self.tool_names(VISION_MODEL, "seeing")
+
+        self.assertNotIn("analyze_image", main)
+        self.assertNotIn("analyze_image", role)
+
+    def test_a_text_model_with_a_vision_provider_gets_the_tool(self) -> None:
+        main, role = self.tool_names(TEXT_MODEL, "seeing")
+
+        self.assertIn("analyze_image", main)
+        self.assertIn("analyze_image", role)
+
+    def test_a_text_model_without_a_vision_provider_does_not(self) -> None:
+        """Nothing to route images to, so the tool would always fail."""
+        main, role = self.tool_names(TEXT_MODEL, None)
+
+        self.assertNotIn("analyze_image", main)
+        self.assertNotIn("analyze_image", role)
+
+    def test_a_role_derives_from_its_own_model(self) -> None:
+        """A text-only role under a vision main agent still gets the tool."""
+        main, role = self.tool_names(
+            VISION_MODEL,
+            "seeing",
+            role_blocks={"researcher": {"provider": "blind"}},
+        )
+
+        self.assertNotIn("analyze_image", main)
+        self.assertIn("analyze_image", role)
+
+    def test_a_role_cannot_ask_for_the_tool_in_its_config(self) -> None:
+        with self.assertRaisesRegex(ValueError, "analyze_image"):
+            self.tool_names(
+                TEXT_MODEL, "seeing", role_tools={"analyze_image": True}
+            )
+
+
+class CrossFileRoleValidationTest(unittest.TestCase):
+    """The two config files must agree on which roles exist."""
+
+    def start(self, provider_roles: dict, agent_roles: dict) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bridge, _ = make_bridge([])
+            bridge.start(
+                start_message(
+                    Path(directory),
+                    provider_config={
+                        "main_agent": {"provider": "first"},
+                        "subagent": {"provider": ""},
+                        "subagent_roles": provider_roles,
+                        "providers": {
+                            "first": {
+                                "model": "openai/first",
+                                "max_context_tokens": 1000,
+                            }
+                        },
+                    },
+                    agent_config={
+                        "max_same_tool_calls": 5,
+                        "max_output_tokens": 100,
+                        "main_agent": {"tools": {"subagent": True}},
+                        "subagent_roles": agent_roles,
+                    },
+                )
+            )
+
+    def test_rejects_a_provider_override_for_an_unknown_role(self) -> None:
+        """A typo must fail loudly instead of silently doing nothing."""
+        with self.assertRaisesRegex(
+            ValueError, "unknown subagent role\\(s\\): codr"
+        ):
+            self.start(
+                {"codr": {"provider": "first"}},
+                {"coder": {"description": "Writes.", "tools": {}}},
+            )
+
+    def test_accepts_matching_role_names(self) -> None:
+        self.start(
+            {"coder": {"provider": "first"}},
+            {"coder": {"description": "Writes.", "tools": {}}},
+        )
 
 
 if __name__ == "__main__":

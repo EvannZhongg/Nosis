@@ -7,6 +7,7 @@ from unittest.mock import patch
 from agent_core import (
     ImagePart,
     LLMRequest,
+    ProviderCapabilities,
     Message,
     TokenUsage,
     ToolCall,
@@ -94,6 +95,95 @@ class LiteLLMProviderTest(unittest.TestCase):
                     content=(ImagePart(path=".nosis/attachments/a1.png"),),
                 )
             )
+
+    def test_names_the_attachment_and_the_tool_when_it_is_registered(
+        self,
+    ) -> None:
+        """A text-only model is told how to reach the image it cannot see."""
+        from agent_core.providers.litellm_provider import (
+            _content_to_provider_format,
+        )
+
+        content = _content_to_provider_format(
+            Message(
+                role="user",
+                content=(
+                    TextPart(text="look at this"),
+                    ImagePart(path=".nosis/attachments/a1.png"),
+                ),
+            ),
+            include_images=False,
+            can_analyze_images=True,
+        )
+
+        self.assertEqual(
+            content,
+            "look at this\n\n"
+            "Attached images (use analyze_image if needed):\n"
+            "- .nosis/attachments/a1.png",
+        )
+
+    def test_does_not_name_a_tool_the_model_does_not_have(self) -> None:
+        """Pointing at an unregistered tool would only invite a failed call."""
+        from agent_core.providers.litellm_provider import (
+            _content_to_provider_format,
+        )
+
+        content = _content_to_provider_format(
+            Message(
+                role="user",
+                content=(
+                    TextPart(text="look at this"),
+                    ImagePart(path=".nosis/attachments/a1.png"),
+                ),
+            ),
+            include_images=False,
+            can_analyze_images=False,
+        )
+
+        self.assertNotIn("analyze_image", content)
+        # The path is still named, so the model can say what it cannot read.
+        self.assertIn(".nosis/attachments/a1.png", content)
+
+    def test_derives_the_hint_from_the_registered_tools(self) -> None:
+        """The flag comes from the request's tools, not from a guess."""
+        provider = LiteLLMProvider(
+            model="text/only",
+            max_context_tokens=1000,
+            media_root=Path.cwd(),
+        )
+        message = Message(
+            role="user",
+            content=(ImagePart(path=".nosis/attachments/a1.png"),),
+        )
+        analyze = ToolDefinition(
+            name="analyze_image",
+            description="Analyze an image.",
+            parameters={"type": "object", "properties": {}},
+        )
+
+        with patch.object(
+            LiteLLMProvider,
+            "capabilities",
+            property(lambda self: ProviderCapabilities(frozenset({"text"}))),
+        ):
+            from agent_core.providers.litellm_provider import _request_messages
+
+            without = _request_messages(
+                LLMRequest(system_prompt="s", messages=(message,)),
+                provider,
+            )
+            with_tool = _request_messages(
+                LLMRequest(
+                    system_prompt="s",
+                    messages=(message,),
+                    tools=(analyze,),
+                ),
+                provider,
+            )
+
+        self.assertNotIn("analyze_image", without[1]["content"])
+        self.assertIn("use analyze_image", with_tool[1]["content"])
 
     @patch("agent_core.providers.litellm_provider.get_model_info", return_value={"supports_vision": True})
     @patch("agent_core.providers.litellm_provider.completion")

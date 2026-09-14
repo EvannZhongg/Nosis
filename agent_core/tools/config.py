@@ -9,7 +9,6 @@ TOOL_NAMES = (
     "shell",
     "web_search",
     "subagent",
-    "analyze_image",
 )
 
 # A role runs inside a sub-agent, so it can never delegate again.

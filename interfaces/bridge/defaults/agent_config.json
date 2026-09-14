@@ -17,8 +17,7 @@
       "list_directory": true,
       "shell": true,
       "web_search": false,
-      "subagent": true,
-      "analyze_image": true
+      "subagent": true
     }
   },
   "subagent_roles": {
@@ -28,8 +27,7 @@
       "tools": {
         "read_file": true,
         "search_files": true,
-        "list_directory": true,
-        "analyze_image": true
+        "list_directory": true
       }
     },
     "coder": {

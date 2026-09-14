@@ -33,12 +33,17 @@ from agent_core import (
     ImagePart,
     builtin_catalog,
     load_agent_config,
+    vision_aware_tool_names,
 )
 from agent_core.prompts import load_system_prompt
 from agent_core.providers import LiteLLMProvider
 from agent_core.mcp.manager import McpClientManager, McpServerStatus
 
-from .config import load_config_with_name, load_vision_config
+from .config import (
+    configured_role_names,
+    load_config_with_name,
+    load_vision_config,
+)
 from .protocol import decode, encode, event_to_message, usage_to_dict
 
 
@@ -170,17 +175,8 @@ class Bridge:
             max_context_tokens=config.max_context_tokens,
             media_root=workspace.path,
         )
-        vision_config = load_vision_config(config_path, main_provider_name)
-        vision_provider = (
-            LiteLLMProvider(
-                model=vision_config.model,
-                base_url=vision_config.url,
-                api_key=vision_config.key,
-                max_context_tokens=vision_config.max_context_tokens,
-                media_root=workspace.path,
-            )
-            if vision_config is not None
-            else None
+        vision_provider = self._provider_for(
+            load_vision_config(config_path), workspace
         )
 
         # One catalog of stateless Tool instances is shared by the main
@@ -198,9 +194,7 @@ class Bridge:
             agent_config,
             catalog,
             config_path,
-            provider if isinstance(provider, str) and provider else None,
             workspace,
-            vision_config,
             shell_policy,
         )
         context = ToolExecutionContext(
@@ -219,7 +213,14 @@ class Bridge:
             system_prompt=load_system_prompt(workspace),
             config=agent_config,
             tools=catalog.select(
-                (*agent_config.tools.enabled, *self._mcp.tool_names),
+                (
+                    *vision_aware_tool_names(
+                        agent_config.tools.enabled,
+                        main_provider,
+                        vision_provider,
+                    ),
+                    *self._mcp.tool_names,
+                ),
                 context,
                 policy=CompositeToolPolicy(
                     shell_policy,
@@ -241,67 +242,65 @@ class Bridge:
             message_count=len(self._session.items),
         )
 
+    def _provider_for(
+        self,
+        config,
+        workspace: Workspace,
+    ) -> LiteLLMProvider | None:
+        if config is None:
+            return None
+        return LiteLLMProvider(
+            model=config.model,
+            base_url=config.url,
+            api_key=config.key,
+            max_context_tokens=config.max_context_tokens,
+            media_root=workspace.path,
+        )
+
     def _subagent_runtime(
         self,
         agent_config,
         catalog,
         config_path: Path,
-        provider: str | None,
         workspace: Workspace,
-        vision_config,
         shell_policy: ShellApprovalPolicy,
     ) -> SubagentRuntime | None:
         """Build the sub-agent runtime, or None when no role is configured."""
         if not agent_config.tools.is_enabled("subagent"):
             return None
+        # A provider override for a role that does not exist is a typo, not
+        # a silent no-op: the two config files must name the same roles.
+        unknown = configured_role_names(config_path) - set(
+            agent_config.subagent_roles
+        )
+        if unknown:
+            names = ", ".join(sorted(unknown))
+            raise ValueError(
+                "provider_config.json configures unknown subagent role(s): "
+                f"{names}"
+            )
         roles = SubagentRoleRegistry(
             SubagentRole(
                 name=name,
                 description=role.description,
                 tools=role.tools.enabled,
+                provider=self._provider_for(
+                    load_config_with_name(config_path, role=name)[1],
+                    workspace,
+                ),
+                vision_provider=self._provider_for(
+                    load_vision_config(config_path, role=name), workspace
+                ),
             )
             for name, role in agent_config.subagent_roles.items()
             if role.enabled
         )
         if not roles:
             return None
-
-        # Sub-agents may run on their own provider; they share the
-        # parent's workspace, executor and session root through the
-        # context the tool call hands them.
-        provider_name, provider_config = load_config_with_name(
-            config_path,
-            provider,
-            subagent=True,
-        )
-        subagent_vision_config = load_vision_config(
-            config_path,
-            provider_name,
-            agent="subagent",
-            inherited=vision_config,
-        )
         return SubagentRuntime(
-            provider=LiteLLMProvider(
-                model=provider_config.model,
-                base_url=provider_config.url,
-                api_key=provider_config.key,
-                max_context_tokens=provider_config.max_context_tokens,
-                media_root=workspace.path,
-            ),
             config=agent_config,
             catalog=catalog,
             roles=roles,
-            vision_provider=(
-                LiteLLMProvider(
-                    model=subagent_vision_config.model,
-                    base_url=subagent_vision_config.url,
-                    api_key=subagent_vision_config.key,
-                    max_context_tokens=subagent_vision_config.max_context_tokens,
-                    media_root=workspace.path,
-                )
-                if subagent_vision_config is not None
-                else None
-            ),
             tool_policy=shell_policy,
         )
 

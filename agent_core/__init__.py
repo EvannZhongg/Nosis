@@ -27,7 +27,12 @@ from .llm import LLMProvider, LLMRequest, LLMResponse, TokenUsage, ProviderCapab
 from .content import Content, ContentPart, TextPart, ImagePart
 from .session import Message, Session
 from .session_store import JsonlSessionStore
-from .subagent import SubagentRole, SubagentRoleRegistry, SubagentRuntime
+from .subagent import (
+    SubagentRole,
+    SubagentRoleRegistry,
+    SubagentRuntime,
+    vision_aware_tool_names,
+)
 from .tool_result import (
     DEFAULT_MAX_TOOL_RESULT_CHARS,
     DEFAULT_TOOL_RESULT_PREVIEW_CHARS,
@@ -137,4 +142,5 @@ __all__ = [
     "load_agent_config",
     "load_mcp_config",
     "load_tool_config",
+    "vision_aware_tool_names",
 ]

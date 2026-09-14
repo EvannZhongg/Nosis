@@ -290,15 +290,10 @@ class ToolSetTest(unittest.TestCase):
                     command_executor=UnusedExecutor(),
                     vision_provider=VisionProvider(),
                     subagents=SubagentRuntime(
-                        provider=StaticProvider("x"),
                         config=SUBAGENT_CONFIG,
                         catalog=catalog,
                         roles=SubagentRoleRegistry(
-                            (
-                                SubagentRole(
-                                    "researcher", "Reads.", frozenset()
-                                ),
-                            )
+                            (role("researcher", "Reads.", frozenset()),)
                         ),
                     ),
                 ),
@@ -427,9 +422,8 @@ class StaticProvider(LLMProvider):
         return LLMResponse(content=self._answer)
 
 
-def subagent_runtime(catalog, roles, answer="child answer", **fields):
+def subagent_runtime(catalog, roles, **fields):
     return SubagentRuntime(
-        provider=StaticProvider(answer),
         config=SUBAGENT_CONFIG,
         catalog=catalog,
         roles=SubagentRoleRegistry(roles),
@@ -437,16 +431,23 @@ def subagent_runtime(catalog, roles, answer="child answer", **fields):
     )
 
 
-RESEARCHER = SubagentRole(
-    name="researcher",
-    description="Read the workspace and report findings.",
-    tools=frozenset({"read_file", "list_directory"}),
+def role(name, description, tools, answer="child answer", **fields):
+    """A role on its own text-only provider, as the bridge would build it."""
+    return SubagentRole(
+        name=name,
+        description=description,
+        tools=frozenset(tools),
+        provider=StaticProvider(answer),
+        **fields,
+    )
+
+
+RESEARCHER = role(
+    "researcher",
+    "Read the workspace and report findings.",
+    {"read_file", "list_directory"},
 )
-CODER = SubagentRole(
-    name="coder",
-    description="Implement a change.",
-    tools=frozenset({"read_file", "edit_file"}),
-)
+CODER = role("coder", "Implement a change.", {"read_file", "edit_file"})
 
 
 class SubagentRoleRegistryTest(unittest.TestCase):
@@ -600,7 +601,6 @@ class SubagentRuntimeTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             catalog = builtin_catalog()
             runtime = RecordingRuntime(
-                provider=StaticProvider("x"),
                 config=SUBAGENT_CONFIG,
                 catalog=catalog,
                 roles=SubagentRoleRegistry((RESEARCHER, CODER)),
@@ -635,13 +635,12 @@ class SubagentRuntimeTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             catalog = builtin_catalog()
-            recursive_role = SubagentRole(
-                name="recursive",
-                description="Tries to delegate again.",
-                tools=frozenset({"subagent", "read_file"}),
+            recursive_role = role(
+                "recursive",
+                "Tries to delegate again.",
+                {"subagent", "read_file"},
             )
             runtime = CapturingRuntime(
-                provider=StaticProvider("child answer"),
                 config=SUBAGENT_CONFIG,
                 catalog=catalog,
                 roles=SubagentRoleRegistry((recursive_role,)),
@@ -673,6 +672,68 @@ class SubagentRuntimeTest(unittest.TestCase):
         # subagent tool is unavailable to it however it is configured.
         self.assertIsNone(child_subagents)
         self.assertEqual(child_tools, ["read_file"])
+
+
+class RoleProviderTest(unittest.TestCase):
+    """Each role runs on its own model, not on a single shared one."""
+
+    def test_two_roles_run_on_their_own_providers(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            catalog = builtin_catalog()
+            cheap = role("cheap", "Reads.", set(), answer="cheap report")
+            strong = role("strong", "Writes.", set(), answer="strong report")
+            context = context_for(
+                Workspace(root),
+                sessions_directory=root / "sessions",
+                subagents=subagent_runtime(catalog, (cheap, strong)),
+            )
+            tool = SubagentTool()
+
+            self.assertEqual(
+                tool.execute({"role": "cheap", "task": "look"}, context),
+                "cheap report",
+            )
+            self.assertEqual(
+                tool.execute({"role": "strong", "task": "change"}, context),
+                "strong report",
+            )
+
+    def test_a_role_without_a_vision_provider_leaves_one_unset(self) -> None:
+        captured = []
+
+        class CapturingRuntime(SubagentRuntime):
+            def run(self, role_name, task, parent):
+                role_config = self.roles.get(role_name)
+                captured.append(role_config.vision_provider)
+                return "done"
+
+        with tempfile.TemporaryDirectory() as directory:
+            catalog = builtin_catalog()
+            seeing = VisionProvider()
+            runtime = CapturingRuntime(
+                config=SUBAGENT_CONFIG,
+                catalog=catalog,
+                roles=SubagentRoleRegistry(
+                    (
+                        role("blind", "No vision.", set()),
+                        role(
+                            "seeing",
+                            "Has vision.",
+                            set(),
+                            vision_provider=seeing,
+                        ),
+                    )
+                ),
+            )
+            context = context_for(
+                Workspace(Path(directory)), subagents=runtime
+            )
+
+            SubagentTool().execute({"role": "blind", "task": "x"}, context)
+            SubagentTool().execute({"role": "seeing", "task": "y"}, context)
+
+        self.assertEqual(captured, [None, seeing])
 
 
 class ParallelSubagentIsolationTest(unittest.TestCase):

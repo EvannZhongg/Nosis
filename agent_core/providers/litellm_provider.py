@@ -15,7 +15,7 @@ from agent_core.llm import (
 )
 from agent_core.content import ImagePart, TextPart
 from agent_core.session import Message
-from agent_core.tools import ToolCall, ToolDefinition
+from agent_core.tools import AnalyzeImageTool, ToolCall, ToolDefinition
 
 
 class LiteLLMProvider(LLMProvider):
@@ -172,6 +172,10 @@ def _request_messages(
                     provider is None
                     or "image" in provider.capabilities.input_modalities
                 ),
+                # Only point the model at the tool when it actually has it.
+                can_analyze_images=any(
+                    tool.name == AnalyzeImageTool.name for tool in request.tools
+                ),
                 media_root=(
                     request.media_root
                     if request.media_root is not None
@@ -222,6 +226,7 @@ def _message_to_dict(
     message: Message,
     *,
     include_images: bool = True,
+    can_analyze_images: bool = False,
     media_root: Path | None = None,
 ) -> dict[str, object]:
     data: dict[str, object] = {
@@ -229,6 +234,7 @@ def _message_to_dict(
         "content": _content_to_provider_format(
             message,
             include_images=include_images,
+            can_analyze_images=can_analyze_images,
             media_root=media_root,
         ),
     }
@@ -258,6 +264,7 @@ def _content_to_provider_format(
     message: Message,
     *,
     include_images: bool = True,
+    can_analyze_images: bool = False,
     media_root: Path | None = None,
 ) -> object:
     parts = message.parts
@@ -266,14 +273,18 @@ def _content_to_provider_format(
     if all(isinstance(part, TextPart) for part in parts):
         return "".join(part.text for part in parts)
     if not include_images:
+        # This model cannot see an image, so the attachment is named rather
+        # than sent. Naming the tool it does not have would only invite a
+        # call that fails, so the hint depends on the registered tool set.
         text = "".join(part.text for part in parts if isinstance(part, TextPart))
         paths = [part.path for part in parts if isinstance(part, ImagePart)]
-        return text + (
-            "\n\nAttached images (use analyze_image if needed):\n"
-            + "\n".join(f"- {path}" for path in paths)
-            if paths
-            else ""
+        heading = (
+            f"Attached images (use {AnalyzeImageTool.name} if needed):"
+            if can_analyze_images
+            else "Attached images (this model cannot read them):"
         )
+        listed = "\n".join(f"- {path}" for path in paths)
+        return f"{text}\n\n{heading}\n{listed}"
     rendered: list[dict[str, object]] = []
     for part in parts:
         if isinstance(part, TextPart):

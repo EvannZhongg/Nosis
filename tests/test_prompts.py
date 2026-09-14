@@ -2,8 +2,22 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agent_core import SubagentRole, Workspace
+from agent_core import LLMProvider, LLMResponse, SubagentRole, Workspace
 from agent_core.prompts import load_subagent_prompt, load_system_prompt
+
+
+class _TextOnlyProvider(LLMProvider):
+    """A role needs a provider; the prompt does not depend on which."""
+
+    @property
+    def max_context_tokens(self) -> int:
+        return 1000
+
+    def count_input_tokens(self, request) -> int:
+        return 1
+
+    def stream(self, request, on_text_delta, on_reasoning_delta=None):
+        return LLMResponse(content="unused")
 
 
 class PromptsTest(unittest.TestCase):
@@ -23,6 +37,7 @@ class PromptsTest(unittest.TestCase):
             name="researcher",
             description="Read the workspace and report findings.",
             tools=frozenset({"read_file"}),
+            provider=_TextOnlyProvider(),
         )
         with tempfile.TemporaryDirectory() as directory:
             workspace = Workspace(Path(directory))

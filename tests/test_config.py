@@ -4,12 +4,16 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from agent_core import ProviderCapabilities
+from agent_core.providers import LiteLLMProvider
 from interfaces.bridge.config import (
     ModelConfig,
+    configured_role_names,
     default_config_directory,
     initialize_default_configs,
     load_config,
     load_model_options,
+    load_vision_config,
 )
 
 
@@ -48,7 +52,7 @@ class ConfigTest(unittest.TestCase):
 
             self.assertEqual(load_config(path, provider="second").model, "openai/second")
             self.assertEqual(
-                load_config(path, provider="second", subagent=True).model,
+                load_config(path, provider="second", role="researcher").model,
                 "openai/second",
             )
 
@@ -314,6 +318,190 @@ class ConfigTest(unittest.TestCase):
             with patch.dict("os.environ", {}, clear=True):
                 with self.assertRaises(ValueError):
                     load_config(path)
+
+
+VISION_MODEL = "vision/model"
+TEXT_MODEL = "text/model"
+
+
+def _capabilities(model: str, base_url: str | None = None):
+    """Report only VISION_MODEL as image-capable, without touching LiteLLM."""
+    modalities = {"text"}
+    if model == VISION_MODEL:
+        modalities.add("image")
+    return ProviderCapabilities(frozenset(modalities))
+
+
+# capabilities_for_model is a classmethod, so the patch must absorb `cls`.
+_CAPABILITIES_PATCH = classmethod(
+    lambda cls, model, base_url=None: _capabilities(model, base_url)
+)
+
+
+class ProviderResolutionTest(unittest.TestCase):
+    """`provider` and `vision_provider` both walk role → subagent → main."""
+
+    def write(self, directory: str, **blocks: object) -> Path:
+        path = Path(directory) / "config.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "main_agent": {"provider": "main"},
+                    "providers": {
+                        "main": {"model": "openai/main"},
+                        "shared": {"model": "openai/shared"},
+                        "special": {"model": "openai/special"},
+                        "seeing": {"model": VISION_MODEL},
+                        "blind": {"model": TEXT_MODEL},
+                        **blocks.pop("providers", {}),
+                    },
+                    **blocks,
+                }
+            ),
+            encoding="utf-8",
+        )
+        return path
+
+    def test_role_override_wins_over_subagent_and_main(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.write(
+                directory,
+                subagent={"provider": "shared"},
+                subagent_roles={"coder": {"provider": "special"}},
+            )
+
+            self.assertEqual(
+                load_config(path, role="coder").model, "openai/special"
+            )
+            self.assertEqual(
+                load_config(path, role="researcher").model, "openai/shared"
+            )
+            self.assertEqual(load_config(path).model, "openai/main")
+
+    def test_empty_role_override_falls_through_the_chain(self) -> None:
+        """"" means inherit, so the chain keeps walking past it."""
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.write(
+                directory,
+                subagent={"provider": "shared"},
+                subagent_roles={"coder": {"provider": ""}},
+            )
+
+            self.assertEqual(
+                load_config(path, role="coder").model, "openai/shared"
+            )
+
+    def test_a_role_overriding_only_vision_still_inherits_its_model(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.write(
+                directory,
+                subagent={"provider": "shared"},
+                subagent_roles={"coder": {"vision_provider": "seeing"}},
+            )
+
+            with patch.object(
+                LiteLLMProvider, "capabilities_for_model", _CAPABILITIES_PATCH
+            ):
+                self.assertEqual(
+                    load_config(path, role="coder").model, "openai/shared"
+                )
+                vision = load_vision_config(path, role="coder")
+
+            self.assertIsNotNone(vision)
+            self.assertEqual(vision.model, VISION_MODEL)
+
+    def test_a_role_overriding_only_its_model_still_inherits_vision(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.write(
+                directory,
+                main_agent={"provider": "main", "vision_provider": "seeing"},
+                subagent_roles={"coder": {"provider": "special"}},
+            )
+
+            with patch.object(
+                LiteLLMProvider, "capabilities_for_model", _CAPABILITIES_PATCH
+            ):
+                self.assertEqual(
+                    load_config(path, role="coder").model, "openai/special"
+                )
+                vision = load_vision_config(path, role="coder")
+
+            self.assertEqual(vision.model, VISION_MODEL)
+
+    def test_no_vision_provider_resolves_to_none_without_scanning(self) -> None:
+        """The capability scan is gone: an unset vision provider is None.
+
+        'seeing' is configured and image-capable, so the deleted fallback
+        would have selected it. Nothing may route images implicitly.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.write(directory)
+
+            with patch.object(
+                LiteLLMProvider, "capabilities_for_model", _CAPABILITIES_PATCH
+            ):
+                self.assertIsNone(load_vision_config(path))
+                self.assertIsNone(load_vision_config(path, role="coder"))
+
+    def test_rejects_a_vision_provider_that_cannot_see(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.write(
+                directory,
+                main_agent={"provider": "main", "vision_provider": "blind"},
+            )
+
+            with patch.object(
+                LiteLLMProvider, "capabilities_for_model", _CAPABILITIES_PATCH
+            ):
+                with self.assertRaisesRegex(
+                    ValueError, "does not support image input"
+                ):
+                    load_vision_config(path)
+
+    def test_rejects_a_blank_override(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.write(
+                directory,
+                subagent_roles={"coder": {"provider": "   "}},
+            )
+
+            with self.assertRaisesRegex(
+                ValueError, "subagent_roles.coder.provider"
+            ):
+                load_config(path, role="coder")
+
+    def test_rejects_a_non_object_role_block(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.write(directory, subagent_roles={"coder": "anthropic"})
+
+            with self.assertRaisesRegex(
+                ValueError, "subagent_roles.coder.*object"
+            ):
+                load_config(path)
+
+    def test_reports_the_roles_that_override_a_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = self.write(
+                directory,
+                subagent_roles={
+                    "coder": {"provider": "special"},
+                    "writer": {"vision_provider": "seeing"},
+                },
+            )
+
+            self.assertEqual(
+                configured_role_names(path), frozenset({"coder", "writer"})
+            )
+
+    def test_reports_no_roles_when_the_block_is_absent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual(
+                configured_role_names(self.write(directory)), frozenset()
+            )
 
 
 if __name__ == "__main__":

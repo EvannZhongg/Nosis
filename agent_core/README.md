@@ -21,7 +21,7 @@
       "list_directory": true,
       "shell": true,
       "web_search": false,
-      "analyze_image": true
+      "subagent": true
     }
   }
 }
@@ -40,12 +40,15 @@
 
 ### Provider
 
-`provider_config.json` 用 `main_agent.provider` 选择主 Provider，`subagent.provider` 可单独指定子 Agent（空字符串表示复用主 Agent）：
+`provider_config.json` 用 `main_agent.provider` 选择主 Provider，`subagent.provider` 设置子 Agent 的默认值，`subagent_roles.<角色>` 可为单个角色单独指定：
 
 ```json
 {
   "main_agent": {"provider": "deepseek", "vision_provider": "gemini"},
   "subagent": {"provider": "", "vision_provider": ""},
+  "subagent_roles": {
+    "coder": {"provider": "anthropic"}
+  },
   "providers": {
     "deepseek": {
       "model": "deepseek/deepseek-chat",
@@ -57,7 +60,19 @@
 }
 ```
 
-`key` 支持直接填写或 `${ENV_NAME}`；Ollama 等无密钥 Provider 可以省略。`max_context_tokens` 省略时从 LiteLLM 元数据读取，元数据缺失时必须填写。视觉能力依据 LiteLLM 的 `supports_vision` 自动识别；主模型不支持视觉且未指定覆盖时，Runtime 会从已配置且凭据可用的视觉 Provider 中选择第一个。需要时可用 `main_agent.vision_provider` 覆盖自动选择。Subagent 默认继承主 Agent 已解析的视觉 Provider，也可以通过 `subagent.vision_provider` 独立指定；显式指定的视觉 Provider 会在启动时校验图片输入能力。OpenAI 兼容服务的 `model` 需要带 LiteLLM 接口前缀，例如 `openai/glm-5.3`。
+`provider` 和 `vision_provider` 都按 `subagent_roles.<角色>` → `subagent` → `main_agent` 逐级回退，空字符串表示继承上一级。因此一个角色可以只覆盖模型而继续共用视觉 Provider，反之亦然。`subagent_roles` 中出现 `agent_config.json` 里不存在的角色名会启动失败，避免两个文件不一致。
+
+`key` 支持直接填写或 `${ENV_NAME}`；Ollama 等无密钥 Provider 可以省略。`max_context_tokens` 省略时从 LiteLLM 元数据读取，元数据缺失时必须填写。OpenAI 兼容服务的 `model` 需要带 LiteLLM 接口前缀，例如 `openai/glm-5.3`。
+
+### 图片与 vision_provider
+
+模型是否支持图片由 LiteLLM 的 `supports_vision` 自动识别，据此决定图片怎么走，无需配置：
+
+* 模型支持图片 → 图片直接内联进对话；
+* 模型不支持、且解析出 `vision_provider` → 自动注册 `analyze_image`，模型可以把图片交给该 Provider 分析；
+* 模型不支持、且没有 `vision_provider` → 不注册该工具，提示里也不会出现它。
+
+`vision_provider` 必须显式配置，不会自动从已配置的 Provider 中挑选：把用户的图片发给第二个 Provider 涉及隐私和成本，不适合由 Runtime 推断。省略即表示该 Agent 没有视觉降级通道。显式指定的 `vision_provider` 会在启动时校验图片输入能力。`analyze_image` 不出现在 `tools` 开关中，它由上述规则推导。
 
 ### MCP
 
@@ -89,7 +104,7 @@
 
 ## 内置 Tool
 
-`read_file`、`edit_file`、`search_files`、`list_directory`、`shell`、`web_search`、`analyze_image` 和 `subagent` 构成共享的 Tool Catalog。Catalog 中的 Tool 实例无状态，由 Runtime 内所有 Agent 共用；每个角色按名字从 Catalog 中筛选出自己的 ToolSet，不重复创建实例。Runtime 依赖（Workspace、Command Executor、Session 根目录、视觉 Provider、MCP、子 Agent Runtime）通过 `ToolExecutionContext` 在调用时传入；缺少依赖的 Tool 不会出现在 ToolSet 中，而不是在调用时报错。文件 Tool 只接受 Workspace 内的相对路径；`search_files` 默认跳过超大文件、非文本文件以及 `.git`、`node_modules`、`build` 等目录。`shell` 每次执行前需要授权，并返回退出码、标准输出、标准错误和超时信息。`web_search` 默认关闭，通过 [Exa](https://exa.ai) 检索公网内容，单次最多返回 10 条结果，启用时需要 `EXA_API_KEY`（可在 [Exa Search](https://exa.ai/products/search) 申请）。单个 Tool Result 回灌模型最多 16K 字符，较大的结果会保存为 Session Artifact。
+`read_file`、`edit_file`、`search_files`、`list_directory`、`shell`、`web_search`、`subagent` 和 `analyze_image` 构成共享的 Tool Catalog（`analyze_image` 不由开关控制，见上文）。Catalog 中的 Tool 实例无状态，由 Runtime 内所有 Agent 共用；每个角色按名字从 Catalog 中筛选出自己的 ToolSet，不重复创建实例。Runtime 依赖（Workspace、Command Executor、Session 根目录、视觉 Provider、MCP、子 Agent Runtime）通过 `ToolExecutionContext` 在调用时传入；缺少依赖的 Tool 不会出现在 ToolSet 中，而不是在调用时报错。文件 Tool 只接受 Workspace 内的相对路径；`search_files` 默认跳过超大文件、非文本文件以及 `.git`、`node_modules`、`build` 等目录。`shell` 每次执行前需要授权，并返回退出码、标准输出、标准错误和超时信息。`web_search` 默认关闭，通过 [Exa](https://exa.ai) 检索公网内容，单次最多返回 10 条结果，启用时需要 `EXA_API_KEY`（可在 [Exa Search](https://exa.ai/products/search) 申请）。单个 Tool Result 回灌模型最多 16K 字符，较大的结果会保存为 Session Artifact。
 
 ## 子 Agent 角色
 
