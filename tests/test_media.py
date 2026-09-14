@@ -132,6 +132,30 @@ class ProbeImageTest(unittest.TestCase):
         with self.assertRaisesRegex(UnsupportedImageError, "exceeding"):
             probe_image(path)
 
+    def test_the_size_limit_can_be_lifted_for_display(self) -> None:
+        """The ceiling bounds what is sent to a model, not what is shown."""
+        path = self.write("big.png", b"")
+        path.write_bytes(
+            b"\x89PNG\r\n\x1a\n" + b"\x00" * (MAX_IMAGE_BYTES + 1024)
+        )
+
+        self.assertEqual(
+            probe_image(path, max_bytes=None).mime_type, "image/png"
+        )
+
+    def test_the_limit_still_applies_after_a_lifted_probe_cached_it(
+        self,
+    ) -> None:
+        """A display probe must not smuggle a huge image past the limit."""
+        path = self.write("big.png", b"")
+        path.write_bytes(
+            b"\x89PNG\r\n\x1a\n" + b"\x00" * (MAX_IMAGE_BYTES + 1024)
+        )
+        probe_image(path, max_bytes=None)
+
+        with self.assertRaisesRegex(UnsupportedImageError, "exceeding"):
+            probe_image(path)
+
 
 class EstimateImageTokensTest(unittest.TestCase):
     def test_a_small_image_costs_one_tile(self) -> None:
@@ -147,10 +171,39 @@ class EstimateImageTokensTest(unittest.TestCase):
         """Cost must not scale with the raw pixel count."""
         estimate = estimate_image_tokens(20000, 20000)
 
-        self.assertLess(estimate, 2000)
+        self.assertLess(estimate, 5000)
 
     def test_degenerate_dimensions_do_not_raise(self) -> None:
         self.assertGreater(estimate_image_tokens(0, 0), 0)
+
+    def test_never_under_prices_area_billing(self) -> None:
+        """Under-counting defeats the compression guard.
+
+        An image cannot be compressed away mid-turn, so an estimate
+        below what the provider bills makes the runtime skip compression
+        and ship a request the provider rejects.
+        """
+        for width, height in [
+            (1024, 1024),
+            (1568, 1568),
+            (2048, 1536),
+            (3024, 4032),
+            (4096, 4096),
+            (16384, 16384),
+            (800, 600),
+            (513, 2048),
+        ]:
+            with self.subTest(size=(width, height)):
+                scale = min(1.0, 1568 / max(width, height))
+                billed = int(width * scale) * int(height * scale) / 750
+
+                self.assertGreaterEqual(
+                    estimate_image_tokens(width, height), billed
+                )
+
+    def test_a_large_image_is_not_flattened_to_the_tile_ceiling(self) -> None:
+        """Fixed tiling alone caps every image near 1.4K tokens."""
+        self.assertGreater(estimate_image_tokens(1568, 1568), 3000)
 
 
 class EncodeDataUrlTest(unittest.TestCase):

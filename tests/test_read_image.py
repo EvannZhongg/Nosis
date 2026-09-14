@@ -149,6 +149,18 @@ class ReadImageToolTest(unittest.TestCase):
 
         self.assertEqual(len(result.attachments), 1)
 
+    def test_different_spellings_of_one_file_load_once(self) -> None:
+        """Dedup has to follow resolution, not the raw argument text."""
+        self.write_image("a.png")
+        (self.root / "sub").mkdir()
+
+        result = ReadImageTool().execute(
+            {"paths": ["a.png", "./a.png", "sub/../a.png"]}, self.context()
+        )
+
+        self.assertEqual(len(result.attachments), 1)
+        self.assertEqual(len(result.output["images"]), 1)
+
     def test_one_bad_path_does_not_discard_the_others(self) -> None:
         self.write_image("good.png")
 

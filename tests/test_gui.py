@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -490,6 +491,40 @@ class GuiTest(unittest.TestCase):
                     "/api/workspace-image", params={"path": "link.png"}
                 ).status_code,
                 404,
+            )
+
+    def test_the_workspace_image_route_404s_an_unreadable_file(self) -> None:
+        """An unreadable file is a missing image, not a server fault."""
+        from tests.test_media import png_bytes
+
+        path = self.root / "locked.png"
+        path.write_bytes(png_bytes(8, 8))
+        path.chmod(0o000)
+        self.addCleanup(path.chmod, 0o644)
+        if os.access(path, os.R_OK):
+            self.skipTest("this user can read a mode-000 file")
+        with self.client() as client:
+            self.assertEqual(
+                client.get(
+                    "/api/workspace-image", params={"path": "locked.png"}
+                ).status_code,
+                404,
+            )
+
+    def test_the_workspace_image_route_serves_a_large_image(self) -> None:
+        """The 5 MiB ceiling bounds model delivery, not display."""
+        from agent_core.media import MAX_IMAGE_BYTES
+
+        path = self.root / "huge.png"
+        path.write_bytes(
+            b"\x89PNG\r\n\x1a\n" + b"\x00" * (MAX_IMAGE_BYTES + 1024)
+        )
+        with self.client() as client:
+            self.assertEqual(
+                client.get(
+                    "/api/workspace-image", params={"path": "huge.png"}
+                ).status_code,
+                200,
             )
 
     def test_rejects_foreign_origins_and_hosts(self) -> None:

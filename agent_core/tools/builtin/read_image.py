@@ -66,6 +66,7 @@ class ReadImageTool(Tool):
         loaded: list[JSONValue] = []
         failed: list[JSONValue] = []
         attachments = []
+        seen: set[str] = set()
         for path in paths:
             try:
                 part, info = resolve_image(path, context)
@@ -74,6 +75,13 @@ class ReadImageTool(Tool):
                 # resolved alongside it; the model is told which failed.
                 failed.append({"path": path, "error": str(error)})
                 continue
+            # De-duplication happens after resolution, because 'a.png',
+            # './a.png' and 'b/../a.png' are three spellings of one file
+            # and would otherwise spend three images of context to show
+            # the model one.
+            if part.path in seen:
+                continue
+            seen.add(part.path)
             attachments.append(part)
             loaded.append(
                 {
@@ -114,6 +122,6 @@ def _parse_paths(arguments: dict[str, JSONValue]) -> list[str]:
         if not isinstance(path, str) or not path:
             raise ValueError("each read_image path must be a non-empty string")
         result.append(path)
-    # An identical path twice would spend the context of two images to
-    # show the model one.
+    # Exact repeats are dropped here; spellings that differ but name the
+    # same file are caught after resolution, in ``execute``.
     return list(dict.fromkeys(result))

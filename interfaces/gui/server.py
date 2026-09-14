@@ -295,8 +295,13 @@ def create_app(
         except ValueError as error:
             raise HTTPException(status_code=404, detail="图片不存在。") from error
         try:
-            info = probe_image(resolved)
-        except UnsupportedImageError as error:
+            # No size limit here: the 5 MiB ceiling exists to bound what
+            # is sent to a model, and a large image is still viewable.
+            info = probe_image(resolved, max_bytes=None)
+        except (UnsupportedImageError, OSError) as error:
+            # An unreadable file is a missing image to the page, not a
+            # server fault: letting OSError escape would answer a locked
+            # or unreadable file with a traceback and the host path.
             raise HTTPException(status_code=404, detail="图片不存在。") from error
         return FileResponse(resolved, media_type=info.mime_type)
 

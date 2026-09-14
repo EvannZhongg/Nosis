@@ -42,10 +42,22 @@ SUPPORTED_IMAGE_MIME_TYPES = (
     "image/webp",
 )
 
+#: Fixed-tile pricing: a flat base plus a cost per 512-pixel tile.
+_TILE_BASE_TOKENS = 85
+_TILE_TOKENS = 170
+
+#: Area pricing: the long edge is clamped, then pixels are charged at a
+#: fixed rate.  These are the most expensive published parameters among
+#: the providers this runtime reaches, which is the point -- the
+#: estimate must not sit below what the provider will actually bill.
+_AREA_MAX_EDGE = 1568
+_AREA_PIXELS_PER_TOKEN = 750
+
 #: Fallback pixel size for a file whose format is recognized but whose
-#: dimensions are not in the probed prefix.  It prices such an image as a
-#: full-size one rather than as free.
-_ASSUMED_DIMENSION = 1024
+#: dimensions are not in the probed prefix.  It is priced at the ceiling
+#: rather than at some middling guess, because an unknown image that
+#: turns out to be large must not be the reason a turn overflows.
+_ASSUMED_DIMENSION = _AREA_MAX_EDGE
 
 
 class UnsupportedImageError(ValueError):
@@ -64,12 +76,14 @@ class ImageInfo:
         return estimate_image_tokens(self.width, self.height)
 
 
-def probe_image(path: Path) -> ImageInfo:
+def probe_image(path: Path, max_bytes: int | None = MAX_IMAGE_BYTES) -> ImageInfo:
     """Identify *path* as a supported image and measure it.
 
     The format comes from the file's magic bytes rather than its name,
     and the size limit is enforced here so every caller that is about to
-    spend context on an image rejects the same set of files.
+    spend context on an image rejects the same set of files.  Pass
+    ``max_bytes=None`` when the image is only being displayed rather
+    than sent to a model, so a large file stays viewable.
 
     Results are memoized on the file's identity: counting context calls
     this for every image on every pass of the agent loop, and re-reading
@@ -84,15 +98,20 @@ def probe_image(path: Path) -> ImageInfo:
         if cached is not None:
             _probe_cache.move_to_end(key)
     if cached is not None:
+        if max_bytes is not None and cached.size_bytes > max_bytes:
+            raise UnsupportedImageError(
+                f"image is {cached.size_bytes} bytes, exceeding the maximum "
+                f"of {max_bytes} bytes for inline delivery"
+            )
         return cached
 
     size_bytes = stat.st_size
     if size_bytes == 0:
         raise UnsupportedImageError(f"image file is empty: {path}")
-    if size_bytes > MAX_IMAGE_BYTES:
+    if max_bytes is not None and size_bytes > max_bytes:
         raise UnsupportedImageError(
             f"image is {size_bytes} bytes, exceeding the maximum of "
-            f"{MAX_IMAGE_BYTES} bytes for inline delivery"
+            f"{max_bytes} bytes for inline delivery"
         )
     with path.open("rb") as file:
         header = file.read(_PROBE_BYTES)
@@ -119,21 +138,38 @@ def probe_image(path: Path) -> ImageInfo:
 
 
 def estimate_image_tokens(width: int, height: int) -> int:
-    """Estimate the context cost of one inline image.
+    """Estimate the context cost of one inline image, erring high.
 
-    Vision models price an image by the number of fixed-size tiles it
-    covers after being scaled down, so the cost follows the dimensions
-    and not the byte count.  This mirrors the widely used 512-pixel
-    tiling: shrink to fit a 2048-pixel square, shrink again until the
-    short side is at most 768, then charge per covered tile.
+    This number exists to decide when to compress, so the two directions
+    of error are not symmetric.  Over-counting compresses a little early.
+    Under-counting makes the runtime believe it is inside the budget, so
+    it neither compresses nor raises
+    :class:`~agent_core.context_manager.ContextWindowExceededError`, and
+    the provider rejects the request instead -- surfacing as an opaque
+    upstream error rather than the graceful failure the check exists to
+    produce.  An image also cannot be compressed away mid-turn: it stays
+    inline until the turn ends.  So the estimate is deliberately the
+    maximum over the pricing models this runtime talks to, not the
+    average.
 
-    The estimate exists to drive compression decisions, so it is
-    deliberately independent of any single vendor's exact table; being
-    off by a tile is harmless, whereas counting base64 characters as
-    text would overstate an image by four orders of magnitude.
+    Two families are priced and the larger wins:
+
+    * fixed tiles -- shrink to fit a 2048-pixel square, shrink again
+      until the short side is at most 768, then charge per 512-pixel
+      tile plus a base cost.  This caps out near 1.4K tokens.
+    * area -- shrink so the long edge is at most 1568, then charge by
+      pixel area.  This reaches roughly 3.3K tokens, so it dominates for
+      any large image.
     """
     width = max(1, width)
     height = max(1, height)
+    return max(
+        _tiled_image_tokens(width, height),
+        _area_image_tokens(width, height),
+    )
+
+
+def _tiled_image_tokens(width: int, height: int) -> int:
     longest = max(width, height)
     if longest > 2048:
         scale = 2048 / longest
@@ -145,7 +181,16 @@ def estimate_image_tokens(width: int, height: int) -> int:
         width = max(1, int(width * scale))
         height = max(1, int(height * scale))
     tiles = math.ceil(width / 512) * math.ceil(height / 512)
-    return 85 + 170 * tiles
+    return _TILE_BASE_TOKENS + _TILE_TOKENS * tiles
+
+
+def _area_image_tokens(width: int, height: int) -> int:
+    longest = max(width, height)
+    if longest > _AREA_MAX_EDGE:
+        scale = _AREA_MAX_EDGE / longest
+        width = max(1, int(width * scale))
+        height = max(1, int(height * scale))
+    return math.ceil(width * height / _AREA_PIXELS_PER_TOKEN)
 
 
 def encode_data_url(path: Path, mime_type: str) -> str:
