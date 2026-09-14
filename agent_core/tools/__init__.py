@@ -4,6 +4,7 @@ from .base import (
     ToolCall,
     ToolDefinition,
     ToolError,
+    ToolOutput,
     ToolPolicy,
     ToolResult,
 )
@@ -12,6 +13,7 @@ from .builtin import (
     EditFileTool,
     ListDirectoryTool,
     ReadFileTool,
+    ReadImageTool,
     SearchFilesTool,
     ShellTool,
     SubagentTool,
@@ -21,6 +23,7 @@ from .builtin import (
 from .catalog import ToolCatalog, ToolSet
 from .config import ROLE_TOOL_NAMES, TOOL_NAMES, ToolConfig, load_tool_config
 from .context import ToolExecutionContext
+from .paths import resolve_image, resolve_readable_path
 from .policy import CompositeToolPolicy, McpApprovalPolicy, ShellApprovalPolicy
 
 __all__ = [
@@ -32,6 +35,7 @@ __all__ = [
     "McpApprovalPolicy",
     "ROLE_TOOL_NAMES",
     "ReadFileTool",
+    "ReadImageTool",
     "SearchFilesTool",
     "ShellApprovalPolicy",
     "ShellTool",
@@ -44,10 +48,13 @@ __all__ = [
     "ToolDefinition",
     "ToolError",
     "ToolExecutionContext",
+    "ToolOutput",
     "ToolPolicy",
     "ToolResult",
     "ToolSet",
     "WebSearchTool",
     "builtin_catalog",
     "load_tool_config",
+    "resolve_image",
+    "resolve_readable_path",
 ]

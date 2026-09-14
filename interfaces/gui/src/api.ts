@@ -8,6 +8,10 @@ export type SessionItem = {
   tool_calls?: ToolCall[];
   tool_call_id?: string;
   reasoning?: string | null;
+  // "tool_media" marks a user-role item the runtime synthesized to carry
+  // images a tool loaded. It is not something the person said, so the
+  // transcript renders it as part of the assistant's work.
+  origin?: "conversation" | "tool_media";
 };
 
 export type Session = { session_id: string; items: SessionItem[]; workspace?: string | null };
@@ -62,8 +66,17 @@ export async function uploadAttachments(files: File[], sessionId?: string): Prom
 }
 
 export function attachmentUrl(path: string, sessionId?: string): string {
+  const query = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : "";
   const prefix = ".nosis/attachments/";
-  return path.startsWith(prefix)
-    ? `/api/attachments/${encodeURIComponent(path.slice(prefix.length))}${sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ""}`
-    : path;
+  if (path.startsWith(prefix)) {
+    return `/api/attachments/${encodeURIComponent(path.slice(prefix.length))}${query}`;
+  }
+  // An image the agent read itself can live anywhere in the workspace,
+  // so it is fetched by path. An absolute path belongs to a session
+  // artifact outside the workspace and has no route.
+  if (path && !path.startsWith("/") && !/^[a-zA-Z]:[\\/]/.test(path)) {
+    const separator = query ? "&" : "?";
+    return `/api/workspace-image${query}${separator}path=${encodeURIComponent(path)}`;
+  }
+  return path;
 }

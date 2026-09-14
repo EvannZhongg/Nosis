@@ -16,6 +16,7 @@ from agent_core import (
     ToolBatchStartedEvent,
     ToolCall,
     ToolCallEvent,
+    ToolMediaEvent,
     ToolResultEvent,
 )
 from agent_core.llm import TokenUsage
@@ -128,6 +129,20 @@ def event_to_message(
             },
             "tool_index": event.tool_index,
             "tool_count": event.tool_count,
+        }
+
+    if isinstance(event, ToolMediaEvent):
+        return {
+            "type": "tool_media",
+            "turn_id": turn_id,
+            "attachments": [
+                {
+                    "type": "image",
+                    "path": part.path,
+                    "mime_type": part.mime_type,
+                }
+                for part in event.attachments
+            ],
         }
 
     raise TypeError(f"unsupported agent event: {type(event).__name__}")

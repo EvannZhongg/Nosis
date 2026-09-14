@@ -29,7 +29,9 @@ from agent_core import (
     ListDirectoryTool,
     Session,
     ToolExecutionContext,
+    UnsupportedImageError,
     Workspace,
+    probe_image,
 )
 
 from ..bridge.config import (
@@ -272,6 +274,31 @@ def create_app(
         if not path.is_file():
             raise HTTPException(status_code=404, detail="附件不存在。")
         return FileResponse(path, media_type=mimetypes.guess_type(path.name)[0])
+
+    @app.get("/api/workspace-image")
+    def get_workspace_image(
+        path: str,
+        session_id: str | None = None,
+    ) -> FileResponse:
+        """Serve an image the agent read from anywhere in the workspace.
+
+        ``read_image`` may load any image the workspace holds, not only
+        an upload, so the transcript needs to render a path that never
+        passed through the attachment folder.  Only real images are
+        served: the media type is read from the file rather than guessed
+        from its name, which also keeps this route from becoming a way
+        to fetch arbitrary workspace files.
+        """
+        workspace = session_workspace(session_id)
+        try:
+            resolved = workspace.resolve_path(path)
+        except ValueError as error:
+            raise HTTPException(status_code=404, detail="图片不存在。") from error
+        try:
+            info = probe_image(resolved)
+        except UnsupportedImageError as error:
+            raise HTTPException(status_code=404, detail="图片不存在。") from error
+        return FileResponse(resolved, media_type=info.mime_type)
 
     @app.websocket("/api/session")
     async def run_session(websocket: WebSocket) -> None:

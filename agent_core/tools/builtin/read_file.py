@@ -3,6 +3,7 @@ from typing import TextIO
 
 from ..base import JSONValue, Tool, ToolDefinition
 from ..context import ToolExecutionContext
+from ..paths import resolve_readable_path
 
 
 DEFAULT_READ_LIMIT = 2000
@@ -56,7 +57,7 @@ class ReadFileTool(Tool):
         context: ToolExecutionContext,
     ) -> JSONValue:
         path, offset, limit = _parse_arguments(arguments)
-        file_path, display_path = _resolve_path(path, context)
+        file_path, display_path = resolve_readable_path(path, context)
         file_size_bytes = file_path.stat().st_size
         if file_size_bytes > MAX_FILE_SIZE_BYTES:
             raise ValueError(
@@ -83,35 +84,6 @@ class ReadFileTool(Tool):
             "file_size_bytes": file_size_bytes,
             "content": content,
         }
-
-
-def _resolve_path(
-    path: str,
-    context: ToolExecutionContext,
-) -> tuple[Path, str]:
-    """Resolve a workspace path, or a Session artifact pseudo-path.
-
-    Tool Result artifacts are addressed as ``.nosis/sessions/...`` even
-    though they live under the Runtime's Session root rather than in the
-    workspace.
-    """
-    marker = Path(".nosis", "sessions")
-    relative = Path(path)
-    if relative == marker or marker in relative.parents:
-        sessions_directory = context.sessions_directory
-        resolved = (
-            sessions_directory / relative.relative_to(marker)
-        ).resolve()
-        try:
-            resolved.relative_to(sessions_directory)
-        except ValueError as error:
-            raise ValueError(
-                "session artifact path must stay within sessions"
-            ) from error
-        return resolved, relative.as_posix()
-    workspace = context.workspace
-    resolved = workspace.resolve_path(path)
-    return resolved, resolved.relative_to(workspace.path).as_posix()
 
 
 def _parse_arguments(

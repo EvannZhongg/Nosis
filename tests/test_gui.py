@@ -422,6 +422,76 @@ class GuiTest(unittest.TestCase):
                 400,
             )
 
+    def test_serves_a_workspace_image_the_agent_read(self) -> None:
+        """``read_image`` may load any image, not only an upload."""
+        from tests.test_media import png_bytes
+
+        (self.root / "src" / "diagram.png").write_bytes(png_bytes(8, 8))
+        with self.client() as client:
+            response = client.get(
+                "/api/workspace-image",
+                params={"path": "src/diagram.png"},
+            )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.headers["content-type"], "image/png")
+
+    def test_the_workspace_image_type_comes_from_the_bytes(self) -> None:
+        """A mislabelled extension must not set the served type."""
+        from tests.test_media import jpeg_bytes
+
+        (self.root / "lying.png").write_bytes(jpeg_bytes(8, 8))
+        with self.client() as client:
+            response = client.get(
+                "/api/workspace-image", params={"path": "lying.png"}
+            )
+
+            self.assertEqual(response.headers["content-type"], "image/jpeg")
+
+    def test_the_workspace_image_route_refuses_non_images(self) -> None:
+        """It must not become a way to read arbitrary workspace files."""
+        with self.client() as client:
+            self.assertEqual(
+                client.get(
+                    "/api/workspace-image", params={"path": "README.md"}
+                ).status_code,
+                404,
+            )
+
+    def test_the_workspace_image_route_rejects_traversal(self) -> None:
+        secret = self.root.parent / "secret.png"
+        secret.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)
+        self.addCleanup(secret.unlink)
+        with self.client() as client:
+            for path in ("../secret.png", "/etc/hosts", "src/../../secret.png"):
+                with self.subTest(path=path):
+                    self.assertEqual(
+                        client.get(
+                            "/api/workspace-image", params={"path": path}
+                        ).status_code,
+                        404,
+                    )
+
+    @unittest.skipUnless(
+        SYMLINKS_AVAILABLE,
+        "creating symlinks needs Developer Mode or administrator rights "
+        "on Windows",
+    )
+    def test_the_workspace_image_route_rejects_external_symlinks(self) -> None:
+        from tests.test_media import png_bytes
+
+        outside = self.root.parent / "outside.png"
+        outside.write_bytes(png_bytes(8, 8))
+        self.addCleanup(outside.unlink)
+        (self.root / "link.png").symlink_to(outside)
+        with self.client() as client:
+            self.assertEqual(
+                client.get(
+                    "/api/workspace-image", params={"path": "link.png"}
+                ).status_code,
+                404,
+            )
+
     def test_rejects_foreign_origins_and_hosts(self) -> None:
         with self.client(FakeBridge()) as client:
             with self.assertRaises(WebSocketDisconnect):

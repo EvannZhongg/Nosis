@@ -9,6 +9,7 @@ from .agent import (
     ToolBatchStartedEvent,
     ToolCallEvent,
     ToolCallLimitExceededError,
+    ToolMediaEvent,
     ToolResultEvent,
 )
 from .config import (
@@ -25,7 +26,15 @@ from .execution import (
 )
 from .llm import LLMProvider, LLMRequest, LLMResponse, TokenUsage, ProviderCapabilities
 from .content import Content, ContentPart, TextPart, ImagePart
-from .session import Message, Session
+from .media import (
+    ImageInfo,
+    MAX_IMAGE_BYTES,
+    SUPPORTED_IMAGE_MIME_TYPES,
+    UnsupportedImageError,
+    estimate_image_tokens,
+    probe_image,
+)
+from .session import Message, MessageOrigin, Session
 from .session_store import JsonlSessionStore
 from .subagent import (
     SubagentRole,
@@ -46,6 +55,7 @@ from .tools import (
     ListDirectoryTool,
     McpApprovalPolicy,
     ReadFileTool,
+    ReadImageTool,
     SearchFilesTool,
     ShellApprovalPolicy,
     ShellTool,
@@ -57,12 +67,15 @@ from .tools import (
     ToolDefinition,
     ToolError,
     ToolExecutionContext,
+    ToolOutput,
     ToolPolicy,
     ToolResult,
     ToolSet,
     WebSearchTool,
     builtin_catalog,
     load_tool_config,
+    resolve_image,
+    resolve_readable_path,
 )
 from .mcp import (
     McpConfig,
@@ -93,6 +106,7 @@ __all__ = [
     "DEFAULT_MAX_TOOL_RESULT_CHARS",
     "DEFAULT_TOOL_RESULT_PREVIEW_CHARS",
     "EditFileTool",
+    "ImageInfo",
     "ImagePart",
     "JSONValue",
     "JsonlSessionStore",
@@ -100,15 +114,19 @@ __all__ = [
     "LLMRequest",
     "LLMResponse",
     "ListDirectoryTool",
+    "MAX_IMAGE_BYTES",
     "McpApprovalPolicy",
     "McpConfig",
     "McpServerConfig",
     "McpTool",
     "McpToolConfig",
     "Message",
+    "MessageOrigin",
     "ProviderCapabilities",
     "ReadFileTool",
+    "ReadImageTool",
     "ReasoningDeltaEvent",
+    "SUPPORTED_IMAGE_MIME_TYPES",
     "SearchFilesTool",
     "Session",
     "ShellApprovalPolicy",
@@ -131,16 +149,23 @@ __all__ = [
     "ToolDefinition",
     "ToolError",
     "ToolExecutionContext",
+    "ToolMediaEvent",
+    "ToolOutput",
     "ToolPolicy",
     "ToolResult",
     "ToolResultEvent",
     "ToolResultNormalizer",
     "ToolSet",
+    "UnsupportedImageError",
     "WebSearchTool",
     "Workspace",
     "builtin_catalog",
+    "estimate_image_tokens",
     "load_agent_config",
     "load_mcp_config",
     "load_tool_config",
+    "probe_image",
+    "resolve_image",
+    "resolve_readable_path",
     "vision_aware_tool_names",
 ]

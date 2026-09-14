@@ -17,7 +17,7 @@ from .session_store import JsonlSessionStore
 from .tools.catalog import ToolCatalog
 from .tools.context import ToolExecutionContext
 from .tools.base import ToolPolicy
-from .tools.builtin import AnalyzeImageTool
+from .tools.builtin import AnalyzeImageTool, ReadImageTool
 
 
 def vision_aware_tool_names(
@@ -25,16 +25,18 @@ def vision_aware_tool_names(
     provider: LLMProvider,
     vision_provider: LLMProvider | None,
 ) -> tuple[str, ...]:
-    """Add ``analyze_image`` only when this agent needs it to see an image.
+    """Add the image tool this agent can actually use, if any.
 
-    A vision-capable model receives images inline, so the tool would be a
-    second, redundant model call. A text-only model has images stripped
-    from its context, so the tool is the only way it can look at one —
-    provided the Runtime resolved a vision provider to hand them to.
+    The two image tools are alternatives, never both. A vision-capable
+    model gets ``read_image`` and looks at the pixels itself. A text-only
+    model has images stripped from its context, so its only route is
+    ``analyze_image``, which spends a second provider call turning them
+    into text -- and that requires the Runtime to have resolved a vision
+    provider to hand them to.
     """
     names = tuple(configured)
     if "image" in provider.capabilities.input_modalities:
-        return names
+        return (*names, ReadImageTool.name)
     if vision_provider is None:
         return names
     return (*names, AnalyzeImageTool.name)
@@ -126,6 +128,9 @@ class SubagentRuntime:
         context = replace(
             parent,
             session=session,
+            vision_input=(
+                "image" in role.provider.capabilities.input_modalities
+            ),
             vision_provider=role.vision_provider,
             subagents=None,
         )
@@ -177,8 +182,16 @@ class SubagentRuntime:
 
 
 def _latest_attachments(session: Session) -> tuple[ImagePart, ...]:
+    """Return the images the parent was last shown by the user.
+
+    Only what the person actually attached is inherited. A message the
+    runtime synthesized to carry a tool's images belongs to the parent's
+    own investigation, and passing it down would both hide the user's
+    real attachment and spend the child's context on an image its task
+    never mentioned.
+    """
     for item in reversed(session.items):
-        if item.role == "user":
+        if item.role == "user" and not item.is_tool_media:
             return tuple(
                 part for part in item.parts if isinstance(part, ImagePart)
             )

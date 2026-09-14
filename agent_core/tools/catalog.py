@@ -6,6 +6,7 @@ from .base import (
     ToolCall,
     ToolDefinition,
     ToolError,
+    ToolOutput,
     ToolPolicy,
     ToolResult,
 )
@@ -112,6 +113,13 @@ class ToolSet:
                 ),
             )
 
+        if isinstance(output, ToolOutput):
+            return ToolResult(
+                tool_call_id=call.id,
+                name=call.name,
+                output=output.output,
+                attachments=output.attachments,
+            )
         return ToolResult(
             tool_call_id=call.id,
             name=call.name,

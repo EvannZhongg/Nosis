@@ -306,6 +306,8 @@ def _message_to_dict(message: Message) -> dict[str, object]:
         data["tool_call_id"] = message.tool_call_id
     if message.reasoning is not None:
         data["reasoning"] = message.reasoning
+    if message.origin != "conversation":
+        data["origin"] = message.origin
     return data
 
 
@@ -357,6 +359,9 @@ def _message_from_dict(data: dict[str, object]) -> Message:
         ),
         tool_call_id=data.get("tool_call_id"),
         reasoning=data.get("reasoning") if isinstance(data.get("reasoning"), str) else None,
+        origin=(
+            "tool_media" if data.get("origin") == "tool_media" else "conversation"
+        ),
     )
 
 

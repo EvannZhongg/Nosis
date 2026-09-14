@@ -279,6 +279,24 @@ function applyMessage(state: State, message: Incoming): State {
         ),
       };
 
+    case 'tool_media':
+      // A terminal cannot show the image, so the user is told which
+      // ones the agent is now looking at.
+      return {
+        ...state,
+        entries: [
+          ...state.entries,
+          {
+            kind: 'notice',
+            id: nextId('notice'),
+            level: 'info',
+            text: `Viewing ${message.attachments.length} image(s): ${message.attachments
+              .map((attachment) => attachment.path)
+              .join(', ')}`,
+          },
+        ],
+      };
+
     case 'approval_request':
       return {
         ...state,

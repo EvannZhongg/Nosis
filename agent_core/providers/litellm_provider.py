@@ -1,4 +1,3 @@
-import base64
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +13,11 @@ from agent_core.llm import (
     TokenUsage,
 )
 from agent_core.content import ImagePart, TextPart
+from agent_core.media import (
+    UnsupportedImageError,
+    encode_data_url,
+    probe_image,
+)
 from agent_core.session import Message
 from agent_core.tools import AnalyzeImageTool, ToolCall, ToolDefinition
 
@@ -79,13 +83,23 @@ class LiteLLMProvider(LLMProvider):
         return self._max_context_tokens
 
     def count_input_tokens(self, request: LLMRequest) -> int:
-        messages = _request_messages(request, self)
+        """Price the request without encoding any image.
+
+        Images are counted from their pixel dimensions and the text is
+        counted by the tokenizer, so a context check reads image headers
+        rather than whole files.  Encoding here would cost a full read
+        and a base64 pass per image on every iteration of the agent
+        loop, and the tokenizer does not inspect a data URL anyway: it
+        prices one by a flat per-image constant regardless of size.
+        """
+        messages = _request_messages(request, self, encode_media=False)
         tools = _request_tools(request)
-        return token_counter(
+        text_tokens = token_counter(
             model=self._model,
             messages=messages,
             tools=tools or None,
         )
+        return text_tokens + _media_tokens(request, self)
 
     def stream(
         self,
@@ -162,6 +176,8 @@ class LiteLLMProvider(LLMProvider):
 def _request_messages(
     request: LLMRequest,
     provider: LiteLLMProvider | None = None,
+    *,
+    encode_media: bool = True,
 ) -> list[dict[str, object]]:
     return [
         {"role": "system", "content": request.system_prompt},
@@ -176,19 +192,47 @@ def _request_messages(
                 can_analyze_images=any(
                     tool.name == AnalyzeImageTool.name for tool in request.tools
                 ),
-                media_root=(
-                    request.media_root
-                    if request.media_root is not None
-                    else (
-                        getattr(provider, "_media_root", None)
-                        if provider is not None
-                        else None
-                    )
-                ),
+                media_root=_media_root(request, provider),
+                encode_media=encode_media,
             )
             for message in request.messages
         ],
     ]
+
+
+def _media_root(
+    request: LLMRequest,
+    provider: "LiteLLMProvider | None",
+) -> Path | None:
+    if request.media_root is not None:
+        return request.media_root
+    if provider is not None:
+        return getattr(provider, "_media_root", None)
+    return None
+
+
+def _media_tokens(
+    request: LLMRequest,
+    provider: "LiteLLMProvider | None",
+) -> int:
+    """Sum the estimated cost of every image the request will send."""
+    if provider is not None and "image" not in provider.capabilities.input_modalities:
+        return 0
+    media_root = _media_root(request, provider)
+    total = 0
+    for message in request.messages:
+        for part in message.parts:
+            if not isinstance(part, ImagePart):
+                continue
+            try:
+                path = _resolve_media_path(part.path, media_root)
+                info = probe_image(path)
+            except (FileNotFoundError, ValueError, UnsupportedImageError):
+                # An unreadable image is sent as a short text notice, so
+                # it costs nothing beyond what the tokenizer counted.
+                continue
+            total += info.token_estimate
+    return total
 
 
 def _request_tools(request: LLMRequest) -> list[dict[str, object]]:
@@ -228,6 +272,7 @@ def _message_to_dict(
     include_images: bool = True,
     can_analyze_images: bool = False,
     media_root: Path | None = None,
+    encode_media: bool = True,
 ) -> dict[str, object]:
     data: dict[str, object] = {
         "role": message.role,
@@ -236,6 +281,7 @@ def _message_to_dict(
             include_images=include_images,
             can_analyze_images=can_analyze_images,
             media_root=media_root,
+            encode_media=encode_media,
         ),
     }
     if message.reasoning is not None:
@@ -266,6 +312,7 @@ def _content_to_provider_format(
     include_images: bool = True,
     can_analyze_images: bool = False,
     media_root: Path | None = None,
+    encode_media: bool = True,
 ) -> object:
     parts = message.parts
     if not parts:
@@ -303,13 +350,17 @@ def _content_to_provider_format(
                     }
                 )
                 continue
-            with path.open("rb") as file:
-                encoded = base64.b64encode(file.read()).decode("ascii")
+            if not encode_media:
+                # Counting tokens never needs the bytes: the caller adds
+                # each image's estimated cost separately. A placeholder
+                # keeps the message shape intact for the tokenizer.
+                rendered.append({"type": "text", "text": f"[image {part.path}]"})
+                continue
             rendered.append(
                 {
                     "type": "image_url",
                     "image_url": {
-                        "url": f"data:{part.mime_type};base64,{encoded}"
+                        "url": encode_data_url(path, part.mime_type)
                     },
                 }
             )
@@ -327,8 +378,13 @@ def _resolve_media_path(path: str, media_root: Path | None) -> Path:
         candidate = media_root / candidate
     resolved = candidate.expanduser().resolve()
     if was_relative and media_root is not None:
+        # Both sides must be resolved before being compared: a root that
+        # still contains a symlink (macOS serves /var as /private/var)
+        # would not be a prefix of the resolved candidate, and a
+        # legitimate path would be rejected as an escape.
+        root = media_root.expanduser().resolve()
         try:
-            resolved.relative_to(media_root)
+            resolved.relative_to(root)
         except ValueError as error:
             raise ValueError("image path must stay within media_root") from error
     if not resolved.is_file():

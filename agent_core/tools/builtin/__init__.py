@@ -1,6 +1,7 @@
 from .edit_file import EditFileTool
 from .list_directory import ListDirectoryTool
 from .read_file import ReadFileTool
+from .read_image import ReadImageTool
 from .search_files import SearchFilesTool
 from .shell import ShellTool
 from .web_search import WebSearchTool
@@ -25,6 +26,7 @@ def builtin_catalog():
             ListDirectoryTool(),
             ShellTool(),
             WebSearchTool(),
+            ReadImageTool(),
             AnalyzeImageTool(),
             SubagentTool(),
         )
@@ -36,6 +38,7 @@ __all__ = [
     "EditFileTool",
     "ListDirectoryTool",
     "ReadFileTool",
+    "ReadImageTool",
     "SearchFilesTool",
     "ShellTool",
     "SubagentTool",

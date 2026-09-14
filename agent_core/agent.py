@@ -73,6 +73,13 @@ class ToolResultEvent:
 
 
 @dataclass(frozen=True)
+class ToolMediaEvent:
+    """Images a tool batch placed into the model's context."""
+
+    attachments: tuple[ImagePart, ...]
+
+
+@dataclass(frozen=True)
 class ContextArchivedEvent:
     checkpoint_number: int
 
@@ -84,8 +91,23 @@ AgentEvent: TypeAlias = (
     | ToolBatchStartedEvent
     | ToolCallEvent
     | ToolResultEvent
+    | ToolMediaEvent
     | ContextArchivedEvent
 )
+
+
+def _media_notice(attachments: tuple[ImagePart, ...]) -> str:
+    """Describe the images that follow in the same message.
+
+    The model is told these came from its own tool call so it does not
+    read them as a new instruction from the person it is talking to.
+    """
+    listed = "\n".join(f"- {part.path}" for part in attachments)
+    noun = "image" if len(attachments) == 1 else "images"
+    return (
+        f"[Tool output] The {noun} requested by the preceding tool "
+        f"call:\n{listed}"
+    )
 
 
 class Agent:
@@ -269,6 +291,25 @@ class Agent:
                         timestamp_utc=self._now().astimezone(timezone.utc),
                         tool_call_id=tool_call.id,
                     )
+                # Images arrive after every tool result, never between
+                # two of them: a provider rejects an assistant step whose
+                # tool calls are not each answered by the message that
+                # follows, so one batch yields at most one media message.
+                media = tuple(
+                    attachment
+                    for _, _, result in executed
+                    for attachment in result.attachments
+                )
+                if media:
+                    self._session.add_item(
+                        role="user",
+                        content=_media_notice(media),
+                        timestamp_utc=self._now().astimezone(timezone.utc),
+                        attachments=media,
+                        origin="tool_media",
+                    )
+                    if on_event is not None:
+                        on_event(ToolMediaEvent(attachments=media))
                 continue
 
             if response.content is None:

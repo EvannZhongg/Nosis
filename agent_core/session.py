@@ -9,6 +9,15 @@ from .content import Content, ImagePart, content_parts
 
 MessageRole = Literal["system", "user", "assistant", "tool"]
 
+#: Where a transcript item came from.  Nearly every item is part of the
+#: conversation itself; ``tool_media`` marks a user-role message the
+#: runtime synthesized to carry images a tool produced.  Images have to
+#: arrive in a user message because a tool-role message cannot hold
+#: them, so the origin is what distinguishes them from something the
+#: person typed -- it keeps them out of the UI's conversation and out of
+#: what a sub-agent inherits.
+MessageOrigin = Literal["conversation", "tool_media"]
+
 
 @dataclass(frozen=True)
 class Message:
@@ -18,10 +27,15 @@ class Message:
     tool_calls: tuple[ToolCall, ...] = ()
     tool_call_id: str | None = None
     reasoning: str | None = None
+    origin: MessageOrigin = "conversation"
 
     @property
     def parts(self):
         return content_parts(self.content)
+
+    @property
+    def is_tool_media(self) -> bool:
+        return self.origin == "tool_media"
 
 
 @dataclass
@@ -63,6 +77,7 @@ class Session:
         tool_call_id: str | None = None,
         reasoning: str | None = None,
         attachments: tuple[ImagePart, ...] = (),
+        origin: MessageOrigin = "conversation",
     ) -> None:
         if attachments:
             parts = list(content_parts(content))
@@ -76,5 +91,6 @@ class Session:
                 tool_calls=tool_calls,
                 tool_call_id=tool_call_id,
                 reasoning=reasoning,
+                origin=origin,
             )
         )

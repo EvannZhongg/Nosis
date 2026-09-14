@@ -180,10 +180,14 @@ class ContextManager:
         visible = historical + list(items[historical_count:])
         result: list[Message] = []
         for index, item in enumerate(visible):
-            if item.role == "user":
+            # A turn begins where the person spoke. A synthesized media
+            # message sits inside a turn, so it must not open a second
+            # timeline block in the middle of one.
+            if item.role == "user" and not item.is_tool_media:
                 end = next(
                     (offset for offset in range(index + 1, len(visible))
-                     if visible[offset].role == "user"),
+                     if visible[offset].role == "user"
+                     and not visible[offset].is_tool_media),
                     len(visible),
                 )
                 result.append(_timeline_message(visible[index:end]))
@@ -202,6 +206,7 @@ def _historical_message(item: Message) -> Message:
         tool_calls=item.tool_calls,
         tool_call_id=item.tool_call_id,
         reasoning=None,
+        origin=item.origin,
     )
 
 
@@ -216,6 +221,11 @@ def _timeline_message(items: list[Message]) -> Message:
             detail = "assistant step (" + ", ".join(call.name for call in item.tool_calls) + ")"
         elif item.role == "tool":
             detail = f"tool result ({item.tool_call_id or 'unknown'})"
+        elif item.is_tool_media:
+            # This message only exists because it is the one place an
+            # image can travel. Labelling it "user" would read as the
+            # person speaking again in the middle of their own turn.
+            detail = "tool images"
         lines.append(f"- {timestamp} — {detail}")
     return Message(
         role="system",

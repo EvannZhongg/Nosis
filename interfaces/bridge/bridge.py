@@ -33,6 +33,7 @@ from agent_core import (
     ImagePart,
     builtin_catalog,
     load_agent_config,
+    probe_image,
     vision_aware_tool_names,
 )
 from agent_core.prompts import load_system_prompt
@@ -203,6 +204,9 @@ class Bridge:
             sessions_directory=sessions_directory,
             command_executor=SubprocessCommandExecutor(workspace.path),
             shell_timeout_seconds=agent_config.shell_timeout_seconds,
+            vision_input=(
+                "image" in main_provider.capabilities.input_modalities
+            ),
             vision_provider=vision_provider,
             mcp=self._mcp,
             subagents=subagents,
@@ -493,18 +497,17 @@ def _parse_attachments(value: object, workspace: Workspace) -> tuple[ImagePart, 
         if not isinstance(item, dict) or item.get("type") != "image":
             raise ValueError("attachments must contain image objects")
         path = item.get("path")
-        mime_type = item.get("mime_type", "image/png")
         if not isinstance(path, str) or not path:
             raise ValueError("image attachment path must be a non-empty string")
-        if not isinstance(mime_type, str) or not mime_type:
-            raise ValueError("image attachment mime_type must be a non-empty string")
         resolved = workspace.resolve_path(path)
-        if not resolved.is_file():
-            raise ValueError(f"image attachment does not exist: {path}")
+        # The media type is taken from the file rather than the client's
+        # claim: a provider handed the wrong one rejects the request, and
+        # the size limit belongs on every route into the context.
+        info = probe_image(resolved)
         result.append(
             ImagePart(
                 path=resolved.relative_to(workspace.path).as_posix(),
-                mime_type=mime_type,
+                mime_type=info.mime_type,
             )
         )
     return tuple(result)

@@ -675,10 +675,11 @@ _CAPABILITIES_PATCH = classmethod(
 
 
 class AnalyzeImageDerivationTest(unittest.TestCase):
-    """`analyze_image` is derived from capability, never configured.
+    """The image tools are derived from capability, never configured.
 
-    It is registered exactly when the agent's own model cannot read an
-    image and the Runtime resolved somewhere to send it instead.
+    Exactly one of them is registered: a model that reads images gets
+    ``read_image``, and a model that cannot gets ``analyze_image`` --
+    but only when the Runtime resolved somewhere to send them instead.
     """
 
     def tool_names(
@@ -752,11 +753,43 @@ class AnalyzeImageDerivationTest(unittest.TestCase):
         self.assertNotIn("analyze_image", main)
         self.assertNotIn("analyze_image", role)
 
+    def test_a_vision_model_gets_read_image_instead(self) -> None:
+        """It can see for itself, so it is handed the pixels."""
+        main, role = self.tool_names(VISION_MODEL, "seeing")
+
+        self.assertIn("read_image", main)
+        self.assertIn("read_image", role)
+
     def test_a_text_model_with_a_vision_provider_gets_the_tool(self) -> None:
         main, role = self.tool_names(TEXT_MODEL, "seeing")
 
         self.assertIn("analyze_image", main)
         self.assertIn("analyze_image", role)
+
+    def test_a_text_model_never_gets_read_image(self) -> None:
+        """Inlining an image for a text model would be dropped anyway."""
+        for vision_provider in ("seeing", None):
+            with self.subTest(vision_provider=vision_provider):
+                main, role = self.tool_names(TEXT_MODEL, vision_provider)
+
+                self.assertNotIn("read_image", main)
+                self.assertNotIn("read_image", role)
+
+    def test_the_two_image_tools_are_never_both_registered(self) -> None:
+        """They are alternatives: one route into context, not two."""
+        for model in (VISION_MODEL, TEXT_MODEL):
+            for vision_provider in ("seeing", None):
+                with self.subTest(model=model, vision=vision_provider):
+                    main, role = self.tool_names(model, vision_provider)
+
+                    for names in (main, role):
+                        self.assertLess(
+                            len(
+                                {"read_image", "analyze_image"}
+                                & set(names)
+                            ),
+                            2,
+                        )
 
     def test_a_text_model_without_a_vision_provider_does_not(self) -> None:
         """Nothing to route images to, so the tool would always fail."""

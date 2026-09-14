@@ -3,6 +3,8 @@ from abc import ABC, abstractmethod
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, ClassVar, Protocol, TypeAlias
 
+from ..content import ImagePart
+
 if TYPE_CHECKING:
     from .context import ToolExecutionContext
 
@@ -44,6 +46,11 @@ class ToolResult:
     name: str
     output: JSONValue = None
     error: ToolError | None = None
+    #: Images this call wants placed in the model's context.  They are
+    #: delivered as a separate message after the tool results, because a
+    #: tool-role message cannot carry image content on the
+    #: OpenAI-compatible chat API that providers are reached through.
+    attachments: tuple[ImagePart, ...] = ()
 
     def to_content(self) -> str:
         if self.error is not None:
@@ -57,6 +64,20 @@ class ToolResult:
                 "output": self.output,
             }
         return json.dumps(data, ensure_ascii=False)
+
+
+@dataclass(frozen=True)
+class ToolOutput:
+    """A tool's result when it carries images as well as data.
+
+    A tool returns this instead of a bare :data:`JSONValue` when the
+    model needs to see pixels: ``output`` is serialized into the tool
+    result as usual, while ``attachments`` are delivered separately by
+    the agent loop.
+    """
+
+    output: JSONValue = None
+    attachments: tuple[ImagePart, ...] = ()
 
 
 class Tool(ABC):
@@ -89,7 +110,7 @@ class Tool(ABC):
         self,
         arguments: dict[str, JSONValue],
         context: "ToolExecutionContext",
-    ) -> JSONValue:
+    ) -> "JSONValue | ToolOutput":
         raise NotImplementedError
 
 

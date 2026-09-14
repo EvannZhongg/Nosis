@@ -178,7 +178,11 @@ type OpenMessage = {
 };
 
 /** The parts one transcript item contributes, in the order the model emitted them. */
-function itemParts(item: TranscriptItem, results: Map<string, ToolOutcome>): Part[] {
+function itemParts(
+  item: TranscriptItem,
+  results: Map<string, ToolOutcome>,
+  sessionId?: string,
+): Part[] {
   const parts: Part[] = [];
   // The model reasons before it answers, so reasoning comes first.
   if (item.reasoning) parts.push({ type: "reasoning", text: item.reasoning });
@@ -186,7 +190,7 @@ function itemParts(item: TranscriptItem, results: Map<string, ToolOutcome>): Par
   if (Array.isArray(item.content)) {
     for (const part of item.content) {
       if (part.type === "text") parts.push({ type: "text", text: part.text });
-      else parts.push({ type: "image", image: attachmentUrl(part.path) } as unknown as Part);
+      else parts.push({ type: "image", image: attachmentUrl(part.path, sessionId) } as unknown as Part);
     }
   }
   for (const call of item.tool_calls ?? []) {
@@ -225,16 +229,19 @@ export function toMessages(items: TranscriptItem[], sessionId?: string): ThreadM
 
   items.forEach((item, index) => {
     if (item.role === "tool") return;
-    const parts = itemParts(item, results).map((part) => {
-      if ((part as any).type === "image" && sessionId) {
-        const image = (part as any).image as string;
-        const marker = "/api/attachments/";
-        if (image.startsWith(marker) && !image.includes("session_id=")) {
-          return { ...(part as any), image: `${image}?session_id=${encodeURIComponent(sessionId)}` } as Part;
-        }
-      }
-      return part;
-    });
+    // The session id travels into the URL builder, so an image is
+    // addressed against the session's own workspace from the start.
+    const parts = itemParts(item, results, sessionId);
+
+    // Images a tool loaded arrive in a user-role item because that is the
+    // only message kind that can carry them. They belong to the reply the
+    // agent was composing, so they join it instead of opening a bubble
+    // that looks like the person spoke. The text beside them only tells
+    // the model where they came from, so it is left out here.
+    if (item.role === "user" && item.origin === "tool_media") {
+      if (open) open.content.push(...parts.filter((part) => (part as any).type === "image"));
+      return;
+    }
 
     if (item.role === "assistant" && open) {
       open.content.push(...parts);

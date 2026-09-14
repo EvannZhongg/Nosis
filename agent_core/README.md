@@ -68,11 +68,17 @@
 
 模型是否支持图片由 LiteLLM 的 `supports_vision` 自动识别，据此决定图片怎么走，无需配置：
 
-* 模型支持图片 → 图片直接内联进对话；
+* 模型支持图片 → 图片直接内联进对话，并自动注册 `read_image`，模型可以自己打开 Workspace 里的图片；
 * 模型不支持、且解析出 `vision_provider` → 自动注册 `analyze_image`，模型可以把图片交给该 Provider 分析；
-* 模型不支持、且没有 `vision_provider` → 不注册该工具，提示里也不会出现它。
+* 模型不支持、且没有 `vision_provider` → 两个工具都不注册，提示里也不会出现它们。
 
-`vision_provider` 必须显式配置，不会自动从已配置的 Provider 中挑选：把用户的图片发给第二个 Provider 涉及隐私和成本，不适合由 Runtime 推断。省略即表示该 Agent 没有视觉降级通道。显式指定的 `vision_provider` 会在启动时校验图片输入能力。`analyze_image` 不出现在 `tools` 开关中，它由上述规则推导。
+`read_image` 和 `analyze_image` 互斥，永远只注册其中一个：前者把像素交给模型自己看，后者用第二次 Provider 调用把像素换成文字。两者都不出现在 `tools` 开关中，由上述规则推导。
+
+`vision_provider` 必须显式配置，不会自动从已配置的 Provider 中挑选：把用户的图片发给第二个 Provider 涉及隐私和成本，不适合由 Runtime 推断。省略即表示该 Agent 没有视觉降级通道。显式指定的 `vision_provider` 会在启动时校验图片输入能力。
+
+图片进入上下文有两条通路：用户在输入框里上传的附件，以及模型自己调用 `read_image` 读到的文件。后者的像素无法放进 `tool` 消息（OpenAI 兼容的 Chat API 不接受），因此 Runtime 在一批 Tool Result **全部写入之后**追加一条 `origin="tool_media"` 的 `user` 消息来承载它们——一批工具调用最多追加一条，否则会在 `assistant` 的 tool_calls 和它的结果之间插入消息，Provider 会直接拒绝。这条消息不是用户说的话：它不会被子 Agent 当作用户附件继承，UI 也会把它并入助手的回复而不是渲染成一个用户气泡。
+
+图片只在当前 turn 内联；turn 结束后历史里只留下路径占位符，所以同一张图不会在后续每次模型调用里反复上传。计数不走 base64：图片按像素尺寸估算 token（只读文件头，不读整个文件），编码结果按 `(路径, mtime, 大小)` 缓存，一个 turn 里多次模型调用只编码一次。单张图片上限 5 MiB，媒体类型按文件magic bytes识别而不是按扩展名，`read_image` 单次最多读 4 张。
 
 ### MCP
 
@@ -104,7 +110,7 @@
 
 ## 内置 Tool
 
-`read_file`、`edit_file`、`search_files`、`list_directory`、`shell`、`web_search`、`subagent` 和 `analyze_image` 构成共享的 Tool Catalog（`analyze_image` 不由开关控制，见上文）。Catalog 中的 Tool 实例无状态，由 Runtime 内所有 Agent 共用；每个角色按名字从 Catalog 中筛选出自己的 ToolSet，不重复创建实例。Runtime 依赖（Workspace、Command Executor、Session 根目录、视觉 Provider、MCP、子 Agent Runtime）通过 `ToolExecutionContext` 在调用时传入；缺少依赖的 Tool 不会出现在 ToolSet 中，而不是在调用时报错。文件 Tool 只接受 Workspace 内的相对路径；`search_files` 默认跳过超大文件、非文本文件以及 `.git`、`node_modules`、`build` 等目录。`shell` 每次执行前需要授权，并返回退出码、标准输出、标准错误和超时信息。`web_search` 默认关闭，通过 [Exa](https://exa.ai) 检索公网内容，单次最多返回 10 条结果，启用时需要 `EXA_API_KEY`（可在 [Exa Search](https://exa.ai/products/search) 申请）。单个 Tool Result 回灌模型最多 16K 字符，较大的结果会保存为 Session Artifact。
+`read_file`、`edit_file`、`search_files`、`list_directory`、`shell`、`web_search`、`subagent`、`read_image` 和 `analyze_image` 构成共享的 Tool Catalog（后两个不由开关控制，见上文）。Catalog 中的 Tool 实例无状态，由 Runtime 内所有 Agent 共用；每个角色按名字从 Catalog 中筛选出自己的 ToolSet，不重复创建实例。Runtime 依赖（Workspace、Command Executor、Session 根目录、模型是否能读图、视觉 Provider、MCP、子 Agent Runtime）通过 `ToolExecutionContext` 在调用时传入；缺少依赖的 Tool 不会出现在 ToolSet 中，而不是在调用时报错。文件 Tool 只接受 Workspace 内的相对路径；`read_file` 和 `read_image` 另外接受 `.nosis/sessions/...` 形式的 Session Artifact 路径，两者共用同一个路径解析器。`search_files` 默认跳过超大文件、非文本文件以及 `.git`、`node_modules`、`build` 等目录。`shell` 每次执行前需要授权，并返回退出码、标准输出、标准错误和超时信息。`web_search` 默认关闭，通过 [Exa](https://exa.ai) 检索公网内容，单次最多返回 10 条结果，启用时需要 `EXA_API_KEY`（可在 [Exa Search](https://exa.ai/products/search) 申请）。单个 Tool Result 回灌模型最多 16K 字符，较大的结果会保存为 Session Artifact。
 
 ## 子 Agent 角色
 

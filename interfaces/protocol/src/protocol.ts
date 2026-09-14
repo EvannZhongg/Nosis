@@ -71,6 +71,11 @@ export type Incoming =
       tool_count: number;
     }
   | {
+      type: 'tool_media';
+      turn_id: string;
+      attachments: ImageAttachment[];
+    }
+  | {
       type: 'approval_request';
       turn_id: string | null;
       request_id: string;

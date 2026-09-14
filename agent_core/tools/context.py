@@ -34,6 +34,11 @@ class ToolExecutionContext:
     )
     command_executor: "CommandExecutor | None" = None
     shell_timeout_seconds: int = DEFAULT_COMMAND_TIMEOUT_SECONDS
+    # Whether the Agent's own model accepts image input.  It decides
+    # which of the two image tools this Agent gets: the model either sees
+    # images itself via ``read_image``, or delegates to the vision
+    # provider via ``analyze_image``.
+    vision_input: bool = False
     vision_provider: "LLMProvider | None" = None
     mcp: "McpClientManager | None" = None
     subagents: "SubagentRuntime | None" = None

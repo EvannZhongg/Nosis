@@ -1,17 +1,23 @@
-from ...content import ImagePart, TextPart
+from ...content import TextPart
 from ...session import Message
 from ...llm import LLMRequest
 from ..base import JSONValue, Tool, ToolDefinition
 from ..context import ToolExecutionContext
+from ..paths import resolve_image
 
 
 class AnalyzeImageTool(Tool):
-    """Ask a vision-capable provider about an image stored in the workspace."""
+    """Ask a vision-capable provider about an image stored in the workspace.
+
+    This is the fallback for a model that cannot see images: it spends a
+    second provider call to turn pixels into text.  A model that accepts
+    image input gets ``read_image`` instead and looks for itself.
+    """
 
     name = "analyze_image"
 
     def available(self, context: ToolExecutionContext) -> bool:
-        return context.vision_provider is not None
+        return context.vision_provider is not None and not context.vision_input
 
     def definition(self, context: ToolExecutionContext) -> ToolDefinition:
         return ToolDefinition(
@@ -41,12 +47,11 @@ class AnalyzeImageTool(Tool):
         provider = context.vision_provider
         if provider is None:
             raise ValueError("this runtime has no vision provider")
-        workspace = context.workspace
-        resolved = workspace.resolve_path(path)
-        if not resolved.is_file():
-            raise ValueError(f"image does not exist: {path}")
         if "image" not in provider.capabilities.input_modalities:
             raise ValueError("the configured provider does not support image input")
+        # The media type is read from the file itself, so a mislabelled
+        # extension cannot make the request claim the wrong format.
+        image, _info = resolve_image(path, context)
         response = provider.stream(
             LLMRequest(
                 system_prompt="Analyze the supplied image and answer the user's question.",
@@ -55,11 +60,11 @@ class AnalyzeImageTool(Tool):
                         role="user",
                         content=(
                             TextPart(text=question),
-                            ImagePart(path=str(resolved)),
+                            image,
                         ),
                     ),
                 ),
-                media_root=workspace.path,
+                media_root=context.workspace.path,
             ),
             lambda _text: None,
         )
