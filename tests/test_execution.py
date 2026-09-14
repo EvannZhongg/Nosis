@@ -7,6 +7,7 @@ from pathlib import Path
 from agent_core import SubprocessCommandExecutor
 from agent_core.execution import (
     MAX_COMMAND_OUTPUT_CHARS,
+    CommandOutputSpool,
     _decode_output,
 )
 
@@ -105,6 +106,50 @@ class SubprocessCommandExecutorTest(unittest.TestCase):
                 result.stderr,
                 r"\[truncated \d+ characters\]",
             )
+            if result.stdout_spool is not None:
+                result.stdout_spool.cleanup()
+            if result.stderr_spool is not None:
+                result.stderr_spool.cleanup()
+
+    def test_retains_oversized_streams_in_spools(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            working_directory = Path(directory)
+            executor = SubprocessCommandExecutor(working_directory)
+            command = _python_script_command(
+                working_directory,
+                "import sys\n"
+                "sys.stdout.write('START-' + 'o' * 70000 + '-END')\n",
+            )
+
+            result = executor.execute(command)
+
+            self.assertIsNotNone(result.stdout_spool)
+            assert result.stdout_spool is not None
+            self.assertEqual(
+                result.stdout_spool.path.read_text(encoding="utf-8"),
+                "START-" + "o" * 70000 + "-END",
+            )
+            result.stdout_spool.cleanup()
+            self.assertFalse(result.stdout_spool.path.exists())
+
+    def test_spool_cleanup_ignores_windows_sharing_violation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "locked.txt"
+            path.write_text("data", encoding="utf-8")
+            spool = CommandOutputSpool(path, 4, "utf-8")
+            original_unlink = Path.unlink
+
+            def locked_unlink(self, missing_ok=False):
+                if self == path:
+                    raise PermissionError(13, "sharing violation")
+                return original_unlink(self, missing_ok=missing_ok)
+
+            from unittest.mock import patch
+
+            with patch.object(Path, "unlink", locked_unlink):
+                spool.cleanup()
+
+            self.assertTrue(path.exists())
 
     def test_decodes_output_that_is_not_utf8(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -74,6 +74,43 @@ class ToolResultNormalizerTest(unittest.TestCase):
                 },
             )
 
+    def test_writes_complete_spooled_result_and_cleans_spool(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace_path = root / "workspace"
+            workspace_path.mkdir()
+            workspace = Workspace(workspace_path)
+            spool = root / "stdout.txt"
+            complete = "START-" + "x" * 70000 + "-END"
+            spool.write_text(complete, encoding="utf-8")
+            from agent_core.execution import CommandOutputSpool
+
+            handle = CommandOutputSpool(spool, len(complete), "utf-8")
+            result = ToolResult(
+                tool_call_id="call-1",
+                name="shell",
+                output={"stdout": complete[:100]},
+                artifact_writer=lambda path: path.write_text(
+                    json.dumps({"stdout": complete}), encoding="utf-8"
+                ) or len(complete),
+                artifact_cleanup=handle.cleanup,
+            )
+            normalizer = ToolResultNormalizer(
+                workspace,
+                "session-1",
+                max_chars=20,
+                sessions_directory=root / "sessions",
+            )
+
+            normalizer.normalize(result)
+
+            artifact = next((root / "sessions").rglob("call-1.txt"))
+            self.assertEqual(
+                json.loads(artifact.read_text(encoding="utf-8"))["stdout"],
+                complete,
+            )
+            self.assertFalse(spool.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

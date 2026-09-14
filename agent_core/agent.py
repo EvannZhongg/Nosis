@@ -302,17 +302,31 @@ class Agent:
                             )
                             futures[future] = (index, call)
 
-                        for future in as_completed(futures):
-                            index, call = futures[future]
-                            result = future.result()
+                        try:
+                            for future in as_completed(futures):
+                                index, call = futures[future]
+                                result = future.result()
+                                completed[index] = (call, result)
+                                emit_result(result, index)
+                        except BaseException:
+                            _cleanup_completed_results(completed)
+                            for future, (_index, _call) in futures.items():
+                                if future.done() and not future.cancelled():
+                                    try:
+                                        _cleanup_tool_result(future.result())
+                                    except BaseException:
+                                        pass
+                            raise
+                else:
+                    try:
+                        for index, call in indexed_calls:
+                            emit_call(call, index)
+                            result = self._tools.execute(call)
                             completed[index] = (call, result)
                             emit_result(result, index)
-                else:
-                    for index, call in indexed_calls:
-                        emit_call(call, index)
-                        result = self._tools.execute(call)
-                        completed[index] = (call, result)
-                        emit_result(result, index)
+                    except BaseException:
+                        _cleanup_completed_results(completed)
+                        raise
 
                 # Session commit order is independent from completion order:
                 # providers receive one result for each call in the exact
@@ -321,35 +335,39 @@ class Agent:
                     (index, completed[index][0], completed[index][1])
                     for index, _ in indexed_calls
                 ]
-                for tool_index, tool_call, tool_result in executed:
-                    normalized_content = (
-                        self._tool_result_normalizer.normalize(tool_result)
+                try:
+                    for tool_index, tool_call, tool_result in executed:
+                        normalized_content = (
+                            self._tool_result_normalizer.normalize(tool_result)
+                        )
+                        self._session.add_item(
+                            role="tool",
+                            content=normalized_content,
+                            timestamp_utc=self._now().astimezone(timezone.utc),
+                            tool_call_id=tool_call.id,
+                        )
+                    # Images arrive after every tool result, never between
+                    # two of them: a provider rejects an assistant step whose
+                    # tool calls are not each answered by the message that
+                    # follows, so one batch yields at most one media message.
+                    media = tuple(
+                        attachment
+                        for _, _, result in executed
+                        for attachment in result.attachments
                     )
-                    self._session.add_item(
-                        role="tool",
-                        content=normalized_content,
-                        timestamp_utc=self._now().astimezone(timezone.utc),
-                        tool_call_id=tool_call.id,
-                    )
-                # Images arrive after every tool result, never between
-                # two of them: a provider rejects an assistant step whose
-                # tool calls are not each answered by the message that
-                # follows, so one batch yields at most one media message.
-                media = tuple(
-                    attachment
-                    for _, _, result in executed
-                    for attachment in result.attachments
-                )
-                if media:
-                    self._session.add_item(
-                        role="user",
-                        content=_media_notice(media),
-                        timestamp_utc=self._now().astimezone(timezone.utc),
-                        attachments=media,
-                        origin="tool_media",
-                    )
-                    if on_event is not None:
-                        on_event(ToolMediaEvent(attachments=media))
+                    if media:
+                        self._session.add_item(
+                            role="user",
+                            content=_media_notice(media),
+                            timestamp_utc=self._now().astimezone(timezone.utc),
+                            attachments=media,
+                            origin="tool_media",
+                        )
+                        if on_event is not None:
+                            on_event(ToolMediaEvent(attachments=media))
+                finally:
+                    for _, _, tool_result in executed:
+                        _cleanup_tool_result(tool_result)
                 continue
 
             if response.content is None:
@@ -389,3 +407,15 @@ def _tool_call_key(tool_call: ToolCall) -> tuple[str, str]:
         separators=(",", ":"),
     )
     return tool_call.name, normalized_arguments
+
+
+def _cleanup_tool_result(result: ToolResult) -> None:
+    if result.artifact_cleanup is not None:
+        result.artifact_cleanup()
+
+
+def _cleanup_completed_results(
+    completed: dict[int, tuple[ToolCall, ToolResult]],
+) -> None:
+    for _, result in completed.values():
+        _cleanup_tool_result(result)

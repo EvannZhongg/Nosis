@@ -1,7 +1,8 @@
 import json
 from abc import ABC, abstractmethod
-from dataclasses import asdict, dataclass
-from typing import TYPE_CHECKING, ClassVar, Protocol, TypeAlias
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from typing import TYPE_CHECKING, Callable, ClassVar, Protocol, TypeAlias
 
 from ..content import ImagePart
 
@@ -51,6 +52,25 @@ class ToolResult:
     #: tool-role message cannot carry image content on the
     #: OpenAI-compatible chat API that providers are reached through.
     attachments: tuple[ImagePart, ...] = ()
+    # Internal hooks used by tools that spool large results.  They are not
+    # part of the serialized tool result; the Runtime consumes them when it
+    # normalizes the result into a Session artifact.
+    artifact_writer: Callable[[Path], int] | None = field(
+        default=None, compare=False, repr=False
+    )
+    artifact_cleanup: Callable[[], None] | None = field(
+        default=None, compare=False, repr=False
+    )
+
+    def __del__(self) -> None:
+        # Last-resort cleanup when a tool result is abandoned before the
+        # normalizer (for example, cancellation or a failed batch commit).
+        cleanup = self.artifact_cleanup
+        if cleanup is not None:
+            try:
+                cleanup()
+            except BaseException:
+                pass
 
     def to_content(self) -> str:
         if self.error is not None:
@@ -68,16 +88,22 @@ class ToolResult:
 
 @dataclass(frozen=True)
 class ToolOutput:
-    """A tool's result when it carries images as well as data.
+    """A tool's result when it carries attachments or a spooled artifact.
 
     A tool returns this instead of a bare :data:`JSONValue` when the
-    model needs to see pixels: ``output`` is serialized into the tool
-    result as usual, while ``attachments`` are delivered separately by
-    the agent loop.
+    model needs to see pixels or when a complete result is retained on
+    disk: ``output`` is serialized into the tool result as usual, while
+    ``attachments`` and artifact hooks are consumed by the Runtime.
     """
 
     output: JSONValue = None
     attachments: tuple[ImagePart, ...] = ()
+    artifact_writer: Callable[[Path], int] | None = field(
+        default=None, compare=False, repr=False
+    )
+    artifact_cleanup: Callable[[], None] | None = field(
+        default=None, compare=False, repr=False
+    )
 
 
 class Tool(ABC):

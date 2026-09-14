@@ -21,6 +21,7 @@ from .config import (
 from .context_manager import ContextManager, ContextWindowExceededError
 from .execution import (
     CommandExecutionResult,
+    CommandOutputSpool,
     CommandExecutor,
     SubprocessCommandExecutor,
 )
@@ -95,6 +96,7 @@ __all__ = [
     "AssistantMessageDeltaEvent",
     "AssistantMessageEvent",
     "CommandExecutionResult",
+    "CommandOutputSpool",
     "CommandExecutor",
     "CompositeToolPolicy",
     "Content",

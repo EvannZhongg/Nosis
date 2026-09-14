@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -13,10 +14,18 @@ from agent_core import (
     TokenUsage,
     ToolCall,
 )
-from agent_core.session_paths import session_log_path, workspace_key
+from agent_core.session_paths import (
+    default_sessions_directory,
+    session_log_path,
+    workspace_key,
+)
 
 
 class JsonlSessionStoreTest(unittest.TestCase):
+    def test_default_sessions_directory_survives_empty_environment(self) -> None:
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertTrue(default_sessions_directory().is_absolute())
+
     def test_lists_sessions_once_in_recent_turn_order(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
