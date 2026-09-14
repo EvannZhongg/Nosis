@@ -89,6 +89,46 @@ describe("applyMessage", () => {
     expect(JSON.parse(items[1].content!)).toEqual({ ok: true });
   });
 
+  it("applies a later tool result before earlier calls finish", () => {
+    const calls = [
+      { id: "call-a", name: "subagent", arguments: { task: "A" } },
+      { id: "call-b", name: "subagent", arguments: { task: "B" } },
+      { id: "call-c", name: "subagent", arguments: { task: "C" } },
+    ];
+    const { items } = fold([
+      {
+        type: "tool_batch_started",
+        turn_id: "t1",
+        model_call_index: 1,
+        tool_calls: calls,
+      },
+      {
+        type: "tool_result",
+        turn_id: "t1",
+        tool_call_id: "call-b",
+        name: "subagent",
+        ok: true,
+        error: null,
+        tool_index: 2,
+        tool_count: 3,
+      },
+    ]);
+
+    const toolParts = (toMessages(items)[0].content as any[]).filter(
+      (part) => part.type === "tool-call",
+    );
+    expect(toolParts.map((part) => part.toolCallId)).toEqual([
+      "call-a",
+      "call-b",
+      "call-c",
+    ]);
+    expect(toolParts.map((part) => part.result)).toEqual([
+      undefined,
+      { ok: true },
+      undefined,
+    ]);
+  });
+
   it("keeps the error from a failed tool", () => {
     const { items } = fold([
       {

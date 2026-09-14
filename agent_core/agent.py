@@ -1,5 +1,5 @@
 import json
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable, TypeAlias
@@ -254,14 +254,32 @@ class Agent:
                         )
                     )
                 tool_count = len(response.tool_calls)
-                def execute_call(item: tuple[int, ToolCall]):
-                    index, call = item
+
+                def emit_call(call: ToolCall, index: int) -> None:
                     if on_event is not None:
-                        on_event(ToolCallEvent(tool_call=call, tool_index=index, tool_count=tool_count))
-                    result = self._tools.execute(call)
-                    return index, call, result
+                        on_event(
+                            ToolCallEvent(
+                                tool_call=call,
+                                tool_index=index,
+                                tool_count=tool_count,
+                            )
+                        )
+
+                def emit_result(
+                    result: ToolResult,
+                    index: int,
+                ) -> None:
+                    if on_event is not None:
+                        on_event(
+                            ToolResultEvent(
+                                tool_result=result,
+                                tool_index=index,
+                                tool_count=tool_count,
+                            )
+                        )
 
                 indexed_calls = list(enumerate(response.tool_calls, start=1))
+                completed: dict[int, tuple[ToolCall, ToolResult]] = {}
                 # Only tools that declare themselves concurrent may share a
                 # batch across threads; they hold no invocation state, so
                 # parallel calls cannot observe each other.
@@ -269,22 +287,44 @@ class Agent:
                     self._tools.is_concurrent(call.name)
                     for _, call in indexed_calls
                 ):
-                    with ThreadPoolExecutor(max_workers=len(indexed_calls)) as executor:
-                        executed = list(executor.map(execute_call, indexed_calls))
+                    with ThreadPoolExecutor(
+                        max_workers=len(indexed_calls)
+                    ) as executor:
+                        futures = {}
+                        # Invocation events retain the model's call order.
+                        # Completion events are emitted later by
+                        # as_completed(), without waiting for an earlier
+                        # invocation that is still running.
+                        for index, call in indexed_calls:
+                            emit_call(call, index)
+                            future = executor.submit(
+                                self._tools.execute, call
+                            )
+                            futures[future] = (index, call)
+
+                        for future in as_completed(futures):
+                            index, call = futures[future]
+                            result = future.result()
+                            completed[index] = (call, result)
+                            emit_result(result, index)
                 else:
-                    executed = [execute_call(item) for item in indexed_calls]
+                    for index, call in indexed_calls:
+                        emit_call(call, index)
+                        result = self._tools.execute(call)
+                        completed[index] = (call, result)
+                        emit_result(result, index)
+
+                # Session commit order is independent from completion order:
+                # providers receive one result for each call in the exact
+                # order in which the model emitted those calls.
+                executed = [
+                    (index, completed[index][0], completed[index][1])
+                    for index, _ in indexed_calls
+                ]
                 for tool_index, tool_call, tool_result in executed:
                     normalized_content = (
                         self._tool_result_normalizer.normalize(tool_result)
                     )
-                    if on_event is not None:
-                        on_event(
-                            ToolResultEvent(
-                                tool_result=tool_result,
-                                tool_index=tool_index,
-                                tool_count=tool_count,
-                            )
-                        )
                     self._session.add_item(
                         role="tool",
                         content=normalized_content,

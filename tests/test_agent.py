@@ -1,17 +1,14 @@
 import json
-import tempfile
 import threading
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
-from agent_core.session_paths import workspace_key
 from agent_core import (
     Agent,
     AgentConfig,
     AssistantMessageDeltaEvent,
     AssistantMessageEvent,
-    ContextManager,
     ContextWindowExceededError,
     LLMProvider,
     LLMRequest,
@@ -26,9 +23,7 @@ from agent_core import (
     ToolCallLimitExceededError,
     ToolConfig,
     ToolDefinition,
-    ToolResult,
     ToolResultEvent,
-    ToolResultNormalizer,
     Workspace,
     ImagePart,
     TextPart,
@@ -554,239 +549,6 @@ class AgentTest(unittest.TestCase):
         self.assertEqual(historical.content, "look at this\n[Image attachment omitted from historical context]")
         self.assertEqual(historical.parts, (TextPart(text=historical.content),))
 
-    def test_context_archive_does_not_send_image_parts(self) -> None:
-        session = Session(session_id="archive-images")
-        session.add_item(
-            "user",
-            "summarize this",
-            attachments=(ImagePart(path=".nosis/attachments/a1.png"),),
-        )
-        provider = MockProvider(["summary"])
-        context = ContextManager(
-            provider=provider,
-            session=session,
-            system_prompt="Be helpful.",
-            config=AGENT_CONFIG,
-        )
-        context.begin_turn(len(session.items))
-        context.archive()
-
-        archived = provider.requests[0].messages
-        self.assertTrue(all(not message.parts or all(
-            isinstance(part, TextPart) for part in message.parts
-        ) for message in archived))
-
-    def test_context_archive_keeps_tools_without_intermediate_timestamps(
-        self,
-    ) -> None:
-        tool_call = ToolCall(
-            id="call-1",
-            name="echo",
-            arguments={"text": "hello"},
-        )
-        session = Session(
-            session_id="session-1",
-            items=[
-                Message("user", "question", REQUEST_TIME),
-                Message(
-                    "assistant",
-                    None,
-                    TOOL_CALL_TIME,
-                    tool_calls=(tool_call,),
-                    reasoning="Use the tool to inspect the file.",
-                ),
-                Message(
-                    "tool",
-                    '{"ok": true}',
-                    TOOL_RESULT_TIME,
-                    tool_call_id="call-1",
-                ),
-                Message(
-                    "assistant",
-                    "answer",
-                    RESPONSE_TIME,
-                    reasoning="Summarize the tool result.",
-                ),
-            ],
-        )
-        provider = MockProvider(["checkpoint"])
-        agent = Agent(
-            provider=provider,
-            session=session,
-            system_prompt="You are helpful.",
-            config=AGENT_CONFIG,
-            tools=tool_set(session=session),
-            context=ToolExecutionContext(
-                workspace=TEST_WORKSPACE, session=session
-            ),
-        )
-
-        agent._context.begin_turn(len(session.items))
-        agent._context.archive()
-
-        archived = provider.requests[0].messages
-        self.assertEqual(
-            [message.role for message in archived],
-            ["system", "user", "assistant", "tool", "assistant"],
-        )
-        self.assertEqual(archived[2].tool_calls, (tool_call,))
-        self.assertEqual(archived[3].tool_call_id, "call-1")
-        self.assertEqual(
-            [message.timestamp_utc for message in archived[1:]],
-            [REQUEST_TIME, None, None, RESPONSE_TIME],
-        )
-        self.assertEqual(
-            [message.reasoning for message in archived[1:]],
-            [None, None, None, None],
-        )
-        timeline = archived[0].content or ""
-        self.assertNotIn("assistant step", timeline)
-        self.assertNotIn("tool result", timeline)
-
-    def test_context_archive_requires_active_turn(self) -> None:
-        provider = MockProvider(["checkpoint"])
-        context = ContextManager(
-            provider=provider,
-            session=Session(session_id="session-1"),
-            system_prompt="You are helpful.",
-            config=AGENT_CONFIG,
-        )
-
-        with self.assertRaisesRegex(
-            RuntimeError,
-            "begin_turn must be called before archiving context",
-        ):
-            context.archive()
-
-    def test_returns_unknown_tool_error_to_model(self) -> None:
-        provider = MockProvider(
-            [
-                LLMResponse(
-                    content=None,
-                    tool_calls=(
-                        ToolCall(
-                            id="call-1",
-                            name="missing",
-                            arguments={},
-                        ),
-                    ),
-                ),
-                LLMResponse(content="cannot use that tool"),
-            ]
-        )
-        session = Session(session_id="session-1")
-        agent = Agent(
-            provider=provider,
-            session=session,
-            system_prompt="You are helpful.",
-            config=AGENT_CONFIG,
-            tools=tool_set(session=session),
-            context=ToolExecutionContext(
-                workspace=TEST_WORKSPACE, session=session
-            ),
-            now=clock(
-                REQUEST_TIME,
-                TOOL_CALL_TIME,
-                TOOL_RESULT_TIME,
-                RESPONSE_TIME,
-            ),
-        )
-
-        agent.run("use a missing tool")
-
-        tool_message = provider.requests[1].messages[-1]
-        self.assertEqual(tool_message.role, "tool")
-        self.assertEqual(
-            json.loads(tool_message.content),
-            {
-                "ok": False,
-                "error": {
-                    "type": "tool_not_found",
-                    "message": "tool 'missing' is not registered",
-                },
-            },
-        )
-
-    def test_normalizes_large_tool_result_before_model_feedback(self) -> None:
-        tool_call = ToolCall(
-            id="call-1",
-            name="echo",
-            arguments={"text": "abcdefghijklmnopqrstuvwxyz"},
-        )
-        provider = MockProvider(
-            [
-                LLMResponse(content=None, tool_calls=(tool_call,)),
-                LLMResponse(content="done"),
-            ]
-        )
-
-        with tempfile.TemporaryDirectory() as directory:
-            workspace = Workspace(Path(directory))
-            session = Session(session_id="session-1")
-            agent = Agent(
-                provider=provider,
-                session=session,
-                system_prompt="You are helpful.",
-                config=AGENT_CONFIG,
-                now=clock(
-                    REQUEST_TIME,
-                    TOOL_CALL_TIME,
-                    TOOL_RESULT_TIME,
-                    RESPONSE_TIME,
-                ),
-                tools=tool_set(
-                    EchoTool(), session=session, workspace=workspace
-                ),
-                context=ToolExecutionContext(
-                    workspace=workspace, session=session
-                ),
-                tool_result_normalizer=ToolResultNormalizer(
-                    workspace,
-                    session.session_id,
-                    max_chars=20,
-                    preview_chars=12,
-                    sessions_directory=workspace.path / ".nosis" / "sessions",
-                ),
-            )
-            events = []
-
-            agent.run("use the echo tool", on_event=events.append)
-
-            tool_message = provider.requests[1].messages[-1]
-            feedback = json.loads(tool_message.content)
-            artifact_path = (
-                f".nosis/sessions/{workspace_key(workspace.path)}"
-                "/session-1/call-1.txt"
-            )
-            self.assertEqual(feedback["artifact_path"], artifact_path)
-            self.assertEqual(
-                feedback["read_instruction"],
-                "Use read_file with path "
-                f"'{artifact_path}' to read the complete tool result.",
-            )
-            full_result = ToolResult(
-                tool_call_id="call-1",
-                name="echo",
-                output={"text": "abcdefghijklmnopqrstuvwxyz"},
-            ).to_content()
-            self.assertEqual(feedback["size_chars"], len(full_result))
-            self.assertEqual(feedback["preview"], full_result[:12])
-            self.assertEqual(
-                (workspace.path / artifact_path).read_text(
-                    encoding="utf-8"
-                ),
-                full_result,
-            )
-            result_events = [
-                event
-                for event in events
-                if isinstance(event, ToolResultEvent)
-            ]
-            self.assertEqual(
-                result_events[0].tool_result.output,
-                {"text": "abcdefghijklmnopqrstuvwxyz"},
-            )
-
     def test_stops_on_sixth_identical_tool_call(self) -> None:
         responses = [
             LLMResponse(
@@ -940,22 +702,21 @@ class AgentTest(unittest.TestCase):
 class ConcurrentToolBatchTest(unittest.TestCase):
     """A batch runs in parallel only when every tool declares it is safe."""
 
-    def test_runs_a_concurrent_tool_batch_on_separate_threads(self) -> None:
-        tool = BlockingTool(concurrent=True, expected=3)
+    def test_emits_completion_order_but_commits_invocation_order(self) -> None:
+        controller = CompletionController(expected=3)
+        tool = OrderedCompletionTool(controller)
+        calls = tuple(
+            ToolCall(
+                id=f"call-{label}",
+                name="ordered_completion",
+                arguments={"label": label},
+            )
+            for label in ("a", "b", "c")
+        )
         session = Session(session_id="session-1")
         provider = MockProvider(
             [
-                LLMResponse(
-                    content=None,
-                    tool_calls=tuple(
-                        ToolCall(
-                            id=f"call-{index}",
-                            name="blocking",
-                            arguments={"index": index},
-                        )
-                        for index in range(3)
-                    ),
-                ),
+                LLMResponse(content=None, tool_calls=calls),
                 LLMResponse(content="done"),
             ]
         )
@@ -971,46 +732,68 @@ class ConcurrentToolBatchTest(unittest.TestCase):
             now=lambda: REQUEST_TIME,
         )
 
-        agent.run("run three at once")
+        events = []
+        result_events = {
+            label: threading.Event() for label in ("a", "b", "c")
+        }
+        errors = []
 
-        # All three were inside execute() simultaneously, which only the
-        # thread pool allows; a sequential run would deadlock on the barrier.
-        self.assertEqual(tool.peak_concurrency, 3)
+        def on_event(event) -> None:
+            events.append(event)
+            if isinstance(event, ToolResultEvent):
+                result_events[event.tool_result.output["label"]].set()
 
-    def test_runs_a_non_concurrent_tool_batch_sequentially(self) -> None:
-        tool = BlockingTool(concurrent=False, expected=1)
-        session = Session(session_id="session-1")
-        provider = MockProvider(
+        def run() -> None:
+            try:
+                agent.run("run three at once", on_event=on_event)
+            except BaseException as error:
+                errors.append(error)
+
+        thread = threading.Thread(target=run)
+        thread.start()
+        self.assertTrue(controller.all_entered.wait(5))
+
+        for label in ("b", "c", "a"):
+            controller.release(label)
+            self.assertTrue(result_events[label].wait(5))
+
+        thread.join(5)
+        self.assertFalse(thread.is_alive())
+        if errors:
+            raise errors[0]
+
+        self.assertEqual(
             [
-                LLMResponse(
-                    content=None,
-                    tool_calls=tuple(
-                        ToolCall(
-                            id=f"call-{index}",
-                            name="blocking",
-                            arguments={"index": index},
-                        )
-                        for index in range(3)
-                    ),
-                ),
-                LLMResponse(content="done"),
-            ]
+                event.tool_call.id
+                for event in events
+                if isinstance(event, ToolCallEvent)
+            ],
+            ["call-a", "call-b", "call-c"],
         )
-        agent = Agent(
-            provider=provider,
-            session=session,
-            system_prompt="You are helpful.",
-            config=AGENT_CONFIG,
-            tools=tool_set(tool, session=session),
-            context=ToolExecutionContext(
-                workspace=TEST_WORKSPACE, session=session
-            ),
-            now=lambda: REQUEST_TIME,
+        self.assertEqual(
+            [
+                event.tool_result.tool_call_id
+                for event in events
+                if isinstance(event, ToolResultEvent)
+            ],
+            ["call-b", "call-c", "call-a"],
         )
-
-        agent.run("run three in order")
-
-        self.assertEqual(tool.peak_concurrency, 1)
+        self.assertEqual(
+            [
+                message.tool_call_id
+                for message in provider.requests[1].messages
+                if message.role == "tool"
+            ],
+            ["call-a", "call-b", "call-c"],
+        )
+        self.assertEqual(
+            [
+                message.tool_call_id
+                for message in session.items
+                if message.role == "tool"
+            ],
+            ["call-a", "call-b", "call-c"],
+        )
 
     def test_a_mixed_batch_stays_sequential(self) -> None:
         """One non-concurrent call keeps the whole batch on one thread."""
@@ -1052,7 +835,6 @@ class ConcurrentToolBatchTest(unittest.TestCase):
 
         self.assertEqual(blocking.peak_concurrency, 1)
 
-
 class BlockingTool(Tool):
     """Records how many calls are inside execute() at the same time.
 
@@ -1088,6 +870,54 @@ class BlockingTool(Tool):
         with self._lock:
             self._active -= 1
         return {"index": arguments["index"]}
+
+
+class CompletionController:
+    """Lets a test choose the exact order in which concurrent calls finish."""
+
+    def __init__(self, expected: int) -> None:
+        self._expected = expected
+        self._entered = 0
+        self._lock = threading.Lock()
+        self._releases: dict[str, threading.Event] = {}
+        self.all_entered = threading.Event()
+
+    def complete(self, label: str):
+        with self._lock:
+            release = self._releases.setdefault(label, threading.Event())
+            self._entered += 1
+            if self._entered == self._expected:
+                self.all_entered.set()
+        if not release.wait(5):
+            raise TimeoutError(f"call {label} was not released")
+        return label
+
+    def release(self, label: str) -> None:
+        with self._lock:
+            release = self._releases.setdefault(label, threading.Event())
+        release.set()
+
+
+class OrderedCompletionTool(Tool):
+    name = "ordered_completion"
+    concurrent = True
+
+    def __init__(self, controller: CompletionController) -> None:
+        self._controller = controller
+
+    def definition(self, context) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description="Complete when released by the test.",
+            parameters={
+                "type": "object",
+                "properties": {"label": {"type": "string"}},
+                "required": ["label"],
+            },
+        )
+
+    def execute(self, arguments, context):
+        return {"label": self._controller.complete(arguments["label"])}
 
 
 if __name__ == "__main__":

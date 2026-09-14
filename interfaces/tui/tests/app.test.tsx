@@ -244,4 +244,56 @@ describe('App', () => {
       expect(lastFrame()).toContain('echo hi');
     });
   });
+
+  it('updates a later tool when it completes before an earlier call', async () => {
+    const { lastFrame } = renderApp();
+    await waitForReady(lastFrame);
+
+    emit({
+      type: 'tool_call',
+      turn_id: 't1',
+      tool_call: { id: 'call-a', name: 'subagent', arguments: { task: 'A' } },
+      tool_index: 1,
+      tool_count: 3,
+    });
+    emit({
+      type: 'tool_call',
+      turn_id: 't1',
+      tool_call: { id: 'call-b', name: 'subagent', arguments: { task: 'B' } },
+      tool_index: 2,
+      tool_count: 3,
+    });
+    emit({
+      type: 'tool_call',
+      turn_id: 't1',
+      tool_call: { id: 'call-c', name: 'subagent', arguments: { task: 'C' } },
+      tool_index: 3,
+      tool_count: 3,
+    });
+    await waitFor(() => {
+      expect(lastFrame()).toContain('[1/3]');
+      expect(lastFrame()).toContain('[2/3]');
+      expect(lastFrame()).toContain('[3/3]');
+    });
+
+    emit({
+      type: 'tool_result',
+      turn_id: 't1',
+      tool_call_id: 'call-b',
+      name: 'subagent',
+      ok: true,
+      error: null,
+      tool_index: 2,
+      tool_count: 3,
+    });
+
+    await waitFor(() => {
+      const frame = lastFrame() ?? '';
+      expect(frame).toContain('[1/3]');
+      expect(frame).toContain('subagent task=A');
+      expect(frame).toContain('[2/3] ✓ subagent task=B');
+      expect(frame).toContain('[3/3]');
+      expect(frame).toContain('subagent task=C');
+    });
+  });
 });

@@ -70,7 +70,9 @@ function EntryView({ entry }: { entry: Entry }): React.ReactElement {
 
 /**
  * Settled entries render inside <Static> so Ink writes them once instead
- * of repainting the whole transcript on every frame.
+ * of repainting the whole transcript on every frame. Everything from the
+ * earliest live entry onward stays dynamic: concurrent tools can complete
+ * out of order, so a running call may precede an already completed call.
  */
 export function Transcript({ state }: { state: State }): React.ReactElement {
   const isLive = (entry: Entry): boolean =>
@@ -78,8 +80,8 @@ export function Transcript({ state }: { state: State }): React.ReactElement {
       !entry.settled) ||
     (entry.kind === 'tool' && entry.state === 'running');
 
-  let split = state.entries.length;
-  while (split > 0 && isLive(state.entries[split - 1]!)) split -= 1;
+  const firstLive = state.entries.findIndex(isLive);
+  const split = firstLive === -1 ? state.entries.length : firstLive;
 
   const settled = state.entries.slice(0, split);
   const live = state.entries.slice(split);

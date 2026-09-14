@@ -118,6 +118,14 @@ token 估算刻意取各家计价模型的**上界**（固定 tile 与按面积�
 
 ## 子 Agent 角色
 
+并行 Tool Batch 明确区分三种顺序：
+
+* **Invocation order**：模型发出 Tool Call 的顺序；`ToolCallEvent` 按此顺序输出。
+* **Completion order**：Tool 实际执行完成的顺序；`ToolResultEvent` 按此顺序立即输出，避免较快的调用等待较慢的前序调用。
+* **Commit order**：Tool Result 写入 Session 并回灌模型的顺序；始终保持 Invocation order，以便每个结果稳定对应模型原始的 Tool Call 序列。
+
+因此模型发出 `A → B → C`、实际完成 `B → C → A` 时，UI 会立即收到 `B → C → A` 的完成事件，而 Session 仍写入 `A → B → C`。顺序语义由 Agent Runtime 统一实现，普通并行 Tool 和 `subagent` 完全一致。
+
 `subagent` 是唯一的委派入口，调用形式为 `subagent(role, task)`。角色在 `agent_config.json` 的 `subagent_roles` 中定义，角色名会写进 Tool Schema 的 `role` 枚举，新增角色只需加一段配置：
 
 ```json
