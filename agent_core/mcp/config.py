@@ -5,19 +5,23 @@ from typing import Literal
 
 
 McpTransport = Literal["stdio", "streamable_http"]
-McpApproval = Literal["never", "prompt"]
 
 _SERVER_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
 _COMMON_FIELDS = {
     "enabled",
     "transport",
-    "tool_allowlist",
-    "approval",
+    "tools",
     "startup_timeout_seconds",
     "call_timeout_seconds",
 }
 _STDIO_FIELDS = _COMMON_FIELDS | {"command", "args", "cwd", "env"}
 _HTTP_FIELDS = _COMMON_FIELDS | {"url", "headers"}
+
+
+@dataclass(frozen=True)
+class McpToolConfig:
+    enabled: frozenset[str] | None = None
+    require_approval: frozenset[str] | None = None
 
 
 @dataclass(frozen=True)
@@ -31,8 +35,7 @@ class McpServerConfig:
     env: dict[str, str] = field(default_factory=dict)
     url: str | None = None
     headers: dict[str, str] = field(default_factory=dict)
-    tool_allowlist: frozenset[str] | None = None
-    approval: McpApproval = "prompt"
+    tools: McpToolConfig = field(default_factory=McpToolConfig)
     startup_timeout_seconds: int = 15
     call_timeout_seconds: int = 60
 
@@ -71,24 +74,14 @@ def _load_server(name: object, value: object) -> McpServerConfig:
     if not isinstance(value, dict):
         raise ValueError(f"config field '{path}' must be an object")
 
-    transport = value.get("transport")
-    if transport not in ("stdio", "streamable_http"):
-        raise ValueError(
-            f"config field '{path}.transport' must be 'stdio' or "
-            "'streamable_http'"
-        )
+    transport = _transport(value, path)
     allowed_fields = (
         _STDIO_FIELDS if transport == "stdio" else _HTTP_FIELDS
     )
     _reject_unknown(value, allowed_fields, path)
 
     enabled = _boolean(value, "enabled", path, True)
-    approval = value.get("approval", "prompt")
-    if approval not in ("never", "prompt"):
-        raise ValueError(
-            f"config field '{path}.approval' must be 'never' or 'prompt'"
-        )
-    allowlist = _optional_string_set(value, "tool_allowlist", path)
+    tools = _tool_config(value.get("tools"), path)
     startup_timeout = _positive_integer(
         value, "startup_timeout_seconds", path, 15
     )
@@ -109,8 +102,7 @@ def _load_server(name: object, value: object) -> McpServerConfig:
             args=args,
             cwd=cwd,
             env=env,
-            tool_allowlist=allowlist,
-            approval=approval,
+            tools=tools,
             startup_timeout_seconds=startup_timeout,
             call_timeout_seconds=call_timeout,
         )
@@ -125,10 +117,86 @@ def _load_server(name: object, value: object) -> McpServerConfig:
         enabled=enabled,
         url=url,
         headers=headers,
-        tool_allowlist=allowlist,
-        approval=approval,
+        tools=tools,
         startup_timeout_seconds=startup_timeout,
         call_timeout_seconds=call_timeout,
+    )
+
+
+def _tool_config(value: object, server_path: str) -> McpToolConfig:
+    path = f"{server_path}.tools"
+    if value is None:
+        return McpToolConfig()
+    if not isinstance(value, dict):
+        raise ValueError(f"config field '{path}' must be an object")
+    _reject_unknown(value, {"enabled", "approval"}, path)
+
+    enabled = _optional_string_set(value, "enabled", path)
+    approval = value.get("approval", "always")
+    if approval == "always":
+        require_approval = None
+    elif approval == "never":
+        require_approval = frozenset()
+    elif isinstance(approval, dict):
+        _reject_unknown(approval, {"always"}, f"{path}.approval")
+        if "always" not in approval:
+            raise ValueError(
+                f"config field '{path}.approval.always' is required"
+            )
+        require_approval = _string_set(
+            approval["always"],
+            f"{path}.approval.always",
+        )
+    else:
+        raise ValueError(
+            f"config field '{path}.approval' must be 'always', 'never', "
+            "or an object with an 'always' array"
+        )
+
+    if (
+        enabled is not None
+        and require_approval is not None
+        and not require_approval <= enabled
+    ):
+        unknown = ", ".join(sorted(require_approval - enabled))
+        raise ValueError(
+            f"config field '{path}.approval.always' contains tools not "
+            f"listed in '{path}.enabled': {unknown}"
+        )
+    return McpToolConfig(
+        enabled=enabled,
+        require_approval=require_approval,
+    )
+
+
+def _transport(
+    data: dict[object, object],
+    path: str,
+) -> McpTransport:
+    transport = data.get("transport")
+    if "transport" in data:
+        if transport == "stdio":
+            return "stdio"
+        if transport == "streamable_http":
+            return "streamable_http"
+        raise ValueError(
+            f"config field '{path}.transport' must be 'stdio' or "
+            "'streamable_http'"
+        )
+
+    has_command = "command" in data
+    has_url = "url" in data
+    if has_command and has_url:
+        raise ValueError(
+            f"config field '{path}' cannot infer transport because both "
+            "'command' and 'url' are present"
+        )
+    if has_command:
+        return "stdio"
+    if has_url:
+        return "streamable_http"
+    raise ValueError(
+        f"config field '{path}' must specify 'transport', 'command', or 'url'"
     )
 
 
@@ -203,14 +271,24 @@ def _optional_string_set(
 ) -> frozenset[str] | None:
     if field not in data:
         return None
-    values = _string_tuple(data, field, path)
+    return _string_set(data[field], f"{path}.{field}")
+
+
+def _string_set(value: object, path: str) -> frozenset[str]:
+    if not isinstance(value, list) or any(
+        not isinstance(item, str) for item in value
+    ):
+        raise ValueError(
+            f"config field '{path}' must be an array of strings"
+        )
+    values = tuple(value)
     if any(not value for value in values):
         raise ValueError(
-            f"config field '{path}.{field}' cannot contain empty strings"
+            f"config field '{path}' cannot contain empty strings"
         )
     if len(set(values)) != len(values):
         raise ValueError(
-            f"config field '{path}.{field}' cannot contain duplicates"
+            f"config field '{path}' cannot contain duplicates"
         )
     return frozenset(values)
 

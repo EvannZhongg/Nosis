@@ -34,16 +34,13 @@ class McpApprovalPolicy:
     def __init__(
         self,
         request_permission: Callable[[ToolCall], bool],
-        prompt_servers: set[str] | frozenset[str],
+        requires_approval: Callable[[str], bool],
     ) -> None:
         self._request_permission = request_permission
-        self._prompt_servers = frozenset(prompt_servers)
+        self._requires_approval = requires_approval
 
     def authorize(self, call: ToolCall) -> None:
-        if not call.name.startswith("mcp__"):
-            return
-        parts = call.name.split("__", 2)
-        if len(parts) != 3 or parts[1] not in self._prompt_servers:
+        if not self._requires_approval(call.name):
             return
         if not self._request_permission(call):
             raise PermissionError("MCP tool call was not approved")

@@ -55,7 +55,13 @@ from .tools import (
     create_builtin_tools,
     load_tool_config,
 )
-from .mcp import McpConfig, McpServerConfig, McpTool, load_mcp_config
+from .mcp import (
+    McpConfig,
+    McpServerConfig,
+    McpTool,
+    McpToolConfig,
+    load_mcp_config,
+)
 from .workspace import Workspace
 
 __all__ = [
@@ -116,6 +122,7 @@ __all__ = [
     "McpConfig",
     "McpServerConfig",
     "McpTool",
+    "McpToolConfig",
     "load_mcp_config",
     "load_agent_config",
     "load_tool_config",

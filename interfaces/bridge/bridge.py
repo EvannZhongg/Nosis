@@ -112,13 +112,19 @@ class Bridge:
             self._deferred.append(message)
 
     def request_mcp_permission(self, call) -> bool:
-        parts = call.name.split("__", 2)
-        server = parts[1] if len(parts) == 3 else None
+        identity = (
+            self._mcp.tool_identity(call.name)
+            if self._mcp is not None
+            else None
+        )
+        server, tool_name = (
+            identity if identity is not None else (None, call.name)
+        )
         return self.request_permission(
             f"{call.name}({call.arguments})",
             kind="mcp",
             server=server,
-            tool_name=call.name,
+            tool_name=tool_name,
         )
 
     def start(self, message: dict[str, object]) -> None:
@@ -245,7 +251,7 @@ class Bridge:
                 ShellApprovalPolicy(self.request_permission),
                 McpApprovalPolicy(
                     self.request_mcp_permission,
-                    self._mcp.approval_servers,
+                    self._mcp.requires_approval,
                 ),
             ),
             sessions_directory=sessions_directory,

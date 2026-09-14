@@ -54,6 +54,7 @@ class McpClientManager:
         self._thread: threading.Thread | None = None
         self._startup_error: BaseException | None = None
         self._tools: tuple[Tool, ...] = ()
+        self._tool_origins: dict[str, tuple[str, str]] = {}
         self._servers = {
             server.name: server
             for server in config.servers
@@ -64,13 +65,19 @@ class McpClientManager:
     def tools(self) -> tuple[Tool, ...]:
         return self._tools
 
-    @property
-    def approval_servers(self) -> frozenset[str]:
-        return frozenset(
-            name
-            for name, config in self._servers.items()
-            if config.approval == "prompt"
-        )
+    def requires_approval(self, qualified_name: str) -> bool:
+        origin = self._tool_origins.get(qualified_name)
+        if origin is None:
+            return False
+        server, remote_name = origin
+        required = self._servers[server].tools.require_approval
+        return required is None or remote_name in required
+
+    def tool_identity(
+        self,
+        qualified_name: str,
+    ) -> tuple[str, str] | None:
+        return self._tool_origins.get(qualified_name)
 
     def start(self) -> tuple[Tool, ...]:
         if not self._servers:
@@ -163,6 +170,10 @@ class McpClientManager:
                                 f"duplicate MCP tool name '{name}'"
                             )
                         names.add(name)
+                        self._tool_origins[name] = (
+                            config.name,
+                            tool.remote_name,
+                        )
                         tools.append(tool)
                     self._emit(config.name, "ready", len(server_tools))
                 self._tools = tuple(tools)
@@ -235,8 +246,8 @@ class McpClientManager:
             )
             for remote in result.tools:
                 if (
-                    config.tool_allowlist is not None
-                    and remote.name not in config.tool_allowlist
+                    config.tools.enabled is not None
+                    and remote.name not in config.tools.enabled
                 ):
                     continue
                 input_schema = getattr(remote, "input_schema", None)

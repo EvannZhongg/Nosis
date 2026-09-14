@@ -58,7 +58,9 @@
 
 ### MCP
 
-在同一 `agent_config.json` 的 `mcp` 字段配置 MCP Server，支持 `stdio` 和 `streamable_http`。HTTP Server 使用 `url`，请求头中的 `${ENV_NAME}` 从环境变量读取。启用后工具以 `mcp__服务器名__工具名` 注册；`tool_allowlist` 可限制暴露的工具，`approval: "prompt"` 会在调用前请求人工确认。配置采用严格校验，传输方式不匹配、未知字段或缺少必填字段都会启动失败。
+在同一 `agent_config.json` 的 `mcp` 字段配置 MCP Server，支持 `stdio` 和 `streamable_http`。`transport` 可以显式填写；省略时，有 `command` 的 Server 推断为 `stdio`，有 `url` 的 Server 推断为 `streamable_http`，两者同时存在或同时缺失时拒绝配置。HTTP Server 使用 `url`，请求头中的 `${ENV_NAME}` 从环境变量读取。启用后工具以 `mcp__服务器名__工具名` 注册。
+
+每个 Server 的 `tools.enabled` 用于限制暴露给模型的远程工具；省略时暴露全部工具，空数组表示不暴露工具。`tools.approval` 可以省略，默认按 `"always"` 处理，即每次调用都请求人工确认；`"never"` 表示无需确认；也可以用 `{"always": ["工具名"]}` 仅确认指定工具。配置采用严格校验，传输方式不匹配、未知字段或缺少必填字段都会启动失败。
 
 ```json
 {
@@ -70,8 +72,12 @@
         "command": "npx",
         "args": ["-y", "@modelcontextprotocol/server-filesystem", "."],
         "cwd": ".",
-        "tool_allowlist": ["read_file"],
-        "approval": "prompt"
+        "tools": {
+          "enabled": ["read_file", "write_file"],
+          "approval": {
+            "always": ["write_file"]
+          }
+        }
       }
     }
   }
