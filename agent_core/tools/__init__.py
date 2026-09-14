@@ -18,6 +18,7 @@ from .builtin import (
     ShellTool,
     SubagentTool,
     WebSearchTool,
+    WriteFileTool,
     builtin_catalog,
 )
 from .catalog import ToolCatalog, ToolSet
@@ -53,6 +54,7 @@ __all__ = [
     "ToolResult",
     "ToolSet",
     "WebSearchTool",
+    "WriteFileTool",
     "builtin_catalog",
     "load_tool_config",
     "resolve_image",

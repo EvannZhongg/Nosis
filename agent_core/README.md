@@ -17,6 +17,7 @@
     "tools": {
       "read_file": true,
       "edit_file": true,
+      "write_file": true,
       "search_files": true,
       "list_directory": true,
       "shell": true,
@@ -114,7 +115,7 @@ token 估算刻意取各家计价模型的**上界**（固定 tile 与按面积�
 
 ## 内置 Tool
 
-`read_file`、`edit_file`、`search_files`、`list_directory`、`shell`、`web_search`、`subagent`、`read_image` 和 `analyze_image` 构成共享的 Tool Catalog（后两个不由开关控制，见上文）。Catalog 中的 Tool 实例无状态，由 Runtime 内所有 Agent 共用；每个角色按名字从 Catalog 中筛选出自己的 ToolSet，不重复创建实例。Runtime 依赖（Workspace、Command Executor、Session 根目录、模型是否能读图、视觉 Provider、MCP、子 Agent Runtime）通过 `ToolExecutionContext` 在调用时传入；缺少依赖的 Tool 不会出现在 ToolSet 中，而不是在调用时报错。文件 Tool 只接受 Workspace 内的相对路径；`read_file` 和 `read_image` 另外接受 `.nosis/sessions/...` 形式的 Session Artifact 路径，两者共用同一个路径解析器。`search_files` 默认跳过超大文件、非文本文件以及 `.git`、`node_modules`、`build` 等目录。`shell` 每次执行前需要授权，并返回退出码、标准输出、标准错误和超时信息。Shell 的命令流先写入临时 spool，返回有界的头尾预览；如果结果过大，Runtime 会把完整结果保存为 Session Artifact，模型可通过 `read_file` 分段读取。`web_search` 默认关闭，通过 [Exa](https://exa.ai) 检索公网内容，单次最多返回 10 条结果，启用时需要 `EXA_API_KEY`（可在 [Exa Search](https://exa.ai/products/search) 申请）。单个 Tool Result 回灌模型最多 16K 字符，较大的结果会保存为 Session Artifact。
+`read_file`、`edit_file`、`write_file`、`search_files`、`list_directory`、`shell`、`web_search`、`subagent`、`read_image` 和 `analyze_image` 构成共享的 Tool Catalog（后两个不由开关控制，见上文）。Catalog 中的 Tool 实例无状态，由 Runtime 内所有 Agent 共用；每个角色按名字从 Catalog 中筛选出自己的 ToolSet，不重复创建实例。Runtime 依赖（Workspace、Command Executor、Session 根目录、模型是否能读图、视觉 Provider、MCP、子 Agent Runtime）通过 `ToolExecutionContext` 在调用时传入；缺少依赖的 Tool 不会出现在 ToolSet 中，而不是在调用时报错。文件 Tool 只接受 Workspace 内的相对路径；`read_file` 和 `read_image` 另外接受 `.nosis/sessions/...` 形式的 Session Artifact 路径，两者共用同一个路径解析器。`write_file` 以 UTF-8 整文件内容写入：目标不存在时创建，目标存在时必须显式设置 `overwrite=true`（否则应使用 `edit_file`），并通过同目录临时文件、flush/fsync、原子替换完成落盘。`search_files` 默认跳过超大文件、非文本文件以及 `.git`、`node_modules`、`build` 等目录。`shell` 每次执行前需要授权，并返回退出码、标准输出、标准错误和超时信息。Shell 的命令流先写入临时 spool，返回有界的头尾预览；如果结果过大，Runtime 会把完整结果保存为 Session Artifact，模型可通过 `read_file` 分段读取。`web_search` 默认关闭，通过 [Exa](https://exa.ai) 检索公网内容，单次最多返回 10 条结果，启用时需要 `EXA_API_KEY`（可在 [Exa Search](https://exa.ai/products/search) 申请）。单个 Tool Result 回灌模型最多 16K 字符，较大的结果会保存为 Session Artifact。
 
 ## 子 Agent 角色
 

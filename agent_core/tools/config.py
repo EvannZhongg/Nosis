@@ -4,6 +4,7 @@ from dataclasses import dataclass
 TOOL_NAMES = (
     "read_file",
     "edit_file",
+    "write_file",
     "search_files",
     "list_directory",
     "shell",
