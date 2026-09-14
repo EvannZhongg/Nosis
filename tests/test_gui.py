@@ -1,10 +1,13 @@
 import asyncio
 import json
 import os
+import signal
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock, patch
 
 from agent_core import (
     JsonlSessionStore,
@@ -74,6 +77,70 @@ class FakeBridge:
 
     async def close(self) -> None:
         self.closed = True
+
+
+@unittest.skipIf(TestClient is None, "Install the gui extra to test the GUI")
+class BridgeProcessTest(unittest.TestCase):
+    def test_cancel_does_not_interrupt_an_idle_starting_bridge(self) -> None:
+        process = SimpleNamespace(returncode=None)
+        process.send_signal = Mock()
+        bridge = server.BridgeProcess(process)
+
+        bridge.cancel_turn()
+
+        process.send_signal.assert_not_called()
+
+    def test_cancel_interrupts_a_requested_turn(self) -> None:
+        stdin = SimpleNamespace(
+            is_closing=lambda: False,
+            write=Mock(),
+        )
+        process = SimpleNamespace(returncode=None, stdin=stdin)
+        process.send_signal = Mock()
+        bridge = server.BridgeProcess(process)
+
+        bridge.send({"type": "user_turn", "turn_id": "t1", "text": "hi"})
+        bridge.cancel_turn()
+
+        process.send_signal.assert_called_once_with(
+            signal.CTRL_BREAK_EVENT if os.name == "nt" else signal.SIGINT
+        )
+
+    @unittest.skipIf(os.name == "nt", "POSIX process groups only")
+    def test_forced_close_kills_the_bridge_process_group(self) -> None:
+        process = SimpleNamespace(returncode=None, pid=123)
+        bridge = server.BridgeProcess(process)
+
+        with patch("interfaces.gui.server.os.killpg") as killpg:
+            bridge._kill()
+
+        killpg.assert_called_once_with(123, signal.SIGKILL)
+
+
+@unittest.skipIf(TestClient is None, "Install the gui extra to test the GUI")
+class BridgeProcessSpawnTest(unittest.IsolatedAsyncioTestCase):
+    async def test_spawn_creates_a_private_process_group(self) -> None:
+        process = SimpleNamespace()
+        spawn = AsyncMock(return_value=process)
+
+        with patch(
+            "interfaces.gui.server.asyncio.create_subprocess_exec",
+            spawn,
+        ):
+            await server.BridgeProcess.spawn(Workspace(Path.cwd()))
+
+        self.assertEqual(
+            spawn.call_args.kwargs["creationflags"],
+            (
+                subprocess.CREATE_NEW_PROCESS_GROUP
+                if os.name == "nt"
+                else 0
+            ),
+        )
+        self.assertEqual(
+            spawn.call_args.kwargs["start_new_session"],
+            os.name != "nt",
+        )
 
 
 @unittest.skipIf(TestClient is None, "Install the gui extra to test the GUI")

@@ -32,11 +32,11 @@ def main() -> None:
         # with CTRL_BREAK: unwind the agent loop exactly as Ctrl+C would.
         signal.signal(signal.SIGBREAK, _interrupt)
     protocol_out = _claim_stdout()
-
-    from .bridge import Bridge
-
-    bridge = Bridge(sys.stdin, protocol_out)
+    bridge = None
     try:
+        from .bridge import Bridge
+
+        bridge = Bridge(sys.stdin, protocol_out)
         first = bridge.read_message()
         if first is None:
             return
@@ -50,16 +50,21 @@ def main() -> None:
             )
             raise SystemExit(1)
         bridge.start(first)
+        bridge.serve()
+    except KeyboardInterrupt:
+        return
     except SystemExit:
         raise
     except BaseException as error:
-        bridge.emit(
-            "fatal",
-            error={"type": type(error).__name__, "message": str(error)},
-        )
+        if bridge is not None:
+            bridge.emit(
+                "fatal",
+                error={"type": type(error).__name__, "message": str(error)},
+            )
         raise SystemExit(1)
-
-    bridge.serve()
+    finally:
+        if bridge is not None:
+            bridge.close()
 
 
 if __name__ == "__main__":

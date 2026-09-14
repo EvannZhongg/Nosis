@@ -1,5 +1,3 @@
-from exa_py import Exa
-
 from ..base import JSONValue, Tool, ToolDefinition
 from ..context import ToolExecutionContext
 
@@ -98,6 +96,8 @@ class WebSearchTool(Tool):
         # the Runtime and may run on several threads, so it caches nothing.
         # A missing EXA_API_KEY therefore fails this call rather than
         # preventing the agent from starting.
+        from exa_py import Exa
+
         response = Exa().search(
             query,
             type="auto",

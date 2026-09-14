@@ -858,7 +858,7 @@ class WebSearchToolTest(unittest.TestCase):
         tool = _Bound(WebSearchTool(), _TMP_WORKSPACE)
 
         with patch(
-            "agent_core.tools.builtin.web_search.Exa",
+            "exa_py.Exa",
             return_value=client,
         ) as exa:
             result = tool.execute({"query": "exa search api"})
@@ -908,7 +908,7 @@ class WebSearchToolTest(unittest.TestCase):
         tool = _Bound(WebSearchTool(), _TMP_WORKSPACE)
 
         with patch(
-            "agent_core.tools.builtin.web_search.Exa",
+            "exa_py.Exa",
             return_value=client,
         ):
             tool.execute(
@@ -947,7 +947,7 @@ class WebSearchToolTest(unittest.TestCase):
         tool = _Bound(WebSearchTool(), _TMP_WORKSPACE)
 
         with patch(
-            "agent_core.tools.builtin.web_search.Exa",
+            "exa_py.Exa",
             return_value=FakeExa(),
         ):
             with self.assertRaisesRegex(

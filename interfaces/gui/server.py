@@ -60,6 +60,8 @@ class BridgeProcess:
 
     def __init__(self, process: asyncio.subprocess.Process) -> None:
         self._process = process
+        self._ready = False
+        self._turn_running = False
 
     @classmethod
     async def spawn(cls, workspace: Workspace) -> "BridgeProcess":
@@ -75,6 +77,7 @@ class BridgeProcess:
             creationflags=(
                 subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
             ),
+            start_new_session=os.name != "nt",
         )
         return cls(process)
 
@@ -82,6 +85,8 @@ class BridgeProcess:
         stdin = self._process.stdin
         if stdin is None or stdin.is_closing():
             return
+        if message.get("type") == "user_turn":
+            self._turn_running = True
         stdin.write(
             (json.dumps(message, ensure_ascii=False) + "\n").encode("utf-8")
         )
@@ -97,11 +102,21 @@ class BridgeProcess:
                 return None
             stripped = line.strip()
             if stripped:
-                return json.loads(stripped)
+                message = json.loads(stripped)
+                message_type = message.get("type")
+                if message_type == "ready":
+                    self._ready = True
+                if message_type in {
+                    "turn_completed",
+                    "turn_cancelled",
+                    "turn_failed",
+                }:
+                    self._turn_running = False
+                return message
 
     def cancel_turn(self) -> None:
         """Interrupt the running turn, as Esc does in the TUI."""
-        if self._process.returncode is None:
+        if self._turn_running and self._process.returncode is None:
             # Windows has no SIGINT for a child: CTRL_BREAK is the signal
             # that reaches the bridge, which turns it into KeyboardInterrupt.
             self._process.send_signal(
@@ -112,7 +127,12 @@ class BridgeProcess:
         # A page that goes away mid-turn would otherwise take the running
         # turn down with the process; the interrupt lets the bridge store
         # what the turn already produced before it shuts down.
-        self.cancel_turn()
+        if not self._ready and self._process.returncode is None:
+            self._process.send_signal(
+                signal.CTRL_BREAK_EVENT if os.name == "nt" else signal.SIGINT
+            )
+        else:
+            self.cancel_turn()
         self.send({"type": "shutdown"})
         if self._process.stdin is not None:
             self._process.stdin.close()
@@ -141,7 +161,10 @@ class BridgeProcess:
                 stderr=subprocess.DEVNULL,
             )
             return
-        self._process.kill()
+        try:
+            os.killpg(self._process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
 
 def create_app(

@@ -440,28 +440,29 @@ class Bridge:
         return None
 
     def serve(self) -> None:
-        try:
-            while True:
-                try:
-                    message = self.read_message()
-                except (json.JSONDecodeError, ValueError) as error:
-                    self.emit(
-                        "fatal",
-                        error={"type": "ProtocolError", "message": str(error)},
-                    )
-                    raise SystemExit(1)
-                except KeyboardInterrupt:
-                    continue  # Interrupted while idle: nothing to cancel.
+        while True:
+            try:
+                message = self.read_message()
+            except (json.JSONDecodeError, ValueError) as error:
+                self.emit(
+                    "fatal",
+                    error={"type": "ProtocolError", "message": str(error)},
+                )
+                raise SystemExit(1)
+            except KeyboardInterrupt:
+                continue  # Interrupted while idle: nothing to cancel.
 
-                if message is None or message["type"] == "shutdown":
-                    return
-                if message["type"] == "start":
-                    self.start(message)
-                elif message["type"] == "user_turn":
-                    self.run_turn(message)
-        finally:
-            if self._mcp is not None:
-                self._mcp.close()
+            if message is None or message["type"] == "shutdown":
+                return
+            if message["type"] == "start":
+                self.start(message)
+            elif message["type"] == "user_turn":
+                self.run_turn(message)
+
+    def close(self) -> None:
+        if self._mcp is not None:
+            self._mcp.close()
+            self._mcp = None
 
 
 def _error_payload(error: Exception) -> dict[str, str]:

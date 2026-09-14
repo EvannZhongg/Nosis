@@ -115,9 +115,17 @@ export function Chat({ session, disabled, models, model, onModelChange, onBusyCh
     socketRef.current = null;
     // Establish the bridge as soon as the session is mounted.  The GUI and
     // runtime therefore come up together; sending a prompt is no longer what
-    // starts the agent process.
-    if (!disabled && model) connect();
+    // starts the agent process. Defer the side effect by one task so React
+    // StrictMode can run its setup/cleanup probe without spawning a throwaway
+    // bridge and its MCP servers.
+    let connectionTimer: ReturnType<typeof setTimeout> | null = null;
+    if (!disabled && model) {
+      connectionTimer = setTimeout(() => {
+        if (socketRef.current === null) connect();
+      }, 0);
+    }
     return () => {
+      if (connectionTimer !== null) clearTimeout(connectionTimer);
       socketRef.current?.close();
       socketRef.current = null;
       if (noticeTimeoutRef.current) clearTimeout(noticeTimeoutRef.current);

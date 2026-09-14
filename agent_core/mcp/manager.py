@@ -51,7 +51,10 @@ class McpClientManager:
         self._on_status = on_status
         self._requests: queue.Queue[_Request | _Stop] = queue.Queue()
         self._ready = threading.Event()
+        self._closing = threading.Event()
         self._thread: threading.Thread | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._task: asyncio.Task[None] | None = None
         self._startup_error: BaseException | None = None
         self._tools: tuple[Tool, ...] = ()
         self._tool_origins: dict[str, tuple[str, str]] = {}
@@ -128,16 +131,35 @@ class McpClientManager:
         if thread is None:
             return
         if thread.is_alive():
+            self._closing.set()
             self._requests.put(_Stop())
+            if not self._ready.is_set():
+                loop = self._loop
+                task = self._task
+                if loop is not None and task is not None:
+                    try:
+                        loop.call_soon_threadsafe(task.cancel)
+                    except RuntimeError:
+                        pass
             thread.join(timeout=5)
         self._thread = None
 
     def _run_thread(self) -> None:
         try:
-            asyncio.run(self._serve())
+            asyncio.run(self._run())
         except BaseException as error:
-            self._startup_error = _unwrap_exception_group(error)
+            if not self._closing.is_set():
+                self._startup_error = _unwrap_exception_group(error)
             self._ready.set()
+
+    async def _run(self) -> None:
+        self._loop = asyncio.get_running_loop()
+        self._task = asyncio.current_task()
+        try:
+            await self._serve()
+        finally:
+            self._task = None
+            self._loop = None
 
     async def _serve(self) -> None:
         sessions: dict[str, ClientSession] = {}
