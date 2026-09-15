@@ -33,6 +33,7 @@ from .media import (
     SUPPORTED_IMAGE_MIME_TYPES,
     UnsupportedImageError,
     estimate_image_tokens,
+    image_extension,
     probe_image,
 )
 from .session import Message, MessageOrigin, Session
@@ -165,6 +166,7 @@ __all__ = [
     "Workspace",
     "builtin_catalog",
     "estimate_image_tokens",
+    "image_extension",
     "load_agent_config",
     "load_mcp_config",
     "load_tool_config",

@@ -31,6 +31,7 @@ from agent_core import (
     ToolExecutionContext,
     UnsupportedImageError,
     Workspace,
+    image_extension,
     probe_image,
 )
 
@@ -290,26 +291,32 @@ def create_app(
         attachment_root.mkdir(parents=True, exist_ok=True)
         attachments = []
         for upload in files:
-            mime_type = upload.content_type or ""
-            suffix_by_type = {
-                "image/png": ".png",
-                "image/jpeg": ".jpg",
-                "image/gif": ".gif",
-                "image/webp": ".webp",
-            }
-            if mime_type not in suffix_by_type:
-                raise HTTPException(status_code=415, detail="只能上传图片附件。")
-            filename = f"{uuid4().hex}{suffix_by_type[mime_type]}"
-            path = attachment_root / filename
+            # The bytes decide the type, not the media type the browser
+            # declared: the same probe used on the way into the model's
+            # context is what accepts the file here, and the extension it
+            # reports is what the stored copy is named after.
+            path = attachment_root / uuid4().hex
             try:
                 with path.open("wb") as target:
                     shutil.copyfileobj(upload.file, target)
+                # No size limit: a large image is still worth showing, and
+                # the 5 MiB ceiling belongs to the model-bound route, which
+                # rejects it with a message naming the actual size.
+                info = probe_image(path, max_bytes=None)
+            except UnsupportedImageError as error:
+                path.unlink(missing_ok=True)
+                raise HTTPException(
+                    status_code=415, detail="只能上传图片附件。"
+                ) from error
             except OSError as error:
+                path.unlink(missing_ok=True)
                 raise HTTPException(status_code=500, detail=str(error)) from error
+            named = path.with_name(path.name + image_extension(info.mime_type))
+            path.replace(named)
             attachments.append({
                 "type": "image",
-                "path": f".nosis/attachments/{filename}",
-                "mime_type": mime_type,
+                "path": f".nosis/attachments/{named.name}",
+                "mime_type": info.mime_type,
             })
         return {"attachments": attachments}
 

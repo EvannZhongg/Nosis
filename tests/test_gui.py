@@ -594,6 +594,37 @@ class GuiTest(unittest.TestCase):
                 200,
             )
 
+    def test_upload_names_an_attachment_after_its_bytes(self) -> None:
+        """A declared media type never decides what an upload is."""
+        from tests.test_media import jpeg_bytes
+
+        with self.client() as client:
+            data = client.post(
+                "/api/attachments",
+                files=[("files", ("photo.png", jpeg_bytes(8, 8), "image/png"))],
+            ).json()
+
+        attachment = data["attachments"][0]
+        self.assertEqual(attachment["mime_type"], "image/jpeg")
+        self.assertTrue(attachment["path"].endswith(".jpg"))
+        self.assertTrue(
+            (self.root / attachment["path"]).is_file(),
+            attachment["path"],
+        )
+
+    def test_upload_rejects_a_file_that_is_not_an_image(self) -> None:
+        with self.client() as client:
+            response = client.post(
+                "/api/attachments",
+                files=[("files", ("notes.png", b"Hello Nosis", "image/png"))],
+            )
+
+        self.assertEqual(response.status_code, 415)
+        self.assertEqual(
+            list((self.root / ".nosis" / "attachments").iterdir()),
+            [],
+        )
+
     def test_rejects_foreign_origins_and_hosts(self) -> None:
         with self.client(FakeBridge()) as client:
             with self.assertRaises(WebSocketDisconnect):

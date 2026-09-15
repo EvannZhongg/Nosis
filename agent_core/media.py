@@ -35,12 +35,23 @@ MAX_IMAGE_BYTES = 5 * 1024 * 1024
 #: loading the whole image.
 _PROBE_BYTES = 512 * 1024
 
-SUPPORTED_IMAGE_MIME_TYPES = (
-    "image/png",
-    "image/jpeg",
-    "image/gif",
-    "image/webp",
-)
+#: Canonical extension per supported image type.  A stored copy of an
+#: image is named from the type that :func:`probe_image` read out of the
+#: bytes, never from the name or the media type its sender claimed.
+_IMAGE_EXTENSIONS: dict[str, str] = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+}
+
+SUPPORTED_IMAGE_MIME_TYPES = tuple(_IMAGE_EXTENSIONS)
+
+
+def image_extension(mime_type: str) -> str:
+    """Return the file extension for a probed image type."""
+    return _IMAGE_EXTENSIONS[mime_type]
+
 
 #: Fixed-tile pricing: a flat base plus a cost per 512-pixel tile.
 _TILE_BASE_TOKENS = 85
