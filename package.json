@@ -1,0 +1,21 @@
+{
+  "name": "nosis",
+  "private": true,
+  "version": "0.1.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "interfaces/protocol",
+    "interfaces/tui",
+    "interfaces/gui"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm test --workspaces --if-present"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
+  }
+}
