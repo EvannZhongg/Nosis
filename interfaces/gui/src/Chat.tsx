@@ -167,7 +167,7 @@ export function Chat({ session, workspaceOptions = [], disabled, models, model, 
       // A session without stored items would erase the live transcript.
       if (stored.items.length) showItems(stored.items);
     } catch {
-      // A turn that never persisted keeps the live transcript.
+      // A turn without stored transcript items keeps the live transcript.
     }
     onTurnEnd();
   }, [session.session_id, onBusyChange, onTurnEnd, showItems]);

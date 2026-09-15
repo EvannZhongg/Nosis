@@ -348,11 +348,10 @@ class Bridge:
                 **kwargs,
             )
         except (KeyboardInterrupt, Cancelled):
-            self._session.cancel_active_work(self._turn_id)
+            self._session.cancel_active_work()
             self.emit(
                 "turn_cancelled",
                 turn_id=self._turn_id,
-                persisted=True,
             )
             return
         except Exception as error:

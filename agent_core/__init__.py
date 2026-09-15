@@ -38,17 +38,11 @@ from .media import (
     probe_image,
 )
 from .session import (
-    JournalEvent,
     Message,
     MessageOrigin,
     Session,
-    ToolExecutionStatus,
-    Turn,
-    TurnStatus,
-    ToolExecution,
 )
 from .session_store import JsonlSessionStore
-from .projection import project_provider_messages
 from .subagent import (
     SubagentRole,
     SubagentRoleRegistry,
@@ -138,7 +132,6 @@ __all__ = [
     "McpToolConfig",
     "Message",
     "MessageOrigin",
-    "JournalEvent",
     "ProviderCapabilities",
     "ReadFileTool",
     "ReadImageTool",
@@ -146,11 +139,6 @@ __all__ = [
     "SUPPORTED_IMAGE_MIME_TYPES",
     "SearchFilesTool",
     "Session",
-    "ToolExecutionStatus",
-    "Turn",
-    "TurnStatus",
-    "ToolExecution",
-    "project_provider_messages",
     "ShellApprovalPolicy",
     "ShellTool",
     "SubagentRole",

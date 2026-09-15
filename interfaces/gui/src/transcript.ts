@@ -105,7 +105,7 @@ export function applyMessage(
         finished: true,
         notice: {
           level: "info",
-          text: message.persisted ? "已取消。" : "已取消，本轮未保存。",
+          text: "已取消。",
         },
       };
 

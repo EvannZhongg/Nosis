@@ -7,6 +7,19 @@ from agent_core import JsonlSessionStore, Message, Session, ToolCall
 
 
 class SessionJournalTest(unittest.TestCase):
+    def test_reused_client_turn_id_does_not_replace_previous_turn(self):
+        session = Session("s")
+        first = session.begin_turn("turn-1")
+        session.finish_turn("completed", first)
+        second = session.begin_turn("turn-1")
+        session.finish_turn("completed", second)
+
+        self.assertEqual(first, "turn-1")
+        self.assertNotEqual(second, first)
+        self.assertEqual(len(session.turns), 2)
+        self.assertEqual(session.turns[first].status, "completed")
+        self.assertEqual(session.turns[second].status, "completed")
+
     def test_projection_does_not_delete_an_unanswered_tool_call(self):
         session = Session("s")
         session.begin_turn("turn-1")

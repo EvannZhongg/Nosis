@@ -403,31 +403,6 @@ class ScriptedAgent:
             raise self._error
 
 
-class CheckpointingAgent:
-    """Stands in for an agent loop that stores every item as it settles."""
-
-    def __init__(
-        self,
-        session: Session,
-        tail: tuple[Message, ...] = (),
-        error: BaseException | None = None,
-    ) -> None:
-        self._session = session
-        self._tail = tail
-        self._error = error
-
-    def run(
-        self,
-        user_input: str,
-        on_event: object = None,
-        attachments: object = (),
-        turn_id: str | None = None,
-    ) -> None:
-        ScriptedAgent(self._session, self._tail, self._error).run(
-            user_input, on_event, attachments, turn_id
-        )
-
-
 class FailingAgent:
     """Stands in for a provider that fails before the agent loop runs."""
 
@@ -485,7 +460,6 @@ class InterruptedTurnTest(unittest.TestCase):
         )
 
         self.assertEqual(emitted(self.stdout)[-1]["type"], "turn_cancelled")
-        self.assertTrue(emitted(self.stdout)[-1]["persisted"])
         self.assertEqual(
             [message.content for message in self.stored_items()],
             ["do the work", "half an answer"],
@@ -507,7 +481,7 @@ class InterruptedTurnTest(unittest.TestCase):
             ["do the work"],
         )
 
-    def test_does_not_store_a_turn_that_produced_nothing(self) -> None:
+    def test_journal_records_a_turn_that_produced_nothing(self) -> None:
         self.start_turn(FailingAgent(self.session))
 
         failure = emitted(self.stdout)[-1]
@@ -517,7 +491,7 @@ class InterruptedTurnTest(unittest.TestCase):
         self.assertEqual(self.stored_items(), [])
         self.assertTrue(self.store.has_journal(self.session_id))
 
-    def test_drops_a_tool_call_whose_result_never_arrived(self) -> None:
+    def test_projection_excludes_a_tool_call_whose_result_never_arrived(self) -> None:
         self.start_turn(
             ScriptedAgent(
                 self.session,
@@ -564,9 +538,9 @@ class InterruptedTurnTest(unittest.TestCase):
             ["user", "assistant", "tool"],
         )
 
-    def test_stores_a_turn_as_each_item_settles(self) -> None:
+    def test_journal_stores_items_as_each_item_settles(self) -> None:
         self.start_turn(
-            CheckpointingAgent(
+            ScriptedAgent(
                 self.session,
                 tail=(Message(role="assistant", content="half an answer"),),
                 error=KeyboardInterrupt(),
@@ -574,15 +548,14 @@ class InterruptedTurnTest(unittest.TestCase):
         )
 
         self.assertEqual(emitted(self.stdout)[-1]["type"], "turn_cancelled")
-        self.assertTrue(emitted(self.stdout)[-1]["persisted"])
         self.assertEqual(
             [message.content for message in self.stored_items()],
             ["do the work", "half an answer"],
         )
 
-    def test_holds_a_tool_step_until_every_result_arrives(self) -> None:
+    def test_projection_excludes_an_incomplete_tool_batch(self) -> None:
         self.start_turn(
-            CheckpointingAgent(
+            ScriptedAgent(
                 self.session,
                 tail=(
                     Message(
@@ -605,9 +578,9 @@ class InterruptedTurnTest(unittest.TestCase):
         self.assertEqual([message.role for message in self.stored_items()], ["user", "assistant", "tool"])
         self.assertEqual([message.role for message in self.session.provider_messages()], ["user"])
 
-    def test_stores_a_held_tool_step_once(self) -> None:
+    def test_projection_restores_a_completed_tool_batch_once(self) -> None:
         self.start_turn(
-            CheckpointingAgent(
+            ScriptedAgent(
                 self.session,
                 tail=(
                     Message(

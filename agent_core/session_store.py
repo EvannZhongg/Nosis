@@ -40,10 +40,6 @@ class JsonlSessionStore:
         path = self._session_path(session_id)
         return path is not None and path.is_file()
 
-    def has_transcript(self, session_id: str) -> bool:
-        """Return whether a journal exists for the user-visible session."""
-        return self.has_journal(session_id)
-
     def delete_session(self, session_id: str) -> bool:
         _validate_session_id(session_id)
         if self._group_by_workspace:

@@ -326,7 +326,7 @@ function applyMessage(state: State, message: Incoming): State {
             kind: 'notice',
             id: nextId('notice'),
             level: 'info',
-            text: message.persisted ? 'Cancelled.' : 'Cancelled (not saved).',
+            text: 'Cancelled.',
           },
         ],
       };

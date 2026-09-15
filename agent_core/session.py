@@ -128,7 +128,6 @@ class Session:
                 started_at=event.timestamp_utc,
             )
         elif event.event_type in (
-            "tool_finished",
             "tool_completed",
             "tool_failed",
             "tool_cancelled",
@@ -200,8 +199,12 @@ class Session:
         return tuple(recovered)
 
     def begin_turn(self, turn_id: str | None = None) -> str:
-        turn_id = turn_id or str(uuid4())
-        event = self._emit("turn_started", turn_id, {"status": "running"})
+        # Client turn ids are correlation hints, not durable identities.  A
+        # restarted frontend may reuse an old id, so never overwrite the
+        # existing turn state during recovery.
+        if turn_id is None or turn_id in self.turns:
+            turn_id = str(uuid4())
+        event = self._event("turn_started", turn_id, {"status": "running"})
         self.apply_event(event)
         self._current_turn_id = turn_id
         return turn_id
@@ -219,7 +222,7 @@ class Session:
         payload: dict[str, object] = {"status": status}
         if error is not None:
             payload["error"] = error
-        event = self._emit(f"turn_{status}", turn_id, payload)
+        event = self._event(f"turn_{status}", turn_id, payload)
         self.apply_event(event)
         if turn_id == self._current_turn_id:
             self._current_turn_id = None
@@ -247,7 +250,7 @@ class Session:
 
     def tool_started(self, call: ToolCall, turn_id: str | None = None) -> None:
         turn_id = turn_id or self._current_turn_id
-        event = self._emit(
+        event = self._event(
             "tool_started",
             turn_id,
             {"name": call.name, "arguments": dict(call.arguments)},
@@ -264,7 +267,7 @@ class Session:
         total_tokens: int | None,
         has_tool_calls: bool,
     ) -> None:
-        self._emit(
+        self._event(
             "model_completed",
             self._current_turn_id,
             {
@@ -290,7 +293,7 @@ class Session:
         payload: dict[str, object] = {"status": status, "name": call.name}
         if error is not None:
             payload["error"] = error
-        event = self._emit(f"tool_{status}", turn_id, payload, call.id)
+        event = self._event(f"tool_{status}", turn_id, payload, call.id)
         self.apply_event(event)
 
     def set_archived_summary(
@@ -302,7 +305,7 @@ class Session:
             if item_count is None
             else max(0, min(item_count, projected_count))
         )
-        event = self._emit(
+        event = self._event(
             "context_archived",
             self._current_turn_id,
             {"summary": summary, "item_count": item_count},
@@ -333,7 +336,7 @@ class Session:
             reasoning,
             origin,
         )
-        event = self._emit(
+        event = self._event(
             "message_appended",
             self._current_turn_id,
             {"message": _message_to_dict(message)},
@@ -352,8 +355,6 @@ class Session:
         turn_id: str | None,
         payload: dict[str, object],
         tool_call_id: str | None = None,
-        *,
-        emit: bool = True,
     ) -> JournalEvent:
         with self._journal_lock:
             event = JournalEvent(
@@ -365,20 +366,10 @@ class Session:
                 tool_call_id=tool_call_id,
                 payload=payload,
             )
-            if emit:
-                if self._sink is not None:
-                    self._sink((event,))
-                self.journal.append(event)
+            if self._sink is not None:
+                self._sink((event,))
+            self.journal.append(event)
         return event
-
-    def _emit(
-        self,
-        event_type: str,
-        turn_id: str | None,
-        payload: dict[str, object],
-        tool_call_id: str | None = None,
-    ) -> JournalEvent:
-        return self._event(event_type, turn_id, payload, tool_call_id)
 
 
 def _message_to_dict(message: Message) -> dict[str, object]:

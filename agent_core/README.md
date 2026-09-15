@@ -119,7 +119,7 @@ token 估算刻意取各家计价模型的**上界**（固定 tile 与按面积�
 
 ## 子 Agent 角色
 
-并行 Tool Batch 明确区分三种顺序：
+并行 Tool Batch 明确区分四种顺序：
 
 * **Invocation order**：模型发出 Tool Call 的顺序；`ToolCallEvent` 按此顺序输出。
 * **Completion order**：Tool 实际执行完成的顺序；`ToolResultEvent` 按此顺序立即输出，避免较快的调用等待较慢的前序调用。

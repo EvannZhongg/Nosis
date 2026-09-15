@@ -243,7 +243,7 @@ def create_app(
         except (OSError, ValueError) as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         try:
-            if store.has_transcript(session_id):
+            if store.has_journal(session_id):
                 store.bind_workspace(session_id, selected.path)
             else:
                 pending_workspaces[session_id] = selected.path

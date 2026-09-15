@@ -168,12 +168,11 @@ class Agent:
         try:
             result = self._run(user_input, on_event, attachments, turn_id)
         except KeyboardInterrupt:
-            self._session.finish_turn("cancelled", turn_id)
+            self._session.finish_turn("cancelled")
             raise
         except Exception as error:
             self._session.finish_turn(
                 "failed",
-                turn_id,
                 error=str(error),
             )
             raise
@@ -182,11 +181,10 @@ class Agent:
                 "cancelled"
                 if isinstance(error, AgentCancelled)
                 else "interrupted",
-                turn_id,
                 error=str(error),
             )
             raise
-        self._session.finish_turn("completed", turn_id)
+        self._session.finish_turn("completed")
         return result
 
     def _run(

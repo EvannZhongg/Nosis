@@ -247,14 +247,14 @@ describe('reducer', () => {
     expect(state.usage?.total_tokens).toBe(12);
   });
 
-  it('reports that a cancelled turn was not saved', () => {
+  it('reports a cancelled turn', () => {
     let state = ready();
     state = reducer(state, {
       type: 'message',
-      message: { type: 'turn_cancelled', turn_id: 't1', persisted: false },
+      message: { type: 'turn_cancelled', turn_id: 't1' },
     });
     expect(state.status).toBe('idle');
-    expect(state.entries.at(-1)).toMatchObject({ text: 'Cancelled (not saved).' });
+    expect(state.entries.at(-1)).toMatchObject({ text: 'Cancelled.' });
   });
 
   it('keeps the session usable after a failed turn', () => {

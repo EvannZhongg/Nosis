@@ -230,13 +230,13 @@ describe("applyMessage", () => {
   it("settles open text and reports a cancelled turn", () => {
     const { items, notice, finished } = fold([
       { type: "assistant_delta", turn_id: "t1", text: "partial", model_call_index: 1 },
-      { type: "turn_cancelled", turn_id: "t1", persisted: false },
+      { type: "turn_cancelled", turn_id: "t1" },
     ]);
 
     expect(items).toEqual([
       { role: "assistant", content: "partial", streaming: false },
     ]);
-    expect(notice).toEqual({ level: "info", text: "已取消，本轮未保存。" });
+    expect(notice).toEqual({ level: "info", text: "已取消。" });
     expect(finished).toBe(true);
   });
 
