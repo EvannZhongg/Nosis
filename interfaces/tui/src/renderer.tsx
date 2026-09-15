@@ -1,5 +1,6 @@
 import React from 'react';
-import { Box, Static, Text } from 'ink';
+import { Box, Text, useBoxMetrics } from 'ink';
+import type { DOMElement } from 'ink';
 import Spinner from 'ink-spinner';
 import { formatArguments } from '@nosis/protocol';
 import type { ApprovalChoice, Entry, State } from './state.js';
@@ -81,32 +82,28 @@ function EntryView({ entry }: { entry: Entry }): React.ReactElement {
   );
 }
 
-/**
- * Settled entries render inside <Static> so Ink writes them once instead
- * of repainting the whole transcript on every frame. Everything from the
- * earliest live entry onward stays dynamic: concurrent tools can complete
- * out of order, so a running call may precede an already completed call.
- */
 export function Transcript({ state }: { state: State }): React.ReactElement {
-  const isLive = (entry: Entry): boolean =>
-    ((entry.kind === 'assistant' || entry.kind === 'reasoning') &&
-      !entry.settled) ||
-    (entry.kind === 'tool' && entry.state === 'running');
-
-  const firstLive = state.entries.findIndex(isLive);
-  const split = firstLive === -1 ? state.entries.length : firstLive;
-
-  const settled = state.entries.slice(0, split);
-  const live = state.entries.slice(split);
+  const viewportRef = React.useRef<DOMElement>(null);
+  const contentRef = React.useRef<DOMElement>(null);
+  const viewport = useBoxMetrics(viewportRef);
+  const content = useBoxMetrics(contentRef);
+  const overflowing =
+    viewport.hasMeasured && content.hasMeasured && content.height > viewport.height;
 
   return (
-    <Box flexShrink={0} flexDirection="column">
-      <Static items={settled}>
-        {(entry) => <EntryView key={entry.id} entry={entry} />}
-      </Static>
-      {live.map((entry) => (
-        <EntryView key={entry.id} entry={entry} />
-      ))}
+    <Box
+      ref={viewportRef}
+      flexGrow={1}
+      flexShrink={1}
+      flexDirection="column"
+      justifyContent={overflowing ? 'flex-end' : 'flex-start'}
+      overflowY="hidden"
+    >
+      <Box ref={contentRef} flexShrink={0} flexDirection="column">
+        {state.entries.map((entry) => (
+          <EntryView key={entry.id} entry={entry} />
+        ))}
+      </Box>
     </Box>
   );
 }
@@ -131,27 +128,26 @@ export function StatusBar({ state, elapsed }: { state: State; elapsed: number })
     state.status === 'streaming' ||
     state.status === 'running' ||
     state.status === 'cancelling';
+  const model = `${state.model}${
+    state.usage?.total_tokens ? ` · ${state.usage.total_tokens} tokens` : ''
+  }${state.sessionId ? ` · ${state.sessionId.slice(0, 8)}` : ''}`;
 
   return (
-    <Box flexShrink={0} flexDirection="column" paddingX={1}>
+    <Box flexShrink={0} paddingX={1}>
       {busy ? (
-        <Box>
+        <Box flexShrink={0}>
           <Text color="yellow">
             <Spinner type="dots" />
           </Text>
-          <Text dimColor>
-            {state.status === 'cancelling' ? ' cancelling…' : ' working'} {elapsed.toFixed(1)}s
-            {' · esc to cancel'}
-          </Text>
         </Box>
       ) : null}
-      <Box>
-        <Text dimColor wrap="truncate-end">
-          {state.model}
-          {state.usage?.total_tokens ? ` · ${state.usage.total_tokens} tokens` : ''}
-          {state.sessionId ? ` · ${state.sessionId.slice(0, 8)}` : ''}
-        </Text>
-      </Box>
+      <Text dimColor wrap="truncate-end">
+        {busy
+          ? `${state.status === 'cancelling' ? ' cancelling…' : ' working'} ${elapsed.toFixed(
+              1,
+            )}s · esc to cancel · ${model}`
+          : model}
+      </Text>
     </Box>
   );
 }

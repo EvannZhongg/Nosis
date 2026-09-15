@@ -151,6 +151,11 @@ export function Prompt({
     showCaret ? caretPosition({ metrics, caret, fullscreen }) : undefined,
   );
 
+  // Ink collapses an empty final line in a Text node. Keep that row in the
+  // layout so Ctrl+J moves the terminal cursor immediately, before another
+  // character is typed.
+  const renderedValue = value.endsWith('\n') ? `${value} ` : value;
+
   return (
     <Box
       ref={boxRef}
@@ -167,7 +172,7 @@ export function Prompt({
       {value === '' ? (
         <Text dimColor>{busy ? 'type to queue a message…' : 'ask anything…'}</Text>
       ) : (
-        <Text>{value}</Text>
+        <Text>{renderedValue}</Text>
       )}
     </Box>
   );

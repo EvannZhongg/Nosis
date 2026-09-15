@@ -174,7 +174,6 @@ export function App(props: AppProps): React.ReactElement {
         flexGrow={1}
         flexShrink={1}
         flexDirection="column"
-        justifyContent="flex-end"
         overflowY="hidden"
       >
         {state.status !== 'starting' && state.entries.length === 0 ? (

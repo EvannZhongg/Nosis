@@ -154,6 +154,21 @@ describe('App', () => {
     expect(turns()[1].text).toBe('second');
   });
 
+  it('keeps the input docked when a turn starts running', async () => {
+    const { stdin, lastFrame } = renderApp();
+    await waitForReady(lastFrame);
+
+    const inputLine = lineContaining(lastFrame(), 'ask anything…');
+    const modelLine = lineContaining(lastFrame(), 'test/model');
+
+    await typeDraft(stdin, lastFrame, 'run task');
+    stdin.write('\r');
+    await waitFor(() => expect(lastFrame()).toContain('esc to cancel'));
+
+    expect(lineContaining(lastFrame(), 'type to queue a message…')).toBe(inputLine);
+    expect(lineContaining(lastFrame(), 'test/model')).toBe(modelLine);
+  });
+
   it('defaults to allow and confirms with enter', async () => {
     const { stdin, lastFrame } = renderApp();
     await waitForReady(lastFrame);
@@ -233,6 +248,68 @@ describe('App', () => {
     });
     // Both deltas land in one live entry, so the frame carries the whole text.
     await waitFor(() => expect(lastFrame()).toContain('weighing the options'));
+  });
+
+  it('grows model output downward from the top of the TUI', async () => {
+    const { lastFrame } = renderApp();
+    await waitForReady(lastFrame);
+
+    emit({
+      type: 'assistant_delta',
+      turn_id: 't1',
+      text: 'first output',
+      model_call_index: 1,
+    });
+    await waitFor(() => expect(lastFrame()).toContain('first output'));
+
+    expect(lineContaining(lastFrame(), 'first output')).toBeLessThan(3);
+    expect(lineContaining(lastFrame(), 'first output')).toBeLessThan(
+      lineContaining(lastFrame(), 'type to queue a message…'),
+    );
+  });
+
+  it('keeps the newest model output visible when the transcript overflows', async () => {
+    const { lastFrame } = renderApp();
+    await waitForReady(lastFrame);
+
+    emit({
+      type: 'assistant_delta',
+      turn_id: 't1',
+      text: Array.from({ length: 30 }, (_, index) => `output line ${index + 1}`).join('\n'),
+      model_call_index: 1,
+    });
+
+    await waitFor(() => {
+      const frame = lastFrame() ?? '';
+      expect(frame).toContain('output line 30');
+      expect(frame).not.toContain('output line 1\n');
+      expect(frame).toContain('type to queue a message…');
+      expect(frame).toContain('test/model');
+    });
+  });
+
+  it('keeps completed output in the transcript viewport', async () => {
+    const { lastFrame } = renderApp();
+    await waitForReady(lastFrame);
+
+    emit({
+      type: 'assistant_delta',
+      turn_id: 't1',
+      text: 'completed answer',
+      model_call_index: 1,
+    });
+    emit({
+      type: 'assistant_message',
+      turn_id: 't1',
+      content: 'completed answer',
+      timestamp_utc: '2026-09-15T12:00:00Z',
+    });
+    emit({ type: 'turn_completed', turn_id: 't1', usage: null });
+
+    await waitFor(() => {
+      expect(lastFrame()).toContain('completed answer');
+      expect(lastFrame()).toContain('test/model');
+    });
   });
 
   it('renders streamed text and the approval prompt', async () => {

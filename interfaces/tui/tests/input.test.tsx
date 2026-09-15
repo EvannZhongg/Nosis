@@ -49,10 +49,19 @@ describe('Prompt newlines', () => {
   });
 
   it('inserts a newline on Ctrl+J without submitting', async () => {
-    const { stdin, submits, draft } = renderPrompt();
+    const { stdin, submits, draft, lastFrame } = renderPrompt();
     await wait(40);
     await type(stdin, 'first');
     await type(stdin, '\n');
+
+    const lines = (lastFrame() ?? '').split('\n');
+    const firstLine = lines.findIndex((line) => line.includes('first'));
+    const rules = lines
+      .map((line, index) => (line.includes('─') ? index : -1))
+      .filter((index) => index >= 0);
+    expect(rules).toHaveLength(2);
+    expect(rules[1]).toBe(firstLine + 2);
+
     await type(stdin, 'second');
 
     expect(submits).toEqual([]);
