@@ -34,6 +34,15 @@ Assign each retained fact its best current mark:
 
 When space is limited, prioritize user corrections and preferences, then solutions, decisions, events, and environment facts.
 
+## Size discipline
+
+- Treat the checkpoint as a replacement, not an append-only log.
+- Re-evaluate every fact from the previous checkpoint; do not retain it merely because it was retained before.
+- Remove facts that are obsolete, superseded, completed, or no longer needed for continuity.
+- Merge related facts into the smallest self-contained statement that preserves the information needed later.
+- The checkpoint should not grow unless newly qualifying information cannot be merged into or replace existing facts.
+- Prefer fewer complete facts over detailed narration. Do not preserve discussion history, intermediate attempts, or rationale unless it changes future actions.
+
 ## Output
 
 Return one concise retained fact per line in this form:
