@@ -10,8 +10,6 @@ export type PromptProps = {
   /** False while a prompt elsewhere owns the keyboard. */
   focus: boolean;
   busy: boolean;
-  /** Compensates for Ink positioning the cursor from a fullscreen frame's last row. */
-  fullscreen?: boolean;
 };
 
 /**
@@ -26,23 +24,6 @@ export function caretPoint(value: string, offset: number): { column: number; row
   return {
     column: stringWidth(before[before.length - 1]!),
     row: before.length - 1,
-  };
-}
-
-export function caretPosition({
-  metrics,
-  caret,
-  fullscreen,
-}: {
-  metrics: { left: number; top: number };
-  caret: { column: number; row: number };
-  fullscreen: boolean;
-}): { x: number; y: number } {
-  return {
-    x: metrics.left + 1 + caret.column,
-    // Fullscreen frames do not end in a newline. Ink still positions from the
-    // conceptual row after the frame, so compensate for the missing row.
-    y: metrics.top + 1 + caret.row + (fullscreen ? 1 : 0),
   };
 }
 
@@ -70,7 +51,6 @@ export function Prompt({
   onSubmit,
   focus,
   busy,
-  fullscreen = false,
 }: PromptProps): React.ReactElement {
   const boxRef = React.useRef<DOMElement>(null);
   const metrics = useBoxMetrics(boxRef);
@@ -148,7 +128,9 @@ export function Prompt({
   const caret = caretPoint(value, caretOffset);
   const showCaret = focus && metrics.hasMeasured && !busy;
   setCursorPosition(
-    showCaret ? caretPosition({ metrics, caret, fullscreen }) : undefined,
+    showCaret
+      ? { x: metrics.left + 1 + caret.column, y: metrics.top + 1 + caret.row }
+      : undefined,
   );
 
   // Ink collapses an empty final line in a Text node. Keep that row in the

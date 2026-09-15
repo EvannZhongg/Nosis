@@ -1,6 +1,5 @@
 import React from 'react';
-import { Box, Text, useBoxMetrics } from 'ink';
-import type { DOMElement } from 'ink';
+import { Box, Static, Text } from 'ink';
 import Spinner from 'ink-spinner';
 import { formatArguments } from '@nosis/protocol';
 import type { ApprovalChoice, Entry, State } from './state.js';
@@ -83,27 +82,23 @@ function EntryView({ entry }: { entry: Entry }): React.ReactElement {
 }
 
 export function Transcript({ state }: { state: State }): React.ReactElement {
-  const viewportRef = React.useRef<DOMElement>(null);
-  const contentRef = React.useRef<DOMElement>(null);
-  const viewport = useBoxMetrics(viewportRef);
-  const content = useBoxMetrics(contentRef);
-  const overflowing =
-    viewport.hasMeasured && content.hasMeasured && content.height > viewport.height;
+  const isLive = (entry: Entry): boolean =>
+    ((entry.kind === 'assistant' || entry.kind === 'reasoning') && !entry.settled) ||
+    (entry.kind === 'tool' && entry.state === 'running');
+
+  const firstLive = state.entries.findIndex(isLive);
+  const split = firstLive === -1 ? state.entries.length : firstLive;
+  const settled = state.entries.slice(0, split);
+  const live = state.entries.slice(split);
 
   return (
-    <Box
-      ref={viewportRef}
-      flexGrow={1}
-      flexShrink={1}
-      flexDirection="column"
-      justifyContent={overflowing ? 'flex-end' : 'flex-start'}
-      overflowY="hidden"
-    >
-      <Box ref={contentRef} flexShrink={0} flexDirection="column">
-        {state.entries.map((entry) => (
-          <EntryView key={entry.id} entry={entry} />
-        ))}
-      </Box>
+    <Box flexDirection="column">
+      <Static items={settled}>
+        {(entry) => <EntryView key={entry.id} entry={entry} />}
+      </Static>
+      {live.map((entry) => (
+        <EntryView key={entry.id} entry={entry} />
+      ))}
     </Box>
   );
 }

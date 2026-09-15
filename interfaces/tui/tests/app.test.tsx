@@ -154,19 +154,18 @@ describe('App', () => {
     expect(turns()[1].text).toBe('second');
   });
 
-  it('keeps the input docked when a turn starts running', async () => {
+  it('keeps the input above the one-line status when a turn starts running', async () => {
     const { stdin, lastFrame } = renderApp();
     await waitForReady(lastFrame);
-
-    const inputLine = lineContaining(lastFrame(), 'ask anything…');
-    const modelLine = lineContaining(lastFrame(), 'test/model');
 
     await typeDraft(stdin, lastFrame, 'run task');
     stdin.write('\r');
     await waitFor(() => expect(lastFrame()).toContain('esc to cancel'));
 
-    expect(lineContaining(lastFrame(), 'type to queue a message…')).toBe(inputLine);
-    expect(lineContaining(lastFrame(), 'test/model')).toBe(modelLine);
+    const inputLine = lineContaining(lastFrame(), 'type to queue a message…');
+    const statusLine = lineContaining(lastFrame(), 'test/model');
+    expect(statusLine).toBe(inputLine + 2);
+    expect((lastFrame() ?? '').split('\n')[statusLine]).toContain('esc to cancel');
   });
 
   it('defaults to allow and confirms with enter', async () => {
@@ -268,7 +267,7 @@ describe('App', () => {
     );
   });
 
-  it('keeps the newest model output visible when the transcript overflows', async () => {
+  it('lets long model output grow through the terminal stream', async () => {
     const { lastFrame } = renderApp();
     await waitForReady(lastFrame);
 
@@ -281,8 +280,8 @@ describe('App', () => {
 
     await waitFor(() => {
       const frame = lastFrame() ?? '';
+      expect(frame).toContain('output line 1');
       expect(frame).toContain('output line 30');
-      expect(frame).not.toContain('output line 1\n');
       expect(frame).toContain('type to queue a message…');
       expect(frame).toContain('test/model');
     });
@@ -330,29 +329,29 @@ describe('App', () => {
     });
   });
 
-  it('keeps the input docked above the model when approval appears', async () => {
+  it('renders approval above the input and model status', async () => {
     const { lastFrame } = renderApp();
     await waitForReady(lastFrame);
-
-    const inputLine = lineContaining(lastFrame(), 'ask anything…');
-    const modelLine = lineContaining(lastFrame(), 'test/model');
-    expect(inputLine).toBeGreaterThanOrEqual(0);
-    expect(modelLine).toBe(inputLine + 2);
 
     requestApproval('echo hi');
     await waitFor(() => expect(lastFrame()).toContain('Shell command requires approval'));
 
-    expect(lineContaining(lastFrame(), 'type to queue a message…')).toBe(inputLine);
-    expect(lineContaining(lastFrame(), 'test/model')).toBe(modelLine);
+    const approvalLine = lineContaining(lastFrame(), 'Shell command requires approval');
+    const inputLine = lineContaining(lastFrame(), 'type to queue a message…');
+    const modelLine = lineContaining(lastFrame(), 'test/model');
+    expect(approvalLine).toBeLessThan(inputLine);
+    expect(modelLine).toBe(inputLine + 2);
   });
 
-  it('keeps the input docked while startup becomes ready', async () => {
+  it('uses one status line before and after startup', async () => {
     autoReady = false;
     const { lastFrame } = renderApp();
     await waitFor(() => expect(lastFrame()).toContain('starting agent…'));
 
-    const inputLine = lineContaining(lastFrame(), 'type to queue a message…');
-    expect(inputLine).toBeGreaterThanOrEqual(0);
+    expect(
+      lineContaining(lastFrame(), 'starting agent…') -
+        lineContaining(lastFrame(), 'type to queue a message…'),
+    ).toBe(2);
 
     emit({
       type: 'ready',
@@ -364,7 +363,10 @@ describe('App', () => {
     });
     await waitForReady(lastFrame);
 
-    expect(lineContaining(lastFrame(), 'ask anything…')).toBe(inputLine);
+    expect(
+      lineContaining(lastFrame(), 'test/model') -
+        lineContaining(lastFrame(), 'ask anything…'),
+    ).toBe(2);
   });
 
   it('updates a later tool when it completes before an earlier call', async () => {
