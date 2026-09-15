@@ -6,8 +6,12 @@ from typing import Callable, TypeAlias
 
 from .config import AgentConfig
 from .context_manager import ContextManager, ContextWindowExceededError
-from .llm import LLMProvider, LLMRequest
-from .llm import LLMResponse
+from .llm import (
+    LLMProvider,
+    LLMRequest,
+    LLMResponse,
+    with_generation_limit,
+)
 from .session import Message, Session
 from .content import ImagePart
 from .tool_result import ToolResultNormalizer
@@ -186,9 +190,10 @@ class Agent:
                         self._config.output_reserve_tokens
                     ),
                 )
-            request = self._context.apply_generation_limit(
+            request = with_generation_limit(
                 request,
-                input_tokens,
+                self._provider,
+                self._config.max_generation_tokens,
             )
             model_call_index += 1
 

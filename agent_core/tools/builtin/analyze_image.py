@@ -65,11 +65,9 @@ class AnalyzeImageTool(Tool):
             ),
             media_root=context.workspace.path,
         )
-        input_tokens = provider.count_input_tokens(request)
         request = with_generation_limit(
             request,
             provider,
-            input_tokens,
             context.max_generation_tokens,
         )
         response = provider.stream(

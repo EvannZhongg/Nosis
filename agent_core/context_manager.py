@@ -116,18 +116,6 @@ class ContextManager:
             media_root=self._media_root,
         )
 
-    def apply_generation_limit(
-        self,
-        request: LLMRequest,
-        input_tokens: int,
-    ) -> LLMRequest:
-        return with_generation_limit(
-            request,
-            self._provider,
-            input_tokens,
-            self._max_generation_tokens,
-        )
-
     def should_archive(self, input_tokens: int) -> bool:
         return (
             self.compression_enabled
@@ -154,8 +142,11 @@ class ContextManager:
             messages=tuple([_timeline_message(historical_items), *historical_items]),
             media_root=self._media_root,
         )
-        input_tokens = self._provider.count_input_tokens(request)
-        request = self.apply_generation_limit(request, input_tokens)
+        request = with_generation_limit(
+            request,
+            self._provider,
+            self._max_generation_tokens,
+        )
         response = self._provider.stream(request, lambda _text: None, None)
         summary = response.content.strip() if response.content else ""
         if response.tool_calls or not summary:

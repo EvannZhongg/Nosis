@@ -210,7 +210,7 @@ class AgentTest(unittest.TestCase):
                 ),
             )
 
-    def test_generation_limit_uses_provider_output_limit(self) -> None:
+    def test_provider_output_limit_is_not_sent_without_policy(self) -> None:
         provider = MockProvider(
             ["hello back"],
             input_tokens=200,
@@ -232,12 +232,9 @@ class AgentTest(unittest.TestCase):
 
         agent.run("hello")
 
-        self.assertEqual(
-            provider.requests[0].max_generation_tokens,
-            500,
-        )
+        self.assertIsNone(provider.requests[0].max_generation_tokens)
 
-    def test_generation_limit_uses_remaining_context(self) -> None:
+    def test_generation_policy_is_not_reduced_by_remaining_context(self) -> None:
         provider = MockProvider(
             ["hello back"],
             input_tokens=850,
@@ -249,7 +246,12 @@ class AgentTest(unittest.TestCase):
             provider=provider,
             session=session,
             system_prompt="You are helpful.",
-            config=AGENT_CONFIG,
+            config=AgentConfig(
+                max_same_tool_calls=5,
+                output_reserve_tokens=100,
+                max_generation_tokens=300,
+                tools=ToolConfig(enabled=()),
+            ),
             tools=tool_set(session=session),
             context=ToolExecutionContext(
                 workspace=TEST_WORKSPACE, session=session
@@ -261,15 +263,15 @@ class AgentTest(unittest.TestCase):
 
         self.assertEqual(
             provider.requests[0].max_generation_tokens,
-            150,
+            300,
         )
 
-    def test_generation_policy_caps_dynamic_limit(self) -> None:
+    def test_provider_output_limit_caps_generation_policy(self) -> None:
         provider = MockProvider(
             ["hello back"],
             input_tokens=200,
             max_context_tokens=1000,
-            max_output_tokens=500,
+            max_output_tokens=40,
         )
         session = Session(session_id="session-1")
         config = AgentConfig(
@@ -294,7 +296,7 @@ class AgentTest(unittest.TestCase):
 
         self.assertEqual(
             provider.requests[0].max_generation_tokens,
-            50,
+            40,
         )
 
     def test_mock_provider_receives_complete_multi_turn_context(self) -> None:

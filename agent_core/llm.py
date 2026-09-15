@@ -75,23 +75,16 @@ class LLMProvider(ABC):
 def with_generation_limit(
     request: LLMRequest,
     provider: LLMProvider,
-    input_tokens: int,
     policy_limit: int | None = None,
 ) -> LLMRequest:
+    if policy_limit is None:
+        return request
+
+    limit = policy_limit
     provider_limit = provider.max_output_tokens
-    if provider_limit is None and policy_limit is None:
-        return request
-
-    remaining_tokens = provider.max_context_tokens - input_tokens
-    if remaining_tokens < 1:
-        return request
-
-    limits = [remaining_tokens]
     if provider_limit is not None:
-        limits.append(provider_limit)
-    if policy_limit is not None:
-        limits.append(policy_limit)
+        limit = min(limit, provider_limit)
     return replace(
         request,
-        max_generation_tokens=min(limits),
+        max_generation_tokens=limit,
     )
