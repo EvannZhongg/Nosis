@@ -6,6 +6,7 @@ from .config import AgentConfig
 from .content import historical_content
 from .llm import LLMProvider, LLMRequest, with_generation_limit
 from .prompts import load_consolidator_prompt
+from .projection import project_provider_messages
 from .session import Message, Session
 from .tools import ToolDefinition
 
@@ -109,15 +110,17 @@ class ContextManager:
         )
 
     def should_archive(self, input_tokens: int) -> bool:
-        return (
-            self.compression_enabled
-            and input_tokens >= self.limits.compression_threshold
-            and bool(self._archivable_items())
-        )
+        if (
+            not self.compression_enabled
+            or input_tokens < self.limits.compression_threshold
+        ):
+            return False
+        _, items = self._archivable_items()
+        return bool(items)
 
     def archive(self) -> int:
         """Compress the unarchived transcript into the session checkpoint."""
-        items = self._archivable_items()
+        archive_end, items = self._archivable_items()
         previous = self._session.archived_summary
         system_prompt = load_consolidator_prompt()
         if previous is not None:
@@ -141,35 +144,41 @@ class ContextManager:
             raise ValueError("context consolidator must return text content")
         self._session.set_archived_summary(
             summary,
-            self._session.archived_item_count + len(items),
+            archive_end,
         )
-        return self._session.archived_item_count
+        return self._session.archived_item_cursor
 
-    def _archivable_items(self) -> list[Message]:
+    def _archivable_items(self) -> tuple[int, list[Message]]:
         """Return only complete turns preceding the active run."""
         turn_start = self._turn_start
         if turn_start is None:
             raise RuntimeError(
                 "begin_turn must be called before archiving context"
             )
-        archive_start = self._session.archived_item_count
-        projected = self._session.provider_messages()
-        archive_end = max(archive_start, min(turn_start, len(projected)))
-        return projected[archive_start:archive_end]
+        archive_start = self._session.archived_item_cursor
+        archive_end = max(
+            archive_start,
+            min(turn_start, len(self._session.items)),
+        )
+        items = self._session.items[archive_start:archive_end]
+        return archive_end, list(project_provider_messages(items))
 
     def _context_messages(self) -> list[Message]:
-        items = self._session.provider_messages()
+        archive_start = self._session.archived_item_cursor
+        recent_items = self._session.items[archive_start:]
         if self._turn_start is None:
-            return list(items)
-        historical_count = max(
-            0,
-            min(
-                self._turn_start - self._session.archived_item_count,
-                len(items),
-            ),
+            return list(project_provider_messages(recent_items))
+        historical_end = max(
+            archive_start,
+            min(self._turn_start, len(self._session.items)),
         )
-        historical = [_historical_message(item) for item in items[:historical_count]]
-        visible = historical + list(items[historical_count:])
+        historical_items = self._session.items[archive_start:historical_end]
+        active_items = self._session.items[historical_end:]
+        historical = [
+            _historical_message(item)
+            for item in project_provider_messages(historical_items)
+        ]
+        visible = historical + list(project_provider_messages(active_items))
         result: list[Message] = []
         for index, item in enumerate(visible):
             # A turn begins where the person spoke. A synthesized media

@@ -117,6 +117,24 @@ class SessionJournalTest(unittest.TestCase):
                 ["call-a", "call-b"],
             )
 
+    def test_context_archive_replays_the_raw_item_cursor(self):
+        session = Session("s")
+        session.add_item("user", "first")
+        session.add_item("assistant", "answer")
+        session.set_archived_summary("summary", 2)
+
+        replayed = Session("s")
+        for event in session.journal:
+            replayed.journal.append(event)
+            replayed.apply_event(event)
+
+        self.assertEqual(replayed.archived_summary, "summary")
+        self.assertEqual(replayed.archived_item_cursor, 2)
+        self.assertEqual(
+            session.journal[-1].payload,
+            {"summary": "summary", "item_cursor": 2},
+        )
+
     def test_replay_ignores_only_a_truncated_final_record(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)

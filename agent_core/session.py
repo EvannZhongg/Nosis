@@ -78,7 +78,7 @@ class Session:
     items: list[Message] = field(default_factory=list)
     workspace: str | None = None
     archived_summary: str | None = None
-    archived_item_count: int = 0
+    archived_item_cursor: int = 0
     journal: list[JournalEvent] = field(default_factory=list, repr=False)
     turns: dict[str, Turn] = field(default_factory=dict, repr=False)
     tool_executions: dict[str, ToolExecution] = field(default_factory=dict, repr=False)
@@ -161,7 +161,7 @@ class Session:
                 if isinstance(payload.get("summary"), str)
                 else None
             )
-            self.archived_item_count = int(payload.get("item_count", 0))
+            self.archived_item_cursor = int(payload["item_cursor"])
 
     def recover(self) -> tuple[JournalEvent, ...]:
         recovered: list[JournalEvent] = []
@@ -297,18 +297,17 @@ class Session:
         self.apply_event(event)
 
     def set_archived_summary(
-        self, summary: str, item_count: int | None = None
+        self, summary: str, item_cursor: int | None = None
     ) -> None:
-        projected_count = len(self.provider_messages())
-        item_count = (
-            projected_count
-            if item_count is None
-            else max(0, min(item_count, projected_count))
+        item_cursor = (
+            len(self.items)
+            if item_cursor is None
+            else max(0, min(item_cursor, len(self.items)))
         )
         event = self._event(
             "context_archived",
             self._current_turn_id,
-            {"summary": summary, "item_count": item_count},
+            {"summary": summary, "item_cursor": item_cursor},
         )
         self.apply_event(event)
 

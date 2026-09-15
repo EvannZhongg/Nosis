@@ -9,6 +9,7 @@ from agent_core import (
     AgentConfig,
     AssistantMessageDeltaEvent,
     AssistantMessageEvent,
+    ContextManager,
     ContextWindowExceededError,
     LLMProvider,
     LLMRequest,
@@ -125,6 +126,127 @@ def clock(*values: datetime):
 
 
 class AgentTest(unittest.TestCase):
+    def test_archive_cursor_advances_by_a_complete_raw_turn(self) -> None:
+        call = ToolCall("call-old", "echo", {"text": "old"})
+        session = Session("session-1")
+        session.add_item("user", "old request")
+        session.add_item("assistant", None, tool_calls=(call,))
+        session.tool_started(call)
+        provider = MockProvider(
+            ["old turn summary", "new answer"],
+            input_tokens=800,
+        )
+        agent = Agent(
+            provider,
+            session,
+            "You are helpful.",
+            AGENT_CONFIG,
+            tool_set(EchoTool(), session=session),
+            ToolExecutionContext(workspace=TEST_WORKSPACE, session=session),
+            now=clock(REQUEST_TIME, RESPONSE_TIME),
+        )
+
+        agent.run("new request")
+
+        self.assertEqual(session.archived_item_cursor, 2)
+        self.assertEqual(
+            [message.content for message in provider.requests[0].messages
+             if message.role == "user"],
+            ["old request"],
+        )
+        self.assertEqual(
+            [message.content for message in provider.requests[1].messages
+             if message.role == "user"],
+            ["new request"],
+        )
+        self.assertTrue(
+            provider.requests[1].system_prompt.endswith(
+                "[Archived Context Summary]\nold turn summary"
+            )
+        )
+        self.assertEqual(
+            [message.role for message in session.items],
+            ["user", "assistant", "user", "assistant"],
+        )
+
+    def test_repeated_archives_replace_summary_and_advance_baseline(self) -> None:
+        session = Session(
+            "session-1",
+            items=[Message("user", "first"), Message("assistant", "one")],
+        )
+        provider = MockProvider(["first summary", "second summary"])
+        context = ContextManager(
+            provider,
+            session,
+            "You are helpful.",
+            AGENT_CONFIG,
+        )
+
+        context.begin_turn(2)
+        session.add_item("user", "second")
+        context.archive()
+        session.add_item("assistant", "two")
+        context.begin_turn(4)
+        session.add_item("user", "third")
+        context.archive()
+
+        self.assertEqual(session.archived_item_cursor, 4)
+        self.assertEqual(session.archived_summary, "second summary")
+        self.assertTrue(
+            provider.requests[1].system_prompt.endswith(
+                "[Archived Context Summary]\nfirst summary"
+            )
+        )
+        self.assertEqual(
+            [message.content for message in provider.requests[1].messages
+             if message.role == "user"],
+            ["second"],
+        )
+        request = context.build_request()
+        self.assertTrue(
+            request.system_prompt.endswith(
+                "[Archived Context Summary]\nsecond summary"
+            )
+        )
+        self.assertNotIn("first summary", request.system_prompt)
+        self.assertEqual(
+            [message.content for message in request.messages
+             if message.role == "user"],
+            ["third"],
+        )
+
+    def test_projection_repairs_a_tool_chain_after_the_archive_cursor(self) -> None:
+        call = ToolCall("call-old", "echo", {"text": "old"})
+        session = Session(
+            "session-1",
+            items=[
+                Message("user", "old request"),
+                Message("assistant", None, tool_calls=(call,)),
+                Message("tool", "old result", tool_call_id=call.id),
+                Message("assistant", "old answer"),
+                Message("user", "new request"),
+            ],
+            archived_summary="old summary",
+            archived_item_cursor=2,
+        )
+        context = ContextManager(
+            MockProvider([]),
+            session,
+            "You are helpful.",
+            AGENT_CONFIG,
+        )
+        context.begin_turn(4)
+
+        request = context.build_request()
+
+        self.assertFalse(any(message.role == "tool" for message in request.messages))
+        self.assertFalse(any(message.tool_calls for message in request.messages))
+        self.assertEqual(
+            [message.content for message in request.messages
+             if message.role != "system"],
+            ["old answer", "new request"],
+        )
+
     def test_new_turn_projects_around_an_incomplete_historical_tool_batch(self):
         call = ToolCall("call-old", "echo", {"text": "old"})
         session = Session("session-1")

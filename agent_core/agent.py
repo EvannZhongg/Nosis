@@ -195,9 +195,8 @@ class Agent:
         turn_id: str | None = None,
     ) -> AgentRunResult:
         turn_start = len(self._session.items)
-        provider_turn_start = len(self._session.provider_messages())
         turn_id = self._session.begin_turn(turn_id)
-        self._context.begin_turn(provider_turn_start)
+        self._context.begin_turn(turn_start)
         model_call_index = 0
         previous_tool_call_key: tuple[str, str] | None = None
         identical_tool_calls = 0
