@@ -100,7 +100,7 @@ export function Transcript({ state }: { state: State }): React.ReactElement {
   const live = state.entries.slice(split);
 
   return (
-    <Box flexDirection="column">
+    <Box flexShrink={0} flexDirection="column">
       <Static items={settled}>
         {(entry) => <EntryView key={entry.id} entry={entry} />}
       </Static>
@@ -114,11 +114,15 @@ export function Transcript({ state }: { state: State }): React.ReactElement {
 export function StatusBar({ state, elapsed }: { state: State; elapsed: number }) {
   if (state.status === 'starting') {
     return (
-      <Box marginTop={1}>
-        <Text color="yellow">
-          <Spinner type="dots" />
+      <Box flexShrink={0} paddingX={1}>
+        <Box flexShrink={0}>
+          <Text color="yellow">
+            <Spinner type="dots" />
+          </Text>
+        </Box>
+        <Text dimColor wrap="truncate-end">
+          {state.mcpStatus ? ` ${state.mcpStatus}` : ' starting agent…'}
         </Text>
-        <Text dimColor>{state.mcpStatus ? ` ${state.mcpStatus}` : ' starting agent…'}</Text>
       </Box>
     );
   }
@@ -129,7 +133,7 @@ export function StatusBar({ state, elapsed }: { state: State; elapsed: number })
     state.status === 'cancelling';
 
   return (
-    <Box flexDirection="column" paddingX={1}>
+    <Box flexShrink={0} flexDirection="column" paddingX={1}>
       {busy ? (
         <Box>
           <Text color="yellow">

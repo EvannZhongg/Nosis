@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import React from 'react';
 import { render } from 'ink-testing-library';
-import { Prompt, caretPoint } from '../src/input.js';
+import { Prompt, caretPoint, caretPosition } from '../src/input.js';
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -136,6 +136,16 @@ describe('caretPoint', () => {
   it('reports the column within the caret row for multiline drafts', () => {
     expect(caretPoint('ab\ncd', 4)).toEqual({ column: 1, row: 1 });
     expect(caretPoint('ab\ncd', 3)).toEqual({ column: 0, row: 1 });
+  });
+});
+
+describe('caretPosition', () => {
+  it('compensates for the missing trailing row in fullscreen output', () => {
+    const metrics = { left: 0, top: 20 };
+    const caret = { column: 3, row: 0 };
+
+    expect(caretPosition({ metrics, caret, fullscreen: false })).toEqual({ x: 4, y: 21 });
+    expect(caretPosition({ metrics, caret, fullscreen: true })).toEqual({ x: 4, y: 22 });
   });
 });
 

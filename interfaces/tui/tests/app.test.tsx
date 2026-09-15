@@ -5,23 +5,26 @@ import type { Incoming } from '@nosis/protocol';
 
 const sent: any[] = [];
 let emit: (message: Incoming) => void = () => {};
+let autoReady = true;
 
 vi.mock('../src/bridge.js', () => ({
   BridgeClient: class {
     constructor(options: any) {
       emit = options.onMessage;
-      setTimeout(
-        () =>
-          options.onMessage({
-            type: 'ready',
-            session_id: 'sess-1234',
-            workspace: '/w',
-            model: 'test/model',
-            resumed: false,
-            message_count: 0,
-          }),
-        10,
-      );
+      if (autoReady) {
+        setTimeout(
+          () =>
+            options.onMessage({
+              type: 'ready',
+              session_id: 'sess-1234',
+              workspace: '/w',
+              model: 'test/model',
+              resumed: false,
+              message_count: 0,
+            }),
+          10,
+        );
+      }
     }
     send(message: any) {
       sent.push(message);
@@ -98,9 +101,14 @@ const requestApproval = (command: string): void => {
   emit({ type: 'approval_request', turn_id: 't1', request_id: 't1:1', command });
 };
 
+function lineContaining(frame: string | undefined, text: string): number {
+  return (frame ?? '').split('\n').findIndex((line) => line.includes(text));
+}
+
 describe('App', () => {
   beforeEach(() => {
     sent.length = 0;
+    autoReady = true;
   });
 
   it('starts the runtime with the workspace and config paths', async () => {
@@ -243,6 +251,43 @@ describe('App', () => {
       expect(lastFrame()).toContain('Shell command requires approval');
       expect(lastFrame()).toContain('echo hi');
     });
+  });
+
+  it('keeps the input docked above the model when approval appears', async () => {
+    const { lastFrame } = renderApp();
+    await waitForReady(lastFrame);
+
+    const inputLine = lineContaining(lastFrame(), 'ask anything…');
+    const modelLine = lineContaining(lastFrame(), 'test/model');
+    expect(inputLine).toBeGreaterThanOrEqual(0);
+    expect(modelLine).toBe(inputLine + 2);
+
+    requestApproval('echo hi');
+    await waitFor(() => expect(lastFrame()).toContain('Shell command requires approval'));
+
+    expect(lineContaining(lastFrame(), 'type to queue a message…')).toBe(inputLine);
+    expect(lineContaining(lastFrame(), 'test/model')).toBe(modelLine);
+  });
+
+  it('keeps the input docked while startup becomes ready', async () => {
+    autoReady = false;
+    const { lastFrame } = renderApp();
+    await waitFor(() => expect(lastFrame()).toContain('starting agent…'));
+
+    const inputLine = lineContaining(lastFrame(), 'type to queue a message…');
+    expect(inputLine).toBeGreaterThanOrEqual(0);
+
+    emit({
+      type: 'ready',
+      session_id: 'sess-1234',
+      workspace: '/w',
+      model: 'test/model',
+      resumed: false,
+      message_count: 0,
+    });
+    await waitForReady(lastFrame);
+
+    expect(lineContaining(lastFrame(), 'ask anything…')).toBe(inputLine);
   });
 
   it('updates a later tool when it completes before an earlier call', async () => {
