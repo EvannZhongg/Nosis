@@ -204,6 +204,7 @@ class Bridge:
             sessions_directory=sessions_directory,
             command_executor=SubprocessCommandExecutor(workspace.path),
             shell_timeout_seconds=agent_config.shell_timeout_seconds,
+            max_generation_tokens=agent_config.max_generation_tokens,
             vision_input=(
                 "image" in main_provider.capabilities.input_modalities
             ),

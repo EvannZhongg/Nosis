@@ -35,6 +35,8 @@ class LiteLLMProvider(LLMProvider):
         self._base_url = base_url
         self._api_key = api_key
         self._media_root = media_root.expanduser().resolve() if media_root is not None else None
+        self._model_info: dict[str, object] | None = None
+        self._model_info_loaded = False
         if max_context_tokens is not None:
             if (
                 isinstance(max_context_tokens, bool)
@@ -46,9 +48,17 @@ class LiteLLMProvider(LLMProvider):
                 )
             self._max_context_tokens = max_context_tokens
         else:
+            try:
+                model_info = self._get_model_info()
+            except Exception as error:
+                raise ValueError(
+                    f"LiteLLM has no context limit metadata for model "
+                    f"'{model}'; configure 'max_context_tokens' for this "
+                    "provider"
+                ) from error
             self._max_context_tokens = _get_model_max_context_tokens(
+                model_info,
                 model,
-                base_url,
             )
         self._capabilities: ProviderCapabilities | None = None
 
@@ -81,6 +91,31 @@ class LiteLLMProvider(LLMProvider):
     @property
     def max_context_tokens(self) -> int:
         return self._max_context_tokens
+
+    @property
+    def max_output_tokens(self) -> int | None:
+        try:
+            model_info = self._get_model_info()
+        except Exception:
+            return None
+        value = model_info.get("max_output_tokens")
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or value < 1
+        ):
+            return None
+        return value
+
+    def _get_model_info(self) -> dict[str, object]:
+        if not self._model_info_loaded:
+            self._model_info = get_model_info(
+                model=self._model,
+                api_base=self._base_url,
+            )
+            self._model_info_loaded = True
+        assert self._model_info is not None
+        return self._model_info
 
     def count_input_tokens(self, request: LLMRequest) -> int:
         """Price the request without encoding any image.
@@ -120,8 +155,10 @@ class LiteLLMProvider(LLMProvider):
         tools = _request_tools(request)
         if tools:
             arguments["tools"] = tools
-        if request.max_output_tokens is not None:
-            arguments["max_tokens"] = request.max_output_tokens
+        if request.max_generation_tokens is not None:
+            arguments["max_completion_tokens"] = (
+                request.max_generation_tokens
+            )
 
         content = ""
         reasoning = ""
@@ -247,20 +284,10 @@ def _request_tools(request: LLMRequest) -> list[dict[str, object]]:
 
 
 def _get_model_max_context_tokens(
+    model_info: dict[str, object],
     model: str,
-    base_url: str | None,
 ) -> int:
-    try:
-        model_info = get_model_info(model=model, api_base=base_url)
-    except Exception as error:
-        raise ValueError(
-            f"LiteLLM has no context limit metadata for model '{model}'; "
-            "configure 'max_context_tokens' for this provider"
-        ) from error
-
     max_context_tokens = model_info.get("max_input_tokens")
-    if max_context_tokens is None:
-        max_context_tokens = model_info.get("max_tokens")
     if (
         isinstance(max_context_tokens, bool)
         or not isinstance(max_context_tokens, int)

@@ -4,7 +4,7 @@ from typing import Iterable
 
 from .config import AgentConfig
 from .content import historical_content
-from .llm import LLMProvider, LLMRequest
+from .llm import LLMProvider, LLMRequest, with_generation_limit
 from .prompts import load_consolidator_prompt
 from .session import Message, Session
 from .tools import ToolDefinition
@@ -15,17 +15,17 @@ class ContextWindowExceededError(RuntimeError):
         self,
         input_tokens: int,
         max_context_tokens: int,
-        max_output_tokens: int,
+        output_reserve_tokens: int,
     ) -> None:
         self.input_tokens = input_tokens
         self.max_context_tokens = max_context_tokens
-        self.max_output_tokens = max_output_tokens
-        self.max_input_tokens = max_context_tokens - max_output_tokens
+        self.output_reserve_tokens = output_reserve_tokens
+        self.max_input_tokens = max_context_tokens - output_reserve_tokens
         super().__init__(
             f"input context contains {input_tokens} tokens, exceeding the "
             f"maximum of {self.max_input_tokens} tokens "
             f"({max_context_tokens} context tokens minus "
-            f"{max_output_tokens} reserved output tokens)"
+            f"{output_reserve_tokens} reserved output tokens)"
         )
 
 
@@ -51,20 +51,23 @@ class ContextManager:
         self._provider = provider
         self._session = session
         self._system_prompt = system_prompt
-        self._max_output_tokens = config.max_output_tokens
+        self._output_reserve_tokens = config.output_reserve_tokens
+        self._max_generation_tokens = config.max_generation_tokens
         self._turn_start: int | None = None
         self._media_root = media_root
 
-        if self._max_output_tokens >= provider.max_context_tokens:
+        if self._output_reserve_tokens >= provider.max_context_tokens:
             raise ValueError(
-                "max_output_tokens must be less than the provider's "
+                "output_reserve_tokens must be less than the provider's "
                 "max_context_tokens"
             )
-        hard_limit = provider.max_context_tokens - self._max_output_tokens
+        hard_limit = (
+            provider.max_context_tokens - self._output_reserve_tokens
+        )
         if hard_limit <= 1:
             raise ValueError(
-                "max_context_tokens minus max_output_tokens must be greater "
-                "than 1"
+                "max_context_tokens minus output_reserve_tokens must be "
+                "greater than 1"
             )
         compression = config.context
         trigger_ratio, target_ratio = _compression_ratios(
@@ -110,8 +113,19 @@ class ContextManager:
             system_prompt=system_prompt,
             messages=tuple(self._context_messages()),
             tools=tuple(tools),
-            max_output_tokens=self._max_output_tokens,
             media_root=self._media_root,
+        )
+
+    def apply_generation_limit(
+        self,
+        request: LLMRequest,
+        input_tokens: int,
+    ) -> LLMRequest:
+        return with_generation_limit(
+            request,
+            self._provider,
+            input_tokens,
+            self._max_generation_tokens,
         )
 
     def should_archive(self, input_tokens: int) -> bool:
@@ -138,9 +152,10 @@ class ContextManager:
         request = LLMRequest(
             system_prompt=system_prompt,
             messages=tuple([_timeline_message(historical_items), *historical_items]),
-            max_output_tokens=self._max_output_tokens,
             media_root=self._media_root,
         )
+        input_tokens = self._provider.count_input_tokens(request)
+        request = self.apply_generation_limit(request, input_tokens)
         response = self._provider.stream(request, lambda _text: None, None)
         summary = response.content.strip() if response.content else ""
         if response.tool_calls or not summary:

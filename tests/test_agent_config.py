@@ -24,7 +24,7 @@ class AgentConfigTest(unittest.TestCase):
                 json.dumps(
                     {
                         "max_same_tool_calls": 5,
-                        "max_output_tokens": 100,
+                        "output_reserve_tokens": 100,
                         **fields,
                     }
                 ),
@@ -39,7 +39,7 @@ class AgentConfigTest(unittest.TestCase):
                 json.dumps(
                     {
                         "max_same_tool_calls": 5,
-                        "max_output_tokens": 100,
+                        "output_reserve_tokens": 100,
                         "shell_timeout_seconds": 30,
                         "main_agent": {
                             "tools": {
@@ -57,7 +57,7 @@ class AgentConfigTest(unittest.TestCase):
                 load_agent_config(path),
                 AgentConfig(
                     max_same_tool_calls=5,
-                    max_output_tokens=100,
+                    output_reserve_tokens=100,
                     shell_timeout_seconds=30,
                     tools=ToolConfig(
                         enabled=(
@@ -76,7 +76,7 @@ class AgentConfigTest(unittest.TestCase):
                 json.dumps(
                     {
                         "max_same_tool_calls": 5,
-                        "max_output_tokens": 100,
+                        "output_reserve_tokens": 100,
                         "main_agent": {"tools": ENABLED_TOOLS},
                     }
                 ),
@@ -97,7 +97,7 @@ class AgentConfigTest(unittest.TestCase):
                         json.dumps(
                             {
                                 "max_same_tool_calls": 5,
-                                "max_output_tokens": 100,
+                                "output_reserve_tokens": 100,
                                 "shell_timeout_seconds": timeout_seconds,
                                 "main_agent": {"tools": ENABLED_TOOLS},
                             }
@@ -118,7 +118,7 @@ class AgentConfigTest(unittest.TestCase):
                 json.dumps(
                     {
                         "max_same_tool_calls": 0,
-                        "max_output_tokens": 100,
+                        "output_reserve_tokens": 100,
                         "main_agent": {"tools": ENABLED_TOOLS},
                     }
                 ),
@@ -135,6 +135,40 @@ class AgentConfigTest(unittest.TestCase):
                 json.dumps(
                     {
                         "max_same_tool_calls": True,
+                        "output_reserve_tokens": 100,
+                        "main_agent": {"tools": ENABLED_TOOLS},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(ValueError):
+                load_agent_config(path)
+
+    def test_rejects_non_positive_output_reserve(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "agent_config.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "max_same_tool_calls": 5,
+                        "output_reserve_tokens": 0,
+                        "main_agent": {"tools": ENABLED_TOOLS},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(ValueError):
+                load_agent_config(path)
+
+    def test_does_not_accept_old_output_limit_field(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "agent_config.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "max_same_tool_calls": 5,
                         "max_output_tokens": 100,
                         "main_agent": {"tools": ENABLED_TOOLS},
                     }
@@ -142,25 +176,42 @@ class AgentConfigTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with self.assertRaises(ValueError):
+            with self.assertRaisesRegex(
+                ValueError,
+                "output_reserve_tokens.*positive integer",
+            ):
                 load_agent_config(path)
 
-    def test_rejects_non_positive_output_limit(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "agent_config.json"
-            path.write_text(
-                json.dumps(
-                    {
-                        "max_same_tool_calls": 5,
-                        "max_output_tokens": 0,
-                        "main_agent": {"tools": ENABLED_TOOLS},
-                    }
-                ),
-                encoding="utf-8",
-            )
+    def test_loads_optional_generation_limit(self) -> None:
+        config = self.load(
+            {
+                "max_generation_tokens": 50,
+                "main_agent": {"tools": ENABLED_TOOLS},
+            }
+        )
 
-            with self.assertRaises(ValueError):
-                load_agent_config(path)
+        self.assertEqual(config.max_generation_tokens, 50)
+
+    def test_defaults_generation_limit_to_none(self) -> None:
+        config = self.load(
+            {"main_agent": {"tools": ENABLED_TOOLS}}
+        )
+
+        self.assertIsNone(config.max_generation_tokens)
+
+    def test_rejects_invalid_generation_limit(self) -> None:
+        for value in (0, True, "100"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "max_generation_tokens.*positive integer or null",
+                ):
+                    self.load(
+                        {
+                            "max_generation_tokens": value,
+                            "main_agent": {"tools": ENABLED_TOOLS},
+                        }
+                    )
 
     def test_rejects_missing_tool_config(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -169,7 +220,7 @@ class AgentConfigTest(unittest.TestCase):
                 json.dumps(
                     {
                         "max_same_tool_calls": 5,
-                        "max_output_tokens": 100,
+                        "output_reserve_tokens": 100,
                     }
                 ),
                 encoding="utf-8",
@@ -185,7 +236,7 @@ class AgentConfigTest(unittest.TestCase):
                 json.dumps(
                     {
                         "max_same_tool_calls": 5,
-                        "max_output_tokens": 100,
+                        "output_reserve_tokens": 100,
                         "main_agent": {"tools": {"read_file": True}},
                     }
                 ),
@@ -209,7 +260,7 @@ class AgentConfigTest(unittest.TestCase):
                 json.dumps(
                     {
                         "max_same_tool_calls": 5,
-                        "max_output_tokens": 100,
+                        "output_reserve_tokens": 100,
                         "main_agent": {
                             "tools": {
                                 "shell": True,
@@ -234,7 +285,7 @@ class AgentConfigTest(unittest.TestCase):
                 json.dumps(
                     {
                         "max_same_tool_calls": 5,
-                        "max_output_tokens": 100,
+                        "output_reserve_tokens": 100,
                         "main_agent": {
                             "tools": {
                                 **ENABLED_TOOLS,
@@ -259,7 +310,7 @@ class AgentConfigTest(unittest.TestCase):
                 json.dumps(
                     {
                         "max_same_tool_calls": 5,
-                        "max_output_tokens": 100,
+                        "output_reserve_tokens": 100,
                         "main_agent": {
                             "tools": {
                                 **ENABLED_TOOLS,
@@ -294,7 +345,7 @@ class SubagentRoleConfigTest(unittest.TestCase):
                 json.dumps(
                     {
                         "max_same_tool_calls": 5,
-                        "max_output_tokens": 100,
+                        "output_reserve_tokens": 100,
                         "main_agent": {"tools": ENABLED_TOOLS},
                         "subagent_roles": roles,
                     }

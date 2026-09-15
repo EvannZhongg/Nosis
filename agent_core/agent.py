@@ -182,8 +182,14 @@ class Agent:
                 raise ContextWindowExceededError(
                     input_tokens=input_tokens,
                     max_context_tokens=self._provider.max_context_tokens,
-                    max_output_tokens=self._config.max_output_tokens,
+                    output_reserve_tokens=(
+                        self._config.output_reserve_tokens
+                    ),
                 )
+            request = self._context.apply_generation_limit(
+                request,
+                input_tokens,
+            )
             model_call_index += 1
 
             def on_text_delta(

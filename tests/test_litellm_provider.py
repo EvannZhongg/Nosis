@@ -240,7 +240,7 @@ class LiteLLMProviderTest(unittest.TestCase):
         request = LLMRequest(
             system_prompt="You are helpful.",
             messages=(Message(role="user", content="hello"),),
-            max_output_tokens=100,
+            max_generation_tokens=100,
         )
         token_counter_mock.return_value = 12
 
@@ -277,7 +277,7 @@ class LiteLLMProviderTest(unittest.TestCase):
             ],
             stream=True,
             stream_options={"include_usage": True},
-            max_tokens=100,
+            max_completion_tokens=100,
         )
 
     @patch("agent_core.providers.litellm_provider.completion")
@@ -305,6 +305,10 @@ class LiteLLMProviderTest(unittest.TestCase):
 
         self.assertEqual(response.content, "first second")
         self.assertEqual(deltas, ["first ", "second"])
+        self.assertNotIn(
+            "max_completion_tokens",
+            completion_mock.call_args.kwargs,
+        )
 
     @patch("agent_core.providers.litellm_provider.completion")
     def test_serializes_tools_and_parses_tool_calls(
@@ -497,7 +501,7 @@ class LiteLLMProviderTest(unittest.TestCase):
     ) -> None:
         get_model_info_mock.return_value = {
             "max_input_tokens": 128000,
-            "max_tokens": 8192,
+            "max_output_tokens": 8192,
         }
 
         provider = LiteLLMProvider(
@@ -506,6 +510,7 @@ class LiteLLMProviderTest(unittest.TestCase):
         )
 
         self.assertEqual(provider.max_context_tokens, 128000)
+        self.assertEqual(provider.max_output_tokens, 8192)
         get_model_info_mock.assert_called_once_with(
             model="openai/test-model",
             api_base="https://example.com/v1",
@@ -538,11 +543,39 @@ class LiteLLMProviderTest(unittest.TestCase):
     ) -> None:
         get_model_info_mock.return_value = {
             "max_input_tokens": None,
-            "max_tokens": None,
+            "max_output_tokens": 8192,
         }
 
         with self.assertRaises(ValueError):
             LiteLLMProvider(model="custom/model")
+
+    @patch("agent_core.providers.litellm_provider.get_model_info")
+    def test_requires_config_when_model_metadata_lookup_fails(
+        self,
+        get_model_info_mock,
+    ) -> None:
+        get_model_info_mock.side_effect = RuntimeError("unknown model")
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "configure 'max_context_tokens'",
+        ):
+            LiteLLMProvider(model="custom/model")
+
+    @patch("agent_core.providers.litellm_provider.get_model_info")
+    def test_unknown_output_limit_is_none(
+        self,
+        get_model_info_mock,
+    ) -> None:
+        get_model_info_mock.return_value = {
+            "max_input_tokens": 128000,
+            "max_output_tokens": None,
+            "max_tokens": 8192,
+        }
+
+        provider = LiteLLMProvider(model="custom/model")
+
+        self.assertIsNone(provider.max_output_tokens)
 
 
 if __name__ == "__main__":

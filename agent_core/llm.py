@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
 
@@ -12,7 +12,7 @@ class LLMRequest:
     system_prompt: str
     messages: tuple[Message, ...]
     tools: tuple[ToolDefinition, ...] = ()
-    max_output_tokens: int | None = None
+    max_generation_tokens: int | None = None
     # Runtime-only root used to resolve relative media paths. It is not
     # persisted in session logs or sent to the provider API.
     media_root: Path | None = None
@@ -47,6 +47,11 @@ class LLMProvider(ABC):
     def max_context_tokens(self) -> int:
         raise NotImplementedError
 
+    @property
+    def max_output_tokens(self) -> int | None:
+        """Return the model's per-call output limit, if it is known."""
+        return None
+
     @abstractmethod
     def count_input_tokens(self, request: LLMRequest) -> int:
         raise NotImplementedError
@@ -65,3 +70,28 @@ class LLMProvider(ABC):
         blocking and single-threaded.
         """
         raise NotImplementedError
+
+
+def with_generation_limit(
+    request: LLMRequest,
+    provider: LLMProvider,
+    input_tokens: int,
+    policy_limit: int | None = None,
+) -> LLMRequest:
+    provider_limit = provider.max_output_tokens
+    if provider_limit is None and policy_limit is None:
+        return request
+
+    remaining_tokens = provider.max_context_tokens - input_tokens
+    if remaining_tokens < 1:
+        return request
+
+    limits = [remaining_tokens]
+    if provider_limit is not None:
+        limits.append(provider_limit)
+    if policy_limit is not None:
+        limits.append(policy_limit)
+    return replace(
+        request,
+        max_generation_tokens=min(limits),
+    )

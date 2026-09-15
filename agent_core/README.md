@@ -11,7 +11,8 @@
 ```json
 {
   "max_same_tool_calls": 5,
-  "max_output_tokens": 8192,
+  "output_reserve_tokens": 8192,
+  "max_generation_tokens": null,
   "shell_timeout_seconds": 60,
   "main_agent": {
     "tools": {
@@ -33,7 +34,8 @@
 | 字段 | 说明 |
 | --- | --- |
 | `max_same_tool_calls` | 单轮内完全相同 Tool Call 的连续次数上限 |
-| `max_output_tokens` | 每次回答预留的输出 token 数；其余为模型 hard limit |
+| `output_reserve_tokens` | 为下一次模型输出预留的上下文空间，只参与输入 hard limit 和压缩阈值计算 |
+| `max_generation_tokens` | 可选的单次生成策略上限；默认 `null`，实际上限取模型最大输出、剩余上下文和该值中的最小值 |
 | `context.compression` | 可选上下文压缩设置：`enabled`、`trigger_ratio`、`target_ratio`；`target` 必须小于 `trigger` |
 | `shell_timeout_seconds` | shell 默认超时，默认 60 秒、上限 900 秒 |
 | `main_agent.tools` | 主 Agent 的内置 Tool 开关；显式写 `true` 才启用 |

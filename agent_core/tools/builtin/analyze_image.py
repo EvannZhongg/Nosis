@@ -1,6 +1,6 @@
 from ...content import TextPart
 from ...session import Message
-from ...llm import LLMRequest
+from ...llm import LLMRequest, with_generation_limit
 from ..base import JSONValue, Tool, ToolDefinition
 from ..context import ToolExecutionContext
 from ..paths import resolve_image
@@ -52,20 +52,28 @@ class AnalyzeImageTool(Tool):
         # The media type is read from the file itself, so a mislabelled
         # extension cannot make the request claim the wrong format.
         image, _info = resolve_image(path, context)
-        response = provider.stream(
-            LLMRequest(
-                system_prompt="Analyze the supplied image and answer the user's question.",
-                messages=(
-                    Message(
-                        role="user",
-                        content=(
-                            TextPart(text=question),
-                            image,
-                        ),
+        request = LLMRequest(
+            system_prompt="Analyze the supplied image and answer the user's question.",
+            messages=(
+                Message(
+                    role="user",
+                    content=(
+                        TextPart(text=question),
+                        image,
                     ),
                 ),
-                media_root=context.workspace.path,
             ),
+            media_root=context.workspace.path,
+        )
+        input_tokens = provider.count_input_tokens(request)
+        request = with_generation_limit(
+            request,
+            provider,
+            input_tokens,
+            context.max_generation_tokens,
+        )
+        response = provider.stream(
+            request,
             lambda _text: None,
         )
         if response.tool_calls or not response.content:

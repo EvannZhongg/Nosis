@@ -36,8 +36,9 @@ class SubagentRoleConfig:
 @dataclass(frozen=True)
 class AgentConfig:
     max_same_tool_calls: int
-    max_output_tokens: int
+    output_reserve_tokens: int
     tools: ToolConfig
+    max_generation_tokens: int | None = None
     shell_timeout_seconds: int = DEFAULT_SHELL_TIMEOUT_SECONDS
     context: ContextCompressionConfig = field(
         default_factory=ContextCompressionConfig
@@ -56,9 +57,13 @@ def load_agent_config(path: Path) -> AgentConfig:
         data,
         "max_same_tool_calls",
     )
-    max_output_tokens = _positive_integer(
+    output_reserve_tokens = _positive_integer(
         data,
-        "max_output_tokens",
+        "output_reserve_tokens",
+    )
+    max_generation_tokens = _optional_positive_integer(
+        data,
+        "max_generation_tokens",
     )
     shell_timeout_seconds = data.get(
         "shell_timeout_seconds",
@@ -81,8 +86,9 @@ def load_agent_config(path: Path) -> AgentConfig:
 
     return AgentConfig(
         max_same_tool_calls=max_same_tool_calls,
-        max_output_tokens=max_output_tokens,
+        output_reserve_tokens=output_reserve_tokens,
         tools=tools,
+        max_generation_tokens=max_generation_tokens,
         subagent_roles=subagent_roles,
         shell_timeout_seconds=shell_timeout_seconds,
         context=context,
@@ -177,5 +183,19 @@ def _positive_integer(data: dict[str, object], field: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise ValueError(
             f"config field '{field}' must be a positive integer"
+        )
+    return value
+
+
+def _optional_positive_integer(
+    data: dict[str, object],
+    field: str,
+) -> int | None:
+    value = data.get(field)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(
+            f"config field '{field}' must be a positive integer or null"
         )
     return value

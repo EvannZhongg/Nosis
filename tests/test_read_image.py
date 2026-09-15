@@ -57,7 +57,7 @@ class StubProvider(LLMProvider):
 def agent_config() -> AgentConfig:
     return AgentConfig(
         max_same_tool_calls=5,
-        max_output_tokens=100,
+        output_reserve_tokens=100,
         tools=ToolConfig(enabled=()),
         context=ContextCompressionConfig(enabled=False),
     )

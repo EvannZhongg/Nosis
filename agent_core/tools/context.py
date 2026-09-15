@@ -34,6 +34,7 @@ class ToolExecutionContext:
     )
     command_executor: "CommandExecutor | None" = None
     shell_timeout_seconds: int = DEFAULT_COMMAND_TIMEOUT_SECONDS
+    max_generation_tokens: int | None = None
     # Whether the Agent's own model accepts image input.  It decides
     # which of the two image tools this Agent gets: the model either sees
     # images itself via ``read_image``, or delegates to the vision

@@ -37,7 +37,7 @@ TOOL_RESULT_TIME = datetime(2026, 9, 9, 8, 0, 11, tzinfo=timezone.utc)
 RESPONSE_TIME = datetime(2026, 9, 9, 8, 1, tzinfo=timezone.utc)
 AGENT_CONFIG = AgentConfig(
     max_same_tool_calls=5,
-    max_output_tokens=100,
+    output_reserve_tokens=100,
     tools=ToolConfig(enabled=()),
 )
 TEST_WORKSPACE = Workspace(Path(__file__).parent)
@@ -60,16 +60,22 @@ class MockProvider(LLMProvider):
         responses: list[str | LLMResponse],
         input_tokens: int = 1,
         max_context_tokens: int = 1000,
+        max_output_tokens: int | None = None,
     ) -> None:
         self._responses = iter(responses)
         self._input_tokens = input_tokens
         self._max_context_tokens = max_context_tokens
+        self._max_output_tokens = max_output_tokens
         self.counted_requests: list[LLMRequest] = []
         self.requests: list[LLMRequest] = []
 
     @property
     def max_context_tokens(self) -> int:
         return self._max_context_tokens
+
+    @property
+    def max_output_tokens(self) -> int | None:
+        return self._max_output_tokens
 
     def count_input_tokens(self, request: LLMRequest) -> int:
         self.counted_requests.append(request)
@@ -142,7 +148,7 @@ class AgentTest(unittest.TestCase):
         self.assertEqual(result.request, provider.requests[0])
         request_messages = provider.requests[0].messages
         self.assertNotIn("[Conversation Timeline]", provider.requests[0].system_prompt)
-        self.assertEqual(provider.requests[0].max_output_tokens, 100)
+        self.assertIsNone(provider.requests[0].max_generation_tokens)
         self.assertEqual(request_messages[0].role, "system")
         self.assertIn("[Conversation Timeline]", request_messages[0].content)
         self.assertEqual(request_messages[1].role, "user")
@@ -183,12 +189,12 @@ class AgentTest(unittest.TestCase):
 
         self.assertEqual(context.exception.input_tokens, 901)
         self.assertEqual(context.exception.max_context_tokens, 1000)
-        self.assertEqual(context.exception.max_output_tokens, 100)
+        self.assertEqual(context.exception.output_reserve_tokens, 100)
         self.assertEqual(context.exception.max_input_tokens, 900)
         self.assertEqual(len(provider.counted_requests), 1)
         self.assertEqual(provider.requests, [])
 
-    def test_rejects_output_limit_not_smaller_than_context_limit(self) -> None:
+    def test_rejects_output_reserve_not_smaller_than_context_limit(self) -> None:
         provider = MockProvider(["unused"], max_context_tokens=100)
         session = Session(session_id="session-1")
 
@@ -203,6 +209,93 @@ class AgentTest(unittest.TestCase):
                     workspace=TEST_WORKSPACE, session=session
                 ),
             )
+
+    def test_generation_limit_uses_provider_output_limit(self) -> None:
+        provider = MockProvider(
+            ["hello back"],
+            input_tokens=200,
+            max_context_tokens=1000,
+            max_output_tokens=500,
+        )
+        session = Session(session_id="session-1")
+        agent = Agent(
+            provider=provider,
+            session=session,
+            system_prompt="You are helpful.",
+            config=AGENT_CONFIG,
+            tools=tool_set(session=session),
+            context=ToolExecutionContext(
+                workspace=TEST_WORKSPACE, session=session
+            ),
+            now=clock(REQUEST_TIME, RESPONSE_TIME),
+        )
+
+        agent.run("hello")
+
+        self.assertEqual(
+            provider.requests[0].max_generation_tokens,
+            500,
+        )
+
+    def test_generation_limit_uses_remaining_context(self) -> None:
+        provider = MockProvider(
+            ["hello back"],
+            input_tokens=850,
+            max_context_tokens=1000,
+            max_output_tokens=500,
+        )
+        session = Session(session_id="session-1")
+        agent = Agent(
+            provider=provider,
+            session=session,
+            system_prompt="You are helpful.",
+            config=AGENT_CONFIG,
+            tools=tool_set(session=session),
+            context=ToolExecutionContext(
+                workspace=TEST_WORKSPACE, session=session
+            ),
+            now=clock(REQUEST_TIME, RESPONSE_TIME),
+        )
+
+        agent.run("hello")
+
+        self.assertEqual(
+            provider.requests[0].max_generation_tokens,
+            150,
+        )
+
+    def test_generation_policy_caps_dynamic_limit(self) -> None:
+        provider = MockProvider(
+            ["hello back"],
+            input_tokens=200,
+            max_context_tokens=1000,
+            max_output_tokens=500,
+        )
+        session = Session(session_id="session-1")
+        config = AgentConfig(
+            max_same_tool_calls=5,
+            output_reserve_tokens=100,
+            max_generation_tokens=50,
+            tools=ToolConfig(enabled=()),
+        )
+        agent = Agent(
+            provider=provider,
+            session=session,
+            system_prompt="You are helpful.",
+            config=config,
+            tools=tool_set(session=session),
+            context=ToolExecutionContext(
+                workspace=TEST_WORKSPACE, session=session
+            ),
+            now=clock(REQUEST_TIME, RESPONSE_TIME),
+        )
+
+        agent.run("hello")
+
+        self.assertEqual(
+            provider.requests[0].max_generation_tokens,
+            50,
+        )
 
     def test_mock_provider_receives_complete_multi_turn_context(self) -> None:
         provider = MockProvider(["first answer", "second answer"])

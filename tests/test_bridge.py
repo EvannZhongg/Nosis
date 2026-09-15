@@ -352,7 +352,7 @@ def start_message(
             if agent_config is not None
             else {
                 "max_same_tool_calls": 5,
-                "max_output_tokens": 100,
+                "output_reserve_tokens": 100,
                 "main_agent": {"tools": {name: False for name in TOOL_NAMES}},
             }
         ),
@@ -590,7 +590,7 @@ class SubagentRoleStartTest(unittest.TestCase):
                     Path(directory),
                     agent_config={
                         "max_same_tool_calls": 5,
-                        "max_output_tokens": 100,
+                        "output_reserve_tokens": 100,
                         "main_agent": {"tools": {"subagent": True}},
                         "subagent_roles": roles,
                     },
@@ -640,7 +640,7 @@ class SubagentRoleStartTest(unittest.TestCase):
                     Path(directory),
                     agent_config={
                         "max_same_tool_calls": 5,
-                        "max_output_tokens": 100,
+                        "output_reserve_tokens": 100,
                         "main_agent": {"tools": {"subagent": True}},
                         "subagent_roles": {
                             "researcher": {
@@ -722,7 +722,7 @@ class AnalyzeImageDerivationTest(unittest.TestCase):
                         },
                         agent_config={
                             "max_same_tool_calls": 5,
-                            "max_output_tokens": 100,
+                            "output_reserve_tokens": 100,
                             "main_agent": {"tools": {"subagent": True}},
                             "subagent_roles": {
                                 "researcher": {
@@ -838,7 +838,7 @@ class CrossFileRoleValidationTest(unittest.TestCase):
                     },
                     agent_config={
                         "max_same_tool_calls": 5,
-                        "max_output_tokens": 100,
+                        "output_reserve_tokens": 100,
                         "main_agent": {"tools": {"subagent": True}},
                         "subagent_roles": agent_roles,
                     },
