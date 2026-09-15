@@ -10,6 +10,8 @@ export type PromptProps = {
   /** False while a prompt elsewhere owns the keyboard. */
   focus: boolean;
   busy: boolean;
+  /** True when the prompt grows upward from a fixed bottom edge. */
+  docked?: boolean;
 };
 
 /**
@@ -24,6 +26,31 @@ export function caretPoint(value: string, offset: number): { column: number; row
   return {
     column: stringWidth(before[before.length - 1]!),
     row: before.length - 1,
+  };
+}
+
+export function caretPosition({
+  metrics,
+  caret,
+  lineCount,
+  docked,
+}: {
+  metrics: { left: number; top: number; height: number };
+  caret: { column: number; row: number };
+  lineCount: number;
+  docked: boolean;
+}): { x: number; y: number } {
+  if (!docked) {
+    return { x: metrics.left + 1 + caret.column, y: metrics.top + 1 + caret.row };
+  }
+
+  const rowsBelowCaret = lineCount - caret.row - 1;
+  return {
+    x: metrics.left + 1 + caret.column,
+    // A docked prompt expands upward. Its previous and next measurements have
+    // the same bottom edge, so this stays correct while useBoxMetrics catches
+    // up after Ctrl+J inserts a new row.
+    y: metrics.top + metrics.height - 2 - rowsBelowCaret,
   };
 }
 
@@ -51,6 +78,7 @@ export function Prompt({
   onSubmit,
   focus,
   busy,
+  docked = false,
 }: PromptProps): React.ReactElement {
   const boxRef = React.useRef<DOMElement>(null);
   const metrics = useBoxMetrics(boxRef);
@@ -129,7 +157,12 @@ export function Prompt({
   const showCaret = focus && metrics.hasMeasured && !busy;
   setCursorPosition(
     showCaret
-      ? { x: metrics.left + 1 + caret.column, y: metrics.top + 1 + caret.row }
+      ? caretPosition({
+          metrics,
+          caret,
+          lineCount: value.split('\n').length,
+          docked,
+        })
       : undefined,
   );
 

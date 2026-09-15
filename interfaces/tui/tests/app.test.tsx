@@ -267,6 +267,26 @@ describe('App', () => {
     );
   });
 
+  it('keeps short multiline output in the viewport until it fills downward', async () => {
+    const { lastFrame } = renderApp();
+    await waitForReady(lastFrame);
+
+    emit({
+      type: 'assistant_delta',
+      turn_id: 't1',
+      text: 'line one\nline two\nline three\nline four\nline five',
+      model_call_index: 1,
+    });
+    await waitFor(() => expect(lastFrame()).toContain('line five'));
+
+    const first = lineContaining(lastFrame(), 'line one');
+    const fifth = lineContaining(lastFrame(), 'line five');
+    const input = lineContaining(lastFrame(), 'type to queue a message…');
+    expect(first).toBeLessThan(3);
+    expect(fifth).toBe(first + 4);
+    expect(input).toBeGreaterThan(fifth + 1);
+  });
+
   it('lets long model output grow through the terminal stream', async () => {
     const { lastFrame } = renderApp();
     await waitForReady(lastFrame);

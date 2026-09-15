@@ -1,5 +1,6 @@
 import React from 'react';
-import { Box, Static, Text } from 'ink';
+import { Box, Static, Text, useBoxMetrics } from 'ink';
+import type { DOMElement } from 'ink';
 import Spinner from 'ink-spinner';
 import { formatArguments } from '@nosis/protocol';
 import type { ApprovalChoice, Entry, State } from './state.js';
@@ -81,25 +82,150 @@ function EntryView({ entry }: { entry: Entry }): React.ReactElement {
   );
 }
 
-export function Transcript({ state }: { state: State }): React.ReactElement {
-  const isLive = (entry: Entry): boolean =>
-    ((entry.kind === 'assistant' || entry.kind === 'reasoning') && !entry.settled) ||
-    (entry.kind === 'tool' && entry.state === 'running');
+type TextEntry = Extract<Entry, { kind: 'assistant' | 'reasoning' }>;
 
-  const firstLive = state.entries.findIndex(isLive);
-  const split = firstLive === -1 ? state.entries.length : firstLive;
-  const settled = state.entries.slice(0, split);
-  const live = state.entries.slice(split);
+type TranscriptItem =
+  | { id: string; kind: 'entry'; entry: Entry }
+  | {
+      id: string;
+      kind: 'text-line';
+      entryKind: TextEntry['kind'];
+      text: string;
+      first: boolean;
+      timestamp?: string;
+    };
+
+function TextLineView({
+  item,
+}: {
+  item: Extract<TranscriptItem, { kind: 'text-line' }>;
+}): React.ReactElement {
+  if (item.entryKind === 'reasoning') {
+    return (
+      <Box>
+        <Text dimColor italic>
+          {item.text || ' '}
+        </Text>
+      </Box>
+    );
+  }
 
   return (
-    <Box flexDirection="column">
-      <Static items={settled}>
-        {(entry) => <EntryView key={entry.id} entry={entry} />}
-      </Static>
-      {live.map((entry) => (
-        <EntryView key={entry.id} entry={entry} />
-      ))}
+    <Box marginTop={item.first ? 1 : 0}>
+      <Text>{item.text || ' '}</Text>
+      {item.timestamp ? <Text dimColor> {new Date(item.timestamp).toLocaleString()}</Text> : null}
     </Box>
+  );
+}
+
+function TranscriptItemView({ item }: { item: TranscriptItem }): React.ReactElement {
+  return item.kind === 'entry' ? <EntryView entry={item.entry} /> : <TextLineView item={item} />;
+}
+
+function textItems(entry: TextEntry): {
+  settled: TranscriptItem[];
+  live: TranscriptItem | null;
+} {
+  const lines = entry.text.split('\n');
+  const settledCount = entry.settled ? lines.length : lines.length - 1;
+  const settled = lines.slice(0, settledCount).map(
+    (text, index): TranscriptItem => ({
+      id: `${entry.id}:line:${index}`,
+      kind: 'text-line',
+      entryKind: entry.kind,
+      text,
+      first: index === 0,
+      ...(entry.kind === 'assistant' &&
+      entry.settled &&
+      index === settledCount - 1 &&
+      entry.timestamp_utc
+        ? { timestamp: entry.timestamp_utc }
+        : {}),
+    }),
+  );
+
+  if (entry.settled || lines.at(-1) === '') return { settled, live: null };
+  return {
+    settled,
+    live: {
+      id: `${entry.id}:tail`,
+      kind: 'text-line',
+      entryKind: entry.kind,
+      text: lines.at(-1)!,
+      first: settledCount === 0,
+    },
+  };
+}
+
+export function Transcript({ state }: { state: State }): React.ReactElement {
+  const items: TranscriptItem[] = [];
+  let committableCount = 0;
+  let reachedLiveEntry = false;
+
+  for (const entry of state.entries) {
+    if (reachedLiveEntry) {
+      items.push({ id: entry.id, kind: 'entry', entry });
+      continue;
+    }
+
+    if (entry.kind === 'assistant' || entry.kind === 'reasoning') {
+      const text = textItems(entry);
+      items.push(...text.settled);
+      committableCount += text.settled.length;
+      if (text.live) {
+        items.push(text.live);
+        reachedLiveEntry = true;
+      }
+      continue;
+    }
+
+    if (entry.kind === 'tool' && entry.state === 'running') {
+      items.push({ id: entry.id, kind: 'entry', entry });
+      reachedLiveEntry = true;
+      continue;
+    }
+
+    items.push({ id: entry.id, kind: 'entry', entry });
+    committableCount += 1;
+  }
+
+  const [committedCount, setCommittedCount] = React.useState(0);
+  const viewportRef = React.useRef<DOMElement>(null);
+  const contentRef = React.useRef<DOMElement>(null);
+  const viewport = useBoxMetrics(viewportRef);
+  const content = useBoxMetrics(contentRef);
+  const overflowing =
+    viewport.hasMeasured && content.hasMeasured && content.height > viewport.height;
+
+  React.useEffect(() => {
+    if (overflowing && committedCount < committableCount) {
+      setCommittedCount((count) => Math.min(count + 1, committableCount));
+    }
+  }, [committableCount, committedCount, overflowing]);
+
+  const committed = items.slice(0, committedCount);
+  const visible = items.slice(committedCount);
+
+  return (
+    <>
+      <Static items={committed}>
+        {(item) => <TranscriptItemView key={item.id} item={item} />}
+      </Static>
+      <Box
+        ref={viewportRef}
+        flexGrow={1}
+        flexShrink={1}
+        flexDirection="column"
+        justifyContent={overflowing ? 'flex-end' : 'flex-start'}
+        overflowY="hidden"
+      >
+        <Box ref={contentRef} flexShrink={0} flexDirection="column">
+          {visible.map((item) => (
+            <TranscriptItemView key={item.id} item={item} />
+          ))}
+        </Box>
+      </Box>
+    </>
   );
 }
 

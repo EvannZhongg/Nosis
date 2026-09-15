@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useReducer, useRef, useState } from 'react';
-import { Box, Text, useApp, useInput } from 'ink';
+import { Box, Text, useApp, useInput, useWindowSize } from 'ink';
 import { BridgeClient } from './bridge.js';
 import { Prompt } from './input.js';
 import { ApprovalPrompt, StatusBar, Transcript } from './renderer.js';
@@ -20,6 +20,7 @@ function protocolPath(path: string): string {
 
 export function App(props: AppProps): React.ReactElement {
   const { exit } = useApp();
+  const { rows } = useWindowSize();
   const [state, dispatch] = useReducer(reducer, initialState);
   const [draft, setDraft] = useState('');
   const [elapsed, setElapsed] = useState(0);
@@ -168,21 +169,25 @@ export function App(props: AppProps): React.ReactElement {
   }, [state.status]);
 
   return (
-    <Box flexDirection="column">
-      {state.status !== 'starting' && state.entries.length === 0 ? (
-        <Box>
-          <Text dimColor>Nosis · {state.workspace}</Text>
-        </Box>
-      ) : null}
+    <Box height={Math.max(1, rows - 1)} flexDirection="column">
+      <Box flexGrow={1} flexShrink={1} flexDirection="column" overflowY="hidden">
+        {state.status !== 'starting' && state.entries.length === 0 ? (
+          <Box flexShrink={0}>
+            <Text dimColor>Nosis · {state.workspace}</Text>
+          </Box>
+        ) : null}
 
-      <Transcript state={state} />
+        <Transcript state={state} />
 
-      {state.approval ? (
-        <ApprovalPrompt command={state.approval.command} choice={state.approval.choice} />
-      ) : null}
+        {state.approval ? (
+          <Box flexShrink={0}>
+            <ApprovalPrompt command={state.approval.command} choice={state.approval.choice} />
+          </Box>
+        ) : null}
+      </Box>
 
       {state.status === 'fatal' ? (
-        <Box marginTop={1}>
+        <Box flexShrink={0} marginTop={1}>
           <Text dimColor>Press Ctrl+C to exit.</Text>
         </Box>
       ) : (
@@ -192,6 +197,7 @@ export function App(props: AppProps): React.ReactElement {
           onSubmit={submit}
           focus={state.approval === null}
           busy={state.status !== 'idle'}
+          docked
         />
       )}
 
