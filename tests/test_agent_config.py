@@ -40,7 +40,6 @@ class AgentConfigTest(unittest.TestCase):
                     {
                         "max_same_tool_calls": 5,
                         "output_reserve_tokens": 100,
-                        "shell_timeout_seconds": 30,
                         "main_agent": {
                             "tools": {
                                 **ENABLED_TOOLS,
@@ -58,7 +57,6 @@ class AgentConfigTest(unittest.TestCase):
                 AgentConfig(
                     max_same_tool_calls=5,
                     output_reserve_tokens=100,
-                    shell_timeout_seconds=30,
                     tools=ToolConfig(
                         enabled=(
                             "read_file",
@@ -68,48 +66,6 @@ class AgentConfigTest(unittest.TestCase):
                     ),
                 ),
             )
-
-    def test_defaults_shell_timeout_to_60_seconds(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "agent_config.json"
-            path.write_text(
-                json.dumps(
-                    {
-                        "max_same_tool_calls": 5,
-                        "output_reserve_tokens": 100,
-                        "main_agent": {"tools": ENABLED_TOOLS},
-                    }
-                ),
-                encoding="utf-8",
-            )
-
-            self.assertEqual(
-                load_agent_config(path).shell_timeout_seconds,
-                60,
-            )
-
-    def test_rejects_invalid_shell_timeout(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "agent_config.json"
-            for timeout_seconds in (0, 901, True):
-                with self.subTest(timeout_seconds=timeout_seconds):
-                    path.write_text(
-                        json.dumps(
-                            {
-                                "max_same_tool_calls": 5,
-                                "output_reserve_tokens": 100,
-                                "shell_timeout_seconds": timeout_seconds,
-                                "main_agent": {"tools": ENABLED_TOOLS},
-                            }
-                        ),
-                        encoding="utf-8",
-                    )
-
-                    with self.assertRaisesRegex(
-                        ValueError,
-                        "shell_timeout_seconds.*between 1 and 900",
-                    ):
-                        load_agent_config(path)
 
     def test_rejects_non_positive_limit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -1807,7 +1807,7 @@ class ShellToolTest(unittest.TestCase):
             },
         )
 
-    def test_allows_shorter_timeout_than_configured_default(self) -> None:
+    def test_allows_explicit_timeout_below_default(self) -> None:
         class RecordingExecutor:
             def __init__(self) -> None:
                 self.timeouts = []
@@ -1827,14 +1827,13 @@ class ShellToolTest(unittest.TestCase):
             ShellTool(),
             _TMP_WORKSPACE,
             command_executor=executor,
-            shell_timeout_seconds=60,
         )
 
         tool.execute({"command": "pwd", "timeout_seconds": 10})
 
         self.assertEqual(executor.timeouts, [10])
 
-    def test_allows_timeout_longer_than_configured_default(self) -> None:
+    def test_allows_timeout_above_the_default(self) -> None:
         class RecordingExecutor:
             def __init__(self) -> None:
                 self.timeouts = []
@@ -1854,7 +1853,6 @@ class ShellToolTest(unittest.TestCase):
             ShellTool(),
             _TMP_WORKSPACE,
             command_executor=executor,
-            shell_timeout_seconds=60,
         )
 
         tool.execute({"command": "pwd", "timeout_seconds": 61})
@@ -1871,7 +1869,6 @@ class ShellToolTest(unittest.TestCase):
             ShellTool(),
             _TMP_WORKSPACE,
             command_executor=UnusedExecutor(),
-            shell_timeout_seconds=90,
         )
 
         definition = tool.definition
@@ -1880,7 +1877,7 @@ class ShellToolTest(unittest.TestCase):
         ]
 
         self.assertEqual(timeout_schema["maximum"], 900)
-        self.assertIn("90 seconds", definition.description)
+        self.assertIn("60 seconds by default", definition.description)
         self.assertIn("maximum of 900", timeout_schema["description"])
         self.assertIn(
             "Git Bash" if os.name == "nt" else "/bin/sh",

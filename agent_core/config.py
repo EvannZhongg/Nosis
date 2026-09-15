@@ -2,17 +2,8 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .execution import (
-    DEFAULT_COMMAND_TIMEOUT_SECONDS,
-    MAX_COMMAND_TIMEOUT_SECONDS,
-)
 from .tools.config import ROLE_TOOL_NAMES, ToolConfig, load_tool_config
 from .mcp.config import McpConfig, load_mcp_config
-
-
-DEFAULT_SHELL_TIMEOUT_SECONDS = DEFAULT_COMMAND_TIMEOUT_SECONDS
-MAX_SHELL_TIMEOUT_SECONDS = MAX_COMMAND_TIMEOUT_SECONDS
-
 
 @dataclass(frozen=True)
 class ContextCompressionConfig:
@@ -38,7 +29,6 @@ class AgentConfig:
     output_reserve_tokens: int
     tools: ToolConfig
     max_generation_tokens: int | None = None
-    shell_timeout_seconds: int = DEFAULT_SHELL_TIMEOUT_SECONDS
     context: ContextCompressionConfig = field(
         default_factory=ContextCompressionConfig
     )
@@ -64,20 +54,6 @@ def load_agent_config(path: Path) -> AgentConfig:
         data,
         "max_generation_tokens",
     )
-    shell_timeout_seconds = data.get(
-        "shell_timeout_seconds",
-        DEFAULT_SHELL_TIMEOUT_SECONDS,
-    )
-    if (
-        isinstance(shell_timeout_seconds, bool)
-        or not isinstance(shell_timeout_seconds, int)
-        or shell_timeout_seconds < 1
-        or shell_timeout_seconds > MAX_SHELL_TIMEOUT_SECONDS
-    ):
-        raise ValueError(
-            "config field 'shell_timeout_seconds' must be an integer "
-            f"between 1 and {MAX_SHELL_TIMEOUT_SECONDS}"
-        )
     tools = _main_agent_tools(data.get("main_agent"))
     subagent_roles = _subagent_roles(data.get("subagent_roles"))
     context = _context_config(data.get("context"))
@@ -89,7 +65,6 @@ def load_agent_config(path: Path) -> AgentConfig:
         tools=tools,
         max_generation_tokens=max_generation_tokens,
         subagent_roles=subagent_roles,
-        shell_timeout_seconds=shell_timeout_seconds,
         context=context,
         mcp=mcp,
     )

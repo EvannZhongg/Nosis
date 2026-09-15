@@ -4,12 +4,18 @@ from pathlib import Path
 from typing import Callable
 
 from ...execution import (
-    MAX_COMMAND_TIMEOUT_SECONDS,
     CommandExecutionResult,
     CommandOutputSpool,
 )
 from ..base import JSONValue, Tool, ToolDefinition, ToolOutput
 from ..context import ToolExecutionContext
+
+
+# Shell timeout policy is fixed for every runtime: the default is what a call
+# gets when it omits ``timeout_seconds``, and the maximum is the longest a
+# call may ask for.  Both are advertised in the Tool schema.
+DEFAULT_SHELL_TIMEOUT_SECONDS = 60
+MAX_SHELL_TIMEOUT_SECONDS = 900
 
 
 WINDOWS_SHELL_NOTE = (
@@ -23,7 +29,7 @@ POSIX_SHELL_NOTE = (
 )
 
 
-def _describe(default_timeout_seconds: int) -> str:
+def _describe() -> str:
     shell_note = (
         WINDOWS_SHELL_NOTE if os.name == "nt" else POSIX_SHELL_NOTE
     )
@@ -31,9 +37,9 @@ def _describe(default_timeout_seconds: int) -> str:
         "Execute a shell command with the workspace as the current "
         f"directory. {shell_note} Every call starts a fresh shell, so "
         "directory and environment changes do not persist. The command is "
-        f"killed after {default_timeout_seconds} seconds by default; the "
-        f"timeout may be set up to {MAX_COMMAND_TIMEOUT_SECONDS} seconds. "
-        "Its exit code, stdout and stderr are returned."
+        f"killed after {DEFAULT_SHELL_TIMEOUT_SECONDS} seconds by default; "
+        f"the timeout may be set up to {MAX_SHELL_TIMEOUT_SECONDS} "
+        "seconds. Its exit code, stdout and stderr are returned."
     )
 
 
@@ -44,10 +50,9 @@ class ShellTool(Tool):
         return context.command_executor is not None
 
     def definition(self, context: ToolExecutionContext) -> ToolDefinition:
-        default_timeout_seconds = _default_timeout(context)
         return ToolDefinition(
             name=self.name,
-            description=_describe(default_timeout_seconds),
+            description=_describe(),
             parameters={
                 "type": "object",
                 "properties": {
@@ -61,12 +66,12 @@ class ShellTool(Tool):
                     "timeout_seconds": {
                         "type": "integer",
                         "minimum": 1,
-                        "maximum": MAX_COMMAND_TIMEOUT_SECONDS,
+                        "maximum": MAX_SHELL_TIMEOUT_SECONDS,
                         "description": (
-                            "Optional timeout in seconds. Defaults to the "
-                            "configured default of "
-                            f"{default_timeout_seconds}, with a maximum of "
-                            f"{MAX_COMMAND_TIMEOUT_SECONDS}."
+                            "Optional timeout in seconds. Defaults to "
+                            f"{DEFAULT_SHELL_TIMEOUT_SECONDS} seconds, "
+                            "with a maximum of "
+                            f"{MAX_SHELL_TIMEOUT_SECONDS}."
                         ),
                     },
                 },
@@ -80,11 +85,10 @@ class ShellTool(Tool):
         arguments: dict[str, JSONValue],
         context: ToolExecutionContext,
     ) -> JSONValue | ToolOutput:
-        default_timeout_seconds = _default_timeout(context)
         command = arguments.get("command")
         timeout_seconds = arguments.get(
             "timeout_seconds",
-            default_timeout_seconds,
+            DEFAULT_SHELL_TIMEOUT_SECONDS,
         )
         if not isinstance(command, str) or not command:
             raise ValueError("shell requires a non-empty string 'command'")
@@ -92,11 +96,11 @@ class ShellTool(Tool):
             isinstance(timeout_seconds, bool)
             or not isinstance(timeout_seconds, int)
             or timeout_seconds < 1
-            or timeout_seconds > MAX_COMMAND_TIMEOUT_SECONDS
+            or timeout_seconds > MAX_SHELL_TIMEOUT_SECONDS
         ):
             raise ValueError(
                 "shell requires 'timeout_seconds' to be an integer "
-                f"between 1 and {MAX_COMMAND_TIMEOUT_SECONDS}"
+                f"between 1 and {MAX_SHELL_TIMEOUT_SECONDS}"
             )
         if not set(arguments) <= {"command", "timeout_seconds"}:
             raise ValueError(
@@ -129,21 +133,6 @@ class ShellTool(Tool):
             artifact_writer=writer,
             artifact_cleanup=_cleanup_spools(stdout_spool, stderr_spool),
         )
-
-
-def _default_timeout(context: ToolExecutionContext) -> int:
-    timeout_seconds = context.shell_timeout_seconds
-    if (
-        isinstance(timeout_seconds, bool)
-        or not isinstance(timeout_seconds, int)
-        or timeout_seconds < 1
-        or timeout_seconds > MAX_COMMAND_TIMEOUT_SECONDS
-    ):
-        raise ValueError(
-            "default shell timeout must be an integer between 1 and "
-            f"{MAX_COMMAND_TIMEOUT_SECONDS} seconds"
-        )
-    return timeout_seconds
 
 
 def _cleanup_spools(

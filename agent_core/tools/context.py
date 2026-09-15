@@ -2,7 +2,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ..execution import DEFAULT_COMMAND_TIMEOUT_SECONDS
 from ..session_paths import default_sessions_directory
 from ..workspace import Workspace
 
@@ -33,7 +32,6 @@ class ToolExecutionContext:
         default_factory=default_sessions_directory
     )
     command_executor: "CommandExecutor | None" = None
-    shell_timeout_seconds: int = DEFAULT_COMMAND_TIMEOUT_SECONDS
     max_generation_tokens: int | None = None
     # Whether the Agent's own model accepts image input.  It decides
     # which of the two image tools this Agent gets: the model either sees
