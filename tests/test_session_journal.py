@@ -4,6 +4,7 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from agent_core import JsonlSessionStore, Message, Session, ToolCall
+from agent_core.projection import project_provider_messages
 
 
 class SessionJournalTest(unittest.TestCase):
@@ -29,7 +30,7 @@ class SessionJournalTest(unittest.TestCase):
         session.tool_started(call)
 
         self.assertEqual([item.role for item in session.items], ["user", "assistant"])
-        self.assertEqual([item.role for item in session.provider_messages()], ["user"])
+        self.assertEqual([item.role for item in project_provider_messages(session.items)], ["user"])
         self.assertEqual(session.tool_executions["call-1"].status, "started")
 
     def test_journal_replays_tool_fact_without_request_snapshot(self):
@@ -111,7 +112,7 @@ class SessionJournalTest(unittest.TestCase):
             session.finish_turn("completed")
 
             replayed = store.load("s")
-            projected = replayed.provider_messages()
+            projected = project_provider_messages(replayed.items)
             self.assertEqual(
                 [item.tool_call_id for item in projected if item.role == "tool"],
                 ["call-a", "call-b"],

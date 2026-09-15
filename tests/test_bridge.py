@@ -25,6 +25,7 @@ from agent_core import (
     ToolResultEvent,
 )
 from agent_core.llm import TokenUsage
+from agent_core.projection import project_provider_messages
 from agent_core.providers import LiteLLMProvider
 from agent_core.subagent import vision_aware_tool_names
 from agent_core.tools.config import TOOL_NAMES
@@ -511,7 +512,7 @@ class InterruptedTurnTest(unittest.TestCase):
             ["user", "assistant"],
         )
         # The next turn must not send the unanswered call to the provider.
-        self.assertEqual([message.role for message in self.session.provider_messages()], ["user"])
+        self.assertEqual([message.role for message in project_provider_messages(self.session.items)], ["user"])
 
     def test_keeps_a_tool_step_that_received_its_result(self) -> None:
         self.start_turn(
@@ -576,7 +577,7 @@ class InterruptedTurnTest(unittest.TestCase):
         # Execution history keeps both facts; provider projection omits the
         # incomplete batch without rewriting the journal.
         self.assertEqual([message.role for message in self.stored_items()], ["user", "assistant", "tool"])
-        self.assertEqual([message.role for message in self.session.provider_messages()], ["user"])
+        self.assertEqual([message.role for message in project_provider_messages(self.session.items)], ["user"])
 
     def test_projection_restores_a_completed_tool_batch_once(self) -> None:
         self.start_turn(

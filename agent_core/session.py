@@ -297,13 +297,9 @@ class Session:
         self.apply_event(event)
 
     def set_archived_summary(
-        self, summary: str, item_cursor: int | None = None
+        self, summary: str, item_cursor: int
     ) -> None:
-        item_cursor = (
-            len(self.items)
-            if item_cursor is None
-            else max(0, min(item_cursor, len(self.items)))
-        )
+        item_cursor = max(0, min(item_cursor, len(self.items)))
         event = self._event(
             "context_archived",
             self._current_turn_id,
@@ -342,11 +338,6 @@ class Session:
             tool_call_id,
         )
         self.apply_event(event)
-
-    def provider_messages(self) -> list[Message]:
-        """Build legal provider messages without mutating execution history."""
-        from .projection import project_provider_messages
-        return list(project_provider_messages(self.items))
 
     def _event(
         self,
