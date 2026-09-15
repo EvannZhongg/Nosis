@@ -4,6 +4,8 @@ from pathlib import Path
 from typing import Callable
 
 from ...execution import (
+    DEFAULT_COMMAND_TIMEOUT_SECONDS,
+    MAX_COMMAND_TIMEOUT_SECONDS,
     CommandExecutionResult,
     CommandOutputSpool,
 )
@@ -13,9 +15,10 @@ from ..context import ToolExecutionContext
 
 # Shell timeout policy is fixed for every runtime: the default is what a call
 # gets when it omits ``timeout_seconds``, and the maximum is the longest a
-# call may ask for.  Both are advertised in the Tool schema.
-DEFAULT_SHELL_TIMEOUT_SECONDS = 60
-MAX_SHELL_TIMEOUT_SECONDS = 900
+# call may ask for.  Both are the executor's bounds, so the schema cannot
+# advertise a timeout the executor would refuse.
+DEFAULT_SHELL_TIMEOUT_SECONDS = DEFAULT_COMMAND_TIMEOUT_SECONDS
+MAX_SHELL_TIMEOUT_SECONDS = MAX_COMMAND_TIMEOUT_SECONDS
 
 
 WINDOWS_SHELL_NOTE = (
