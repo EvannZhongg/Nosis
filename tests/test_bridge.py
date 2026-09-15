@@ -388,10 +388,18 @@ class ScriptedAgent:
         user_input: str,
         on_event: object = None,
         attachments: object = (),
+        turn_id: str | None = None,
     ) -> None:
+        self._session.begin_turn(turn_id)
         self._session.add_item("user", user_input)
-        self._session.items.extend(self._tail)
+        for item in self._tail:
+            self._session.add_item(
+                item.role, item.content, item.timestamp_utc, item.tool_calls,
+                item.tool_call_id, item.reasoning, origin=item.origin,
+            )
         if self._error is not None:
+            if isinstance(self._error, Exception):
+                self._session.finish_turn("failed", turn_id)
             raise self._error
 
 
@@ -413,29 +421,29 @@ class CheckpointingAgent:
         user_input: str,
         on_event: object = None,
         attachments: object = (),
-        on_checkpoint: Callable[..., None] | None = None,
+        turn_id: str | None = None,
     ) -> None:
-        def settle(item: Message) -> None:
-            self._session.items.append(item)
-            assert on_checkpoint is not None
-            on_checkpoint((item,), None, None)
-
-        settle(Message(role="user", content=user_input))
-        for message in self._tail:
-            settle(message)
-        if self._error is not None:
-            raise self._error
+        ScriptedAgent(self._session, self._tail, self._error).run(
+            user_input, on_event, attachments, turn_id
+        )
 
 
 class FailingAgent:
     """Stands in for a provider that fails before the agent loop runs."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
 
     def run(
         self,
         user_input: str,
         on_event: object = None,
         attachments: object = (),
+        turn_id: str | None = None,
     ) -> None:
+        # A provider can fail only after the Runtime has durably opened a turn.
+        self._session.begin_turn(turn_id)
+        self._session.finish_turn("failed", turn_id)
         raise ValueError("provider refused the request")
 
 
@@ -500,15 +508,14 @@ class InterruptedTurnTest(unittest.TestCase):
         )
 
     def test_does_not_store_a_turn_that_produced_nothing(self) -> None:
-        self.start_turn(FailingAgent())
+        self.start_turn(FailingAgent(self.session))
 
         failure = emitted(self.stdout)[-1]
         self.assertEqual(failure["type"], "turn_failed")
         self.assertEqual(failure["error"]["type"], "ValueError")
-        # An empty transcript would list as a session with no items.
+        # The failed turn is a fact even though it produced no messages.
         self.assertEqual(self.stored_items(), [])
-        self.assertFalse(self.store.has_transcript(self.session_id))
-        self.assertEqual(self.store.list_sessions(), [])
+        self.assertTrue(self.store.has_journal(self.session_id))
 
     def test_drops_a_tool_call_whose_result_never_arrived(self) -> None:
         self.start_turn(
@@ -527,13 +534,10 @@ class InterruptedTurnTest(unittest.TestCase):
 
         self.assertEqual(
             [message.role for message in self.stored_items()],
-            ["user"],
+            ["user", "assistant"],
         )
         # The next turn must not send the unanswered call to the provider.
-        self.assertEqual(
-            [message.role for message in self.session.items],
-            ["user"],
-        )
+        self.assertEqual([message.role for message in self.session.provider_messages()], ["user"])
 
     def test_keeps_a_tool_step_that_received_its_result(self) -> None:
         self.start_turn(
@@ -596,9 +600,10 @@ class InterruptedTurnTest(unittest.TestCase):
             )
         )
 
-        # The batch is incomplete, so neither half of it may be stored.
-        self.assertEqual([message.role for message in self.stored_items()], ["user"])
-        self.assertEqual([message.role for message in self.session.items], ["user"])
+        # Execution history keeps both facts; provider projection omits the
+        # incomplete batch without rewriting the journal.
+        self.assertEqual([message.role for message in self.stored_items()], ["user", "assistant", "tool"])
+        self.assertEqual([message.role for message in self.session.provider_messages()], ["user"])
 
     def test_stores_a_held_tool_step_once(self) -> None:
         self.start_turn(
@@ -640,16 +645,15 @@ class InterruptedTurnTest(unittest.TestCase):
     def test_reports_a_storage_failure_without_ending_the_bridge(self) -> None:
         storage = patch.object(
             self.bridge._store,
-            "bind_workspace",
+            "append_events",
             side_effect=ValueError("session already exists in workspace: 'x'"),
         )
         storage.start()
 
         self.start_turn(ScriptedAgent(self.session, error=KeyboardInterrupt()))
 
-        cancelled = emitted(self.stdout)[-1]
-        self.assertEqual(cancelled["type"], "turn_cancelled")
-        self.assertFalse(cancelled["persisted"])
+        failure = emitted(self.stdout)[-1]
+        self.assertEqual(failure["type"], "turn_failed")
 
         # The bridge keeps serving turns once storage recovers.
         storage.stop()
@@ -657,7 +661,7 @@ class InterruptedTurnTest(unittest.TestCase):
             ScriptedAgent(self.session, error=KeyboardInterrupt()),
             text="second try",
         )
-        self.assertTrue(emitted(self.stdout)[-1]["persisted"])
+        self.assertEqual(emitted(self.stdout)[-1]["type"], "turn_cancelled")
         self.assertEqual(
             [message.content for message in self.stored_items()],
             ["second try"],

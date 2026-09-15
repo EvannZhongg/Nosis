@@ -14,6 +14,7 @@ from agent_core import (
     LLMRequest,
     LLMResponse,
     Message,
+    Session,
     Workspace,
 )
 
@@ -420,13 +421,12 @@ class GuiTest(unittest.TestCase):
 
     def test_reads_history_written_by_the_tui(self) -> None:
         self.store.bind_workspace("from-tui", self.root)
-        self.store.append_turn(
-            "from-tui",
-            LLMRequest("private prompt", ()),
-            LLMResponse("你好"),
-            (Message("user", "TUI 对话"), Message("assistant", "你好")),
-            workspace=self.root,
-        )
+        session = Session("from-tui")
+        session.begin_turn("turn-1")
+        session.add_item("user", "TUI 对话")
+        session.add_item("assistant", "你好")
+        session.finish_turn("completed")
+        self.store.append_events("from-tui", session.journal, workspace=self.root)
         with self.client() as client:
             self.assertEqual(
                 client.get("/api/sessions").json(),

@@ -153,14 +153,12 @@ class ContextManager:
                 "begin_turn must be called before archiving context"
             )
         archive_start = self._session.archived_item_count
-        archive_end = max(
-            archive_start,
-            min(turn_start, len(self._session.items)),
-        )
-        return self._session.items[archive_start:archive_end]
+        projected = self._session.provider_messages()
+        archive_end = max(archive_start, min(turn_start, len(projected)))
+        return projected[archive_start:archive_end]
 
     def _context_messages(self) -> list[Message]:
-        items = self._session.recent_items
+        items = self._session.provider_messages()
         if self._turn_start is None:
             return list(items)
         historical_count = max(

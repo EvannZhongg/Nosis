@@ -122,6 +122,10 @@ class SubagentRuntime:
 
         role = self._roles.get(role_name)
         session = Session()
+        store = self._store(parent)
+        session.attach_journal_sink(
+            lambda events: store.append_events(session.session_id, events)
+        )
         # A child never reaches the sub-agent runtime, so it cannot spawn
         # a grandchild: recursion is bounded by the context, not by
         # rewriting the child's tool configuration.
@@ -151,14 +155,6 @@ class SubagentRuntime:
         # The child receives only the task text plus whatever the parent
         # was last shown, never the parent's transcript.
         result = child.run(task, attachments=_latest_attachments(parent.session))
-        self._store(parent).append_turn(
-            session.session_id,
-            result.request,
-            result.response,
-            result.items,
-            workspace=parent.workspace.path,
-            **_archive_fields(session),
-        )
         # The parent sees the final report only: no child reasoning and
         # no intermediate tool calls.
         return result.response.content or ""
@@ -196,12 +192,3 @@ def _latest_attachments(session: Session) -> tuple[ImagePart, ...]:
                 part for part in item.parts if isinstance(part, ImagePart)
             )
     return ()
-
-
-def _archive_fields(session: Session) -> dict[str, object]:
-    if session.archived_summary is None:
-        return {}
-    return {
-        "archived_summary": session.archived_summary,
-        "archived_item_count": session.archived_item_count,
-    }

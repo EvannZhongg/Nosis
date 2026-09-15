@@ -196,7 +196,14 @@ def create_app(
     @app.get("/api/sessions/{session_id}")
     def get_session(session_id: str) -> object:
         try:
-            return jsonable_encoder(store.load(session_id))
+            session = store.load(session_id)
+            return jsonable_encoder(
+                {
+                    "session_id": session.session_id,
+                    "items": session.items,
+                    "workspace": session.workspace,
+                }
+            )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
 

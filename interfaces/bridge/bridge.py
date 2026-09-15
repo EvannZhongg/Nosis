@@ -6,21 +6,18 @@ can drive it with plain string buffers.
 """
 
 import json
-import inspect
 from collections import deque
 from itertools import count
 from pathlib import Path
 from threading import Lock
-from typing import Sequence, TextIO
+from typing import TextIO
 
 from dotenv import load_dotenv
 
 from agent_core import (
     Agent,
+    AgentCancelled as Cancelled,
     JsonlSessionStore,
-    LLMRequest,
-    LLMResponse,
-    Message,
     Session,
     CompositeToolPolicy,
     McpApprovalPolicy,
@@ -47,10 +44,6 @@ from .config import (
     load_vision_config,
 )
 from .protocol import decode, encode, event_to_message, usage_to_dict
-
-
-class Cancelled(Exception):
-    """Raised to unwind the agent loop when a turn is cancelled."""
 
 
 class Bridge:
@@ -166,9 +159,21 @@ class Bridge:
             if bound_workspace:
                 workspace = Workspace(Path(bound_workspace))
         self._session = (
-            self._store.load(str(session_id)) if resumed else Session()
+            self._store.load(str(session_id), recover=False)
+            if resumed
+            else Session()
         )
         self._workspace = workspace
+        # Runtime events are persisted as soon as they happen.  There is no
+        # Bridge-side transcript checkpoint or tool-call repair buffer.
+        self._store.bind_workspace(self._session.session_id, workspace.path)
+        self._session.workspace = str(workspace.path)
+        self._session.attach_journal_sink(
+            lambda events: self._store.append_events(
+                self._session.session_id, events, workspace=workspace.path
+            )
+        )
+        self._session.recover()
 
         main_provider = LiteLLMProvider(
             model=config.model,
@@ -327,79 +332,30 @@ class Bridge:
             raise RuntimeError("bridge workspace is not initialized")
 
         self._turn_id = str(message["turn_id"])
-        workspace = self._workspace.path
-        turn_start = len(self._session.items)
-        persisted_incrementally = "on_checkpoint" in inspect.signature(
-            self._agent.run
-        ).parameters
-        persist_error: list[Exception] = []
-        held_step: Message | None = None
-        held_results: list[Message] = []
-
-        def checkpoint(items, request=None, response=None) -> None:
-            nonlocal held_step, held_results
-            checkpoint_items = tuple(items)
-            # Hold an assistant tool step until every result it declares has
-            # arrived, so a cancelled turn can never leave a call on disk
-            # that no later message answers.
-            if (
-                held_step is None
-                and len(checkpoint_items) == 1
-                and checkpoint_items[0].role == "assistant"
-                and checkpoint_items[0].tool_calls
-            ):
-                held_step = checkpoint_items[0]
-                return
-            if held_step is not None:
-                held_results.extend(checkpoint_items)
-                answered = {item.tool_call_id for item in held_results}
-                if any(
-                    call.id not in answered
-                    for call in held_step.tool_calls or ()
-                ):
-                    return
-                checkpoint_items = (held_step, *held_results)
-                held_step = None
-                held_results = []
-            error = self._persist(
-                workspace,
-                checkpoint_items,
-                request=request,
-                response=response,
-            )
-            if error is not None:
-                persist_error.append(error)
-                raise error
-
         try:
-            attachments = _parse_attachments(message.get("attachments"), self._workspace)
+            attachments = _parse_attachments(
+                message.get("attachments"), self._workspace
+            )
             kwargs = {
                 "on_event": lambda event: self.emit(
                     **event_to_message(event, self._turn_id or "")
                 ),
                 "attachments": attachments,
             }
-            if persisted_incrementally:
-                kwargs["on_checkpoint"] = checkpoint
-            result = self._agent.run(str(message["text"]), **kwargs)
+            result = self._agent.run(
+                str(message["text"]),
+                turn_id=self._turn_id,
+                **kwargs,
+            )
         except (KeyboardInterrupt, Cancelled):
-            # Keep the in-memory session aligned with the durable transcript;
-            # incremental checkpoints already cover the answerable prefix.
-            answerable = self._drop_unanswered_calls(turn_start)
-            if not persisted_incrementally:
-                error = self._persist(workspace, answerable)
-                if error is not None:
-                    persist_error.append(error)
+            self._session.cancel_active_work(self._turn_id)
             self.emit(
                 "turn_cancelled",
                 turn_id=self._turn_id,
-                persisted=not persist_error,
+                persisted=True,
             )
             return
         except Exception as error:
-            answerable = self._drop_unanswered_calls(turn_start)
-            if not persisted_incrementally:
-                self._persist(workspace, answerable)
             self.emit(
                 "turn_failed",
                 turn_id=self._turn_id,
@@ -407,89 +363,11 @@ class Bridge:
             )
             return
 
-        if not persisted_incrementally:
-            error = self._persist(
-                workspace,
-                result.items,
-                request=result.request,
-                response=result.response,
-            )
-        else:
-            error = persist_error[0] if persist_error else None
-        if error is not None:
-            # The answer arrived but the session could not store it; the UI
-            # must hear about it instead of the connection ending silently.
-            self.emit(
-                "turn_failed",
-                turn_id=self._turn_id,
-                error=_error_payload(error),
-            )
-            return
         self.emit(
             "turn_completed",
             turn_id=self._turn_id,
             usage=usage_to_dict(result.response.usage),
         )
-
-    def _drop_unanswered_calls(self, turn_start: int) -> list[Message]:
-        """Drop the tail of a turn that never received its tool results.
-
-        A provider rejects a tool call whose result is missing, so such a
-        step must leave neither the transcript nor the running session.
-        """
-        session = self._session
-        if session is None:
-            raise RuntimeError("received 'user_turn' before 'start'")
-        items = _answerable_items(session.items[turn_start:])
-        del session.items[turn_start + len(items) :]
-        return items
-
-    def _persist(
-        self,
-        workspace: Path,
-        items: Sequence[Message],
-        request: LLMRequest | None = None,
-        response: LLMResponse | None = None,
-    ) -> Exception | None:
-        """Store a turn's items; return the storage error when it failed."""
-        session = self._session
-        store = self._store
-        if session is None or store is None:
-            return RuntimeError("session storage is not initialized")
-        if not items:
-            # A turn that ended before producing anything must not leave
-            # an empty transcript behind, which reads as an empty session.
-            return None
-
-        fields: dict[str, object] = {}
-        if session.archived_summary is not None:
-            fields = {
-                "archived_summary": session.archived_summary,
-                "archived_item_count": session.archived_item_count,
-            }
-        try:
-            # Do not create metadata for an idle new session. Persist the
-            # binding together with the first stored items.
-            store.bind_workspace(session.session_id, workspace)
-            if request is None or response is None:
-                store.append_items(
-                    session.session_id,
-                    items,
-                    workspace=workspace,
-                    **fields,
-                )
-            else:
-                store.append_turn(
-                    session.session_id,
-                    request,
-                    response,
-                    items,
-                    workspace=workspace,
-                    **fields,
-                )
-        except (OSError, ValueError) as error:
-            return error
-        return None
 
     def serve(self) -> None:
         while True:
@@ -519,25 +397,6 @@ class Bridge:
 
 def _error_payload(error: Exception) -> dict[str, str]:
     return {"type": type(error).__name__, "message": str(error)}
-
-
-def _answerable_items(items: Sequence[Message]) -> list[Message]:
-    """Trim a trailing tool step that never received all of its results.
-
-    A provider rejects a tool call whose result is missing, so a turn that
-    ended between the model's tool calls and their execution must not leave
-    an unanswered call in the stored transcript.
-    """
-    completed = list(items)
-    for index in range(len(completed) - 1, -1, -1):
-        item = completed[index]
-        if item.role != "assistant" or not item.tool_calls:
-            continue
-        answered = {later.tool_call_id for later in completed[index + 1 :]}
-        if all(call.id in answered for call in item.tool_calls):
-            return completed
-        return completed[:index]
-    return completed
 
 
 def _parse_attachments(value: object, workspace: Workspace) -> tuple[ImagePart, ...]:

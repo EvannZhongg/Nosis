@@ -16,7 +16,7 @@ nosis / nosis-gui
 
 - 首条消息必须是 `start`，否则返回 `fatal`。
 - shell 和 MCP Tool 在执行前发送 `approval_request`，前端回复 `approval_response`。
-- `Esc`、`Ctrl+C`、GUI 的「停止」都会取消当前轮次；取消的轮次同样写入已产生的 items，未取得结果的 Tool Call 会被丢弃。
+- `Esc`、`Ctrl+C`、GUI 的「停止」都会取消当前轮次；取消前真实发生的 Turn、Message 与 Tool 状态都已由 Runtime 写入 Journal。未取得结果的 Tool Call 不会被删除，只会被 Provider projection 排除。
 - 前端关闭或发送 `shutdown` 时，不会执行尚未获批的命令。
 
 Bridge 的 Python 实现位于 `bridge.py`，进程入口为 `__main__.py`；测试可直接使用内存输入输出驱动 `Bridge`，无需启动界面进程。

@@ -125,6 +125,32 @@ def clock(*values: datetime):
 
 
 class AgentTest(unittest.TestCase):
+    def test_new_turn_projects_around_an_incomplete_historical_tool_batch(self):
+        call = ToolCall("call-old", "echo", {"text": "old"})
+        session = Session("session-1")
+        session.add_item("user", "old request")
+        session.add_item("assistant", None, tool_calls=(call,))
+        session.tool_started(call)
+        provider = MockProvider([LLMResponse(content="new answer")])
+        agent = Agent(
+            provider,
+            session,
+            "You are helpful.",
+            AGENT_CONFIG,
+            tool_set(EchoTool(), session=session),
+            ToolExecutionContext(workspace=TEST_WORKSPACE, session=session),
+            now=clock(REQUEST_TIME, RESPONSE_TIME),
+        )
+
+        agent.run("new request")
+
+        messages = provider.requests[0].messages
+        self.assertEqual(
+            [message.content for message in messages if message.role == "user"],
+            ["old request", "new request"],
+        )
+        self.assertFalse(any(message.tool_calls for message in messages))
+
     def test_calls_provider_and_writes_user_and_assistant_items(self) -> None:
         provider = MockProvider(["hello back"])
         session = Session(session_id="session-1")
@@ -891,7 +917,7 @@ class ConcurrentToolBatchTest(unittest.TestCase):
                 for message in session.items
                 if message.role == "tool"
             ],
-            ["call-a", "call-b", "call-c"],
+            ["call-b", "call-c", "call-a"],
         )
 
     def test_a_mixed_batch_stays_sequential(self) -> None:
@@ -933,6 +959,41 @@ class ConcurrentToolBatchTest(unittest.TestCase):
         agent.run("one of each")
 
         self.assertEqual(blocking.peak_concurrency, 1)
+
+    def test_cancelled_parallel_batch_journals_other_completed_side_effects(self) -> None:
+        barrier = threading.Barrier(2, timeout=5)
+
+        class CancellingTool(EchoTool):
+            name = "cancelling"
+            concurrent = True
+
+            def execute(self, arguments, context):
+                barrier.wait()
+                if arguments["text"] == "cancel":
+                    raise KeyboardInterrupt()
+                return {"text": arguments["text"]}
+
+        calls = (
+            ToolCall("call-cancel", "cancelling", {"text": "cancel"}),
+            ToolCall("call-write", "cancelling", {"text": "side effect"}),
+        )
+        session = Session("session-1")
+        agent = Agent(
+            MockProvider([LLMResponse(None, tool_calls=calls)]),
+            session,
+            "You are helpful.",
+            AGENT_CONFIG,
+            tool_set(CancellingTool(), session=session),
+            ToolExecutionContext(workspace=TEST_WORKSPACE, session=session),
+            now=lambda: REQUEST_TIME,
+        )
+
+        with self.assertRaises(KeyboardInterrupt):
+            agent.run("run both")
+
+        self.assertEqual(session.tool_executions["call-cancel"].status, "unknown")
+        self.assertEqual(session.tool_executions["call-write"].status, "completed")
+        self.assertIn("call-write", [item.tool_call_id for item in session.items])
 
 class BlockingTool(Tool):
     """Records how many calls are inside execute() at the same time.

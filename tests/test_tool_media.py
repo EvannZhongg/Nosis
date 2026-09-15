@@ -85,9 +85,14 @@ class ToolMediaPersistenceTest(unittest.TestCase):
     def round_trip(self, *items: Message) -> list[Message]:
         session = Session()
         self.store.bind_workspace(session.session_id, self.workspace)
-        self.store.append_items(
-            session.session_id, list(items), workspace=self.workspace
-        )
+        session.begin_turn("turn-1")
+        for item in items:
+            session.add_item(
+                item.role, item.content, item.timestamp_utc, item.tool_calls,
+                item.tool_call_id, item.reasoning, origin=item.origin,
+            )
+        session.finish_turn("completed")
+        self.store.append_events(session.session_id, session.journal, workspace=self.workspace)
         return self.store.load(
             session.session_id, workspace=self.workspace
         ).items

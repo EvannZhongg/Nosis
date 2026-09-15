@@ -123,9 +123,10 @@ token 估算刻意取各家计价模型的**上界**（固定 tile 与按面积�
 
 * **Invocation order**：模型发出 Tool Call 的顺序；`ToolCallEvent` 按此顺序输出。
 * **Completion order**：Tool 实际执行完成的顺序；`ToolResultEvent` 按此顺序立即输出，避免较快的调用等待较慢的前序调用。
-* **Commit order**：Tool Result 写入 Session 并回灌模型的顺序；始终保持 Invocation order，以便每个结果稳定对应模型原始的 Tool Call 序列。
+* **Journal order**：Tool 的开始与实际完成按发生顺序立即写入 Journal，不等待前序调用。
+* **Provider projection order**：下一次模型调用从 Journal 投影合法消息，并把已完成结果恢复为 Invocation order。
 
-因此模型发出 `A → B → C`、实际完成 `B → C → A` 时，UI 会立即收到 `B → C → A` 的完成事件，而 Session 仍写入 `A → B → C`。顺序语义由 Agent Runtime 统一实现，普通并行 Tool 和 `subagent` 完全一致。
+因此模型发出 `A → B → C`、实际完成 `B → C → A` 时，UI 与 Journal 都立即记录 `B → C → A`；Provider Conversation 则投影为 `A → B → C`。真实执行顺序不会为了满足 Provider 格式而被改写。
 
 `subagent` 是唯一的委派入口，调用形式为 `subagent(role, task)`。角色在 `agent_config.json` 的 `subagent_roles` 中定义，角色名会写进 Tool Schema 的 `role` 枚举，新增角色只需加一段配置：
 
@@ -145,6 +146,10 @@ token 估算刻意取各家计价模型的**上界**（固定 tile 与按面积�
 
 ## Session 与附件
 
-每轮对话的 user/assistant/tool item 会在对应步骤完成时立即追加到 `~/.nosis/sessions/<WORKSPACE_KEY>/<SESSION_ID>/<SESSION_ID>.jsonl`，并逐条 flush/fsync；完整上下文、Tool Result 和模型响应均可恢复。被取消或失败的轮次只写入已经产生的 items，因此中断、进程异常退出或机器崩溃时已完成的步骤仍可恢复。同一 Workspace 下的 Session 在 GUI 中分组显示，Session 是否存在以其 `<SESSION_ID>.jsonl` 为准，Workspace 目录的 `workspace.json` 记录该分组的绝对路径。修改 Workspace 会将 Session 目录移动到新的 Workspace 分组。超过回灌上限的 Tool Result 保存为同目录下的 `<TOOL_CALL_ID>.txt`；使用 `nosis --session SESSION_ID` 恢复。子代理的子会话转录写在父 Session 的 `subagents` 目录下，因此不会出现在会话列表中，但仍可查阅。
+Session 文件是 append-only Runtime Journal。每条 JSONL record 都有单调递增的 `seq`、唯一 `event_id`、`turn_id`，Tool 事件另有 `tool_call_id`；turn、message、model call、context archive 以及 Tool 的 started/completed/failed/cancelled/unknown 状态均按发生顺序逐条 flush/fsync。Journal 不保存完整 Provider request、system prompt 或重复的 Tool schema。
+
+Execution History 直接由 Journal replay；Provider Conversation 由独立 projection 构建。未完整配对的 Tool batch 仍保留在真实历史中，但不会进入下一次模型请求。进程异常退出后，尚在 running/started 的 Turn 与 Tool 会恢复为 unknown，可能已产生副作用的 Tool 不会自动重放；正常取消与失败则分别保留 cancelled/failed 状态。JSONL 最后一条若因进程退出而只写入一部分，恢复时以前一条完整且已 fsync 的 record 为准。
+
+Session 位于 `~/.nosis/sessions/<WORKSPACE_KEY>/<SESSION_ID>/<SESSION_ID>.jsonl`。同一 Workspace 下的 Session 在 GUI 中分组显示，Workspace 目录的 `workspace.json` 记录该分组的绝对路径。修改 Workspace 会将 Session 目录移动到新的 Workspace 分组。超过回灌上限的 Tool Result 保存为同目录下的 `<TOOL_CALL_ID>.txt`；使用 `nosis --session SESSION_ID` 恢复。子代理的 Journal 写在父 Session 的 `subagents` 目录下，因此不会出现在会话列表中，但仍可查阅。
 
 GUI 上传的图片保存在 Workspace 的 `.nosis/attachments/<id>.<ext>`，Session 只记录路径和 MIME 类型。Runtime 请求 Provider 时才读取图片，并通过 `LLMRequest(media_root=workspace.path)` 解析工作区路径。

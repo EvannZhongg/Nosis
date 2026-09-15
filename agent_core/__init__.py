@@ -1,5 +1,6 @@
 from .agent import (
     Agent,
+    AgentCancelled,
     AgentEvent,
     AgentRunResult,
     AssistantMessageDeltaEvent,
@@ -36,8 +37,18 @@ from .media import (
     image_extension,
     probe_image,
 )
-from .session import Message, MessageOrigin, Session
+from .session import (
+    JournalEvent,
+    Message,
+    MessageOrigin,
+    Session,
+    ToolExecutionStatus,
+    Turn,
+    TurnStatus,
+    ToolExecution,
+)
 from .session_store import JsonlSessionStore
+from .projection import project_provider_messages
 from .subagent import (
     SubagentRole,
     SubagentRoleRegistry,
@@ -91,6 +102,7 @@ from .workspace import Workspace
 
 __all__ = [
     "Agent",
+    "AgentCancelled",
     "AgentConfig",
     "AgentEvent",
     "AgentRunResult",
@@ -126,6 +138,7 @@ __all__ = [
     "McpToolConfig",
     "Message",
     "MessageOrigin",
+    "JournalEvent",
     "ProviderCapabilities",
     "ReadFileTool",
     "ReadImageTool",
@@ -133,6 +146,11 @@ __all__ = [
     "SUPPORTED_IMAGE_MIME_TYPES",
     "SearchFilesTool",
     "Session",
+    "ToolExecutionStatus",
+    "Turn",
+    "TurnStatus",
+    "ToolExecution",
+    "project_provider_messages",
     "ShellApprovalPolicy",
     "ShellTool",
     "SubagentRole",

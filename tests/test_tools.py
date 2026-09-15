@@ -576,9 +576,9 @@ class SubagentRuntimeTest(unittest.TestCase):
             # Nested under the parent without repeating its workspace key.
             self.assertEqual(len(relative.parts), 2)
             self.assertEqual(relative.name, f"{relative.parts[0]}.jsonl")
-            record = json.loads(transcripts[0].read_text(encoding="utf-8"))
+            child = JsonlSessionStore(subagents, group_by_workspace=False).load(relative.parts[0])
             self.assertEqual(
-                [item["content"] for item in record["items"]],
+                [item.content for item in child.items],
                 ["write the quarterly summary", "child answer"],
             )
             self.assertEqual(
@@ -804,8 +804,9 @@ class ParallelSubagentIsolationTest(unittest.TestCase):
             self.assertEqual(len(transcripts), 8)
             tasks = []
             for transcript in transcripts:
-                record = json.loads(transcript.read_text(encoding="utf-8"))
-                tasks.append(record["items"][0]["content"])
+                child_id = transcript.parent.name
+                child = JsonlSessionStore(transcript.parent.parent, group_by_workspace=False).load(child_id)
+                tasks.append(child.items[0].content)
             self.assertEqual(
                 sorted(tasks), sorted(f"task {index}" for index in range(8))
             )

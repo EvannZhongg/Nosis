@@ -2,7 +2,7 @@ import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Callable, TypeAlias, Sequence
+from typing import Callable, TypeAlias
 
 from .config import AgentConfig
 from .context_manager import ContextManager, ContextWindowExceededError
@@ -12,7 +12,7 @@ from .llm import (
     LLMResponse,
     with_generation_limit,
 )
-from .session import Message, Session
+from .session import Message, Session, ToolExecutionStatus
 from .content import ImagePart
 from .tool_result import ToolResultNormalizer
 from .tools import ToolCall, ToolExecutionContext, ToolResult, ToolSet
@@ -26,6 +26,10 @@ class ToolCallLimitExceededError(RuntimeError):
             f"tool call '{tool_name}' exceeded the maximum of "
             f"{limit} identical consecutive executions"
         )
+
+
+class AgentCancelled(BaseException):
+    """Unwind the Runtime when the interface cancels active work."""
 
 
 @dataclass(frozen=True)
@@ -159,10 +163,43 @@ class Agent:
         user_input: str,
         on_event: Callable[[AgentEvent], None] | None = None,
         attachments: tuple[ImagePart, ...] = (),
-        on_checkpoint: Callable[[Sequence[Message], LLMRequest | None, LLMResponse | None], None] | None = None,
+        turn_id: str | None = None,
+    ) -> AgentRunResult:
+        try:
+            result = self._run(user_input, on_event, attachments, turn_id)
+        except KeyboardInterrupt:
+            self._session.finish_turn("cancelled", turn_id)
+            raise
+        except Exception as error:
+            self._session.finish_turn(
+                "failed",
+                turn_id,
+                error=str(error),
+            )
+            raise
+        except BaseException as error:
+            self._session.finish_turn(
+                "cancelled"
+                if isinstance(error, AgentCancelled)
+                else "interrupted",
+                turn_id,
+                error=str(error),
+            )
+            raise
+        self._session.finish_turn("completed", turn_id)
+        return result
+
+    def _run(
+        self,
+        user_input: str,
+        on_event: Callable[[AgentEvent], None] | None = None,
+        attachments: tuple[ImagePart, ...] = (),
+        turn_id: str | None = None,
     ) -> AgentRunResult:
         turn_start = len(self._session.items)
-        self._context.begin_turn(turn_start)
+        provider_turn_start = len(self._session.provider_messages())
+        turn_id = self._session.begin_turn(turn_id)
+        self._context.begin_turn(provider_turn_start)
         model_call_index = 0
         previous_tool_call_key: tuple[str, str] | None = None
         identical_tool_calls = 0
@@ -174,9 +211,6 @@ class Agent:
             timestamp_utc=request_timestamp_utc,
             attachments=attachments,
         )
-        if on_checkpoint is not None:
-            on_checkpoint((self._session.items[-1],), None, None)
-
         while True:
             request = self._context.build_request(self._tools.definitions)
             input_tokens = self._provider.count_input_tokens(request)
@@ -221,6 +255,16 @@ class Agent:
                 on_text_delta,
                 on_reasoning_delta,
             )
+            usage = response.usage
+            self._session.model_completed(
+                model_call_index,
+                input_tokens=(usage.input_tokens if usage is not None else None),
+                output_tokens=(
+                    usage.output_tokens if usage is not None else None
+                ),
+                total_tokens=(usage.total_tokens if usage is not None else None),
+                has_tool_calls=bool(response.tool_calls),
+            )
 
             if response.tool_calls:
                 next_tool_call_key = previous_tool_call_key
@@ -252,8 +296,6 @@ class Agent:
                     tool_calls=response.tool_calls,
                     reasoning=response.reasoning,
                 )
-                if on_checkpoint is not None:
-                    on_checkpoint((self._session.items[-1],), None, None)
                 if response.content and on_event is not None:
                     on_event(
                         AssistantMessageEvent(
@@ -307,40 +349,144 @@ class Agent:
                         max_workers=len(indexed_calls)
                     ) as executor:
                         futures = {}
+                        first_error: BaseException | None = None
                         # Invocation events retain the model's call order.
                         # Completion events are emitted later by
                         # as_completed(), without waiting for an earlier
                         # invocation that is still running.
                         for index, call in indexed_calls:
-                            emit_call(call, index)
-                            future = executor.submit(
-                                self._tools.execute, call
-                            )
+                            self._session.tool_started(call, turn_id)
+                            try:
+                                future = executor.submit(
+                                    self._tools.execute, call
+                                )
+                            except BaseException as error:
+                                self._session.tool_finished(
+                                    call,
+                                    _tool_failure_status(error),
+                                    error=str(error),
+                                    turn_id=turn_id,
+                                )
+                                first_error = error
+                                break
                             futures[future] = (index, call)
+
+                        observed: set[int] = set()
+
+                        try:
+                            for index, call in futures.values():
+                                emit_call(call, index)
+                        except BaseException as error:
+                            first_error = error
+
+                        def settle_future(future) -> None:
+                            nonlocal first_error
+                            index, call = futures[future]
+                            observed.add(index)
+                            try:
+                                result = future.result()
+                            except BaseException as error:
+                                self._session.tool_finished(
+                                    call,
+                                    _tool_failure_status(error),
+                                    error=str(error),
+                                    turn_id=turn_id,
+                                )
+                                if first_error is None:
+                                    first_error = error
+                                return
+
+                            completed[index] = (call, result)
+                            status = (
+                                "failed"
+                                if result.error is not None
+                                else "completed"
+                            )
+                            self._session.tool_finished(
+                                call,
+                                status,
+                                error=(
+                                    result.error.message
+                                    if result.error is not None
+                                    else None
+                                ),
+                                turn_id=turn_id,
+                            )
+                            try:
+                                normalized_content = (
+                                    self._tool_result_normalizer.normalize(
+                                        result
+                                    )
+                                )
+                                self._session.add_item(
+                                    "tool",
+                                    normalized_content,
+                                    self._now().astimezone(timezone.utc),
+                                    tool_call_id=call.id,
+                                )
+                                emit_result(result, index)
+                            except BaseException as error:
+                                if first_error is None:
+                                    first_error = error
 
                         try:
                             for future in as_completed(futures):
-                                index, call = futures[future]
-                                result = future.result()
-                                completed[index] = (call, result)
-                                emit_result(result, index)
-                        except BaseException:
+                                settle_future(future)
+                        except BaseException as error:
+                            # SIGINT can interrupt the coordinator while tools
+                            # are still running.  They cannot be safely killed;
+                            # drain them and journal every resulting fact.
+                            first_error = first_error or error
+                        finally:
+                            for future, (index, _call) in futures.items():
+                                if index not in observed:
+                                    settle_future(future)
+                        if first_error is not None:
                             _cleanup_completed_results(completed)
-                            for future, (_index, _call) in futures.items():
-                                if future.done() and not future.cancelled():
-                                    try:
-                                        _cleanup_tool_result(future.result())
-                                    except BaseException:
-                                        pass
-                            raise
+                            raise first_error
                 else:
+                    active_call: ToolCall | None = None
                     try:
                         for index, call in indexed_calls:
+                            active_call = call
+                            self._session.tool_started(call, turn_id)
                             emit_call(call, index)
                             result = self._tools.execute(call)
                             completed[index] = (call, result)
+                            status = (
+                                "failed"
+                                if result.error is not None
+                                else "completed"
+                            )
+                            self._session.tool_finished(
+                                call,
+                                status,
+                                error=(
+                                    result.error.message
+                                    if result.error is not None
+                                    else None
+                                ),
+                                turn_id=turn_id,
+                            )
+                            active_call = None
+                            normalized_content = (
+                                self._tool_result_normalizer.normalize(result)
+                            )
+                            self._session.add_item(
+                                "tool",
+                                normalized_content,
+                                self._now().astimezone(timezone.utc),
+                                tool_call_id=call.id,
+                            )
                             emit_result(result, index)
-                    except BaseException:
+                    except BaseException as error:
+                        if active_call is not None:
+                            self._session.tool_finished(
+                                active_call,
+                                _tool_failure_status(error),
+                                error=str(error),
+                                turn_id=turn_id,
+                            )
                         _cleanup_completed_results(completed)
                         raise
 
@@ -352,18 +498,6 @@ class Agent:
                     for index, _ in indexed_calls
                 ]
                 try:
-                    for tool_index, tool_call, tool_result in executed:
-                        normalized_content = (
-                            self._tool_result_normalizer.normalize(tool_result)
-                        )
-                        self._session.add_item(
-                            role="tool",
-                            content=normalized_content,
-                            timestamp_utc=self._now().astimezone(timezone.utc),
-                            tool_call_id=tool_call.id,
-                        )
-                        if on_checkpoint is not None:
-                            on_checkpoint((self._session.items[-1],), None, None)
                     # Images arrive after every tool result, never between
                     # two of them: a provider rejects an assistant step whose
                     # tool calls are not each answered by the message that
@@ -381,8 +515,6 @@ class Agent:
                             attachments=media,
                             origin="tool_media",
                         )
-                        if on_checkpoint is not None:
-                            on_checkpoint((self._session.items[-1],), None, None)
                         if on_event is not None:
                             on_event(ToolMediaEvent(attachments=media))
                 finally:
@@ -408,8 +540,6 @@ class Agent:
                 timestamp_utc=response_timestamp_utc,
                 reasoning=response.reasoning,
             )
-            if on_checkpoint is not None:
-                on_checkpoint((self._session.items[-1],), request, response)
             if on_event is not None:
                 on_event(
                     AssistantMessageEvent(
@@ -435,6 +565,16 @@ def _tool_call_key(tool_call: ToolCall) -> tuple[str, str]:
         separators=(",", ":"),
     )
     return tool_call.name, normalized_arguments
+
+
+def _tool_failure_status(error: BaseException) -> ToolExecutionStatus:
+    if isinstance(error, AgentCancelled):
+        return "cancelled"
+    if isinstance(error, KeyboardInterrupt):
+        # SIGINT may arrive after an irreversible side effect but before the
+        # tool returns, so completion cannot be inferred.
+        return "unknown"
+    return "failed"
 
 
 def _cleanup_tool_result(result: ToolResult) -> None:
