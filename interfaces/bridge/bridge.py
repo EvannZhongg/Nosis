@@ -6,6 +6,7 @@ can drive it with plain string buffers.
 """
 
 import json
+import inspect
 from collections import deque
 from itertools import count
 from pathlib import Path
@@ -329,29 +330,77 @@ class Bridge:
         self._turn_id = str(message["turn_id"])
         workspace = self._workspace.path
         turn_start = len(self._session.items)
+        persisted_incrementally = "on_checkpoint" in inspect.signature(
+            self._agent.run
+        ).parameters
+        persist_error: list[Exception] = []
+        held_step: Message | None = None
+        held_results: list[Message] = []
+
+        def checkpoint(items, request=None, response=None) -> None:
+            nonlocal held_step, held_results
+            checkpoint_items = tuple(items)
+            # Hold an assistant tool step until every result it declares has
+            # arrived, so a cancelled turn can never leave a call on disk
+            # that no later message answers.
+            if (
+                held_step is None
+                and len(checkpoint_items) == 1
+                and checkpoint_items[0].role == "assistant"
+                and checkpoint_items[0].tool_calls
+            ):
+                held_step = checkpoint_items[0]
+                return
+            if held_step is not None:
+                held_results.extend(checkpoint_items)
+                answered = {item.tool_call_id for item in held_results}
+                if any(
+                    call.id not in answered
+                    for call in held_step.tool_calls or ()
+                ):
+                    return
+                checkpoint_items = (held_step, *held_results)
+                held_step = None
+                held_results = []
+            error = self._persist(
+                workspace,
+                checkpoint_items,
+                request=request,
+                response=response,
+            )
+            if error is not None:
+                persist_error.append(error)
+                raise error
+
         try:
             attachments = _parse_attachments(message.get("attachments"), self._workspace)
-            result = self._agent.run(
-                str(message["text"]),
-                on_event=lambda event: self.emit(
+            kwargs = {
+                "on_event": lambda event: self.emit(
                     **event_to_message(event, self._turn_id or "")
                 ),
-                attachments=attachments,
-            )
+                "attachments": attachments,
+            }
+            if persisted_incrementally:
+                kwargs["on_checkpoint"] = checkpoint
+            result = self._agent.run(str(message["text"]), **kwargs)
         except (KeyboardInterrupt, Cancelled):
-            # An interrupted turn still produced transcript items, so they are
-            # stored without a response instead of dropped with the turn.
+            # Keep the in-memory session aligned with the durable transcript;
+            # incremental checkpoints already cover the answerable prefix.
+            answerable = self._drop_unanswered_calls(turn_start)
+            if not persisted_incrementally:
+                error = self._persist(workspace, answerable)
+                if error is not None:
+                    persist_error.append(error)
             self.emit(
                 "turn_cancelled",
                 turn_id=self._turn_id,
-                persisted=self._persist(
-                    workspace, self._drop_unanswered_calls(turn_start)
-                )
-                is None,
+                persisted=not persist_error,
             )
             return
         except Exception as error:
-            self._persist(workspace, self._drop_unanswered_calls(turn_start))
+            answerable = self._drop_unanswered_calls(turn_start)
+            if not persisted_incrementally:
+                self._persist(workspace, answerable)
             self.emit(
                 "turn_failed",
                 turn_id=self._turn_id,
@@ -359,12 +408,15 @@ class Bridge:
             )
             return
 
-        error = self._persist(
-            workspace,
-            result.items,
-            request=result.request,
-            response=result.response,
-        )
+        if not persisted_incrementally:
+            error = self._persist(
+                workspace,
+                result.items,
+                request=result.request,
+                response=result.response,
+            )
+        else:
+            error = persist_error[0] if persist_error else None
         if error is not None:
             # The answer arrived but the session could not store it; the UI
             # must hear about it instead of the connection ending silently.

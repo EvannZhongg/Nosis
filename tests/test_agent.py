@@ -561,7 +561,11 @@ class AgentTest(unittest.TestCase):
         )
         provider = MockProvider(
             [
-                LLMResponse(content="using echo", tool_calls=(tool_call,)),
+                LLMResponse(
+                    content="using echo",
+                    reasoning="I need to inspect the requested input first.",
+                    tool_calls=(tool_call,),
+                ),
                 LLMResponse(content="first answer"),
                 LLMResponse(content="second answer"),
             ]
@@ -610,7 +614,7 @@ class AgentTest(unittest.TestCase):
         )
         self.assertEqual(
             [message.reasoning for message in history[1:5]],
-            [None, None, None, None],
+            [None, "I need to inspect the requested input first.", None, None],
         )
         historical_timeline = history[0].content or ""
         self.assertIn("user", historical_timeline)

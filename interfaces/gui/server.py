@@ -40,6 +40,7 @@ from ..bridge.config import (
     initialize_default_configs,
     load_model_options,
 )
+from ..bridge.process import cancel_process
 
 
 STATIC_PATH = Path(__file__).resolve().parent / "static"
@@ -118,20 +119,14 @@ class BridgeProcess:
     def cancel_turn(self) -> None:
         """Interrupt the running turn, as Esc does in the TUI."""
         if self._turn_running and self._process.returncode is None:
-            # Windows has no SIGINT for a child: CTRL_BREAK is the signal
-            # that reaches the bridge, which turns it into KeyboardInterrupt.
-            self._process.send_signal(
-                signal.CTRL_BREAK_EVENT if os.name == "nt" else signal.SIGINT
-            )
+            cancel_process(self._process)
 
     async def close(self) -> None:
         # A page that goes away mid-turn would otherwise take the running
         # turn down with the process; the interrupt lets the bridge store
         # what the turn already produced before it shuts down.
         if not self._ready and self._process.returncode is None:
-            self._process.send_signal(
-                signal.CTRL_BREAK_EVENT if os.name == "nt" else signal.SIGINT
-            )
+            cancel_process(self._process)
         else:
             self.cancel_turn()
         self.send({"type": "shutdown"})

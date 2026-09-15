@@ -2,7 +2,7 @@ import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Callable, TypeAlias
+from typing import Callable, TypeAlias, Sequence
 
 from .config import AgentConfig
 from .context_manager import ContextManager, ContextWindowExceededError
@@ -159,6 +159,7 @@ class Agent:
         user_input: str,
         on_event: Callable[[AgentEvent], None] | None = None,
         attachments: tuple[ImagePart, ...] = (),
+        on_checkpoint: Callable[[Sequence[Message], LLMRequest | None, LLMResponse | None], None] | None = None,
     ) -> AgentRunResult:
         turn_start = len(self._session.items)
         self._context.begin_turn(turn_start)
@@ -173,6 +174,8 @@ class Agent:
             timestamp_utc=request_timestamp_utc,
             attachments=attachments,
         )
+        if on_checkpoint is not None:
+            on_checkpoint((self._session.items[-1],), None, None)
 
         while True:
             request = self._context.build_request(self._tools.definitions)
@@ -249,6 +252,8 @@ class Agent:
                     tool_calls=response.tool_calls,
                     reasoning=response.reasoning,
                 )
+                if on_checkpoint is not None:
+                    on_checkpoint((self._session.items[-1],), None, None)
                 if response.content and on_event is not None:
                     on_event(
                         AssistantMessageEvent(
@@ -357,6 +362,8 @@ class Agent:
                             timestamp_utc=self._now().astimezone(timezone.utc),
                             tool_call_id=tool_call.id,
                         )
+                        if on_checkpoint is not None:
+                            on_checkpoint((self._session.items[-1],), None, None)
                     # Images arrive after every tool result, never between
                     # two of them: a provider rejects an assistant step whose
                     # tool calls are not each answered by the message that
@@ -374,6 +381,8 @@ class Agent:
                             attachments=media,
                             origin="tool_media",
                         )
+                        if on_checkpoint is not None:
+                            on_checkpoint((self._session.items[-1],), None, None)
                         if on_event is not None:
                             on_event(ToolMediaEvent(attachments=media))
                 finally:
@@ -399,6 +408,8 @@ class Agent:
                 timestamp_utc=response_timestamp_utc,
                 reasoning=response.reasoning,
             )
+            if on_checkpoint is not None:
+                on_checkpoint((self._session.items[-1],), request, response)
             if on_event is not None:
                 on_event(
                     AssistantMessageEvent(

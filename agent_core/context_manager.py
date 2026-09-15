@@ -199,7 +199,11 @@ def _historical_message(item: Message) -> Message:
         timestamp_utc=timestamp_utc,
         tool_calls=item.tool_calls,
         tool_call_id=item.tool_call_id,
-        reasoning=None,
+        # Thinking-mode providers (notably DeepSeek) require every assistant
+        # reasoning_content value to be echoed in later requests.  Dropping
+        # it while converting a turn to historical context makes the next
+        # request invalid, including when the assistant step had no tools.
+        reasoning=item.reasoning if item.role == "assistant" else None,
         origin=item.origin,
     )
 

@@ -147,6 +147,6 @@ token 估算刻意取各家计价模型的**上界**（固定 tile 与按面积�
 
 ## Session 与附件
 
-每轮对话都会追加到 `~/.nosis/sessions/<WORKSPACE_KEY>/<SESSION_ID>/<SESSION_ID>.jsonl`，完整上下文、Tool Result 和模型响应均可恢复；被取消或失败的轮次只写入已经产生的 items，因此中断的对话同样可以恢复。同一 Workspace 下的 Session 在 GUI 中分组显示，Session 是否存在以其 `<SESSION_ID>.jsonl` 为准，Workspace 目录的 `workspace.json` 记录该分组的绝对路径。修改 Workspace 会将 Session 目录移动到新的 Workspace 分组。超过回灌上限的 Tool Result 保存为同目录下的 `<TOOL_CALL_ID>.txt`；使用 `nosis --session SESSION_ID` 恢复。子代理的子会话转录写在父 Session 的 `subagents` 目录下，因此不会出现在会话列表中，但仍可查阅。
+每轮对话的 user/assistant/tool item 会在对应步骤完成时立即追加到 `~/.nosis/sessions/<WORKSPACE_KEY>/<SESSION_ID>/<SESSION_ID>.jsonl`，并逐条 flush/fsync；完整上下文、Tool Result 和模型响应均可恢复。被取消或失败的轮次只写入已经产生的 items，因此中断、进程异常退出或机器崩溃时已完成的步骤仍可恢复。同一 Workspace 下的 Session 在 GUI 中分组显示，Session 是否存在以其 `<SESSION_ID>.jsonl` 为准，Workspace 目录的 `workspace.json` 记录该分组的绝对路径。修改 Workspace 会将 Session 目录移动到新的 Workspace 分组。超过回灌上限的 Tool Result 保存为同目录下的 `<TOOL_CALL_ID>.txt`；使用 `nosis --session SESSION_ID` 恢复。子代理的子会话转录写在父 Session 的 `subagents` 目录下，因此不会出现在会话列表中，但仍可查阅。
 
 GUI 上传的图片保存在 Workspace 的 `.nosis/attachments/<id>.<ext>`，Session 只记录路径和 MIME 类型。Runtime 请求 Provider 时才读取图片，并通过 `LLMRequest(media_root=workspace.path)` 解析工作区路径。

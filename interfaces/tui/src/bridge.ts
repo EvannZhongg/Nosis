@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { kill as killProcess } from 'node:process';
 import { MessageDecoder, type Incoming, type Outgoing } from '@nosis/protocol';
 
 export type BridgeOptions = {
@@ -8,6 +9,22 @@ export type BridgeOptions = {
   onExit: (code: number | null) => void;
   onProtocolError: (error: Error) => void;
 };
+
+/** Send the same process-group interrupt used by the GUI bridge client. */
+export function cancelBridgeProcess(
+  child: ChildProcessWithoutNullStreams,
+): void {
+  if (child.exitCode !== null || child.killed || child.pid === undefined) return;
+  if (process.platform === 'win32') {
+    child.kill('SIGBREAK');
+  } else {
+    try {
+      killProcess(-child.pid, 'SIGINT');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+    }
+  }
+}
 
 /** Owns the Python agent process and the protocol stream. */
 export class BridgeClient {
@@ -19,6 +36,9 @@ export class BridgeClient {
     this.child = spawn(options.python, ['-m', 'interfaces.bridge'], {
       cwd: options.cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
+      // A private group lets POSIX target the bridge and its descendants,
+      // while Windows SIGBREAK reaches only this child group.
+      detached: true,
     }) as ChildProcessWithoutNullStreams;
 
     this.child.stdout.setEncoding('utf8');
@@ -50,7 +70,7 @@ export class BridgeClient {
 
   /** Cancels the active turn. Ink consumes Ctrl+C, so signal explicitly. */
   cancel(): void {
-    this.child.kill('SIGINT');
+    cancelBridgeProcess(this.child);
   }
 
   shutdown(): void {

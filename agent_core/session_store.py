@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -130,9 +131,11 @@ class JsonlSessionStore:
             if target_dir.exists():
                 raise ValueError(f"session already exists in workspace: {session_id!r}")
             shutil.move(str(current_dir), str(target_dir))
-        (target_group / "workspace.json").write_text(
-            json.dumps({"workspace": str(resolved)}, ensure_ascii=False), encoding="utf-8"
-        )
+        metadata = target_group / "workspace.json"
+        with metadata.open("w", encoding="utf-8") as file:
+            file.write(json.dumps({"workspace": str(resolved)}, ensure_ascii=False))
+            file.flush()
+            os.fsync(file.fileno())
 
     def workspace_for(self, session_id: str) -> str | None:
         _validate_session_id(session_id)
@@ -257,6 +260,11 @@ class JsonlSessionStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as file:
             file.write(json.dumps(record, ensure_ascii=False) + "\n")
+            # Checkpoint writes must survive an abrupt process interruption;
+            # the default text buffer otherwise leaves a recent line only in
+            # userspace memory.
+            file.flush()
+            os.fsync(file.fileno())
 
     def _session_path(self, session_id: str, workspace: Path | str | None = None) -> Path | None:
         if not self._group_by_workspace:

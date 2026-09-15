@@ -6,6 +6,7 @@ import time
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 from unittest.mock import patch
 
 from agent_core import (
@@ -36,6 +37,7 @@ from interfaces.bridge.protocol import (
 )
 
 TOOL_CALL = ToolCall(id="call-1", name="shell", arguments={"command": "ls"})
+SECOND_TOOL_CALL = ToolCall(id="call-2", name="shell", arguments={"command": "pwd"})
 EVENT_TIME = datetime(2026, 9, 9, 8, 0, tzinfo=timezone.utc)
 
 
@@ -393,6 +395,38 @@ class ScriptedAgent:
             raise self._error
 
 
+class CheckpointingAgent:
+    """Stands in for an agent loop that stores every item as it settles."""
+
+    def __init__(
+        self,
+        session: Session,
+        tail: tuple[Message, ...] = (),
+        error: BaseException | None = None,
+    ) -> None:
+        self._session = session
+        self._tail = tail
+        self._error = error
+
+    def run(
+        self,
+        user_input: str,
+        on_event: object = None,
+        attachments: object = (),
+        on_checkpoint: Callable[..., None] | None = None,
+    ) -> None:
+        def settle(item: Message) -> None:
+            self._session.items.append(item)
+            assert on_checkpoint is not None
+            on_checkpoint((item,), None, None)
+
+        settle(Message(role="user", content=user_input))
+        for message in self._tail:
+            settle(message)
+        if self._error is not None:
+            raise self._error
+
+
 class FailingAgent:
     """Stands in for a provider that fails before the agent loop runs."""
 
@@ -524,6 +558,83 @@ class InterruptedTurnTest(unittest.TestCase):
         self.assertEqual(
             [message.role for message in self.stored_items()],
             ["user", "assistant", "tool"],
+        )
+
+    def test_stores_a_turn_as_each_item_settles(self) -> None:
+        self.start_turn(
+            CheckpointingAgent(
+                self.session,
+                tail=(Message(role="assistant", content="half an answer"),),
+                error=KeyboardInterrupt(),
+            )
+        )
+
+        self.assertEqual(emitted(self.stdout)[-1]["type"], "turn_cancelled")
+        self.assertTrue(emitted(self.stdout)[-1]["persisted"])
+        self.assertEqual(
+            [message.content for message in self.stored_items()],
+            ["do the work", "half an answer"],
+        )
+
+    def test_holds_a_tool_step_until_every_result_arrives(self) -> None:
+        self.start_turn(
+            CheckpointingAgent(
+                self.session,
+                tail=(
+                    Message(
+                        role="assistant",
+                        content=None,
+                        tool_calls=(TOOL_CALL, SECOND_TOOL_CALL),
+                    ),
+                    Message(
+                        role="tool",
+                        content='{"ok": true}',
+                        tool_call_id=TOOL_CALL.id,
+                    ),
+                ),
+                error=KeyboardInterrupt(),
+            )
+        )
+
+        # The batch is incomplete, so neither half of it may be stored.
+        self.assertEqual([message.role for message in self.stored_items()], ["user"])
+        self.assertEqual([message.role for message in self.session.items], ["user"])
+
+    def test_stores_a_held_tool_step_once(self) -> None:
+        self.start_turn(
+            CheckpointingAgent(
+                self.session,
+                tail=(
+                    Message(
+                        role="assistant",
+                        content=None,
+                        tool_calls=(TOOL_CALL, SECOND_TOOL_CALL),
+                    ),
+                    Message(
+                        role="tool",
+                        content='{"ok": true}',
+                        tool_call_id=TOOL_CALL.id,
+                    ),
+                    Message(
+                        role="tool",
+                        content='{"ok": true}',
+                        tool_call_id=SECOND_TOOL_CALL.id,
+                    ),
+                    Message(role="assistant", content="half an answer"),
+                ),
+                error=KeyboardInterrupt(),
+            )
+        )
+
+        self.assertEqual(
+            [(message.role, message.tool_call_id) for message in self.stored_items()],
+            [
+                ("user", None),
+                ("assistant", None),
+                ("tool", TOOL_CALL.id),
+                ("tool", SECOND_TOOL_CALL.id),
+                ("assistant", None),
+            ],
         )
 
     def test_reports_a_storage_failure_without_ending_the_bridge(self) -> None:
