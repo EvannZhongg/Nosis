@@ -1834,23 +1834,33 @@ class ShellToolTest(unittest.TestCase):
 
         self.assertEqual(executor.timeouts, [10])
 
-    def test_rejects_timeout_longer_than_configured_default(self) -> None:
-        class UnusedExecutor:
-            def execute(self, command, timeout_seconds=60):
-                raise AssertionError("executor should not be called")
+    def test_allows_timeout_longer_than_configured_default(self) -> None:
+        class RecordingExecutor:
+            def __init__(self) -> None:
+                self.timeouts = []
 
+            def execute(self, command, timeout_seconds=60):
+                self.timeouts.append(timeout_seconds)
+                return CommandExecutionResult(
+                    command=command,
+                    exit_code=0,
+                    stdout="",
+                    stderr="",
+                    timeout_seconds=timeout_seconds,
+                )
+
+        executor = RecordingExecutor()
         tool = _Bound(
             ShellTool(),
             _TMP_WORKSPACE,
-            command_executor=UnusedExecutor(),
+            command_executor=executor,
             shell_timeout_seconds=60,
         )
 
-        with self.assertRaisesRegex(
-            ValueError,
-            "cannot exceed the configured default of 60 seconds",
-        ):
-            tool.execute({"command": "pwd", "timeout_seconds": 61})
+        tool.execute({"command": "pwd", "timeout_seconds": 61})
+        tool.execute({"command": "pwd", "timeout_seconds": 900})
+
+        self.assertEqual(executor.timeouts, [61, 900])
 
     def test_advertises_the_shell_and_timeout_it_uses(self) -> None:
         class UnusedExecutor:
@@ -1869,8 +1879,9 @@ class ShellToolTest(unittest.TestCase):
             "timeout_seconds"
         ]
 
-        self.assertEqual(timeout_schema["maximum"], 90)
+        self.assertEqual(timeout_schema["maximum"], 900)
         self.assertIn("90 seconds", definition.description)
+        self.assertIn("maximum of 900", timeout_schema["description"])
         self.assertIn(
             "Git Bash" if os.name == "nt" else "/bin/sh",
             definition.description,

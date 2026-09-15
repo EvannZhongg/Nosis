@@ -31,8 +31,9 @@ def _describe(default_timeout_seconds: int) -> str:
         "Execute a shell command with the workspace as the current "
         f"directory. {shell_note} Every call starts a fresh shell, so "
         "directory and environment changes do not persist. The command is "
-        f"killed after {default_timeout_seconds} seconds, and its exit "
-        "code, stdout and stderr are returned."
+        f"killed after {default_timeout_seconds} seconds by default; the "
+        f"timeout may be set up to {MAX_COMMAND_TIMEOUT_SECONDS} seconds. "
+        "Its exit code, stdout and stderr are returned."
     )
 
 
@@ -60,11 +61,12 @@ class ShellTool(Tool):
                     "timeout_seconds": {
                         "type": "integer",
                         "minimum": 1,
-                        "maximum": default_timeout_seconds,
+                        "maximum": MAX_COMMAND_TIMEOUT_SECONDS,
                         "description": (
-                            "Optional timeout in seconds, at most the "
+                            "Optional timeout in seconds. Defaults to the "
                             "configured default of "
-                            f"{default_timeout_seconds}."
+                            f"{default_timeout_seconds}, with a maximum of "
+                            f"{MAX_COMMAND_TIMEOUT_SECONDS}."
                         ),
                     },
                 },
@@ -95,11 +97,6 @@ class ShellTool(Tool):
             raise ValueError(
                 "shell requires 'timeout_seconds' to be an integer "
                 f"between 1 and {MAX_COMMAND_TIMEOUT_SECONDS}"
-            )
-        if timeout_seconds > default_timeout_seconds:
-            raise ValueError(
-                "shell 'timeout_seconds' cannot exceed the configured "
-                f"default of {default_timeout_seconds} seconds"
             )
         if not set(arguments) <= {"command", "timeout_seconds"}:
             raise ValueError(
