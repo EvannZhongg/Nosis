@@ -4,6 +4,7 @@ import { Chat } from "./Chat";
 import { Workspace } from "./Workspace";
 import type { Usage } from "@nosis/protocol";
 import { deleteSession, get, sessionUrl, type ModelOption, type ModelOptions, type Session, type WorkspaceSessions } from "./api";
+import { addSessionSummary } from "./sessions";
 
 export function App() {
   const [sessionGroups, setSessionGroups] = useState<WorkspaceSessions[]>([]);
@@ -115,6 +116,12 @@ export function App() {
           models={models} model={model} onModelChange={setModel} onBusyChange={(value) => setBusyBySession((all) => ({ ...all, [current.session_id]: value }))} onUsageChange={(value) => { if (current.session_id === session.session_id) setUsage(value); }} onTurnEnd={() => {
           void refreshSessions();
           setWorkspaceVersion((value) => value + 1);
+        }} onSessionStart={(title) => {
+          if (!current.workspace) return;
+          setSessionGroups((groups) => addSessionSummary(groups, current.workspace!, {
+            session_id: current.session_id,
+            title,
+          }));
         }} onWorkspaceChange={(workspace) => {
           setChatSessions((all) => all.map((item) => item.session_id === current.session_id ? { ...item, workspace } : item));
           if (current.session_id === session.session_id) setSession((item) => ({ ...item, workspace }));

@@ -74,9 +74,10 @@ function PendingAttachment({ file, onRemove }: { file: File; onRemove: () => voi
   return <span className="attachment-chip"><img src={url} alt={file.name} /><span>{file.name}</span><button type="button" aria-label={`移除 ${file.name}`} onClick={onRemove}><X size={12} /></button></span>;
 }
 
-export function Chat({ session, workspaceOptions = [], disabled, models, model, onModelChange, onBusyChange, onUsageChange, onTurnEnd, onWorkspaceChange }: {
+export function Chat({ session, workspaceOptions = [], disabled, models, model, onModelChange, onBusyChange, onUsageChange, onSessionStart, onTurnEnd, onWorkspaceChange }: {
   session: Session; disabled: boolean; onBusyChange: (busy: boolean) => void; onTurnEnd: () => void;
   onUsageChange: (usage: Usage | null) => void;
+  onSessionStart: (title: string) => void;
   models: ModelOption[]; model: string; onModelChange: (model: string) => void;
   workspaceOptions?: string[];
   onWorkspaceChange?: (workspace: string) => void;
@@ -229,6 +230,7 @@ export function Chat({ session, workspaceOptions = [], disabled, models, model, 
   async function onNew(message: AppendMessage) {
     const text = message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n").trim();
     if ((!text && pendingFiles.length === 0) || runningRef.current) return;
+    const startsSession = !itemsRef.current.some((item) => item.role === "user" && item.origin !== "tool_media");
 
     let attachments: ImageAttachment[] = [];
     if (pendingFiles.length) {
@@ -266,6 +268,11 @@ export function Chat({ session, workspaceOptions = [], disabled, models, model, 
       text,
       ...(attachments.length ? { attachments } : {}),
     });
+    if (startsSession) {
+      // The store derives list titles from the first persisted user item.
+      // Multimodal content is structured, so its current fallback is the id.
+      onSessionStart(attachments.length ? session.session_id : text);
+    }
   }
 
   function respond(approved: boolean) {
