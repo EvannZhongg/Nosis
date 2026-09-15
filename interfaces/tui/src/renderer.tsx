@@ -55,14 +55,27 @@ function EntryView({ entry }: { entry: Entry }): React.ReactElement {
       <Text color="red">✗</Text>
     );
 
+  // Single calls pad to the width of an index tag so markers line up.
+  const index = (entry.count > 1 ? `[${entry.index}/${entry.count}] ` : '').padEnd(6);
+
   return (
     <Box>
-      <Text dimColor>{entry.count > 1 ? `[${entry.index}/${entry.count}] ` : '  '}</Text>
-      {marker}
-      <Text> {entry.name}</Text>
-      {args ? <Text dimColor> {args}</Text> : null}
+      <Box flexShrink={0}>
+        <Text dimColor>{index}</Text>
+        {marker}
+        <Text> {entry.name}</Text>
+      </Box>
+      {args ? (
+        <Text dimColor wrap="truncate-end">
+          {' '}
+          {args}
+        </Text>
+      ) : null}
       {entry.state === 'error' && entry.error ? (
-        <Text color="red"> — {entry.error.message}</Text>
+        <Text color="red" wrap="truncate-end">
+          {' '}
+          — {entry.error.message}
+        </Text>
       ) : null}
     </Box>
   );
@@ -116,7 +129,7 @@ export function StatusBar({ state, elapsed }: { state: State; elapsed: number })
     state.status === 'cancelling';
 
   return (
-    <Box marginTop={1} flexDirection="column">
+    <Box flexDirection="column" paddingX={1}>
       {busy ? (
         <Box>
           <Text color="yellow">
@@ -129,7 +142,7 @@ export function StatusBar({ state, elapsed }: { state: State; elapsed: number })
         </Box>
       ) : null}
       <Box>
-        <Text dimColor>
+        <Text dimColor wrap="truncate-end">
           {state.model}
           {state.usage?.total_tokens ? ` · ${state.usage.total_tokens} tokens` : ''}
           {state.sessionId ? ` · ${state.sessionId.slice(0, 8)}` : ''}

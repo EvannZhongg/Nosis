@@ -181,8 +181,6 @@ export function App(props: AppProps): React.ReactElement {
         <ApprovalPrompt command={state.approval.command} choice={state.approval.choice} />
       ) : null}
 
-      <StatusBar state={state} elapsed={elapsed} />
-
       {state.status === 'fatal' ? (
         <Box marginTop={1}>
           <Text dimColor>Press Ctrl+C to exit.</Text>
@@ -196,6 +194,8 @@ export function App(props: AppProps): React.ReactElement {
           busy={state.status !== 'idle'}
         />
       )}
+
+      <StatusBar state={state} elapsed={elapsed} />
     </Box>
   );
 }
