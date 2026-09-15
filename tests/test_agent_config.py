@@ -213,6 +213,22 @@ class AgentConfigTest(unittest.TestCase):
                         }
                     )
 
+    def test_rejects_removed_compression_target_ratio(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "context.compression.*target_ratio",
+        ):
+            self.load(
+                {
+                    "context": {
+                        "compression": {
+                            "target_ratio": 0.5,
+                        }
+                    },
+                    "main_agent": {"tools": ENABLED_TOOLS},
+                }
+            )
+
     def test_rejects_missing_tool_config(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "agent_config.json"

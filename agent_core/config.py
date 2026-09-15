@@ -18,7 +18,6 @@ MAX_SHELL_TIMEOUT_SECONDS = MAX_COMMAND_TIMEOUT_SECONDS
 class ContextCompressionConfig:
     enabled: bool = True
     trigger_ratio: float | None = None
-    target_ratio: float | None = None
 
 
 @dataclass(frozen=True)
@@ -159,14 +158,18 @@ def _context_config(value: object) -> ContextCompressionConfig:
         return ContextCompressionConfig()
     if not isinstance(compression, dict):
         raise ValueError("config field 'context.compression' must be an object")
+    unknown = set(compression) - {"enabled", "trigger_ratio"}
+    if unknown:
+        fields = ", ".join(sorted(unknown))
+        raise ValueError(
+            "unknown field(s) in 'context.compression': "
+            f"{fields}"
+        )
     enabled = compression.get("enabled", True)
     if not isinstance(enabled, bool):
         raise ValueError("config field 'context.compression.enabled' must be a boolean")
     trigger = _optional_ratio(compression, "trigger_ratio")
-    target = _optional_ratio(compression, "target_ratio")
-    if trigger is not None and target is not None and target >= trigger:
-        raise ValueError("context compression target_ratio must be less than trigger_ratio")
-    return ContextCompressionConfig(enabled, trigger, target)
+    return ContextCompressionConfig(enabled, trigger)
 
 
 def _optional_ratio(data: dict[str, object], field: str) -> float | None:

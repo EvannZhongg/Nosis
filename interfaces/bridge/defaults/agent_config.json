@@ -6,8 +6,7 @@
   "context": {
     "compression": {
       "enabled": true,
-      "trigger_ratio": null,
-      "target_ratio": null
+      "trigger_ratio": null
     }
   },
   "main_agent": {

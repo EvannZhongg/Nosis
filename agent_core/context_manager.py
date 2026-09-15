@@ -34,7 +34,6 @@ class ContextLimits:
     hard_limit: int
     compression_enabled: bool
     compression_threshold: int
-    compression_target: int
 
 
 class ContextManager:
@@ -70,22 +69,15 @@ class ContextManager:
                 "greater than 1"
             )
         compression = config.context
-        trigger_ratio, target_ratio = _compression_ratios(
+        trigger_ratio = _compression_trigger_ratio(
             provider.max_context_tokens,
             compression.trigger_ratio,
-            compression.target_ratio,
         )
         threshold = max(1, int(hard_limit * trigger_ratio))
-        target = max(1, int(hard_limit * target_ratio))
-        if compression.enabled and (
-            target >= threshold or threshold >= hard_limit
-        ):
-            raise ValueError("compression target must be less than threshold")
         self.limits = ContextLimits(
             hard_limit=hard_limit,
             compression_enabled=compression.enabled,
             compression_threshold=threshold,
-            compression_target=target,
         )
 
     @property
@@ -128,10 +120,6 @@ class ContextManager:
         items = self._archivable_items()
         previous = self._session.archived_summary
         system_prompt = load_consolidator_prompt()
-        system_prompt = (
-            f"{system_prompt}\n\nTarget checkpoint size: approximately "
-            f"{self.limits.compression_target} tokens."
-        )
         if previous is not None:
             system_prompt = (
                 f"{system_prompt}\n\n[Archived Context Summary]\n{previous}"
@@ -244,19 +232,14 @@ def _timeline_message(items: list[Message]) -> Message:
     )
 
 
-def _compression_ratios(
+def _compression_trigger_ratio(
     max_context_tokens: int,
     trigger_ratio: float | None,
-    target_ratio: float | None,
-) -> tuple[float, float]:
+) -> float:
+    if trigger_ratio is not None:
+        return trigger_ratio
     if max_context_tokens <= 32 * 1024:
-        default_trigger, default_target = 0.75, 0.45
-    elif max_context_tokens <= 256 * 1024:
-        default_trigger, default_target = 0.80, 0.50
-    else:
-        default_trigger = 200_000 / max_context_tokens
-        default_target = 128_000 / max_context_tokens
-    return (
-        trigger_ratio if trigger_ratio is not None else default_trigger,
-        target_ratio if target_ratio is not None else default_target,
-    )
+        return 0.75
+    if max_context_tokens <= 256 * 1024:
+        return 0.80
+    return 200_000 / max_context_tokens

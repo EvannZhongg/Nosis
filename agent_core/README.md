@@ -36,7 +36,7 @@
 | `max_same_tool_calls` | 单轮内完全相同 Tool Call 的连续次数上限 |
 | `output_reserve_tokens` | 为下一次模型输出预留的上下文空间，只参与输入 hard limit 和压缩阈值计算 |
 | `max_generation_tokens` | 可选的单次生成策略上限；默认 `null` 时不向 Provider 传生成上限，显式设置时由模型最大输出能力裁剪 |
-| `context.compression` | 可选上下文压缩设置：`enabled`、`trigger_ratio`、`target_ratio`；`target` 必须小于 `trigger` |
+| `context.compression` | 可选上下文压缩设置：`enabled`、`trigger_ratio`；达到输入 hard limit 的指定比例时归档历史 turn |
 | `shell_timeout_seconds` | shell 默认超时，默认 60 秒、上限 900 秒 |
 | `main_agent.tools` | 主 Agent 的内置 Tool 开关；显式写 `true` 才启用 |
 | `subagent_roles` | 子 Agent 角色表；每个角色有 `enabled`、`description` 和自己的 `tools` |
