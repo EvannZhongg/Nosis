@@ -12,33 +12,65 @@
 
 ## 2. 架构要求
 
-* Agent Core 与 TUI、GUI 解耦。
-* TUI 和 GUI 仅作为交互层，共享同一套 Agent Runtime。
-* Agent Core 不依赖任何具体 UI 实现。
-* 核心能力通过稳定接口暴露，不允许将 TUI/GUI 特有逻辑写入 Agent Runtime。
-* 保持清晰的依赖方向，避免模块间循环依赖。
-
-推荐依赖关系：
-
 ```text
-TUI ───────┐
-           ├── Agent Core
-GUI/API ───┘
+TUI (Ink + React) ──────┐
+                        ├─── Bridge ── Agent Core
+GUI (React) ── FastAPI ─┘
 ```
 
-## 3. Agent Runtime
+Bridge 以 `python -m interfaces.bridge` 作为独立进程运行，是前端与 Runtime 之间的唯一通道，两端用 newline-delimited JSON 交换协议消息。
 
-Agent Runtime 负责核心执行流程，包括：
+* 依赖方向单向：`interfaces/* → agent_core`；`agent_core` 不得 import `interfaces`。
+* 驱动 Agent、执行 Tool、发起审批只能经由 Bridge 协议，前端不得自行运行 Agent Loop 或 Tool 执行。
+* 前端对 Core 的复用仅限只读能力（如 Session 读取、Workspace 路径解析）；执行语义不得在前端复制。
+* TUI 和 GUI 仅作为交互层，共享同一套 Agent Runtime。
+* 授权、取消、Session 与 Tool 执行语义只实现一次，不得由两个前端各维护一套。
+* 保持清晰的依赖方向，避免模块间循环依赖。
+* 各层细节见 [README](README.md) 的文档导航；本文只记录约束与不变量。
 
-* 模型调用
-* 上下文管理
+## 3. Agent Core 与 Bridge
+
+新增能力的落点由职责决定：
+
+* 影响所有前端共享的执行语义 → `agent_core`。
+* 只决定选择、装配、进程与协议 → `interfaces/bridge`。
+* 只影响单个前端的呈现与交互 → 对应前端；不得反向进入 Core。
+
+### 3.1 Agent Core：机制
+
+`agent_core` 提供与前端无关、可被复用的机制；它不知道前端存在，也不知道配置与进程从何而来：
+
+* Agent Loop、模型调用、错误处理与终止条件
+* 上下文管理与上下文压缩
 * Tool 调用与结果回灌
 * Session 状态
-* Agent Loop
 * 执行事件输出
-* 错误处理与终止条件
+* Tool 抽象、Tool Catalog 与调用时依赖注入
+* 子 Agent Runtime 与角色注册表
+* Provider 抽象、MCP 客户端机制
 
-Agent Loop 应保持显式、可理解和可测试，不隐藏关键执行流程。
+约束：
+
+* Agent Loop 应保持显式、可理解和可测试，不隐藏关键执行流程。
+* 机制通过已有稳定接口暴露；不引入只服务某个前端的参数、事件或分支。
+* Core 不感知 TUI/GUI、终端、浏览器或协议消息。
+
+### 3.2 Bridge：Runtime 装配
+
+Bridge 是唯一把 Core 拼装成可运行 Runtime 的地方，负责：
+
+* 选择 Provider，读取 `provider_config.json` 与 `agent_config.json`
+* 组装 Tool Catalog、按角色 select、安装 `ToolPolicy`
+* MCP Server 生命周期
+* 子 Agent 角色注册表
+* Workspace 绑定、Session 存储位置、取消与持久化时机
+* 把 `AgentEvent` 翻译为协议消息，并转发用户输入与授权响应
+
+约束：
+
+* Bridge 不含 Agent 决策逻辑：Agent Loop、上下文压缩、结果回灌都属于 Core。
+* Runtime 装配只有一处实现；TUI 与 GUI 不得各建一套。
+* 协议消息的增改必须同时更新 `interfaces/bridge/protocol.py` 与 `interfaces/protocol/src/protocol.ts`。
 
 ## 4. Tool 系统
 
@@ -50,10 +82,8 @@ Agent Loop 应保持显式、可理解和可测试，不隐藏关键执行流程
 
 ## 5. TUI 与 GUI
 
-* TUI 和 GUI 必须复用相同的 Agent 行为。
-* 禁止分别维护两套 Agent 执行逻辑。
-* GUI 展示需求不得反向污染 Agent Core。
-* Agent 输出优先采用结构化 Event，再由不同前端自行渲染。
+* 前端只负责渲染协议消息与采集输入，不得在其中实现或改写 Agent 行为。
+* Agent 状态必须由结构化事件驱动，不得从自由文本中解析；如何渲染由各前端自行决定。
 * GUI 应重点展示对话、Tool 执行、状态和人工确认。
 
 ## 6. Session 与状态
