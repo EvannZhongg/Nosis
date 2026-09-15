@@ -120,9 +120,15 @@ export function Prompt({
   // Set during render, not in an effect: useCursor publishes the position from
   // an insertion effect, which runs before layout and passive effects, so a
   // position stored later would only be applied on the following commit.
+  //
+  // Hidden while the agent works. Every streamed delta repaints the frame, and
+  // a visible cursor is re-placed on each one — it blinks against the text and
+  // surfaces below the box in the gap between erase and reposition. Typing
+  // ahead still works; the caret comes back when the turn ends.
   const caret = caretPoint(value, caretOffset);
+  const showCaret = focus && metrics.hasMeasured && !busy;
   setCursorPosition(
-    focus && metrics.hasMeasured
+    showCaret
       ? { x: metrics.left + 1 + caret.column, y: metrics.top + 1 + caret.row }
       : undefined,
   );

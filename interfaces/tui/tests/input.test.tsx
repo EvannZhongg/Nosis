@@ -138,3 +138,40 @@ describe('caretPoint', () => {
     expect(caretPoint('ab\ncd', 3)).toEqual({ column: 0, row: 1 });
   });
 });
+
+describe('Prompt caret visibility', () => {
+  /**
+   * The terminal cursor is a single shared resource: while the agent streams,
+   * every delta repaints and a visible caret blinks over the text and can
+   * surface outside the box between frames. It must stay hidden until idle.
+   */
+  it('hides the caret while the agent is busy and restores it when idle', async () => {
+    const { lastFrame, rerender } = render(
+      <Prompt value="draft" onChange={() => {}} onSubmit={() => {}} focus busy />,
+    );
+    await wait(60);
+    expect(lastFrame() ?? '').toContain('draft');
+
+    rerender(<Prompt value="draft" onChange={() => {}} onSubmit={() => {}} focus busy={false} />);
+    await wait(60);
+    expect(lastFrame() ?? '').toContain('draft');
+  });
+
+  it('shows the placeholder only when the draft is empty', async () => {
+    const { lastFrame, rerender } = render(
+      <Prompt value="" onChange={() => {}} onSubmit={() => {}} focus busy={false} />,
+    );
+    await wait(60);
+    expect(lastFrame() ?? '').toContain('ask anything');
+
+    rerender(<Prompt value="" onChange={() => {}} onSubmit={() => {}} focus busy />);
+    await wait(60);
+    expect(lastFrame() ?? '').toContain('type to queue');
+
+    rerender(<Prompt value="typed" onChange={() => {}} onSubmit={() => {}} focus busy={false} />);
+    await wait(60);
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('typed');
+    expect(frame).not.toContain('ask anything');
+  });
+});
