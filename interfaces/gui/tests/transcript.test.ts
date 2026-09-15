@@ -1,8 +1,27 @@
 import { describe, expect, it } from "vitest";
 import type { Incoming } from "@nosis/protocol";
-import { applyMessage, toMessages, type TranscriptItem } from "../src/transcript";
+import { applyMessage, isTurnActivity, toMessages, type TranscriptItem } from "../src/transcript";
 
 const TOOL_CALL = { id: "call-1", name: "shell", arguments: { command: "ls" } };
+
+describe("isTurnActivity", () => {
+  it.each([
+    { type: "assistant_delta", turn_id: "t1", text: "hi", model_call_index: 1 },
+    { type: "reasoning_delta", turn_id: "t1", text: "thinking", model_call_index: 1 },
+    { type: "tool_batch_started", turn_id: "t1", model_call_index: 1, tool_calls: [] },
+    { type: "assistant_message", turn_id: "t1", content: "hi", timestamp_utc: "2026-09-16T00:00:00Z", model_call_index: 1 },
+  ] satisfies Incoming[])("recognizes $type", (message) => {
+    expect(isTurnActivity(message)).toBe(true);
+  });
+
+  it("ignores lifecycle messages", () => {
+    expect(isTurnActivity({
+      type: "turn_completed",
+      turn_id: "t1",
+      usage: null,
+    })).toBe(false);
+  });
+});
 
 /** Folds a sequence of bridge messages, as the socket callback does. */
 function fold(messages: Incoming[], initial: TranscriptItem[] = []) {

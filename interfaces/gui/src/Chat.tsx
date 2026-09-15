@@ -9,7 +9,7 @@ import { ArrowUp, Check, ChevronDown, ChevronRight, LoaderCircle, Paperclip, Shi
 import remarkGfm from "remark-gfm";
 import { get, selectWorkspace, sessionUrl, updateSessionWorkspace, uploadAttachments, type ImageAttachment, type ModelOption, type Session } from "./api";
 import { SessionSocket } from "./session";
-import { applyMessage, toMessages, type Notice, type TranscriptItem } from "./transcript";
+import { applyMessage, isTurnActivity, toMessages, type Notice, type TranscriptItem } from "./transcript";
 import type { Usage } from "@nosis/protocol";
 
 type Approval = {
@@ -74,10 +74,10 @@ function PendingAttachment({ file, onRemove }: { file: File; onRemove: () => voi
   return <span className="attachment-chip"><img src={url} alt={file.name} /><span>{file.name}</span><button type="button" aria-label={`移除 ${file.name}`} onClick={onRemove}><X size={12} /></button></span>;
 }
 
-export function Chat({ session, workspaceOptions = [], disabled, models, model, onModelChange, onBusyChange, onUsageChange, onSessionStart, onTurnEnd, onWorkspaceChange }: {
+export function Chat({ session, workspaceOptions = [], disabled, models, model, onModelChange, onBusyChange, onUsageChange, onSessionAvailable, onTurnEnd, onWorkspaceChange }: {
   session: Session; disabled: boolean; onBusyChange: (busy: boolean) => void; onTurnEnd: () => void;
   onUsageChange: (usage: Usage | null) => void;
-  onSessionStart: (title: string) => void;
+  onSessionAvailable: () => void;
   models: ModelOption[]; model: string; onModelChange: (model: string) => void;
   workspaceOptions?: string[];
   onWorkspaceChange?: (workspace: string) => void;
@@ -101,6 +101,7 @@ export function Chat({ session, workspaceOptions = [], disabled, models, model, 
   // turn state they fold onto are kept in refs.
   const itemsRef = useRef(items);
   const runningRef = useRef(false);
+  const awaitingSessionActivityRef = useRef(false);
 
   useEffect(() => {
     if (session.workspace) setWorkspaceDraft(session.workspace);
@@ -159,6 +160,7 @@ export function Chat({ session, workspaceOptions = [], disabled, models, model, 
 
   const endTurn = useCallback(async () => {
     runningRef.current = false;
+    awaitingSessionActivityRef.current = false;
     setRunning(false);
     onBusyChange(false);
     setApproval(null);
@@ -190,6 +192,10 @@ export function Chat({ session, workspaceOptions = [], disabled, models, model, 
             noticeTimeoutRef.current = null;
           }
           setNotice(null);
+        }
+        if (awaitingSessionActivityRef.current && isTurnActivity(message)) {
+          awaitingSessionActivityRef.current = false;
+          onSessionAvailable();
         }
         const applied = applyMessage(itemsRef.current, message);
         showItems(applied.items);
@@ -262,17 +268,13 @@ export function Chat({ session, workspaceOptions = [], disabled, models, model, 
 
     turnCounter.current += 1;
     const socket = socketRef.current ?? connect();
+    awaitingSessionActivityRef.current = startsSession;
     socket.send({
       type: "user_turn",
       turn_id: `turn-${turnCounter.current}`,
       text,
       ...(attachments.length ? { attachments } : {}),
     });
-    if (startsSession) {
-      // The store derives list titles from the first persisted user item.
-      // Multimodal content is structured, so its current fallback is the id.
-      onSessionStart(attachments.length ? session.session_id : text);
-    }
   }
 
   function respond(approved: boolean) {

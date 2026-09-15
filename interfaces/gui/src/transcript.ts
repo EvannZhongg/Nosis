@@ -26,6 +26,14 @@ export type Applied = {
 
 type ToolOutcome = { ok: boolean; error?: { type: string; message: string } };
 
+/** Messages that prove the model has started handling the persisted turn. */
+export function isTurnActivity(message: Incoming): boolean {
+  return message.type === "assistant_delta"
+    || message.type === "reasoning_delta"
+    || message.type === "tool_batch_started"
+    || message.type === "assistant_message";
+}
+
 /**
  * Folds a bridge message into the transcript.
  *
