@@ -87,6 +87,7 @@ const waitForReady = (lastFrame: Frame) =>
 const approvalResponse = () => sent.find((m) => m.type === 'approval_response');
 const questionResponse = () => sent.find((m) => m.type === 'user_question_response');
 const turns = () => sent.filter((m) => m.type === 'user_turn');
+const steers = () => sent.filter((m) => m.type === 'user_steer');
 
 /** Types text and waits until Ink has parsed it into the draft. */
 async function typeDraft(
@@ -149,7 +150,7 @@ describe('App', () => {
     );
   });
 
-  it('queues a turn typed while the agent is busy', async () => {
+  it('sends steering while the agent is busy', async () => {
     const { stdin, lastFrame } = renderApp();
     await waitForReady(lastFrame);
 
@@ -159,14 +160,11 @@ describe('App', () => {
 
     await typeDraft(stdin, lastFrame, 'second');
     stdin.write('\r');
-    // The draft clearing means the submit handler ran; the turn is held back.
+    // The draft clears immediately and the message targets the active turn.
     await waitFor(() => expect(lastFrame()).not.toContain('second'));
     expect(turns()).toHaveLength(1);
-
-    // Completing the first turn releases the queued one.
-    emit({ type: 'turn_completed', turn_id: turns()[0].turn_id, usage: null });
-    await waitFor(() => expect(turns()).toHaveLength(2));
-    expect(turns()[1].text).toBe('second');
+    await waitFor(() => expect(steers()).toHaveLength(1));
+    expect(steers()[0]).toMatchObject({ turn_id: turns()[0].turn_id, text: 'second' });
   });
 
   it('keeps the input above the one-line status when a turn starts running', async () => {
@@ -177,7 +175,7 @@ describe('App', () => {
     stdin.write('\r');
     await waitFor(() => expect(lastFrame()).toContain('esc to cancel'));
 
-    const inputLine = lineContaining(lastFrame(), 'type to queue a message…');
+    const inputLine = lineContaining(lastFrame(), 'steer the current turn…');
     const statusLine = lineContaining(lastFrame(), 'test/model');
     expect(statusLine).toBe(inputLine + 2);
     expect((lastFrame() ?? '').split('\n')[statusLine]).toContain('esc to cancel');
@@ -303,7 +301,7 @@ describe('App', () => {
 
     expect(lineContaining(lastFrame(), 'first output')).toBeLessThan(3);
     expect(lineContaining(lastFrame(), 'first output')).toBeLessThan(
-      lineContaining(lastFrame(), 'type to queue a message…'),
+      lineContaining(lastFrame(), 'steer the current turn…'),
     );
   });
 
@@ -321,7 +319,7 @@ describe('App', () => {
 
     const first = lineContaining(lastFrame(), 'line one');
     const fifth = lineContaining(lastFrame(), 'line five');
-    const input = lineContaining(lastFrame(), 'type to queue a message…');
+    const input = lineContaining(lastFrame(), 'steer the current turn…');
     expect(first).toBeLessThan(3);
     expect(fifth).toBe(first + 4);
     expect(input).toBeGreaterThan(fifth + 1);
@@ -342,7 +340,7 @@ describe('App', () => {
       const frame = lastFrame() ?? '';
       expect(frame).toContain('output line 1');
       expect(frame).toContain('output line 30');
-      expect(frame).toContain('type to queue a message…');
+      expect(frame).toContain('steer the current turn…');
       expect(frame).toContain('test/model');
     });
   });
@@ -397,7 +395,7 @@ describe('App', () => {
     await waitFor(() => expect(lastFrame()).toContain('Shell command requires approval'));
 
     const approvalLine = lineContaining(lastFrame(), 'Shell command requires approval');
-    const inputLine = lineContaining(lastFrame(), 'type to queue a message…');
+    const inputLine = lineContaining(lastFrame(), 'steer the current turn…');
     const modelLine = lineContaining(lastFrame(), 'test/model');
     expect(approvalLine).toBeLessThan(inputLine);
     expect(modelLine).toBe(inputLine + 2);
@@ -410,7 +408,7 @@ describe('App', () => {
 
     expect(
       lineContaining(lastFrame(), 'starting agent…') -
-        lineContaining(lastFrame(), 'type to queue a message…'),
+        lineContaining(lastFrame(), 'steer the current turn…'),
     ).toBe(2);
 
     emit({

@@ -6,10 +6,12 @@ can drive it with plain string buffers.
 """
 
 import json
+import _thread
 from collections import deque
 from itertools import count
 from pathlib import Path
-from threading import Lock
+from queue import Queue
+from threading import Lock, Thread
 from typing import TextIO
 
 from dotenv import load_dotenv
@@ -28,6 +30,7 @@ from agent_core import (
     SubagentRuntime,
     SubprocessCommandExecutor,
     ToolExecutionContext,
+    TurnControl,
     Workspace,
     ImagePart,
     builtin_catalog,
@@ -58,13 +61,23 @@ class Bridge:
     def __init__(self, stdin: TextIO, stdout: TextIO) -> None:
         self._stdin = stdin
         self._stdout = stdout
-        self._deferred: deque[dict[str, object]] = deque()
+        self._stdout_lock = Lock()
+        self._messages: Queue[dict[str, object] | BaseException | None] = Queue()
+        self._reader: Thread | None = None
+        self._reader_lock = Lock()
+        self._router_lock = Lock()
+        self._waiters: dict[str, Queue[dict[str, object] | BaseException]] = {}
+        self._queued_turn_ids: set[str] = set()
+        self._pending_steers: dict[str, deque[tuple[str, str]]] = {}
+        self._pending_cancels: set[str] = set()
+        self._input_closed = False
+        self._shutdown_requested = False
         self._interaction_ids = count(1)
-        # Parallel tool calls share this one protocol channel. An interaction
-        # is a read-modify-write on it, so two of them must not interleave:
-        # one thread would consume the other's response and both would hang.
+        # The interface presents one approval/question at a time even when
+        # parallel tools request several interactions concurrently.
         self._interaction_lock = Lock()
         self._turn_id: str | None = None
+        self._turn_control: TurnControl | None = None
         self._agent: Agent | None = None
         self._session: Session | None = None
         self._store: JsonlSessionStore | None = None
@@ -72,27 +85,172 @@ class Bridge:
         self._workspace: Workspace | None = None
 
     def emit(self, type: str, **fields: object) -> None:
-        self._stdout.write(encode({"type": type, **fields}) + "\n")
+        with self._stdout_lock:
+            self._stdout.write(encode({"type": type, **fields}) + "\n")
 
     def read_message(self) -> dict[str, object] | None:
-        """Return the next protocol message, or None at end of input.
+        """Return the next command routed by the sole stdin reader."""
+        self._start_reader()
+        message = self._messages.get()
+        if isinstance(message, BaseException):
+            raise message
+        return message
 
-        Messages deferred by a nested approval read are replayed first,
-        in arrival order.
-        """
-        if self._deferred:
-            return self._deferred.popleft()
-        return self._read_incoming()
+    def _start_reader(self) -> None:
+        with self._reader_lock:
+            if self._reader is not None:
+                return
+            self._reader = Thread(
+                target=self._read_stdin,
+                name="bridge-input-reader",
+                daemon=True,
+            )
+            self._reader.start()
 
-    def _read_incoming(self) -> dict[str, object] | None:
-        """Read a fresh message from stdin, skipping blank lines."""
+    def _read_stdin(self) -> None:
+        first_message = self._agent is None
         while True:
-            line = self._stdin.readline()
-            if not line:
-                return None
-            stripped = line.strip()
-            if stripped:
-                return decode(stripped)
+            try:
+                line = self._stdin.readline()
+                if not line:
+                    self._route_shutdown()
+                    return
+                stripped = line.strip()
+                if stripped:
+                    message = decode(stripped)
+                    if first_message:
+                        first_message = False
+                        if message["type"] == "start":
+                            self._messages.put(message)
+                        else:
+                            self._route_message(message)
+                    else:
+                        self._route_message(message)
+                    if message["type"] == "shutdown":
+                        return
+            except (json.JSONDecodeError, ValueError) as error:
+                self._messages.put(error)
+                self._route_shutdown(notify_commands=False)
+                return
+
+    def _route_message(self, message: dict[str, object]) -> None:
+        message_type = message["type"]
+        if message_type in {"approval_response", "user_question_response"}:
+            request_id = message.get("request_id")
+            if not isinstance(request_id, str):
+                return
+            with self._router_lock:
+                waiter = self._waiters.get(request_id)
+                if waiter is not None:
+                    waiter.put(message)
+            return
+        if message_type == "user_steer":
+            self._route_steer(message)
+            return
+        if message_type == "cancel":
+            self._route_cancel(message)
+            return
+        if message_type == "shutdown":
+            self._route_shutdown()
+            return
+        if message_type == "user_turn":
+            turn_id = message.get("turn_id")
+            if isinstance(turn_id, str):
+                with self._router_lock:
+                    self._queued_turn_ids.add(turn_id)
+        self._messages.put(message)
+
+    def _route_steer(self, message: dict[str, object]) -> None:
+        steer_id = message.get("steer_id")
+        turn_id = message.get("turn_id")
+        text = message.get("text")
+        if not isinstance(steer_id, str) or not steer_id:
+            return
+        accepted = False
+        if isinstance(text, str) and text.strip():
+            with self._router_lock:
+                control = self._turn_control
+                active_turn_id = self._turn_id
+                if control is not None and turn_id == active_turn_id:
+                    accepted = control.steer(steer_id, text.strip())
+                elif (
+                    isinstance(turn_id, str)
+                    and turn_id in self._queued_turn_ids
+                ):
+                    self._pending_steers.setdefault(
+                        turn_id, deque()
+                    ).append((steer_id, text.strip()))
+                    accepted = True
+        self.emit(
+            "user_steer_received" if accepted else "user_steer_rejected",
+            turn_id=turn_id,
+            steer_id=steer_id,
+            text=text if isinstance(text, str) else "",
+        )
+
+    def _route_cancel(self, message: dict[str, object]) -> None:
+        turn_id = message.get("turn_id")
+        with self._router_lock:
+            control = self._turn_control
+            if control is not None and turn_id == self._turn_id:
+                cancelled = control.cancel()
+                waiters = tuple(self._waiters.values()) if cancelled else ()
+            else:
+                cancelled = False
+                waiters = ()
+                if (
+                    isinstance(turn_id, str)
+                    and turn_id in self._queued_turn_ids
+                ):
+                    self._pending_cancels.add(turn_id)
+        for waiter in waiters:
+            waiter.put(Cancelled())
+        if cancelled:
+            _thread.interrupt_main()
+
+    def _route_shutdown(self, *, notify_commands: bool = True) -> None:
+        with self._router_lock:
+            self._input_closed = True
+            self._shutdown_requested = True
+            control = self._turn_control
+            cancelled = control.cancel() if control is not None else False
+            waiters = tuple(self._waiters.values())
+        for waiter in waiters:
+            waiter.put(Cancelled())
+        if cancelled:
+            _thread.interrupt_main()
+        if notify_commands:
+            self._messages.put(None)
+
+    def _register_interaction(
+        self, request_id: str
+    ) -> Queue[dict[str, object] | BaseException]:
+        waiter: Queue[dict[str, object] | BaseException] = Queue()
+        with self._router_lock:
+            self._waiters[request_id] = waiter
+            if (
+                self._input_closed
+                or (
+                    self._turn_control is not None
+                    and self._turn_control.cancelled
+                )
+            ):
+                waiter.put(Cancelled())
+        self._start_reader()
+        return waiter
+
+    def _unregister_interaction(self, request_id: str) -> None:
+        with self._router_lock:
+            self._waiters.pop(request_id, None)
+
+    @staticmethod
+    def _wait_for_interaction(
+        waiter: Queue[dict[str, object] | BaseException],
+    ) -> dict[str, object]:
+        response = waiter.get()
+        if isinstance(response, BaseException):
+            raise response
+        return response
 
     def request_permission(
         self,
@@ -106,6 +264,7 @@ class Bridge:
         # racing for each other's answers; the user still answers one at a time.
         with self._interaction_lock:
             request_id = f"{self._turn_id}:{next(self._interaction_ids)}"
+            waiter = self._register_interaction(request_id)
             self.emit(
                 "approval_request",
                 turn_id=self._turn_id,
@@ -115,19 +274,11 @@ class Bridge:
                 server=server,
                 tool_name=tool_name,
             )
-            while True:
-                # Read fresh input only: replaying the deferred queue here
-                # would spin, since non-matching messages go back onto it.
-                message = self._read_incoming()
-                if message is None or message["type"] == "shutdown":
-                    # The UI is gone; never run an unapproved command.
-                    raise Cancelled
-                if (
-                    message["type"] == "approval_response"
-                    and message.get("request_id") == request_id
-                ):
-                    return bool(message.get("approved"))
-                self._deferred.append(message)
+            try:
+                message = self._wait_for_interaction(waiter)
+                return bool(message.get("approved"))
+            finally:
+                self._unregister_interaction(request_id)
 
     def request_user_choice(
         self,
@@ -137,6 +288,7 @@ class Bridge:
     ) -> object:
         with self._interaction_lock:
             request_id = f"{self._turn_id}:{next(self._interaction_ids)}"
+            waiter = self._register_interaction(request_id)
             self.emit(
                 "user_question",
                 turn_id=self._turn_id,
@@ -148,14 +300,9 @@ class Bridge:
             option_by_id = {
                 str(option["id"]): option for option in options
             }
-            while True:
-                message = self._read_incoming()
-                if message is None or message["type"] == "shutdown":
-                    raise Cancelled
-                if (
-                    message["type"] == "user_question_response"
-                    and message.get("request_id") == request_id
-                ):
+            try:
+                while True:
+                    message = self._wait_for_interaction(waiter)
                     option_id = message.get("option_id")
                     text = message.get("text")
                     if isinstance(option_id, str) and option_id in option_by_id:
@@ -165,14 +312,10 @@ class Bridge:
                             "id": option_id,
                             "label": option["label"],
                         }
-                    if (
-                        allow_free_text
-                        and isinstance(text, str)
-                        and text.strip()
-                    ):
+                    if allow_free_text and isinstance(text, str) and text.strip():
                         return {"type": "text", "text": text.strip()}
-                    continue
-                self._deferred.append(message)
+            finally:
+                self._unregister_interaction(request_id)
 
     def request_mcp_permission(self, call) -> bool:
         identity = (
@@ -392,6 +535,22 @@ class Bridge:
             raise RuntimeError("bridge workspace is not initialized")
 
         self._turn_id = str(message["turn_id"])
+        control = TurnControl()
+        with self._router_lock:
+            self._turn_control = control
+            self._queued_turn_ids.discard(self._turn_id)
+            pending_steers = self._pending_steers.pop(
+                self._turn_id, deque()
+            )
+            cancelled = (
+                self._turn_id in self._pending_cancels
+                or self._shutdown_requested
+            )
+            self._pending_cancels.discard(self._turn_id)
+        for steer_id, text in pending_steers:
+            control.steer(steer_id, text)
+        if cancelled:
+            control.cancel()
         try:
             attachments = _parse_attachments(
                 message.get("attachments"), self._workspace
@@ -405,6 +564,7 @@ class Bridge:
             result = self._agent.run(
                 str(message["text"]),
                 turn_id=self._turn_id,
+                turn_control=control,
                 **kwargs,
             )
         except (KeyboardInterrupt, Cancelled):
@@ -420,7 +580,14 @@ class Bridge:
                 error=_error_payload(error),
             )
             return
+        finally:
+            with self._router_lock:
+                if self._turn_control is control:
+                    self._turn_control = None
+                shutdown_requested = self._shutdown_requested
 
+        if shutdown_requested:
+            return
         self.emit(
             "turn_completed",
             turn_id=self._turn_id,
@@ -428,6 +595,7 @@ class Bridge:
         )
 
     def serve(self) -> None:
+        started = False
         while True:
             try:
                 message = self.read_message()
@@ -442,12 +610,23 @@ class Bridge:
 
             if message is None or message["type"] == "shutdown":
                 return
-            if message["type"] == "start":
+            if not started:
+                if message["type"] != "start":
+                    self.emit(
+                        "fatal",
+                        error={
+                            "type": "ProtocolError",
+                            "message": "first message must be 'start'",
+                        },
+                    )
+                    raise SystemExit(1)
                 self.start(message)
+                started = True
             elif message["type"] == "user_turn":
                 self.run_turn(message)
 
     def close(self) -> None:
+        self._route_shutdown(notify_commands=False)
         if self._mcp is not None:
             self._mcp.close()
             self._mcp = None

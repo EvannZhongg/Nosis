@@ -26,6 +26,8 @@ from agent_core import (
     ToolConfig,
     ToolDefinition,
     ToolResultEvent,
+    TurnControl,
+    UserSteerAppliedEvent,
     Workspace,
     ImagePart,
     TextPart,
@@ -104,6 +106,21 @@ class MockProvider(LLMProvider):
         return response
 
 
+class SteeringProvider(MockProvider):
+    def __init__(self, responses, turn_control: TurnControl, steer_on_calls: dict[int, str]):
+        super().__init__(responses)
+        self._turn_control = turn_control
+        self._steer_on_calls = steer_on_calls
+
+    def stream(self, request, on_text_delta, on_reasoning_delta=None):
+        call_index = len(self.requests) + 1
+        response = super().stream(request, on_text_delta, on_reasoning_delta)
+        text = self._steer_on_calls.get(call_index)
+        if text is not None:
+            self._turn_control.steer(f"steer-{call_index}", text)
+        return response
+
+
 class EchoTool(Tool):
     name = "echo"
 
@@ -131,6 +148,88 @@ def clock(*values: datetime):
 
 
 class AgentTest(unittest.TestCase):
+    def test_applies_steering_after_a_tool_batch_commits(self) -> None:
+        control = TurnControl()
+        call = ToolCall("call-1", "echo", {"text": "hello"})
+        provider = SteeringProvider(
+            [LLMResponse(content=None, tool_calls=(call,)), LLMResponse(content="done")],
+            control,
+            {1: "check tests first"},
+        )
+        session = Session("session-1")
+        events = []
+        agent = Agent(
+            provider,
+            session,
+            "You are helpful.",
+            AGENT_CONFIG,
+            tool_set(EchoTool(), session=session),
+            ToolExecutionContext(workspace=TEST_WORKSPACE, session=session),
+            now=clock(REQUEST_TIME, TOOL_CALL_TIME, TOOL_RESULT_TIME, RESPONSE_TIME, RESPONSE_TIME),
+        )
+
+        agent.run("work", on_event=events.append, turn_control=control)
+
+        self.assertEqual(
+            [message.role for message in session.items],
+            ["user", "assistant", "tool", "user", "assistant"],
+        )
+        self.assertEqual(session.items[3].content, "check tests first")
+        self.assertEqual(
+            [message.content for message in provider.requests[1].messages if message.role == "user"],
+            ["work", "check tests first"],
+        )
+        self.assertEqual(
+            [event.text for event in events if isinstance(event, UserSteerAppliedEvent)],
+            ["check tests first"],
+        )
+
+    def test_steering_before_return_reopens_the_turn(self) -> None:
+        control = TurnControl()
+        provider = SteeringProvider(
+            [
+                LLMResponse(content="first answer"),
+                LLMResponse(content="second answer"),
+                LLMResponse(content="revised answer"),
+            ],
+            control,
+            {1: "also explain why", 2: "keep it concise"},
+        )
+        session = Session("session-1")
+        agent = Agent(
+            provider,
+            session,
+            "You are helpful.",
+            AGENT_CONFIG,
+            tool_set(session=session),
+            ToolExecutionContext(workspace=TEST_WORKSPACE, session=session),
+            now=clock(
+                REQUEST_TIME,
+                RESPONSE_TIME,
+                RESPONSE_TIME,
+                RESPONSE_TIME,
+                RESPONSE_TIME,
+                RESPONSE_TIME,
+            ),
+        )
+
+        result = agent.run("answer", turn_control=control)
+
+        self.assertEqual(result.response.content, "revised answer")
+        self.assertEqual(
+            [message.content for message in session.items],
+            [
+                "answer",
+                "first answer",
+                "also explain why",
+                "second answer",
+                "keep it concise",
+                "revised answer",
+            ],
+        )
+        self.assertFalse(control.steer("late", "too late"))
+        self.assertFalse(control.cancel())
+
     def test_archive_cursor_advances_by_complete_context_units(self) -> None:
         call = ToolCall("call-old", "echo", {"text": "old"})
         session = Session("session-1")

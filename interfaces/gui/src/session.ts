@@ -14,8 +14,7 @@ export type SessionSocketOptions = {
 
 /** What the browser may send: relayed bridge messages plus 'cancel'. */
 type Sendable =
-  | Extract<Outgoing, { type: "user_turn" | "approval_response" | "user_question_response" }>
-  | { type: "cancel" };
+  Extract<Outgoing, { type: "user_turn" | "user_steer" | "approval_response" | "user_question_response" | "cancel" }>;
 
 /**
  * Owns one WebSocket to the agent bridge for the lifetime of a session.

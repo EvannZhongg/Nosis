@@ -18,6 +18,7 @@ from agent_core import (
     ToolCallEvent,
     ToolMediaEvent,
     ToolResultEvent,
+    UserSteerAppliedEvent,
 )
 from agent_core.llm import TokenUsage
 
@@ -84,6 +85,7 @@ def ready_message(
 def runtime_state_message(
     *,
     running: bool,
+    turn_id: str | None = None,
     approval: dict[str, object] | None,
     question: dict[str, object] | None,
     provider: str | None,
@@ -92,6 +94,7 @@ def runtime_state_message(
     return {
         "type": "runtime_state",
         "running": running,
+        "turn_id": turn_id,
         "approval": approval,
         "question": question,
         "provider": provider,
@@ -188,6 +191,15 @@ def event_to_message(
                 }
                 for part in event.attachments
             ],
+        }
+
+    if isinstance(event, UserSteerAppliedEvent):
+        return {
+            "type": "user_steer_applied",
+            "turn_id": turn_id,
+            "steer_id": event.steer_id,
+            "text": event.text,
+            "timestamp_utc": format_timestamp(event.timestamp_utc),
         }
 
     raise TypeError(f"unsupported agent event: {type(event).__name__}")

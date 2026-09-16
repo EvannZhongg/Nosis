@@ -55,11 +55,13 @@ export type State = {
   question: UserQuestionState | null;
   turnId: string | null;
   usage: Usage | null;
+  pendingSteers: number;
 };
 
 export type Action =
   | { type: 'message'; message: Incoming }
   | { type: 'submit'; turnId: string; text: string }
+  | { type: 'steer_submitted' }
   | { type: 'approval_choice'; choice: ApprovalChoice }
   | { type: 'approval_resolved' }
   | { type: 'question_choice'; selectedIndex: number }
@@ -78,6 +80,7 @@ export const initialState: State = {
   question: null,
   turnId: null,
   usage: null,
+  pendingSteers: 0,
 };
 
 let entryCounter = 0;
@@ -175,6 +178,9 @@ function reduceAction(state: State, action: Action): State {
           { kind: 'user', id: nextId('user'), text: action.text },
         ],
       };
+
+    case 'steer_submitted':
+      return { ...state, pendingSteers: state.pendingSteers + 1 };
 
     case 'approval_choice':
       return state.approval === null
@@ -334,6 +340,34 @@ function applyMessage(state: State, message: Incoming): State {
         ],
       };
 
+    case 'user_steer_received':
+      return state;
+
+    case 'user_steer_applied':
+      return {
+        ...state,
+        pendingSteers: Math.max(0, state.pendingSteers - 1),
+        entries: [
+          ...state.entries,
+          { kind: 'user', id: nextId('user'), text: message.text },
+        ],
+      };
+
+    case 'user_steer_rejected':
+      return {
+        ...state,
+        pendingSteers: Math.max(0, state.pendingSteers - 1),
+        entries: [
+          ...state.entries,
+          {
+            kind: 'notice',
+            id: nextId('notice'),
+            level: 'info',
+            text: 'Steering arrived after the turn finished and was not applied.',
+          },
+        ],
+      };
+
     case 'approval_request':
       return {
         ...state,
@@ -364,7 +398,7 @@ function applyMessage(state: State, message: Incoming): State {
     }
 
     case 'turn_completed':
-      return { ...state, status: 'idle', turnId: null, approval: null, question: null, usage: message.usage };
+      return { ...state, status: 'idle', turnId: null, approval: null, question: null, pendingSteers: 0, usage: message.usage };
 
     case 'turn_cancelled':
       return {
@@ -373,6 +407,7 @@ function applyMessage(state: State, message: Incoming): State {
         turnId: null,
         approval: null,
         question: null,
+        pendingSteers: 0,
         entries: [
           ...state.entries,
           {
@@ -391,6 +426,7 @@ function applyMessage(state: State, message: Incoming): State {
         turnId: null,
         approval: null,
         question: null,
+        pendingSteers: 0,
         entries: [
           ...state.entries,
           {

@@ -56,11 +56,10 @@ export function caretPosition({
 }
 
 /**
- * Stays mounted while the agent works so typing ahead is not lost;
- * submission is gated by the caller until the runtime is idle.
+ * Stays mounted while the agent works so the caller can submit steering.
  *
- * Top and bottom rules mark the input area; the dimmed border is the only
- * cue that a submission will be queued rather than sent.
+ * Top and bottom rules mark the input area; the dimmed border distinguishes
+ * steering the active turn from starting a new one.
  *
  * The draft is edited here because the real terminal cursor has to sit on
  * the caret: an IME draws its preedit ("nihao"
@@ -151,12 +150,8 @@ export function Prompt({
   // an insertion effect, which runs before layout and passive effects, so a
   // position stored later would only be applied on the following commit.
   //
-  // Hidden while the agent works. Every streamed delta repaints the frame, and
-  // a visible cursor is re-placed on each one — it blinks against the text and
-  // surfaces below the box in the gap between erase and reposition. Typing
-  // ahead still works; the caret comes back when the turn ends.
   const caret = caretPoint(value, caretOffset);
-  const showCaret = focus && metrics.hasMeasured && !busy;
+  const showCaret = focus && metrics.hasMeasured;
   setCursorPosition(
     showCaret
       ? caretPosition({
@@ -187,7 +182,7 @@ export function Prompt({
       paddingX={1}
     >
       {value === '' ? (
-        <Text dimColor>{placeholder ?? (busy ? 'type to queue a message…' : 'ask anything…')}</Text>
+        <Text dimColor>{placeholder ?? (busy ? 'steer the current turn…' : 'ask anything…')}</Text>
       ) : (
         <Text>{renderedValue}</Text>
       )}

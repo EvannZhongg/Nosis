@@ -105,6 +105,30 @@ export function applyMessage(
         ],
       };
 
+    case "user_steer_applied":
+      return {
+        items: [
+          ...items,
+          {
+            role: "user",
+            content: message.text,
+            timestamp_utc: message.timestamp_utc,
+          },
+        ],
+      };
+
+    case "user_steer_received":
+      return { items };
+
+    case "user_steer_rejected":
+      return {
+        items,
+        notice: {
+          level: "info",
+          text: "这条引导消息到达时本轮已结束，未写入上下文。",
+        },
+      };
+
     case "approval_request":
       return {
         items,

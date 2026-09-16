@@ -12,6 +12,7 @@ from .agent import (
     ToolCallLimitExceededError,
     ToolMediaEvent,
     ToolResultEvent,
+    UserSteerAppliedEvent,
 )
 from .config import (
     AgentConfig,
@@ -97,6 +98,7 @@ from .mcp import (
     load_mcp_config,
 )
 from .workspace import Workspace
+from .turn_control import TurnControl, UserSteer, UserSteeringMailbox
 
 __all__ = [
     "Agent",
@@ -173,8 +175,12 @@ __all__ = [
     "ToolResult",
     "ToolResultEvent",
     "ToolResultNormalizer",
+    "TurnControl",
     "ToolSet",
     "UnsupportedImageError",
+    "UserSteer",
+    "UserSteerAppliedEvent",
+    "UserSteeringMailbox",
     "WebSearchTool",
     "WriteFileTool",
     "Workspace",

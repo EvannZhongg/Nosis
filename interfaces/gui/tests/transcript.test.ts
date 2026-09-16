@@ -46,6 +46,23 @@ function fold(messages: Incoming[], initial: TranscriptItem[] = []) {
 }
 
 describe("applyMessage", () => {
+  it("appends steering only when the runtime applies it", () => {
+    const applied = applyMessage([], {
+      type: "user_steer_applied",
+      turn_id: "t1",
+      steer_id: "s1",
+      text: "check tests first",
+      timestamp_utc: "2026-09-16T10:00:00Z",
+    });
+
+    expect(applied.items).toEqual([
+      {
+        role: "user",
+        content: "check tests first",
+        timestamp_utc: "2026-09-16T10:00:00Z",
+      },
+    ]);
+  });
   it("shows skill discovery warnings from ready", () => {
     const { notice } = applyMessage([], {
       type: "ready",

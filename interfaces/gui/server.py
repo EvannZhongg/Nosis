@@ -51,7 +51,12 @@ SHUTDOWN_TIMEOUT_SECONDS = 2
 # excluded: the server builds it so a page cannot point the agent at an
 # arbitrary configuration file.
 RELAYED_MESSAGE_TYPES = frozenset(
-    {"user_turn", "approval_response", "user_question_response"}
+    {
+        "user_turn",
+        "user_steer",
+        "approval_response",
+        "user_question_response",
+    }
 )
 
 
@@ -62,6 +67,7 @@ class BridgeProcess:
         self._process = process
         self._ready = False
         self._turn_running = False
+        self._turn_id: str | None = None
 
     @classmethod
     async def spawn(cls, workspace: Workspace) -> "BridgeProcess":
@@ -87,6 +93,7 @@ class BridgeProcess:
             return
         if message.get("type") == "user_turn":
             self._turn_running = True
+            self._turn_id = str(message.get("turn_id"))
         stdin.write(
             (json.dumps(message, ensure_ascii=False) + "\n").encode("utf-8")
         )
@@ -112,16 +119,17 @@ class BridgeProcess:
                     "turn_failed",
                 }:
                     self._turn_running = False
+                    self._turn_id = None
                 return message
 
     def cancel_turn(self) -> None:
-        """Interrupt the running turn, as Esc does in the TUI."""
-        if self._turn_running and self._process.returncode is None:
-            cancel_process(self._process)
+        """Route cancellation to the active turn."""
+        if self._turn_running and self._turn_id is not None:
+            self.send({"type": "cancel", "turn_id": self._turn_id})
 
     async def close(self) -> None:
         # A page that goes away mid-turn would otherwise take the running
-        # turn down with the process; the interrupt lets the bridge store
+        # turn down with the process; a routed cancel lets the bridge store
         # what the turn already produced before it shuts down.
         if not self._ready and self._process.returncode is None:
             cancel_process(self._process)
@@ -183,6 +191,7 @@ class ActiveRuntime:
         self.items = items
         self.bridge = bridge
         self.running = False
+        self.turn_id: str | None = None
         self.approval: dict[str, object] | None = None
         self.question: dict[str, object] | None = None
         self.done = False
@@ -224,6 +233,7 @@ class ActiveRuntime:
                     events = list(self._events[after_event:])
                     state = runtime_state_message(
                         running=self.running,
+                        turn_id=self.turn_id,
                         approval=self.approval,
                         question=self.question,
                         provider=self.provider,
@@ -264,6 +274,7 @@ class ActiveRuntime:
     def send(self, message: dict[str, object]) -> None:
         if message.get("type") == "user_turn":
             self.running = True
+            self.turn_id = str(message.get("turn_id"))
             self.approval = None
             self.question = None
             content: object = str(message.get("text", ""))
@@ -320,6 +331,7 @@ class ActiveRuntime:
                     self.question = message
                 elif message_type in TERMINAL_MESSAGE_TYPES:
                     self.running = False
+                    self.turn_id = None
                     self.approval = None
                     self.question = None
                     self._terminal_pending = True
@@ -691,6 +703,7 @@ def create_app(
             await websocket.send_json(
                 runtime_state_message(
                     running=False,
+                    turn_id=None,
                     approval=None,
                     question=None,
                     provider=None,
@@ -791,7 +804,8 @@ async def _relay(
                 continue
             message_type = message.get("type")
             if message_type == "cancel":
-                runtime.cancel_turn()
+                if message.get("turn_id") == runtime.turn_id:
+                    runtime.cancel_turn()
             elif message_type in RELAYED_MESSAGE_TYPES:
                 runtime.send(message)
 

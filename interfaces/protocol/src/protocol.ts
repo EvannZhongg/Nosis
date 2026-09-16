@@ -48,6 +48,7 @@ export type Incoming =
   | {
       type: 'runtime_state';
       running: boolean;
+      turn_id: string | null;
       provider: string | null;
       approval: {
         type: 'approval_request';
@@ -108,6 +109,15 @@ export type Incoming =
       turn_id: string;
       attachments: ImageAttachment[];
     }
+  | { type: 'user_steer_received'; turn_id: string | null; steer_id: string; text: string }
+  | { type: 'user_steer_rejected'; turn_id: string | null; steer_id: string; text: string }
+  | {
+      type: 'user_steer_applied';
+      turn_id: string;
+      steer_id: string;
+      text: string;
+      timestamp_utc: string;
+    }
   | {
       type: 'approval_request';
       turn_id: string | null;
@@ -139,7 +149,9 @@ export type Outgoing =
       provider?: string;
     }
   | { type: 'user_turn'; turn_id: string; text: string; attachments?: ImageAttachment[] }
+  | { type: 'user_steer'; turn_id: string; steer_id: string; text: string }
   | { type: 'approval_response'; request_id: string; approved: boolean }
+  | { type: 'cancel'; turn_id: string }
   | { type: 'user_question_response'; request_id: string; option_id?: string; text?: string }
   | { type: 'shutdown' };
 

@@ -198,7 +198,7 @@ describe('Prompt caret visibility', () => {
 
     rerender(<Prompt value="" onChange={() => {}} onSubmit={() => {}} focus busy />);
     await wait(60);
-    expect(lastFrame() ?? '').toContain('type to queue');
+    expect(lastFrame() ?? '').toContain('steer the current turn');
 
     rerender(<Prompt value="typed" onChange={() => {}} onSubmit={() => {}} focus busy={false} />);
     await wait(60);

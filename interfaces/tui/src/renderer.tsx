@@ -265,7 +265,7 @@ export function StatusBar({ state, elapsed }: { state: State; elapsed: number })
         {busy
           ? `${state.status === 'cancelling' ? ' cancelling…' : ' working'} ${elapsed.toFixed(
               1,
-            )}s · esc to cancel · ${model}`
+            )}s${state.pendingSteers ? ` · ${state.pendingSteers} steer pending` : ''} · esc to cancel · ${model}`
           : model}
       </Text>
     </Box>

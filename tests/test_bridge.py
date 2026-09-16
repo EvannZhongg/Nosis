@@ -23,6 +23,8 @@ from agent_core import (
     ToolError,
     ToolResult,
     ToolResultEvent,
+    UserSteerAppliedEvent,
+    TurnControl,
 )
 from agent_core.llm import TokenUsage
 from agent_core.projection import project_context_units
@@ -128,6 +130,19 @@ class ProtocolTest(unittest.TestCase):
         # Output can be large and is offloaded to session artifacts.
         self.assertNotIn("output", message)
 
+    def test_encodes_applied_user_steering(self) -> None:
+        message = event_to_message(
+            UserSteerAppliedEvent(
+                steer_id="s1",
+                text="check tests first",
+                timestamp_utc=EVENT_TIME,
+            ),
+            "t1",
+        )
+        self.assertEqual(message["type"], "user_steer_applied")
+        self.assertEqual(message["steer_id"], "s1")
+        self.assertEqual(message["text"], "check tests first")
+
     def test_tool_result_reports_error(self) -> None:
         message = event_to_message(
             ToolResultEvent(
@@ -179,6 +194,7 @@ class ProtocolTest(unittest.TestCase):
         self.assertEqual(
             runtime_state_message(
                 running=True,
+                turn_id="t1",
                 approval=approval,
                 question=None,
                 provider="second",
@@ -186,6 +202,7 @@ class ProtocolTest(unittest.TestCase):
             {
                 "type": "runtime_state",
                 "running": True,
+                "turn_id": "t1",
                 "approval": approval,
                 "question": None,
                 "provider": "second",
@@ -239,6 +256,19 @@ class _SlowStdin:
     def readline(self) -> str:
         time.sleep(0.01)
         return next(self._lines, "")
+
+
+class _BlockingAfterLines:
+    def __init__(self, lines: list[str]) -> None:
+        self._lines = iter(f"{line}\n" for line in lines)
+        self.release = threading.Event()
+
+    def readline(self) -> str:
+        try:
+            return next(self._lines)
+        except StopIteration:
+            self.release.wait(5)
+            return ""
 
 
 class BridgeApprovalTest(unittest.TestCase):
@@ -341,6 +371,54 @@ class BridgeApprovalTest(unittest.TestCase):
         self.assertEqual(len(request_ids), approvals)
         self.assertEqual(len(set(request_ids)), approvals)
 
+    def test_routes_steering_while_waiting_for_approval(self) -> None:
+        stdin = _BlockingAfterLines(
+            [
+                '{"type": "user_steer", "turn_id": "t1", "steer_id": "s1", "text": "check tests"}',
+                '{"type": "approval_response", "request_id": "t1:1", "approved": true}',
+            ]
+        )
+        stdout = io.StringIO()
+        bridge = Bridge(stdin, stdout)
+        control = TurnControl()
+        bridge._turn_id = "t1"
+        bridge._turn_control = control
+
+        self.assertTrue(bridge.request_permission("ls"))
+        self.assertEqual(control.drain_steering()[0].text, "check tests")
+        self.assertIn(
+            "user_steer_received",
+            [message["type"] for message in emitted(stdout)],
+        )
+        bridge._turn_control = None
+        stdin.release.set()
+
+    def test_ignores_a_stale_response_that_arrived_before_its_waiter(self) -> None:
+        bridge, _ = make_bridge(
+            [
+                '{"type": "approval_response", "request_id": "None:1", "approved": true}',
+            ]
+        )
+        bridge._start_reader()
+        time.sleep(0.02)
+
+        with self.assertRaises(Cancelled):
+            bridge.request_permission("ls")
+
+    def test_routes_cancel_for_a_turn_queued_before_run_turn(self) -> None:
+        bridge, _ = make_bridge(
+            [
+                '{"type": "user_turn", "turn_id": "t1", "text": "work"}',
+                '{"type": "cancel", "turn_id": "t1"}',
+            ]
+        )
+
+        message = bridge.read_message()
+        assert message is not None
+        time.sleep(0.02)
+
+        self.assertIn("t1", bridge._pending_cancels)
+
 
 class BridgeUserQuestionTest(unittest.TestCase):
     OPTIONS = [
@@ -400,7 +478,7 @@ class BridgeServeTest(unittest.TestCase):
         bridge, _ = make_bridge(
             ['{"type": "user_turn", "turn_id": "t1", "text": "hi"}']
         )
-        with self.assertRaises(RuntimeError):
+        with self.assertRaises(SystemExit):
             bridge.serve()
 
     def test_reports_malformed_input_as_fatal(self) -> None:
@@ -480,6 +558,7 @@ class ScriptedAgent:
         on_event: object = None,
         attachments: object = (),
         turn_id: str | None = None,
+        turn_control: TurnControl | None = None,
     ) -> None:
         self._session.begin_turn(turn_id)
         self._session.add_item("user", user_input)
@@ -506,6 +585,7 @@ class FailingAgent:
         on_event: object = None,
         attachments: object = (),
         turn_id: str | None = None,
+        turn_control: TurnControl | None = None,
     ) -> None:
         # A provider can fail only after the Runtime has durably opened a turn.
         self._session.begin_turn(turn_id)

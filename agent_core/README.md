@@ -154,6 +154,8 @@ Execution History 直接由 Journal replay；Provider Conversation 由独立 pro
 
 上下文压缩以 `ContextUnit` 为边界，而不是以 turn 或裸 Message 为边界。普通消息各自构成单元；包含 Tool Call 的 assistant 消息、该批次的全部 Tool Result 和尾随 Tool Media 共同构成一个不可拆分单元。触发压缩时，最近 `context.compression.keep_recent_units` 个完整单元保留原文，更早的单元合并进 checkpoint，因此归档 cursor 可以在仍执行的 turn 内推进，但不会落到 Tool batch 中间。
 
+运行中用户 steering 在安全点作为普通 `user` Message 追加，因此它自然构成新的 `ContextUnit`，沿用同一套 token 统计、hard limit 与压缩保留规则，不维护额外的上下文计数。
+
 Session 位于 `~/.nosis/sessions/<WORKSPACE_KEY>/<SESSION_ID>/<SESSION_ID>.jsonl`。同一 Workspace 下的 Session 在 GUI 中分组显示，Workspace 目录的 `workspace.json` 记录该分组的绝对路径。修改 Workspace 会将 Session 目录移动到新的 Workspace 分组。超过回灌上限的 Tool Result 保存为同目录下的 `<TOOL_CALL_ID>.txt`；使用 `nosis --session SESSION_ID` 恢复。子代理的 Journal 写在父 Session 的 `subagents` 目录下，因此不会出现在会话列表中，但仍可查阅。
 
 GUI 上传的图片保存在 Workspace 的 `.nosis/attachments/<id>.<ext>`，Session 只记录路径和 MIME 类型。Runtime 请求 Provider 时才读取图片，并通过 `LLMRequest(media_root=workspace.path)` 解析工作区路径。

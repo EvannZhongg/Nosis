@@ -95,7 +95,7 @@ class BridgeProcessTest(unittest.TestCase):
 
         process.send_signal.assert_not_called()
 
-    def test_cancel_interrupts_a_requested_turn(self) -> None:
+    def test_cancel_routes_to_a_requested_turn(self) -> None:
         stdin = SimpleNamespace(
             is_closing=lambda: False,
             write=Mock(),
@@ -107,8 +107,10 @@ class BridgeProcessTest(unittest.TestCase):
         bridge.send({"type": "user_turn", "turn_id": "t1", "text": "hi"})
         bridge.cancel_turn()
 
-        process.send_signal.assert_called_once_with(
-            signal.CTRL_BREAK_EVENT if os.name == "nt" else signal.SIGINT
+        process.send_signal.assert_not_called()
+        self.assertEqual(
+            json.loads(stdin.write.call_args.args[0].decode("utf-8")),
+            {"type": "cancel", "turn_id": "t1"},
         )
 
     @unittest.skipIf(os.name == "nt", "POSIX process groups only")
@@ -420,13 +422,19 @@ class GuiTest(unittest.TestCase):
             with client.websocket_connect("/api/session") as socket:
                 socket.send_json({"type": "start", "session_id": "s1", "attachment_id": "page-1"})
                 self.assertEqual(socket.receive_json()["type"], "ready")
+                socket.send_json(
+                    {"type": "user_turn", "turn_id": "t1", "text": "hi"}
+                )
                 # The fake ends its stream on cancel, as an exiting
                 # bridge would.
-                socket.send_json({"type": "cancel"})
+                socket.send_json({"type": "cancel", "turn_id": "t1"})
                 _wait_for(lambda: bridge.closed)
 
         self.assertEqual(bridge.cancelled, 1)
-        self.assertEqual([m["type"] for m in bridge.sent], ["start"])
+        self.assertEqual(
+            [m["type"] for m in bridge.sent],
+            ["start", "user_turn"],
+        )
 
     def test_reconnects_to_the_same_runtime_and_restores_approval(self) -> None:
         bridge = FakeBridge(
@@ -529,7 +537,7 @@ class GuiTest(unittest.TestCase):
                     }
                 )
                 self.assertEqual(first.receive_json()["text"], "still attached")
-                first.send_json({"type": "cancel"})
+                first.send_json({"type": "cancel", "turn_id": "t1"})
                 _wait_for(lambda: bridge.closed)
 
     def test_explicit_takeover_replaces_the_previous_page(self) -> None:
@@ -577,7 +585,7 @@ class GuiTest(unittest.TestCase):
                         }
                     )
                     self.assertEqual(second.receive_json()["text"], "new owner")
-                    second.send_json({"type": "cancel"})
+                    second.send_json({"type": "cancel", "turn_id": "t1"})
                     _wait_for(lambda: bridge.closed)
 
     def test_replays_events_and_completion_emitted_while_detached(self) -> None:
@@ -661,10 +669,16 @@ class GuiTest(unittest.TestCase):
                         second.receive_json()["type"],
                         "ready",
                     )
-                    second.send_json({"type": "cancel"})
+                    second.send_json(
+                        {"type": "user_turn", "turn_id": "t2", "text": "two"}
+                    )
+                    second.send_json({"type": "cancel", "turn_id": "t2"})
                     _wait_for(lambda: bridges[1].closed)
 
-                first.send_json({"type": "cancel"})
+                first.send_json(
+                    {"type": "user_turn", "turn_id": "t1", "text": "one"}
+                )
+                first.send_json({"type": "cancel", "turn_id": "t1"})
                 _wait_for(lambda: bridges[0].closed)
 
         self.assertEqual(

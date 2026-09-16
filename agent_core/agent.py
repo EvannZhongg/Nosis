@@ -16,6 +16,7 @@ from .session import Message, Session, ToolExecutionStatus
 from .content import ImagePart
 from .tool_result import ToolResultNormalizer
 from .tools import ToolCall, ToolExecutionContext, ToolResult, ToolSet
+from .turn_control import TurnControl, UserSteer
 
 
 class ToolCallLimitExceededError(RuntimeError):
@@ -92,6 +93,13 @@ class ContextArchivedEvent:
     checkpoint_number: int
 
 
+@dataclass(frozen=True)
+class UserSteerAppliedEvent:
+    steer_id: str
+    text: str
+    timestamp_utc: datetime
+
+
 AgentEvent: TypeAlias = (
     AssistantMessageDeltaEvent
     | ReasoningDeltaEvent
@@ -101,6 +109,7 @@ AgentEvent: TypeAlias = (
     | ToolResultEvent
     | ToolMediaEvent
     | ContextArchivedEvent
+    | UserSteerAppliedEvent
 )
 
 
@@ -164,9 +173,16 @@ class Agent:
         on_event: Callable[[AgentEvent], None] | None = None,
         attachments: tuple[ImagePart, ...] = (),
         turn_id: str | None = None,
+        turn_control: TurnControl | None = None,
     ) -> AgentRunResult:
         try:
-            result = self._run(user_input, on_event, attachments, turn_id)
+            result = self._run(
+                user_input,
+                on_event,
+                attachments,
+                turn_id,
+                turn_control,
+            )
         except KeyboardInterrupt:
             self._session.finish_turn("cancelled")
             raise
@@ -193,6 +209,7 @@ class Agent:
         on_event: Callable[[AgentEvent], None] | None = None,
         attachments: tuple[ImagePart, ...] = (),
         turn_id: str | None = None,
+        turn_control: TurnControl | None = None,
     ) -> AgentRunResult:
         run_item_start = len(self._session.items)
         turn_id = self._session.begin_turn(turn_id)
@@ -208,12 +225,19 @@ class Agent:
             attachments=attachments,
         )
         while True:
+            _raise_if_cancelled(turn_control)
             request = self._context.build_request(self._tools.definitions)
             input_tokens = self._provider.count_input_tokens(request)
             if self._context.should_archive(input_tokens):
                 checkpoint_number = self._context.archive()
                 if on_event is not None:
                     on_event(ContextArchivedEvent(checkpoint_number))
+                _apply_steering(
+                    self._session,
+                    turn_control,
+                    self._now,
+                    on_event,
+                )
                 continue
             if input_tokens > self._context.hard_limit:
                 raise ContextWindowExceededError(
@@ -261,6 +285,7 @@ class Agent:
                 total_tokens=(usage.total_tokens if usage is not None else None),
                 has_tool_calls=bool(response.tool_calls),
             )
+            _raise_if_cancelled(turn_control)
 
             if response.tool_calls:
                 next_tool_call_key = previous_tool_call_key
@@ -516,6 +541,15 @@ class Agent:
                 finally:
                     for _, _, tool_result in executed:
                         _cleanup_tool_result(tool_result)
+                _raise_if_cancelled(turn_control)
+                if _apply_steering(
+                    self._session,
+                    turn_control,
+                    self._now,
+                    on_event,
+                ):
+                    previous_tool_call_key = None
+                    identical_tool_calls = 0
                 continue
 
             if response.content is None:
@@ -544,6 +578,18 @@ class Agent:
                         model_call_index=model_call_index,
                     )
                 )
+            if turn_control is not None:
+                steers = turn_control.finish()
+                if steers:
+                    _append_steering(
+                        self._session,
+                        steers,
+                        self._now,
+                        on_event,
+                    )
+                    previous_tool_call_key = None
+                    identical_tool_calls = 0
+                    continue
             return AgentRunResult(
                 request=request,
                 response=response,
@@ -551,6 +597,49 @@ class Agent:
                 user_input=user_input,
                 request_timestamp_utc=request_timestamp_utc,
                 response_timestamp_utc=response_timestamp_utc,
+            )
+
+
+def _raise_if_cancelled(turn_control: TurnControl | None) -> None:
+    if turn_control is not None and turn_control.cancelled:
+        raise AgentCancelled
+
+
+def _apply_steering(
+    session: Session,
+    turn_control: TurnControl | None,
+    now: Callable[[], datetime],
+    on_event: Callable[[AgentEvent], None] | None,
+) -> bool:
+    if turn_control is None:
+        return False
+    steers = turn_control.drain_steering()
+    if not steers:
+        return False
+    _append_steering(session, steers, now, on_event)
+    return True
+
+
+def _append_steering(
+    session: Session,
+    steers: tuple[UserSteer, ...],
+    now: Callable[[], datetime],
+    on_event: Callable[[AgentEvent], None] | None,
+) -> None:
+    for steer in steers:
+        timestamp_utc = now().astimezone(timezone.utc)
+        session.add_item(
+            "user",
+            steer.text,
+            timestamp_utc=timestamp_utc,
+        )
+        if on_event is not None:
+            on_event(
+                UserSteerAppliedEvent(
+                    steer_id=steer.steer_id,
+                    text=steer.text,
+                    timestamp_utc=timestamp_utc,
+                )
             )
 
 def _tool_call_key(tool_call: ToolCall) -> tuple[str, str]:

@@ -286,6 +286,29 @@ describe('reducer', () => {
     expect(state.usage?.total_tokens).toBe(12);
   });
 
+  it('shows steering only after the runtime applies it', () => {
+    let state = reducer(ready(), { type: 'submit', turnId: 't1', text: 'work' });
+    state = reducer(state, { type: 'steer_submitted' });
+    expect(state.pendingSteers).toBe(1);
+
+    state = reducer(state, {
+      type: 'message',
+      message: {
+        type: 'user_steer_applied',
+        turn_id: 't1',
+        steer_id: 's1',
+        text: 'check tests first',
+        timestamp_utc: '2026-09-16T10:00:00Z',
+      },
+    });
+
+    expect(state.pendingSteers).toBe(0);
+    expect(state.entries.at(-1)).toMatchObject({
+      kind: 'user',
+      text: 'check tests first',
+    });
+  });
+
   it('reports a cancelled turn', () => {
     let state = ready();
     state = reducer(state, {

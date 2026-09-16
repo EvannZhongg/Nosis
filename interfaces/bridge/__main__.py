@@ -37,19 +37,6 @@ def main() -> None:
         from .bridge import Bridge
 
         bridge = Bridge(sys.stdin, protocol_out)
-        first = bridge.read_message()
-        if first is None:
-            return
-        if first["type"] != "start":
-            bridge.emit(
-                "fatal",
-                error={
-                    "type": "ProtocolError",
-                    "message": "first message must be 'start'",
-                },
-            )
-            raise SystemExit(1)
-        bridge.start(first)
         bridge.serve()
     except KeyboardInterrupt:
         return

@@ -26,8 +26,8 @@ export function App(props: AppProps): React.ReactElement {
   const [questionDraft, setQuestionDraft] = useState('');
   const [elapsed, setElapsed] = useState(0);
   const turnCounter = useRef(0);
+  const steerCounter = useRef(0);
   const startedAt = useRef<number | null>(null);
-  const pending = useRef<string[]>([]);
 
   const bridge = useMemo(
     () =>
@@ -116,7 +116,7 @@ export function App(props: AppProps): React.ReactElement {
     (_input, key) => {
       if (!state.question) return;
       if ((key.ctrl && _input === 'c') || key.escape) {
-        bridge.cancel();
+        if (state.turnId) bridge.cancel(state.turnId);
         dispatch({ type: 'cancelling' });
         return;
       }
@@ -169,7 +169,7 @@ export function App(props: AppProps): React.ReactElement {
     (input, key) => {
       if (key.ctrl && input === 'c') {
         if (busy) {
-          bridge.cancel();
+          if (state.turnId) bridge.cancel(state.turnId);
           dispatch({ type: 'cancelling' });
         } else if (draft === '') {
           exit();
@@ -181,7 +181,7 @@ export function App(props: AppProps): React.ReactElement {
 
       if (key.escape) {
         if (busy) {
-          bridge.cancel();
+          if (state.turnId) bridge.cancel(state.turnId);
           dispatch({ type: 'cancelling' });
         } else {
           setDraft('');
@@ -198,9 +198,15 @@ export function App(props: AppProps): React.ReactElement {
     const text = value.trim();
     if (text === '') return;
     setDraft('');
-    if (state.status !== 'idle') {
-      // Typed ahead while the agent was busy; send it once idle.
-      pending.current.push(text);
+    if (state.status !== 'idle' && state.turnId !== null) {
+      steerCounter.current += 1;
+      dispatch({ type: 'steer_submitted' });
+      bridge.send({
+        type: 'user_steer',
+        turn_id: state.turnId,
+        steer_id: `steer-${steerCounter.current}`,
+        text,
+      });
       return;
     }
     sendTurn(text);
@@ -212,12 +218,6 @@ export function App(props: AppProps): React.ReactElement {
     dispatch({ type: 'submit', turnId, text });
     bridge.send({ type: 'user_turn', turn_id: turnId, text });
   };
-
-  useEffect(() => {
-    if (state.status !== 'idle') return;
-    const next = pending.current.shift();
-    if (next !== undefined) sendTurn(next);
-  }, [state.status]);
 
   return (
     <Box height={Math.max(1, rows - 1)} flexDirection="column">
@@ -267,6 +267,7 @@ export function App(props: AppProps): React.ReactElement {
           focus={state.approval === null}
           busy={state.status !== 'idle'}
           docked
+          placeholder={state.status === 'idle' ? undefined : 'steer the current turn…'}
         />
       )}
 
