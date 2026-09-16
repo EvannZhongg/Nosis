@@ -31,6 +31,7 @@ from agent_core.subagent import vision_aware_tool_names
 from agent_core.tools.config import TOOL_NAMES
 from interfaces.bridge.bridge import Bridge, Cancelled
 from interfaces.bridge.protocol import (
+    attachment_replaced_message,
     decode,
     event_to_message,
     format_timestamp,
@@ -187,6 +188,12 @@ class ProtocolTest(unittest.TestCase):
                 "approval": approval,
                 "provider": "second",
             },
+        )
+
+    def test_attachment_replaced_message_preserves_runtime_state(self) -> None:
+        self.assertEqual(
+            attachment_replaced_message(running=True),
+            {"type": "attachment_replaced", "running": True},
         )
 
     def test_format_timestamp_normalizes_to_utc(self) -> None:

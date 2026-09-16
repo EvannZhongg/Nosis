@@ -22,7 +22,7 @@ nosis-gui --config path/to/provider_config.json \
 
 执行中点击「停止」会取消当前轮次，等同于 TUI 的 `Esc`。不同 Session 可以并行执行；切换会话只切换显示，已经运行的 Chat 保持连接并继续接收事件。已执行的 Tool 操作不会因取消而撤销。
 
-打开历史会话只读取持久化内容，不启动 Bridge。第一次发送消息时，GUI 服务才为该 Session 启动 Runtime。GUI 服务按 `session_id` 保存活动 Runtime；WebSocket 仅负责附着与分离，所以页面刷新或临时断网不会终止正在执行的任务。重新连接后会恢复 running/approval 状态并补发断线期间的协议事件，轮次结束后关闭对应 Bridge 进程。
+打开历史会话只读取持久化内容，不启动 Bridge。第一次发送消息时，GUI 服务才为该 Session 启动 Runtime。GUI 服务按 `session_id` 保存活动 Runtime；WebSocket 仅负责附着与分离，所以页面刷新或临时断网不会终止正在执行的任务。重新连接后会恢复 running/approval 状态并补发断线期间的协议事件，轮次结束后关闭对应 Bridge 进程。同一 Session 同时只由一个页面控制；新页面会接管连接，被接管的页面停止自动重连，并可由用户显式接管回来。
 
 ## 前端开发
 

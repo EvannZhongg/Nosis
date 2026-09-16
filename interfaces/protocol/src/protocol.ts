@@ -43,6 +43,7 @@ export type Incoming =
         tool_name?: string;
       } | null;
     }
+  | { type: 'attachment_replaced'; running: boolean }
   | {
       type: 'ready';
       session_id: string;
@@ -114,6 +115,8 @@ export type Outgoing =
       agent_config_path: string;
       attach_only?: boolean;
       after_event?: number;
+      attachment_id?: string;
+      takeover?: boolean;
       // Omitted to use the provider selected in the configuration file.
       provider?: string;
     }

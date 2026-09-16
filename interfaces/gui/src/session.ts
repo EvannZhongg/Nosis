@@ -3,8 +3,10 @@ import type { Incoming, Outgoing } from "@nosis/protocol";
 export type SessionSocketOptions = {
   sessionId: string | null;
   provider: string;
+  attachmentId: string;
   attachOnly?: boolean;
   afterEvent?: number;
+  takeover?: boolean;
   onMessage: (message: Incoming) => void;
   onClose: () => void;
   onError: () => void;
@@ -34,8 +36,10 @@ export class SessionSocket {
         type: "start",
         session_id: options.sessionId,
         provider: options.provider,
+        attachment_id: options.attachmentId,
         ...(options.attachOnly ? { attach_only: true } : {}),
         ...(options.afterEvent ? { after_event: options.afterEvent } : {}),
+        ...(options.takeover ? { takeover: true } : {}),
       });
       for (const message of this.queued) this.write(message);
       this.queued = [];

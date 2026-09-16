@@ -202,6 +202,7 @@ function applyMessage(state: State, message: Incoming): State {
     // Attachment bookkeeping belongs to the GUI server; the bridge
     // never sends it to this frontend.
     case 'runtime_state':
+    case 'attachment_replaced':
       return state;
 
     case 'mcp_server_status':

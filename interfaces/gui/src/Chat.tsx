@@ -86,6 +86,7 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
   const [items, setItems] = useState<TranscriptItem[]>(session.items);
   const [running, setRunning] = useState(false);
   const [attaching, setAttaching] = useState(false);
+  const [attachmentReplaced, setAttachmentReplaced] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [compressionNotice, setCompressionNotice] = useState("");
   const [approval, setApproval] = useState<Approval | null>(null);
@@ -102,6 +103,7 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
   const compressionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const turnCounter = useRef(0);
   const eventCounterRef = useRef(0);
+  const [attachmentId] = useState(() => crypto.randomUUID());
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const messages = useMemo(() => toMessages(items, session.session_id), [items, session.session_id]);
 
@@ -109,6 +111,7 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
   // turn state they fold onto are kept in refs.
   const itemsRef = useRef(items);
   const runningRef = useRef(false);
+  const attachmentReplacedRef = useRef(false);
   const awaitingSessionActivityRef = useRef(false);
 
   useEffect(() => {
@@ -159,7 +162,7 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
   useEffect(() => {
     if (runtimeActive && model && socketRef.current === null) {
       setAttaching(true);
-      connect(true);
+      connect({ attachOnly: true, takeover: true });
     }
   }, [runtimeActive, model]);
 
@@ -200,22 +203,51 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
     onTurnEnd();
   }, [session.session_id, onBusyChange, onTurnEnd, showItems]);
 
-  function connect(attachOnly = false): SessionSocket {
+  function connect({ attachOnly = false, takeover = true }: { attachOnly?: boolean; takeover?: boolean } = {}): SessionSocket {
     if (!attachOnly) eventCounterRef.current = 0;
     let socket: SessionSocket;
     socket = new SessionSocket({
       sessionId: session.session_id,
       provider: model,
+      attachmentId,
       attachOnly,
       afterEvent: attachOnly ? eventCounterRef.current : 0,
+      takeover,
       onMessage: (message) => {
         // A socket that was replaced during a model switch may still have
         // messages queued in the browser event loop. Ignore those messages
         // so stale transcript, notice, usage, and turn callbacks cannot
         // mutate the active connection's state.
         if (socketRef.current !== socket) return;
-        if (message.type === "runtime_state") {
+        if (message.type === "attachment_replaced") {
+          if (noticeTimeoutRef.current) {
+            clearTimeout(noticeTimeoutRef.current);
+            noticeTimeoutRef.current = null;
+          }
+          setNotice(null);
+          socketRef.current = null;
+          socketModelRef.current = "";
+          attachmentReplacedRef.current = true;
+          setAttachmentReplaced(true);
           setAttaching(false);
+          setApproval(null);
+          const wasRunning = runningRef.current;
+          runningRef.current = message.running;
+          setRunning(message.running);
+          onBusyChange(message.running);
+          socket.close();
+          if (wasRunning && !message.running) void endTurn();
+          return;
+        }
+        if (message.type === "runtime_state") {
+          if (noticeTimeoutRef.current) {
+            clearTimeout(noticeTimeoutRef.current);
+            noticeTimeoutRef.current = null;
+          }
+          setNotice(null);
+          setAttaching(false);
+          attachmentReplacedRef.current = false;
+          setAttachmentReplaced(false);
           if (message.provider) {
             socketModelRef.current = message.provider;
             if (message.provider !== model) onModelChange(message.provider);
@@ -236,6 +268,8 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
         }
         eventCounterRef.current += 1;
         if (message.type === "ready") {
+          attachmentReplacedRef.current = false;
+          setAttachmentReplaced(false);
           if (noticeTimeoutRef.current) {
             clearTimeout(noticeTimeoutRef.current);
             noticeTimeoutRef.current = null;
@@ -262,14 +296,16 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
         socketRef.current = null;
         socketModelRef.current = "";
         setAttaching(false);
-        if (runningRef.current) {
+        if (runningRef.current && !attachmentReplacedRef.current) {
           showNotice({
             level: "error",
             text: "连接已断开，Nosis 仍在后台运行，正在重新连接。",
           });
           reconnectTimeoutRef.current = setTimeout(() => {
             reconnectTimeoutRef.current = null;
-            if (mountedRef.current && runningRef.current && socketRef.current === null) connect(true);
+            if (mountedRef.current && runningRef.current && socketRef.current === null && !attachmentReplacedRef.current) {
+              connect({ attachOnly: true, takeover: false });
+            }
           }, 1000);
         }
       },
@@ -287,6 +323,12 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
     socketRef.current = socket;
     socketModelRef.current = model;
     return socket;
+  }
+
+  function takeOverAttachment() {
+    if (attaching || socketRef.current !== null) return;
+    setAttaching(true);
+    connect({ attachOnly: true, takeover: true });
   }
 
   async function onNew(message: AppendMessage) {
@@ -389,7 +431,7 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
     if (!event.clipboardData.getData("text/plain")) event.preventDefault();
   }
 
-  const controlsDisabled = inputDisabled || attaching || (runtimeActive && socketRef.current === null);
+  const controlsDisabled = inputDisabled || attaching || attachmentReplaced || (runtimeActive && socketRef.current === null);
   const runtime = useExternalStoreRuntime({ messages, convertMessage: (message) => message, isRunning: running, isDisabled: controlsDisabled, onNew });
   const availableWorkspaces = Array.from(new Set([...workspaceOptions, workspaceDraft].filter(Boolean)));
 
@@ -402,9 +444,10 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
         <div className="messages"><ThreadPrimitive.Messages components={{ UserMessage, AssistantMessage }} /></div>
       </ThreadPrimitive.Viewport>
       <div className="composer-area">
-        {approval && <div className="approval-card" role="region" aria-label="工具执行确认"><div className="approval-title"><ShieldCheck size={17} /> 允许执行此工具调用？</div><pre>{approval.command}</pre><div className="approval-actions"><button onClick={() => respond(false)}>拒绝</button><button className="approve-button" onClick={() => respond(true)}>允许执行</button></div></div>}
+        {attachmentReplaced && <div className="attachment-replaced" role="status"><span>{running ? "此会话已在另一个页面接管。任务仍在后台运行，本页已暂停实时更新。" : "此会话已在另一个页面接管，本页已暂停实时更新。"}</span><button type="button" onClick={takeOverAttachment} disabled={attaching}>{attaching ? "正在接管…" : "在此页面接管"}</button></div>}
+        {!attachmentReplaced && approval && <div className="approval-card" role="region" aria-label="工具执行确认"><div className="approval-title"><ShieldCheck size={17} /> 允许执行此工具调用？</div><pre>{approval.command}</pre><div className="approval-actions"><button onClick={() => respond(false)}>拒绝</button><button className="approve-button" onClick={() => respond(true)}>允许执行</button></div></div>}
         {notice && <div className={notice.level === "error" ? "error-banner" : "notice-banner"} role="alert">{notice.text}</div>}
-        {running && <div className="activity" role="status"><LoaderCircle size={13} className="spin" />{approval ? "等待你的确认" : "Nosis 正在处理…"}
+        {running && !attachmentReplaced && <div className="activity" role="status"><LoaderCircle size={13} className="spin" />{approval ? "等待你的确认" : "Nosis 正在处理…"}
           {!approval && <button className="stop-button" aria-label="停止执行" onClick={() => socketRef.current?.send({ type: "cancel" })}><Square size={11} /> 停止</button>}
         </div>}
         {pendingFiles.length > 0 && <div className="attachment-list" aria-label="待发送图片">{pendingFiles.map((file, index) => <PendingAttachment key={`${file.name}-${file.lastModified}-${index}`} file={file} onRemove={() => setPendingFiles((files) => files.filter((_, itemIndex) => itemIndex !== index))} />)}</div>}

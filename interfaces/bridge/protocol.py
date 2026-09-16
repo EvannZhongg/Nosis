@@ -96,6 +96,14 @@ def runtime_state_message(
     }
 
 
+def attachment_replaced_message(*, running: bool) -> dict[str, object]:
+    """Tell a GUI page that another attachment owns the session."""
+    return {
+        "type": "attachment_replaced",
+        "running": running,
+    }
+
+
 def event_to_message(
     event: AgentEvent,
     turn_id: str,

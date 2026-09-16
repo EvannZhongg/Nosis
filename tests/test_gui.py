@@ -195,6 +195,7 @@ class GuiTest(unittest.TestCase):
                     {
                         "type": "start",
                         "session_id": "resumed",
+                        "attachment_id": "page-1",
                         "provider": "second",
                         # Ignored: the server supplies its own paths.
                         "provider_config_path": "/etc/passwd",
@@ -223,7 +224,7 @@ class GuiTest(unittest.TestCase):
         bridge = FakeBridge()
         with self.client(bridge) as client:
             with client.websocket_connect("/api/session") as socket:
-                socket.send_json({"type": "start", "provider": "unknown"})
+                socket.send_json({"type": "start", "provider": "unknown", "attachment_id": "page-1"})
                 message = socket.receive_json()
 
         self.assertEqual(message["type"], "fatal")
@@ -239,6 +240,17 @@ class GuiTest(unittest.TestCase):
                 message = socket.receive_json()
 
         self.assertEqual(message["error"]["type"], "ProtocolError")
+        self.assertEqual(bridge.sent, [])
+
+    def test_requires_an_attachment_identity(self) -> None:
+        bridge = FakeBridge()
+        with self.client(bridge) as client:
+            with client.websocket_connect("/api/session") as socket:
+                socket.send_json({"type": "start", "session_id": "s1"})
+                message = socket.receive_json()
+
+        self.assertEqual(message["error"]["type"], "ProtocolError")
+        self.assertIn("attachment_id", message["error"]["message"])
         self.assertEqual(bridge.sent, [])
 
     def test_relays_approval_round_trip_in_both_directions(self) -> None:
@@ -261,7 +273,7 @@ class GuiTest(unittest.TestCase):
         )
         with self.client(bridge) as client:
             with client.websocket_connect("/api/session") as socket:
-                socket.send_json({"type": "start", "session_id": "s1"})
+                socket.send_json({"type": "start", "session_id": "s1", "attachment_id": "page-1"})
                 self.assertEqual(socket.receive_json()["type"], "ready")
 
                 socket.send_json(
@@ -294,11 +306,11 @@ class GuiTest(unittest.TestCase):
         )
         with self.client(bridge) as client:
             with client.websocket_connect("/api/session") as socket:
-                socket.send_json({"type": "start", "session_id": "s1"})
+                socket.send_json({"type": "start", "session_id": "s1", "attachment_id": "page-1"})
                 self.assertEqual(socket.receive_json()["type"], "ready")
                 # A page must not shut the bridge down or restart it.
                 socket.send_json({"type": "shutdown"})
-                socket.send_json({"type": "start", "session_id": "other"})
+                socket.send_json({"type": "start", "session_id": "other", "attachment_id": "page-1"})
                 socket.send_json(
                     {"type": "user_turn", "turn_id": "t1", "text": "hi"}
                 )
@@ -315,7 +327,7 @@ class GuiTest(unittest.TestCase):
         bridge = FakeBridge(replies={"start": [{"type": "ready"}]})
         with self.client(bridge) as client:
             with client.websocket_connect("/api/session") as socket:
-                socket.send_json({"type": "start", "session_id": "s1"})
+                socket.send_json({"type": "start", "session_id": "s1", "attachment_id": "page-1"})
                 self.assertEqual(socket.receive_json()["type"], "ready")
                 # The fake ends its stream on cancel, as an exiting
                 # bridge would.
@@ -345,7 +357,7 @@ class GuiTest(unittest.TestCase):
         )
         with self.client(bridge) as client:
             with client.websocket_connect("/api/session") as first:
-                first.send_json({"type": "start", "session_id": "shared"})
+                first.send_json({"type": "start", "session_id": "shared", "attachment_id": "page-1"})
                 self.assertEqual(first.receive_json()["type"], "ready")
                 first.send_json(
                     {"type": "user_turn", "turn_id": "t1", "text": "list"}
@@ -360,6 +372,7 @@ class GuiTest(unittest.TestCase):
                     {
                         "type": "start",
                         "session_id": "shared",
+                        "attachment_id": "page-1",
                         "attach_only": True,
                         "after_event": 2,
                     }
@@ -383,13 +396,106 @@ class GuiTest(unittest.TestCase):
             ["start", "user_turn", "approval_response"],
         )
 
+    def test_background_reconnect_does_not_replace_another_page(self) -> None:
+        bridge = FakeBridge(
+            replies={"start": [{"type": "ready", "session_id": "shared"}]}
+        )
+        with self.client(bridge) as client:
+            with client.websocket_connect("/api/session") as first:
+                first.send_json(
+                    {
+                        "type": "start",
+                        "session_id": "shared",
+                        "attachment_id": "page-1",
+                    }
+                )
+                self.assertEqual(first.receive_json()["type"], "ready")
+                first.send_json(
+                    {"type": "user_turn", "turn_id": "t1", "text": "hi"}
+                )
+
+                with client.websocket_connect("/api/session") as second:
+                    second.send_json(
+                        {
+                            "type": "start",
+                            "session_id": "shared",
+                            "attachment_id": "page-2",
+                            "attach_only": True,
+                        }
+                    )
+                    replaced = second.receive_json()
+
+                self.assertEqual(
+                    replaced,
+                    {"type": "attachment_replaced", "running": True},
+                )
+                bridge.emit(
+                    {
+                        "type": "assistant_delta",
+                        "turn_id": "t1",
+                        "text": "still attached",
+                        "model_call_index": 0,
+                    }
+                )
+                self.assertEqual(first.receive_json()["text"], "still attached")
+                first.send_json({"type": "cancel"})
+                _wait_for(lambda: bridge.closed)
+
+    def test_explicit_takeover_replaces_the_previous_page(self) -> None:
+        bridge = FakeBridge(
+            replies={"start": [{"type": "ready", "session_id": "shared"}]}
+        )
+        with self.client(bridge) as client:
+            with client.websocket_connect("/api/session") as first:
+                first.send_json(
+                    {
+                        "type": "start",
+                        "session_id": "shared",
+                        "attachment_id": "page-1",
+                    }
+                )
+                self.assertEqual(first.receive_json()["type"], "ready")
+                first.send_json(
+                    {"type": "user_turn", "turn_id": "t1", "text": "hi"}
+                )
+
+                with client.websocket_connect("/api/session") as second:
+                    second.send_json(
+                        {
+                            "type": "start",
+                            "session_id": "shared",
+                            "attachment_id": "page-2",
+                            "attach_only": True,
+                            "after_event": 1,
+                            "takeover": True,
+                        }
+                    )
+                    self.assertEqual(
+                        first.receive_json(),
+                        {"type": "attachment_replaced", "running": True},
+                    )
+                    state = second.receive_json()
+                    self.assertTrue(state["running"])
+
+                    bridge.emit(
+                        {
+                            "type": "assistant_delta",
+                            "turn_id": "t1",
+                            "text": "new owner",
+                            "model_call_index": 0,
+                        }
+                    )
+                    self.assertEqual(second.receive_json()["text"], "new owner")
+                    second.send_json({"type": "cancel"})
+                    _wait_for(lambda: bridge.closed)
+
     def test_replays_events_and_completion_emitted_while_detached(self) -> None:
         bridge = FakeBridge(
             replies={"start": [{"type": "ready", "session_id": "shared"}]}
         )
         with self.client(bridge) as client:
             with client.websocket_connect("/api/session") as first:
-                first.send_json({"type": "start", "session_id": "shared"})
+                first.send_json({"type": "start", "session_id": "shared", "attachment_id": "page-1"})
                 self.assertEqual(first.receive_json()["type"], "ready")
                 first.send_json(
                     {"type": "user_turn", "turn_id": "t1", "text": "hi"}
@@ -414,6 +520,7 @@ class GuiTest(unittest.TestCase):
                     {
                         "type": "start",
                         "session_id": "shared",
+                        "attachment_id": "page-1",
                         "attach_only": True,
                         "after_event": 1,
                     }
@@ -452,13 +559,13 @@ class GuiTest(unittest.TestCase):
             self.client() as client,
         ):
             with client.websocket_connect("/api/session") as first:
-                first.send_json({"type": "start", "session_id": "one"})
+                first.send_json({"type": "start", "session_id": "one", "attachment_id": "page-1"})
                 self.assertEqual(first.receive_json()["type"], "ready")
 
                 # The second session stays free even though the first
                 # page is still connected and holding its own lock.
                 with client.websocket_connect("/api/session") as second:
-                    second.send_json({"type": "start", "session_id": "two"})
+                    second.send_json({"type": "start", "session_id": "two", "attachment_id": "page-2"})
                     self.assertEqual(
                         second.receive_json()["type"],
                         "ready",
@@ -482,6 +589,7 @@ class GuiTest(unittest.TestCase):
                     {
                         "type": "start",
                         "session_id": "missing",
+                        "attachment_id": "page-1",
                         "provider": "second",
                         "attach_only": True,
                     }

@@ -40,7 +40,7 @@ from ..bridge.config import (
     load_model_options,
 )
 from ..bridge.process import cancel_process
-from ..bridge.protocol import runtime_state_message
+from ..bridge.protocol import attachment_replaced_message, runtime_state_message
 
 
 STATIC_PATH = Path(__file__).resolve().parent / "static"
@@ -185,6 +185,7 @@ class ActiveRuntime:
         self.done = False
         self._closed = False
         self._terminal_pending = False
+        self._attachment_id: str | None = None
         self._subscriber: asyncio.Queue[dict[str, object] | None] | None = None
         self._subscriber_detached: asyncio.Event | None = None
         self._events: list[dict[str, object]] = []
@@ -194,13 +195,25 @@ class ActiveRuntime:
     async def attach(
         self,
         after_event: int,
+        attachment_id: str,
+        *,
+        takeover: bool,
     ) -> tuple[
         asyncio.Queue[dict[str, object] | None],
         list[dict[str, object]],
         dict[str, object],
-    ]:
+    ] | None:
+        claimed = False
         while True:
             async with self._lock:
+                replacing = (
+                    self._attachment_id is not None
+                    and self._attachment_id != attachment_id
+                )
+                if replacing and (not takeover or claimed):
+                    return None
+                self._attachment_id = attachment_id
+                claimed = True
                 if self._subscriber is None:
                     queue: asyncio.Queue[dict[str, object] | None] = asyncio.Queue()
                     self._subscriber = queue
@@ -216,6 +229,10 @@ class ActiveRuntime:
                     return queue, events, state
                 previous = self._subscriber
                 detached = self._subscriber_detached
+                if replacing:
+                    previous.put_nowait(
+                        attachment_replaced_message(running=self.running)
+                    )
                 previous.put_nowait(None)
             if detached is not None:
                 await detached.wait()
@@ -223,12 +240,17 @@ class ActiveRuntime:
     async def detach(
         self,
         queue: asyncio.Queue[dict[str, object] | None],
+        attachment_id: str,
     ) -> None:
         close_idle = False
         async with self._lock:
             if self._subscriber is queue:
                 self._subscriber = None
-                close_idle = not self.running and not self.done
+                close_idle = (
+                    self._attachment_id == attachment_id
+                    and not self.running
+                    and not self.done
+                )
                 if self._subscriber_detached is not None:
                     self._subscriber_detached.set()
                     self._subscriber_detached = None
@@ -253,6 +275,9 @@ class ActiveRuntime:
 
     def cancel_turn(self) -> None:
         self.bridge.cancel_turn()
+
+    def owns_attachment(self, attachment_id: str) -> bool:
+        return self._attachment_id == attachment_id
 
     @property
     def attachable(self) -> bool:
@@ -617,6 +642,20 @@ def create_app(
             return
 
         attach_only = opening.get("attach_only") is True
+        attachment_id = opening.get("attachment_id")
+        if not isinstance(attachment_id, str) or not attachment_id:
+            await websocket.send_json(
+                {
+                    "type": "fatal",
+                    "error": {
+                        "type": "ProtocolError",
+                        "message": "'attachment_id' must be a non-empty string",
+                    },
+                }
+            )
+            await websocket.close()
+            return
+        takeover = opening.get("takeover") is True
         after_event = opening.get("after_event", 0)
         if not isinstance(after_event, int) or isinstance(after_event, bool) or after_event < 0:
             await websocket.send_json(
@@ -645,7 +684,18 @@ def create_app(
             )
             await websocket.close()
             return
-        queue, events, state = await runtime.attach(after_event)
+        attachment = await runtime.attach(
+            after_event,
+            attachment_id,
+            takeover=takeover,
+        )
+        if attachment is None:
+            await websocket.send_json(
+                attachment_replaced_message(running=runtime.running)
+            )
+            await websocket.close()
+            return
+        queue, events, state = attachment
         terminal_delivered = False
         try:
             for message in events:
@@ -655,7 +705,12 @@ def create_app(
                 await websocket.send_json(state)
             try:
                 terminal_delivered = (
-                    await _relay(websocket, runtime, queue)
+                    await _relay(
+                        websocket,
+                        runtime,
+                        queue,
+                        attachment_id,
+                    )
                     or terminal_delivered
                 )
             except asyncio.CancelledError:
@@ -665,7 +720,7 @@ def create_app(
         finally:
             if terminal_delivered:
                 runtime.mark_terminal_delivered()
-            await asyncio.shield(runtime.detach(queue))
+            await asyncio.shield(runtime.detach(queue, attachment_id))
             if not runtime.attachable:
                 async with runtime_lock:
                     if runtimes.get(runtime.session_id) is runtime:
@@ -709,6 +764,7 @@ async def _relay(
     websocket: WebSocket,
     runtime: ActiveRuntime,
     queue: asyncio.Queue[dict[str, object] | None],
+    attachment_id: str,
 ) -> bool:
     """Pump messages between one browser attachment and its runtime."""
 
@@ -716,6 +772,8 @@ async def _relay(
         while True:
             message = await websocket.receive_json()
             if not isinstance(message, dict):
+                continue
+            if not runtime.owns_attachment(attachment_id):
                 continue
             message_type = message.get("type")
             if message_type == "cancel":
