@@ -12,9 +12,9 @@ TOOL_NAMES = (
     "subagent",
 )
 
-# ``read_image`` and ``analyze_image`` are absent by design: which of the
-# two an agent gets is derived from its model's image capability, not
-# configured. See ``agent_core.subagent.vision_aware_tool_names``.
+# ``read_image``, ``analyze_image`` and ``read_skill`` are absent by design:
+# they are derived from Runtime capabilities rather than configured. See
+# ``agent_core.subagent``.
 
 # A role runs inside a sub-agent, so it can never delegate again.
 ROLE_TOOL_NAMES = tuple(name for name in TOOL_NAMES if name != "subagent")

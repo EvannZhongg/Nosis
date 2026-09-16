@@ -22,6 +22,7 @@ from agent_core import (
     CompositeToolPolicy,
     McpApprovalPolicy,
     ShellApprovalPolicy,
+    SkillRegistry,
     SubagentRole,
     SubagentRoleRegistry,
     SubagentRuntime,
@@ -33,6 +34,7 @@ from agent_core import (
     load_agent_config,
     probe_image,
     vision_aware_tool_names,
+    skill_aware_tool_names,
 )
 from agent_core.prompts import load_system_prompt
 from agent_core.providers import LiteLLMProvider
@@ -43,7 +45,13 @@ from .config import (
     load_config_with_name,
     load_vision_config,
 )
-from .protocol import decode, encode, event_to_message, usage_to_dict
+from .protocol import (
+    decode,
+    encode,
+    event_to_message,
+    ready_message,
+    usage_to_dict,
+)
 
 
 class Bridge:
@@ -149,6 +157,7 @@ class Bridge:
             provider if isinstance(provider, str) and provider else None,
         )
         agent_config = load_agent_config(agent_config_path)
+        skills = SkillRegistry.discover(config_path.parent / "skills")
 
         session_id = message.get("session_id")
         sessions_directory = config_path.parent / "sessions"
@@ -216,18 +225,22 @@ class Bridge:
             vision_provider=vision_provider,
             mcp=self._mcp,
             subagents=subagents,
+            skills=skills,
         )
         self._agent = Agent(
             provider=main_provider,
             session=self._session,
-            system_prompt=load_system_prompt(workspace),
+            system_prompt=load_system_prompt(workspace, skills),
             config=agent_config,
             tools=catalog.select(
                 (
-                    *vision_aware_tool_names(
-                        agent_config.tools.enabled,
-                        main_provider,
-                        vision_provider,
+                    *skill_aware_tool_names(
+                        vision_aware_tool_names(
+                            agent_config.tools.enabled,
+                            main_provider,
+                            vision_provider,
+                        ),
+                        skills,
                     ),
                     *self._mcp.tool_names,
                 ),
@@ -243,14 +256,14 @@ class Bridge:
             context=context,
         )
 
-        self.emit(
-            "ready",
+        self.emit(**ready_message(
             session_id=self._session.session_id,
             workspace=str(workspace.path),
             model=config.model,
             resumed=resumed,
             message_count=len(self._session.items),
-        )
+            skill_warnings=skills.warnings,
+        ))
 
     def _provider_for(
         self,

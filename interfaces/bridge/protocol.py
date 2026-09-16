@@ -61,6 +61,26 @@ def usage_to_dict(usage: TokenUsage | None) -> dict[str, object] | None:
     }
 
 
+def ready_message(
+    *,
+    session_id: str,
+    workspace: str,
+    model: str,
+    resumed: bool,
+    message_count: int,
+    skill_warnings: tuple[str, ...] = (),
+) -> dict[str, object]:
+    return {
+        "type": "ready",
+        "session_id": session_id,
+        "workspace": workspace,
+        "model": model,
+        "resumed": resumed,
+        "message_count": message_count,
+        "skill_warnings": list(skill_warnings),
+    }
+
+
 def event_to_message(
     event: AgentEvent,
     turn_id: str,

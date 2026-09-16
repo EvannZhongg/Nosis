@@ -73,7 +73,7 @@ class ReadFileTool(Tool):
                 errors="strict",
                 newline=None,
             ) as file:
-                content = _read_range(file, offset, limit)
+                content = read_text_range(file, offset, limit)
         except UnicodeDecodeError as error:
             raise ValueError(
                 "read_file requires a UTF-8 text file"
@@ -118,7 +118,8 @@ def _parse_arguments(
     return path, offset, limit
 
 
-def _read_range(file: TextIO, offset: int, limit: int) -> str:
+def read_text_range(file: TextIO, offset: int, limit: int) -> str:
+    """Read a bounded, line-numbered range from an open text file."""
     skipped_lines = _skip_lines(file, offset - 1)
     if skipped_lines < offset - 1:
         return f"(End of file — {skipped_lines} lines total)"
@@ -191,7 +192,7 @@ def _read_range(file: TextIO, offset: int, limit: int) -> str:
     )
     content = _join_content(rendered_lines, status)
     if len(content) > MAX_READ_CHARS:
-        raise RuntimeError("read_file exceeded its output character limit")
+        raise RuntimeError("text range exceeded its output character limit")
     return content
 
 

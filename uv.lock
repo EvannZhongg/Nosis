@@ -1373,6 +1373,7 @@ dependencies = [
     { name = "litellm" },
     { name = "mcp" },
     { name = "python-dotenv" },
+    { name = "pyyaml" },
 ]
 
 [package.optional-dependencies]
@@ -1391,6 +1392,7 @@ requires-dist = [
     { name = "mcp", specifier = ">=2.0,<3" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "python-multipart", marker = "extra == 'gui'", specifier = ">=0.0.9" },
+    { name = "pyyaml", specifier = ">=6.0" },
     { name = "uvicorn", marker = "extra == 'gui'", specifier = ">=0.30" },
     { name = "websockets", marker = "extra == 'gui'", specifier = ">=13" },
 ]

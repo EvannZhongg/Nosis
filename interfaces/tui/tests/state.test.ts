@@ -71,6 +71,19 @@ describe('reducer', () => {
     expect(state.entries[0]).toMatchObject({ kind: 'notice', level: 'info' });
   });
 
+  it('shows skill discovery warnings without blocking startup', () => {
+    const state = reducer(initialState, {
+      type: 'message',
+      message: { ...READY, skill_warnings: ['Skipping invalid skill.'] },
+    });
+    expect(state.status).toBe('idle');
+    expect(state.entries[0]).toMatchObject({
+      kind: 'notice',
+      level: 'info',
+      text: 'Skipping invalid skill.',
+    });
+  });
+
   it('accumulates deltas into one assistant entry', () => {
     let state = ready();
     state = reducer(state, { type: 'submit', turnId: 't1', text: 'hi' });

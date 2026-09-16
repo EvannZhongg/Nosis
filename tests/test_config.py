@@ -120,6 +120,7 @@ class ConfigTest(unittest.TestCase):
                 },
             )
             self.assertEqual(agent_config["max_same_tool_calls"], 5)
+            self.assertTrue((config_directory / "skills").is_dir())
             self.assertNotIn("shell_timeout_seconds", agent_config)
             self.assertTrue(agent_config["main_agent"]["tools"]["read_file"])
             # Every shipped role carries an explicit enable switch.
@@ -143,6 +144,7 @@ class ConfigTest(unittest.TestCase):
                 provider_path.read_text(encoding="utf-8"),
                 "custom",
             )
+            self.assertTrue((config_directory / "skills").is_dir())
 
     def test_loads_selected_provider_from_json_and_env(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -14,10 +14,11 @@ from .prompts import load_subagent_prompt
 from .session import Session
 from .session_paths import session_directory
 from .session_store import JsonlSessionStore
+from .skills import SkillRegistry
 from .tools.catalog import ToolCatalog
 from .tools.context import ToolExecutionContext
 from .tools.base import ToolPolicy
-from .tools.builtin import AnalyzeImageTool, ReadImageTool
+from .tools.builtin import AnalyzeImageTool, ReadImageTool, ReadSkillTool
 
 
 def vision_aware_tool_names(
@@ -40,6 +41,17 @@ def vision_aware_tool_names(
     if vision_provider is None:
         return names
     return (*names, AnalyzeImageTool.name)
+
+
+def skill_aware_tool_names(
+    configured: Iterable[str],
+    skills: SkillRegistry | None,
+) -> tuple[str, ...]:
+    """Add progressive skill loading when the Runtime found skills."""
+    names = tuple(configured)
+    if not skills:
+        return names
+    return (*names, ReadSkillTool.name)
 
 
 @dataclass(frozen=True)
@@ -141,11 +153,16 @@ class SubagentRuntime:
         child = Agent(
             provider=role.provider,
             session=session,
-            system_prompt=load_subagent_prompt(parent.workspace, role),
+            system_prompt=load_subagent_prompt(
+                parent.workspace, role, parent.skills
+            ),
             config=self._config,
             tools=self._catalog.select(
-                vision_aware_tool_names(
-                    role.tools, role.provider, role.vision_provider
+                skill_aware_tool_names(
+                    vision_aware_tool_names(
+                        role.tools, role.provider, role.vision_provider
+                    ),
+                    parent.skills,
                 ),
                 context,
                 policy=self._tool_policy,

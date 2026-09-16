@@ -46,6 +46,23 @@ function fold(messages: Incoming[], initial: TranscriptItem[] = []) {
 }
 
 describe("applyMessage", () => {
+  it("shows skill discovery warnings from ready", () => {
+    const { notice } = applyMessage([], {
+      type: "ready",
+      session_id: "s1",
+      workspace: "/tmp/work",
+      model: "test/model",
+      resumed: false,
+      message_count: 0,
+      skill_warnings: ["Skipping invalid skill."],
+    });
+
+    expect(notice).toEqual({
+      level: "info",
+      text: "Skipping invalid skill.",
+    });
+  });
+
   it("streams deltas into a single assistant item", () => {
     const { items } = fold([
       { type: "assistant_delta", turn_id: "t1", text: "he", model_call_index: 1 },

@@ -27,12 +27,13 @@ def default_config_directory() -> Path:
 
 def initialize_default_configs(directory: Path) -> tuple[Path, ...]:
     created = []
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "skills").mkdir(exist_ok=True)
     defaults = files("interfaces.bridge.defaults")
     for filename in DEFAULT_CONFIG_FILENAMES:
         path = directory / filename
         if path.exists():
             continue
-        directory.mkdir(parents=True, exist_ok=True)
         path.write_text(
             defaults.joinpath(filename).read_text(encoding="utf-8"),
             encoding="utf-8",
@@ -268,4 +269,3 @@ def _optional_positive_integer(
             f"provider '{provider}' field '{field}' must be a positive integer"
         )
     return value
-

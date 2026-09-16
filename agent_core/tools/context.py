@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from ..llm import LLMProvider
     from ..mcp.manager import McpClientManager
     from ..session import Session
+    from ..skills import SkillRegistry
     from ..subagent import SubagentRuntime
 
 
@@ -41,6 +42,7 @@ class ToolExecutionContext:
     vision_provider: "LLMProvider | None" = None
     mcp: "McpClientManager | None" = None
     subagents: "SubagentRuntime | None" = None
+    skills: "SkillRegistry | None" = None
 
     def __post_init__(self) -> None:
         object.__setattr__(

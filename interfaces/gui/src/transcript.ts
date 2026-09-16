@@ -45,6 +45,17 @@ export function applyMessage(
   message: Incoming,
 ): Applied {
   switch (message.type) {
+    case "ready":
+      return {
+        items,
+        notice: message.skill_warnings?.length
+          ? {
+              level: "info",
+              text: message.skill_warnings.join("\n"),
+            }
+          : undefined,
+      };
+
     case "mcp_server_status":
       return {
         items,
@@ -129,8 +140,7 @@ export function applyMessage(
         },
       };
 
-    // 'ready' and 'tool_call' carry no transcript change: the session id
-    // is read from the REST API, and the batch already listed the calls.
+    // 'tool_call' carries no transcript change: the batch already listed it.
     default:
       return { items };
   }

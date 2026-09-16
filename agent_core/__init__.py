@@ -43,10 +43,12 @@ from .session import (
     Session,
 )
 from .session_store import JsonlSessionStore
+from .skills import Skill, SkillRegistry
 from .subagent import (
     SubagentRole,
     SubagentRoleRegistry,
     SubagentRuntime,
+    skill_aware_tool_names,
     vision_aware_tool_names,
 )
 from .tool_result import (
@@ -63,6 +65,7 @@ from .tools import (
     McpApprovalPolicy,
     ReadFileTool,
     ReadImageTool,
+    ReadSkillTool,
     SearchFilesTool,
     ShellApprovalPolicy,
     ShellTool,
@@ -135,10 +138,13 @@ __all__ = [
     "ProviderCapabilities",
     "ReadFileTool",
     "ReadImageTool",
+    "ReadSkillTool",
     "ReasoningDeltaEvent",
     "SUPPORTED_IMAGE_MIME_TYPES",
     "SearchFilesTool",
     "Session",
+    "Skill",
+    "SkillRegistry",
     "ShellApprovalPolicy",
     "ShellTool",
     "SubagentRole",
@@ -179,5 +185,6 @@ __all__ = [
     "probe_image",
     "resolve_image",
     "resolve_readable_path",
+    "skill_aware_tool_names",
     "vision_aware_tool_names",
 ]

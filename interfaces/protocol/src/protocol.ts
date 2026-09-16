@@ -36,6 +36,7 @@ export type Incoming =
       model: string;
       resumed: boolean;
       message_count: number;
+      skill_warnings?: string[];
     }
   | { type: 'assistant_delta'; turn_id: string; text: string; model_call_index: number }
   | { type: 'reasoning_delta'; turn_id: string; text: string; model_call_index: number }

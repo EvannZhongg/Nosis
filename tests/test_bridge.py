@@ -34,6 +34,7 @@ from interfaces.bridge.protocol import (
     decode,
     event_to_message,
     format_timestamp,
+    ready_message,
     usage_to_dict,
 )
 
@@ -151,6 +152,19 @@ class ProtocolTest(unittest.TestCase):
                 TokenUsage(input_tokens=1, output_tokens=2, total_tokens=3)
             ),
             {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3},
+        )
+
+    def test_ready_message_includes_skill_warnings(self) -> None:
+        self.assertEqual(
+            ready_message(
+                session_id="s1",
+                workspace="/tmp/work",
+                model="test/model",
+                resumed=False,
+                message_count=0,
+                skill_warnings=("Skipped invalid skill.",),
+            )["skill_warnings"],
+            ["Skipped invalid skill."],
         )
 
     def test_format_timestamp_normalizes_to_utc(self) -> None:
@@ -666,6 +680,57 @@ class BridgeStartTest(unittest.TestCase):
     def test_rejects_an_unconfigured_provider(self) -> None:
         with self.assertRaisesRegex(ValueError, "not configured"):
             self.started_model(provider="unknown")
+
+    def test_registers_discovered_skills_and_their_read_tool(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            skill_directory = root / "skills" / "demo"
+            skill_directory.mkdir(parents=True)
+            (skill_directory / "SKILL.md").write_text(
+                "---\n"
+                "name: demo-skill\n"
+                "description: Does demo work.\n"
+                "---\n\n"
+                "# Detailed instructions\n",
+                encoding="utf-8",
+            )
+            bridge, _ = make_bridge([])
+
+            bridge.start(start_message(root))
+
+            names = [item.name for item in bridge._agent._tools.definitions]
+            prompt = bridge._agent._context._system_prompt
+
+        self.assertIn("read_skill", names)
+        self.assertIn("demo-skill: Does demo work.", prompt)
+        self.assertNotIn("# Detailed instructions", prompt)
+
+    def test_invalid_skill_does_not_prevent_bridge_startup(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            invalid = root / "skills" / "invalid"
+            invalid.mkdir(parents=True)
+            (invalid / "SKILL.md").write_text(
+                "# Missing front matter\n", encoding="utf-8"
+            )
+            valid = root / "skills" / "valid"
+            valid.mkdir()
+            (valid / "SKILL.md").write_text(
+                "---\nname: valid-skill\n"
+                "description: Still available.\n---\n",
+                encoding="utf-8",
+            )
+            bridge, stdout = make_bridge([])
+
+            bridge.start(start_message(root))
+
+            ready = emitted(stdout)[-1]
+            names = [item.name for item in bridge._agent._tools.definitions]
+
+        self.assertEqual(ready["type"], "ready")
+        self.assertEqual(len(ready["skill_warnings"]), 1)
+        self.assertIn("Skipping skill at", ready["skill_warnings"][0])
+        self.assertIn("read_skill", names)
 
 
 class SubagentRoleStartTest(unittest.TestCase):

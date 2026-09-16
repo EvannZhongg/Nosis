@@ -206,6 +206,12 @@ function applyMessage(state: State, message: Incoming): State {
       };
 
     case 'ready':
+      const startupNotices: Entry[] = (message.skill_warnings ?? []).map((text) => ({
+        kind: 'notice',
+        id: nextId('notice'),
+        level: 'info',
+        text,
+      }));
       return {
         ...state,
         status: 'idle',
@@ -216,6 +222,7 @@ function applyMessage(state: State, message: Incoming): State {
         entries: message.resumed
           ? [
               ...state.entries,
+              ...startupNotices,
               {
                 kind: 'notice',
                 id: nextId('notice'),
@@ -223,7 +230,7 @@ function applyMessage(state: State, message: Incoming): State {
                 text: `Resumed session with ${message.message_count} message(s).`,
               },
             ]
-          : state.entries,
+          : [...state.entries, ...startupNotices],
       };
 
     case 'assistant_delta':
