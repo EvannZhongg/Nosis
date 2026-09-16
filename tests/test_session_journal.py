@@ -4,7 +4,7 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from agent_core import ImagePart, JsonlSessionStore, Message, Session, ToolCall
-from agent_core.projection import project_context_units, project_provider_messages
+from agent_core.projection import project_context_units
 
 
 class SessionJournalTest(unittest.TestCase):
@@ -57,7 +57,9 @@ class SessionJournalTest(unittest.TestCase):
         session.tool_started(call)
 
         self.assertEqual([item.role for item in session.items], ["user", "assistant"])
-        self.assertEqual([item.role for item in project_provider_messages(session.items)], ["user"])
+        # An unanswered call exposes no provider messages, but stays a unit.
+        units = project_context_units(session.items)
+        self.assertEqual([message.role for unit in units for message in unit.messages], ["user"])
         self.assertEqual(session.tool_executions["call-1"].status, "started")
 
     def test_journal_replays_tool_fact_without_request_snapshot(self):
@@ -139,7 +141,8 @@ class SessionJournalTest(unittest.TestCase):
             session.finish_turn("completed")
 
             replayed = store.load("s")
-            projected = project_provider_messages(replayed.items)
+            units = project_context_units(replayed.items)
+            projected = [message for unit in units for message in unit.messages]
             self.assertEqual(
                 [item.tool_call_id for item in projected if item.role == "tool"],
                 ["call-a", "call-b"],

@@ -22,8 +22,10 @@ def project_context_units(
     """Group raw items into units that must be retained or archived whole.
 
     A tool-calling assistant message, every result in that batch, and its
-    trailing media message form one unit.  Incomplete batches remain part of
-    the raw span but expose no provider messages.
+    trailing media message form one unit, with the results ordered by the
+    model's original call order rather than completion order.  Incomplete
+    batches remain part of the raw span but expose no provider messages, and
+    are therefore absent from the next provider request.
     """
     history = tuple(items)
     result: list[ContextUnit] = []
@@ -70,17 +72,3 @@ def project_context_units(
         )
         index += 1
     return tuple(result)
-
-
-def project_provider_messages(items: Iterable[Message]) -> tuple[Message, ...]:
-    """Return provider-valid messages without changing execution history.
-
-    An incomplete tool batch remains visible to recovery and UI projections,
-    but it is absent from the next provider request.  Completed results are
-    ordered by the model's original call order rather than completion order.
-    """
-    return tuple(
-        message
-        for unit in project_context_units(items)
-        for message in unit.messages
-    )
