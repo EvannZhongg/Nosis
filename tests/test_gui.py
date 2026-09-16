@@ -4,6 +4,7 @@ import os
 import signal
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -482,7 +483,7 @@ class GuiTest(unittest.TestCase):
                 # The fake ends its stream on cancel, as an exiting
                 # bridge would.
                 socket.send_json({"type": "cancel", "turn_id": "t1"})
-                _wait_for(lambda: bridge.closed)
+                _wait_for(client, lambda: bridge.closed)
 
         self.assertEqual(bridge.cancelled, 1)
         self.assertEqual(
@@ -592,7 +593,7 @@ class GuiTest(unittest.TestCase):
                 )
                 self.assertEqual(first.receive_json()["text"], "still attached")
                 first.send_json({"type": "cancel", "turn_id": "t1"})
-                _wait_for(lambda: bridge.closed)
+                _wait_for(client, lambda: bridge.closed)
 
     def test_explicit_takeover_replaces_the_previous_page(self) -> None:
         bridge = FakeBridge(
@@ -640,7 +641,7 @@ class GuiTest(unittest.TestCase):
                     )
                     self.assertEqual(second.receive_json()["text"], "new owner")
                     second.send_json({"type": "cancel", "turn_id": "t1"})
-                    _wait_for(lambda: bridge.closed)
+                    _wait_for(client, lambda: bridge.closed)
 
     def test_replays_events_and_completion_emitted_while_detached(self) -> None:
         bridge = FakeBridge(
@@ -664,7 +665,7 @@ class GuiTest(unittest.TestCase):
                 },
                 {"type": "turn_completed", "turn_id": "t1", "usage": None},
             )
-            _wait_for(lambda: bridge.closed)
+            _wait_for(client, lambda: bridge.closed)
 
             runtimes = client.get("/api/runtimes").json()
             self.assertEqual(runtimes[0]["session_id"], "shared")
@@ -685,7 +686,7 @@ class GuiTest(unittest.TestCase):
             self.assertFalse(state["running"])
             self.assertEqual(delta["text"], "done")
             self.assertEqual(completed["type"], "turn_completed")
-            _wait_for(lambda: client.get("/api/runtimes").json() == [])
+            _wait_for(client, lambda: client.get("/api/runtimes").json() == [])
 
         self.assertEqual(
             [message["type"] for message in bridge.sent],
@@ -727,13 +728,13 @@ class GuiTest(unittest.TestCase):
                         {"type": "user_turn", "turn_id": "t2", "text": "two"}
                     )
                     second.send_json({"type": "cancel", "turn_id": "t2"})
-                    _wait_for(lambda: bridges[1].closed)
+                    _wait_for(client, lambda: bridges[1].closed)
 
                 first.send_json(
                     {"type": "user_turn", "turn_id": "t1", "text": "one"}
                 )
                 first.send_json({"type": "cancel", "turn_id": "t1"})
-                _wait_for(lambda: bridges[0].closed)
+                _wait_for(client, lambda: bridges[0].closed)
 
         self.assertEqual(
             [bridge.sent[0]["session_id"] for bridge in bridges],
@@ -1026,15 +1027,21 @@ class GuiStartupTest(unittest.TestCase):
                 )
 
 
-def _wait_for(condition, timeout: float = 2.0) -> None:
-    """Waits for a relayed message to reach the fake bridge."""
-    import time
+def _wait_for(client, condition, timeout: float = 2.0) -> None:
+    """Wait for a condition the server's own tasks produce.
+
+    The test client runs the application's event loop only while a
+    request is in flight, so polling from the test thread would never
+    schedule those tasks.  Each poll therefore issues a request of its
+    own: the real server's loop runs continuously, and this keeps the
+    loop turning the same way.
+    """
 
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if condition():
             return
-        time.sleep(0.01)
+        client.get("/api/models")
     raise AssertionError("timed out waiting for the relay")
 
 

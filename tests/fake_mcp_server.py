@@ -1,4 +1,14 @@
+import os
+import time
+
 from mcp.server.mcpserver import MCPServer
+
+
+# Lets a test charge this server a startup delay, which is how the
+# concurrent startup of several servers becomes observable.
+_delay = float(os.environ.get("TEST_MCP_DELAY_SECONDS", "0"))
+if _delay > 0:
+    time.sleep(_delay)
 
 
 server = MCPServer("nosis-test")

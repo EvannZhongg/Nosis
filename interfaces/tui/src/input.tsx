@@ -2,6 +2,8 @@ import React from 'react';
 import { Box, Text, useBoxMetrics, useCursor, useInput } from 'ink';
 import type { DOMElement } from 'ink';
 import stringWidth from 'string-width';
+import { matchCommands } from './commands.js';
+import type { Command } from './commands.js';
 
 export type PromptProps = {
   value: string;
@@ -13,6 +15,8 @@ export type PromptProps = {
   /** True when the prompt grows upward from a fixed bottom edge. */
   docked?: boolean;
   placeholder?: string;
+  /** Slash commands offered above the box while their name is being typed. */
+  commands?: Command[];
 };
 
 /**
@@ -56,6 +60,42 @@ export function caretPosition({
 }
 
 /**
+ * The commands a draft can still become, listed directly above the input box.
+ *
+ * The rows are sibling nodes of the box rather than a wrapper around it: the
+ * caret is placed from the box's own measured position, which stays absolute
+ * only while the box's parent is the frame.
+ */
+function CommandMenu({
+  commands,
+  highlightedIndex,
+}: {
+  commands: Command[];
+  highlightedIndex: number;
+}): React.ReactElement {
+  return (
+    <Box flexShrink={0} flexDirection="column" marginTop={1} paddingX={1}>
+      {commands.map((command, index) => {
+        const highlighted = index === highlightedIndex;
+        return (
+          <Box key={command.name}>
+            <Text
+              color={highlighted ? 'cyan' : undefined}
+              dimColor={!highlighted}
+              bold={highlighted}
+            >
+              {highlighted ? '❯ ' : '  '}
+              {command.name}
+            </Text>
+            <Text dimColor>  {command.description}</Text>
+          </Box>
+        );
+      })}
+    </Box>
+  );
+}
+
+/**
  * Stays mounted while the agent works so the caller can submit steering.
  *
  * Top and bottom rules mark the input area; the dimmed border distinguishes
@@ -71,6 +111,9 @@ export function caretPosition({
  * "\n". Shift+Enter is indistinguishable from Enter unless the terminal
  * speaks the kitty keyboard protocol (enabled in cli.tsx) and reports the
  * modifier.
+ *
+ * A slash at the start of the draft lists the commands in `commands` above the
+ * box; ↑/↓ move the highlight and plain Enter runs it.
  */
 export function Prompt({
   value,
@@ -80,11 +123,22 @@ export function Prompt({
   busy,
   docked = false,
   placeholder,
+  commands,
 }: PromptProps): React.ReactElement {
   const boxRef = React.useRef<DOMElement>(null);
   const metrics = useBoxMetrics(boxRef);
   const { setCursorPosition } = useCursor();
   const [offset, setOffset] = React.useState(value.length);
+  const [highlighted, setHighlighted] = React.useState(0);
+
+  // Only the prompt that owns the keyboard offers commands: elsewhere the
+  // arrow keys belong to the prompt that took the keyboard away.
+  const suggestions = commands && focus ? matchCommands(value, commands) : [];
+  const highlightedIndex =
+    suggestions.length === 0 ? 0 : Math.min(highlighted, suggestions.length - 1);
+
+  // Every edit changes which names match, so the highlight returns to the top.
+  React.useEffect(() => setHighlighted(0), [value]);
 
   // The parent clears the draft on submit, so the caret follows the value.
   const caretOffset = Math.min(offset, value.length);
@@ -98,6 +152,23 @@ export function Prompt({
     (input, key) => {
       // Ctrl+C, Ctrl+D and Esc belong to the app-level handlers.
       if (key.ctrl || key.escape) return;
+
+      if (suggestions.length > 0) {
+        if (key.upArrow) {
+          setHighlighted((current) => (current - 1 + suggestions.length) % suggestions.length);
+          return;
+        }
+        if (key.downArrow) {
+          setHighlighted((current) => (current + 1) % suggestions.length);
+          return;
+        }
+        // Plain Enter runs the highlighted command; Shift/Alt+Enter still
+        // inserts a line below.
+        if (key.return && !key.shift && !key.meta) {
+          onSubmit(suggestions[highlightedIndex]!.name);
+          return;
+        }
+      }
 
       if (key.return) {
         // Shift+Enter (kitty protocol only) and Alt+Enter add a line instead
@@ -169,23 +240,31 @@ export function Prompt({
   const renderedValue = value.endsWith('\n') ? `${value} ` : value;
 
   return (
-    <Box
-      ref={boxRef}
-      width="100%"
-      flexShrink={0}
-      marginTop={1}
-      borderStyle="single"
-      borderLeft={false}
-      borderRight={false}
-      borderColor="cyan"
-      borderDimColor={busy}
-      paddingX={1}
-    >
-      {value === '' ? (
-        <Text dimColor>{placeholder ?? (busy ? 'steer the current turn…' : 'ask anything…')}</Text>
-      ) : (
-        <Text>{renderedValue}</Text>
-      )}
-    </Box>
+    <>
+      {suggestions.length > 0 ? (
+        <CommandMenu commands={suggestions} highlightedIndex={highlightedIndex} />
+      ) : null}
+
+      <Box
+        ref={boxRef}
+        width="100%"
+        flexShrink={0}
+        // The menu carries the blank line that separates the input area from
+        // the transcript while it is open.
+        marginTop={suggestions.length > 0 ? 0 : 1}
+        borderStyle="single"
+        borderLeft={false}
+        borderRight={false}
+        borderColor="cyan"
+        borderDimColor={busy}
+        paddingX={1}
+      >
+        {value === '' ? (
+          <Text dimColor>{placeholder ?? (busy ? 'steer the current turn…' : 'ask anything…')}</Text>
+        ) : (
+          <Text>{renderedValue}</Text>
+        )}
+      </Box>
+    </>
   );
 }

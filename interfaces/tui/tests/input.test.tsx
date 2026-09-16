@@ -5,8 +5,17 @@ import { Prompt, caretPoint, caretPosition } from '../src/input.js';
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const COMMANDS = [
+  { name: '/permissions', description: 'Choose permissions' },
+  { name: '/model', description: 'Switch model' },
+];
+
+function lineContaining(frame: string | undefined, text: string): number {
+  return (frame ?? '').split('\n').findIndex((line) => line.includes(text));
+}
+
 /** Drives Prompt as a controlled input, recording what it submits. */
-function renderPrompt() {
+function renderPrompt(commands?: { name: string; description: string }[]) {
   const submits: string[] = [];
   let value = '';
 
@@ -23,6 +32,7 @@ function renderPrompt() {
         }}
         focus
         busy={false}
+        commands={commands}
       />
     );
   }
@@ -205,5 +215,88 @@ describe('Prompt caret visibility', () => {
     const frame = lastFrame() ?? '';
     expect(frame).toContain('typed');
     expect(frame).not.toContain('ask anything');
+  });
+});
+
+describe('Prompt command menu', () => {
+  it('lists the commands above the input box after a slash', async () => {
+    const { stdin, lastFrame } = renderPrompt(COMMANDS);
+    await wait(40);
+    await type(stdin, '/');
+
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('❯ /permissions');
+    expect(frame).toContain('Choose permissions');
+    expect(frame).toContain('/model');
+
+    const menuLine = lineContaining(frame, 'Choose permissions');
+    const ruleLine = frame.split('\n').findIndex((line) => line.includes('─'));
+    expect(menuLine).toBeLessThan(ruleLine);
+  });
+
+  it('narrows the menu to the name being typed', async () => {
+    const { stdin, lastFrame } = renderPrompt(COMMANDS);
+    await wait(40);
+    await type(stdin, '/m');
+
+    const frame = lastFrame() ?? '';
+    expect(frame).toContain('❯ /model');
+    expect(frame).not.toContain('/permissions');
+  });
+
+  it('wraps the highlight with the arrow keys and runs the highlighted command', async () => {
+    const { stdin, lastFrame, submits } = renderPrompt(COMMANDS);
+    await wait(40);
+    await type(stdin, '/');
+
+    await type(stdin, '\u001B[A'); // up from the first command wraps to the last
+    expect(lastFrame()).toContain('❯ /model');
+    await type(stdin, '\u001B[B'); // down from the last wraps back
+    expect(lastFrame()).toContain('❯ /permissions');
+    await type(stdin, '\u001B[B');
+    expect(lastFrame()).toContain('❯ /model');
+
+    await type(stdin, '\r');
+    expect(submits).toEqual(['/model']);
+  });
+
+  it('returns the highlight to the first match when the name grows', async () => {
+    const { stdin, lastFrame } = renderPrompt(COMMANDS);
+    await wait(40);
+    await type(stdin, '/');
+    await type(stdin, '\u001B[B');
+    expect(lastFrame()).toContain('❯ /model');
+
+    await type(stdin, 'p');
+    expect(lastFrame()).toContain('❯ /permissions');
+  });
+
+  it('closes the menu once the name is followed by an argument', async () => {
+    const { stdin, lastFrame, submits } = renderPrompt(COMMANDS);
+    await wait(40);
+    await type(stdin, '/model gpt');
+
+    expect(lastFrame()).not.toContain('Switch model');
+    await type(stdin, '\r');
+    expect(submits).toEqual(['/model gpt']);
+  });
+
+  it('sends an unmatched slash draft instead of running a command', async () => {
+    const { stdin, lastFrame, submits } = renderPrompt(COMMANDS);
+    await wait(40);
+    await type(stdin, '/unknown');
+
+    expect(lastFrame()).not.toContain('/permissions');
+    await type(stdin, '\r');
+    expect(submits).toEqual(['/unknown']);
+  });
+
+  it('offers no commands when the prompt does not own the keyboard', async () => {
+    const { lastFrame } = render(
+      <Prompt value="/" onChange={() => {}} onSubmit={() => {}} focus={false} busy={false} commands={COMMANDS} />,
+    );
+    await wait(60);
+
+    expect(lastFrame()).not.toContain('/permissions');
   });
 });

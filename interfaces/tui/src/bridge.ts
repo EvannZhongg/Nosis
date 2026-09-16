@@ -19,9 +19,17 @@ export class BridgeClient {
     this.child = spawn(options.python, ['-m', 'interfaces.bridge'], {
       cwd: options.cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
-      // A private group lets POSIX target the bridge and its descendants,
-      // while Windows SIGBREAK reaches only this child group.
-      detached: true,
+      // POSIX gives the bridge its own session: a signal aimed at the TUI's
+      // process group cannot interrupt a turn behind the protocol's back, so
+      // a turn stops only through a turn-addressed cancel or a shutdown
+      // message.
+      // Windows must not detach the bridge. Its process is a console
+      // program, and detaching it makes Windows allocate a console for it,
+      // which appears as a second terminal window beside the TUI.
+      detached: process.platform !== 'win32',
+      // The windowless launch the Windows path relies on instead; ignored
+      // elsewhere.
+      windowsHide: true,
     }) as ChildProcessWithoutNullStreams;
 
     this.child.stdout.setEncoding('utf8');

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { Box, Text, useApp, useInput, useWindowSize } from 'ink';
 import type { PermissionPreset } from '@nosis/protocol';
 import { BridgeClient } from './bridge.js';
+import { COMMANDS, findCommand } from './commands.js';
 import { Prompt } from './input.js';
 import { ApprovalPrompt, PermissionPrompt, StatusBar, Transcript, UserQuestionPrompt } from './renderer.js';
 import { initialState, reducer } from './state.js';
@@ -216,8 +217,10 @@ export function App(props: AppProps): React.ReactElement {
     const text = value.trim();
     if (text === '') return;
     setDraft('');
-    if (text === '/permissions') {
-      setPermissionChoice(state.permissionPreset);
+    // Commands are answered by the TUI, so the agent never sees them.
+    const command = findCommand(text);
+    if (command) {
+      if (command.name === '/permissions') setPermissionChoice(state.permissionPreset);
       return;
     }
     if (state.status !== 'idle' && state.turnId !== null) {
@@ -294,6 +297,7 @@ export function App(props: AppProps): React.ReactElement {
           focus={state.approval === null && permissionChoice === null}
           busy={state.status !== 'idle'}
           docked
+          commands={COMMANDS}
           placeholder={state.status === 'idle' ? undefined : 'steer the current turn…'}
         />
       )}

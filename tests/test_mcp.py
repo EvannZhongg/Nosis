@@ -1,7 +1,9 @@
 import os
 import sys
+import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from agent_core import Session, ToolCall, ToolExecutionContext, Workspace
 from agent_core.mcp.config import load_mcp_config
@@ -290,6 +292,92 @@ class McpClientManagerTest(unittest.TestCase):
             manager.close()
         self.assertEqual(statuses[0].status, "connecting")
         self.assertEqual(statuses[-1].status, "closed")
+
+    def test_overall_wait_covers_the_slowest_server_budget(self) -> None:
+        """The overall wait must leave one server budget room to act.
+
+        Each server budget turns a slow server into an "unavailable"
+        status. If the overall wait ended first — the manager thread can
+        start late while the main thread imports the provider stack — the
+        whole agent would fail instead, which is what this guards.
+        """
+        budgets = (3, 7, 2)
+        config = load_mcp_config(
+            {
+                "enabled": True,
+                "servers": {
+                    f"server{index}": {
+                        "transport": "stdio",
+                        "command": sys.executable,
+                        "args": [str(Path(__file__).with_name("fake_mcp_server.py"))],
+                        "startup_timeout_seconds": budget,
+                    }
+                    for index, budget in enumerate(budgets)
+                },
+            }
+        )
+
+        waited: list[float] = []
+        manager = McpClientManager(config, Path.cwd())
+        original_wait = manager._ready.wait
+
+        def record_wait(timeout: float | None = None) -> bool:
+            waited.append(timeout if timeout is not None else -1)
+            return original_wait(timeout)
+
+        with patch.object(manager._ready, "wait", record_wait):
+            try:
+                manager.start()
+            finally:
+                manager.close()
+
+        self.assertEqual(len(waited), 1)
+        self.assertGreater(waited[0], max(budgets))
+        self.assertGreaterEqual(waited[0] - max(budgets), 5)
+
+    def test_starts_servers_concurrently(self) -> None:
+        """Startup costs the slowest server, not the sum of the servers.
+
+        The stdio helpers charge themselves a startup delay, so starting
+        them one after another would need both delays before the first
+        turn could run. The delay is well above the interpreter and
+        handshake cost the two servers pay at the same time, so the sum
+        stays separable from the slowest server.
+        """
+        delay = 1.5
+        config = load_mcp_config(
+            {
+                "enabled": True,
+                "servers": {
+                    "first": {
+                        "transport": "stdio",
+                        "command": sys.executable,
+                        "args": [str(Path(__file__).with_name("fake_mcp_server.py"))],
+                        "env": {"TEST_MCP_DELAY_SECONDS": str(delay)},
+                    },
+                    "second": {
+                        "transport": "stdio",
+                        "command": sys.executable,
+                        "args": [str(Path(__file__).with_name("fake_mcp_server.py"))],
+                        "env": {"TEST_MCP_DELAY_SECONDS": str(delay)},
+                    },
+                },
+            }
+        )
+
+        manager = McpClientManager(config, Path.cwd())
+        started = time.monotonic()
+        try:
+            tools = manager.start()
+        finally:
+            manager.close()
+
+        self.assertEqual(
+            sorted(tool.name for tool in tools),
+            ["mcp__first__echo", "mcp__first__hidden",
+             "mcp__second__echo", "mcp__second__hidden"],
+        )
+        self.assertLess(time.monotonic() - started, 2 * delay)
 
 
 if __name__ == "__main__":

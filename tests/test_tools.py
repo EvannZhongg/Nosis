@@ -516,7 +516,11 @@ class WebSearchToolTest(unittest.TestCase):
         )
 
     def test_missing_api_key_fails_the_call_not_the_tool(self) -> None:
-        with patch.dict("os.environ", {}, clear=True):
+        # Only the key is removed: clearing the environment would also
+        # take USERPROFILE, which session paths resolve through
+        # Path.home() on Windows.
+        with patch.dict("os.environ"):
+            os.environ.pop("EXA_API_KEY", None)
             tool = _Bound(WebSearchTool(), _TMP_WORKSPACE)
 
             with self.assertRaisesRegex(ValueError, "EXA_API_KEY"):

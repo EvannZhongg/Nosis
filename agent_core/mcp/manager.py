@@ -19,6 +19,11 @@ from .config import McpConfig, McpServerConfig
 from .tool import McpTool
 
 
+# Room for the manager thread and interpreter imports to reach the first
+# connection, on top of the slowest server's own startup budget.
+_STARTUP_SLACK_SECONDS = 5
+
+
 @dataclass(frozen=True)
 class McpServerStatus:
     server: str
@@ -93,11 +98,16 @@ class McpClientManager:
             daemon=True,
         )
         self._thread.start()
-        maximum_timeout = sum(
+        # Servers start concurrently, so the slowest budget is the whole
+        # startup window: waiting for the sum would raise here while a
+        # server was about to be reported unavailable, turning a slow
+        # start into a failed agent. The slack covers the thread and
+        # interpreter work before the first connection is attempted.
+        budget = max(
             config.startup_timeout_seconds
             for config in self._servers.values()
         )
-        if not self._ready.wait(maximum_timeout + 1):
+        if not self._ready.wait(budget + _STARTUP_SLACK_SECONDS):
             self.close()
             raise TimeoutError("MCP servers did not finish starting")
         if self._startup_error is not None:
@@ -168,22 +178,37 @@ class McpClientManager:
             async with AsyncExitStack() as stack:
                 for config in self._servers.values():
                     self._emit(config.name, "connecting")
-                    try:
-                        session = await asyncio.wait_for(
-                            self._connect(stack, config),
-                            timeout=config.startup_timeout_seconds,
+
+                # Servers start concurrently: the slowest budget, not the
+                # sum of them, decides how long startup takes. Each server
+                # still owns its outcome, so a failure or a timeout is an
+                # "unavailable" status and never a failed startup.
+                # The budget covers connecting and discovering together,
+                # so it bounds a server's whole startup.
+                results = await asyncio.gather(
+                    *(
+                        asyncio.ensure_future(
+                            asyncio.wait_for(
+                                self._start_server(stack, config),
+                                timeout=config.startup_timeout_seconds,
+                            )
                         )
-                        server_tools = await asyncio.wait_for(
-                            self._discover_tools(session, config),
-                            timeout=config.startup_timeout_seconds,
-                        )
-                    except Exception as error:
+                        for config in self._servers.values()
+                    ),
+                    return_exceptions=True,
+                )
+                for config, outcome in zip(
+                    self._servers.values(),
+                    results,
+                ):
+                    if not isinstance(outcome, tuple):
                         self._emit(
                             config.name,
                             "unavailable",
-                            error=_exception_message(error),
+                            error=_exception_message(outcome),
                         )
                         continue
+                    session, server_tools = outcome
                     sessions[config.name] = session
                     for tool in server_tools:
                         name = tool.name
@@ -215,11 +240,12 @@ class McpClientManager:
             for name in sessions:
                 self._emit(name, "closed")
 
-    async def _connect(
+    async def _start_server(
         self,
         stack: AsyncExitStack,
         config: McpServerConfig,
-    ) -> ClientSession:
+    ) -> tuple[ClientSession, tuple[McpTool, ...]]:
+        """Connect one server and discover its tools under one budget."""
         if config.transport == "stdio":
             cwd = None
             if config.cwd is not None:
@@ -249,7 +275,7 @@ class McpClientManager:
             )
         )
         await session.initialize()
-        return session
+        return session, await self._discover_tools(session, config)
 
     async def _discover_tools(
         self,

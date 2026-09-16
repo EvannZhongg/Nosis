@@ -169,6 +169,25 @@ describe('App', () => {
     expect(turns()).toHaveLength(0);
   });
 
+  it('lists the commands after a slash and runs the highlighted one', async () => {
+    const { stdin, lastFrame } = renderApp();
+    await waitForReady(lastFrame);
+
+    stdin.write('/');
+    await waitFor(() => expect(lastFrame()).toContain('❯ /permissions'));
+
+    const frame = lastFrame() ?? '';
+    const menuLine = lineContaining(frame, '❯ /permissions');
+    const ruleLine = frame.split('\n').findIndex((line) => line.includes('─'));
+    expect(menuLine).toBeGreaterThanOrEqual(0);
+    expect(menuLine).toBeLessThan(ruleLine);
+
+    stdin.write('\r');
+    await waitFor(() => expect(lastFrame()).toContain('Ask for approval'));
+    // The command opened the permission card instead of becoming a turn.
+    expect(turns()).toHaveLength(0);
+  });
+
   it('sends steering while the agent is busy', async () => {
     const { stdin, lastFrame } = renderApp();
     await waitForReady(lastFrame);
