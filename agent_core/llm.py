@@ -71,6 +71,19 @@ class LLMProvider(ABC):
         """
         raise NotImplementedError
 
+    def stream_cancellable(
+        self,
+        request: LLMRequest,
+        on_text_delta: Callable[[str], None],
+        on_reasoning_delta: Callable[[str], None] | None,
+        check_cancelled: Callable[[], None],
+    ) -> LLMResponse:
+        """Stream with cancellation checkpoints when the provider supports them."""
+        check_cancelled()
+        response = self.stream(request, on_text_delta, on_reasoning_delta)
+        check_cancelled()
+        return response
+
 
 def with_generation_limit(
     request: LLMRequest,

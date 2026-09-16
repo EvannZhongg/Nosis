@@ -1,7 +1,10 @@
 import json
+from contextvars import copy_context
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from queue import Empty, Full, Queue
+from threading import Event, Thread
+from typing import Callable, Iterable, Iterator
 
 from litellm import completion, get_model_info, token_counter
 
@@ -23,6 +26,8 @@ from agent_core.tools import AnalyzeImageTool, ToolCall, ToolDefinition
 
 
 class LiteLLMProvider(LLMProvider):
+    _CANCEL_POLL_SECONDS = 0.1
+
     def __init__(
         self,
         model: str,
@@ -142,6 +147,35 @@ class LiteLLMProvider(LLMProvider):
         on_text_delta: Callable[[str], None],
         on_reasoning_delta: Callable[[str], None] | None = None,
     ) -> LLMResponse:
+        return self._stream(
+            request,
+            on_text_delta,
+            on_reasoning_delta,
+            check_cancelled=lambda: None,
+        )
+
+    def stream_cancellable(
+        self,
+        request: LLMRequest,
+        on_text_delta: Callable[[str], None],
+        on_reasoning_delta: Callable[[str], None] | None,
+        check_cancelled: Callable[[], None],
+    ) -> LLMResponse:
+        return self._stream(
+            request,
+            on_text_delta,
+            on_reasoning_delta,
+            check_cancelled=check_cancelled,
+        )
+
+    def _stream(
+        self,
+        request: LLMRequest,
+        on_text_delta: Callable[[str], None],
+        on_reasoning_delta: Callable[[str], None] | None,
+        *,
+        check_cancelled: Callable[[], None],
+    ) -> LLMResponse:
         arguments = dict(
             model=self._model,
             base_url=self._base_url,
@@ -165,7 +199,12 @@ class LiteLLMProvider(LLMProvider):
         tool_call_fragments: dict[int, _ToolCallFragment] = {}
         usage = None
 
-        for chunk in completion(**arguments):
+        chunks = _cancellable_chunks(
+            lambda: completion(**arguments),
+            check_cancelled,
+            self._CANCEL_POLL_SECONDS,
+        )
+        for chunk in chunks:
             chunk_usage = getattr(chunk, "usage", None)
             if chunk_usage is not None:
                 usage = chunk_usage
@@ -215,6 +254,61 @@ class LiteLLMProvider(LLMProvider):
             if usage is not None
             else None,
         )
+
+
+_STREAM_END = object()
+
+
+def _cancellable_chunks(
+    create_stream: Callable[[], Iterable[object]],
+    check_cancelled: Callable[[], None],
+    poll_seconds: float,
+) -> Iterator[object]:
+    """Yield a synchronous provider stream without blocking cancellation checks."""
+    queue: Queue[object | BaseException] = Queue(maxsize=1)
+    stopped = Event()
+
+    def publish(item: object | BaseException) -> bool:
+        while not stopped.is_set():
+            try:
+                queue.put(item, timeout=poll_seconds)
+                return True
+            except Full:
+                continue
+        return False
+
+    def read_stream() -> None:
+        try:
+            for chunk in create_stream():
+                if not publish(chunk):
+                    return
+        except BaseException as error:
+            if not publish(error):
+                return
+        publish(_STREAM_END)
+
+    reader = Thread(
+        target=copy_context().run,
+        args=(read_stream,),
+        name="litellm-stream-reader",
+        daemon=True,
+    )
+    reader.start()
+    try:
+        while True:
+            check_cancelled()
+            try:
+                item = queue.get(timeout=poll_seconds)
+            except Empty:
+                continue
+            check_cancelled()
+            if item is _STREAM_END:
+                return
+            if isinstance(item, BaseException):
+                raise item
+            yield item
+    finally:
+        stopped.set()
 
 
 def _request_messages(

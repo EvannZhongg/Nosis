@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { shouldSubmitComposerEnter } from "../src/Chat";
+import { shouldBlockRunningAttachmentSubmit, shouldSubmitComposerEnter } from "../src/Chat";
 
 const enter = {
   key: "Enter",
@@ -29,5 +29,15 @@ describe("composer Enter handling", () => {
 
   it("keeps Shift+Enter as a newline", () => {
     expect(shouldSubmitComposerEnter({ ...enter, shiftKey: true }, false)).toBe(false);
+  });
+});
+
+describe("running attachment submission", () => {
+  it("blocks submission while a turn is running so the composer stays intact", () => {
+    expect(shouldBlockRunningAttachmentSubmit(true, 1)).toBe(true);
+  });
+
+  it("allows steering without attachments", () => {
+    expect(shouldBlockRunningAttachmentSubmit(true, 0)).toBe(false);
   });
 });

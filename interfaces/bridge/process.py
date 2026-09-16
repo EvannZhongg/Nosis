@@ -13,7 +13,7 @@ class _Process(Protocol):
 
 
 def cancel_process(process: _Process) -> None:
-    """Deliver a soft interrupt to a bridge process running in its own group."""
+    """Interrupt a bridge that is not ready to receive protocol shutdown."""
     if process.returncode is not None:
         return
     if os.name == "nt":

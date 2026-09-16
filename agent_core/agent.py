@@ -270,10 +270,11 @@ class Agent:
                 if on_event is not None:
                     on_event(ReasoningDeltaEvent(text=text, model_call_index=model_call_index))
 
-            response = self._provider.stream(
+            response = self._provider.stream_cancellable(
                 request,
                 on_text_delta,
                 on_reasoning_delta,
+                lambda: _raise_if_cancelled(turn_control),
             )
             usage = response.usage
             self._session.model_completed(

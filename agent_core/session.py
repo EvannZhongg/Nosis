@@ -223,27 +223,6 @@ class Session:
         if turn_id == self._current_turn_id:
             self._current_turn_id = None
 
-    def cancel_active_work(self, turn_id: str | None = None) -> None:
-        turn_id = turn_id or self._current_turn_id
-        for execution in tuple(self.tool_executions.values()):
-            if execution.turn_id == turn_id and execution.status == "started":
-                call = ToolCall(
-                    execution.tool_call_id,
-                    execution.name,
-                    execution.arguments,
-                )
-                self.tool_finished(
-                    call,
-                    "cancelled",
-                    error="turn cancelled",
-                    turn_id=turn_id,
-                )
-        turn = self.turns.get(turn_id) if turn_id is not None else None
-        if turn_id is not None and (
-            turn is None or turn.status != "cancelled"
-        ):
-            self.finish_turn("cancelled", turn_id)
-
     def tool_started(self, call: ToolCall, turn_id: str | None = None) -> None:
         turn_id = turn_id or self._current_turn_id
         event = self._event(

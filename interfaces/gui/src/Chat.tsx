@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent } from "react";
 import {
   AssistantRuntimeProvider, ComposerPrimitive, MessagePrimitive,
   ThreadPrimitive, useAuiState, useExternalStoreRuntime,
@@ -31,6 +31,13 @@ export function shouldSubmitComposerEnter(
     && !composing
     && !event.isComposing
     && event.keyCode !== 229;
+}
+
+export function shouldBlockRunningAttachmentSubmit(
+  running: boolean,
+  pendingFileCount: number,
+): boolean {
+  return running && pendingFileCount > 0;
 }
 
 function ToolCard({ toolName, args, result }: ToolCallMessagePartProps) {
@@ -369,7 +376,11 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
     if (!text && pendingFiles.length === 0) return;
     if (runningRef.current) {
       const turnId = activeTurnIdRef.current;
-      if (!turnId || pendingFiles.length > 0) return;
+      if (pendingFiles.length > 0) {
+        showNotice({ level: "info", text: "任务运行中不能发送图片；待发送内容已保留，请停止或等待当前任务结束。" }, true);
+        return;
+      }
+      if (!turnId) return;
       steerCounter.current += 1;
       socketRef.current?.send({
         type: "user_steer",
@@ -496,6 +507,14 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
     event.currentTarget.closest("form")?.requestSubmit();
   }
 
+  function onComposerSubmit(event: FormEvent<HTMLFormElement>) {
+    if (!shouldBlockRunningAttachmentSubmit(runningRef.current, pendingFiles.length)) return;
+    // Stop assistant-ui before it clears the draft; images cannot be steered
+    // into an already running turn, so the whole pending message stays intact.
+    event.preventDefault();
+    showNotice({ level: "info", text: "任务运行中不能发送图片；待发送内容已保留，请停止或等待当前任务结束。" }, true);
+  }
+
   function onCompositionStart() {
     if (compositionEndTimeoutRef.current) clearTimeout(compositionEndTimeoutRef.current);
     composingRef.current = true;
@@ -558,7 +577,7 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
         </div>}
         {pendingFiles.length > 0 && <div className="attachment-list" aria-label="待发送图片">{pendingFiles.map((file, index) => <PendingAttachment key={`${file.name}-${file.lastModified}-${index}`} file={file} onRemove={() => setPendingFiles((files) => files.filter((_, itemIndex) => itemIndex !== index))} />)}</div>}
         {compressionNotice && <div className="compression-notice" role="status">{compressionNotice}</div>}
-        <ComposerPrimitive.Root className="composer"><div ref={workspacePickerRef} className="workspace-picker-wrap"><button type="button" className="workspace-picker" onClick={() => setWorkspaceEditing((value) => { if (value && !workspaceDraft.trim()) setWorkspaceDraft(session.workspace ?? ""); return !value; })} disabled={controlsDisabled || running} aria-expanded={workspaceEditing}><span className="workspace-picker-icon">⌂</span><span className="workspace-picker-value">{workspaceDraft || "选择项目"}</span><ChevronDown size={14} /></button>{workspaceEditing && <div className="workspace-menu" role="menu"><div className="workspace-menu-heading">选择工作区</div>{availableWorkspaces.map((path) => <button type="button" role="menuitem" className={`workspace-option ${path === workspaceDraft ? "selected" : ""}`} key={path} onClick={() => { void saveWorkspace(path); setWorkspaceEditing(false); }} disabled={controlsDisabled || running || workspaceSaving} title={path}><span className="workspace-option-path">{path}</span></button>)}<div className="workspace-menu-divider" /><button type="button" role="menuitem" className="workspace-new-option" onClick={() => { void chooseNewWorkspace(); }} disabled={controlsDisabled || running || workspaceSaving}>＋ 新建工作区</button></div>}</div><ComposerPrimitive.Input placeholder="Ask Nosis…" aria-label="消息" rows={2} autoFocus submitMode="none" onKeyDown={onComposerKeyDown} onCompositionStart={onCompositionStart} onCompositionEnd={onCompositionEnd} onPaste={onPaste} /><div className="composer-bottom">
+        <ComposerPrimitive.Root className="composer" onSubmit={onComposerSubmit}><div ref={workspacePickerRef} className="workspace-picker-wrap"><button type="button" className="workspace-picker" onClick={() => setWorkspaceEditing((value) => { if (value && !workspaceDraft.trim()) setWorkspaceDraft(session.workspace ?? ""); return !value; })} disabled={controlsDisabled || running} aria-expanded={workspaceEditing}><span className="workspace-picker-icon">⌂</span><span className="workspace-picker-value">{workspaceDraft || "选择项目"}</span><ChevronDown size={14} /></button>{workspaceEditing && <div className="workspace-menu" role="menu"><div className="workspace-menu-heading">选择工作区</div>{availableWorkspaces.map((path) => <button type="button" role="menuitem" className={`workspace-option ${path === workspaceDraft ? "selected" : ""}`} key={path} onClick={() => { void saveWorkspace(path); setWorkspaceEditing(false); }} disabled={controlsDisabled || running || workspaceSaving} title={path}><span className="workspace-option-path">{path}</span></button>)}<div className="workspace-menu-divider" /><button type="button" role="menuitem" className="workspace-new-option" onClick={() => { void chooseNewWorkspace(); }} disabled={controlsDisabled || running || workspaceSaving}>＋ 新建工作区</button></div>}</div><ComposerPrimitive.Input placeholder="Ask Nosis…" aria-label="消息" rows={2} autoFocus submitMode="none" onKeyDown={onComposerKeyDown} onCompositionStart={onCompositionStart} onCompositionEnd={onCompositionEnd} onPaste={onPaste} /><div className="composer-bottom">
           <button type="button" className="attachment-button" aria-label="添加图片" title="添加图片" disabled={controlsDisabled || running} onClick={() => fileInputRef.current?.click()}><Paperclip size={15} /></button>
           <input ref={fileInputRef} className="attachment-input" type="file" accept="image/*" multiple onChange={(event) => { setPendingFiles((files) => [...files, ...Array.from(event.target.files ?? [])]); event.currentTarget.value = ""; }} />
           <label className="model-selector" title={models.find((option) => option.id === model)?.model}>

@@ -105,24 +105,6 @@ class SessionJournalTest(unittest.TestCase):
                 {"turn_recovered", "tool_recovered"},
             )
 
-    def test_completed_tool_survives_later_batch_cancellation(self):
-        session = Session("s")
-        session.begin_turn("turn-1")
-        first = ToolCall("call-1", "write", {"path": "a"})
-        second = ToolCall("call-2", "write", {"path": "b"})
-        session.add_item("assistant", None, tool_calls=(first, second))
-        session.tool_started(first)
-        session.tool_started(second)
-        session.tool_finished(first, "completed")
-        session.add_item("tool", '{"ok":true}', tool_call_id=first.id)
-
-        session.cancel_active_work("turn-1")
-
-        self.assertEqual(session.tool_executions[first.id].status, "completed")
-        self.assertEqual(session.tool_executions[second.id].status, "cancelled")
-        self.assertEqual(session.turns["turn-1"].status, "cancelled")
-        self.assertIn("tool_completed", [event.event_type for event in session.journal])
-
     def test_parallel_completion_replays_in_call_order_for_provider(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)

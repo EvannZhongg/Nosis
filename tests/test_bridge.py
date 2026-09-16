@@ -474,6 +474,12 @@ class BridgeServeTest(unittest.TestCase):
         bridge, _ = make_bridge([])
         bridge.serve()
 
+    def test_does_not_swallow_an_external_keyboard_interrupt(self) -> None:
+        bridge, _ = make_bridge([])
+        with patch.object(bridge, "read_message", side_effect=KeyboardInterrupt):
+            with self.assertRaises(KeyboardInterrupt):
+                bridge.serve()
+
     def test_rejects_turn_before_start(self) -> None:
         bridge, _ = make_bridge(
             ['{"type": "user_turn", "turn_id": "t1", "text": "hi"}']

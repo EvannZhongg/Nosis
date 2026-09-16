@@ -28,8 +28,8 @@ def main() -> None:
     if hasattr(sys.stdin, "reconfigure"):
         sys.stdin.reconfigure(encoding="utf-8", errors="strict")
     if hasattr(signal, "SIGBREAK"):
-        # A Windows child has no usable SIGINT, so the GUI cancels a turn
-        # with CTRL_BREAK: unwind the agent loop exactly as Ctrl+C would.
+        # A bridge that has not reached the protocol loop cannot receive a
+        # shutdown message. Its owner uses CTRL_BREAK to terminate startup.
         signal.signal(signal.SIGBREAK, _interrupt)
     protocol_out = _claim_stdout()
     bridge = None

@@ -567,7 +567,13 @@ class Bridge:
                 turn_control=control,
                 **kwargs,
             )
-        except (KeyboardInterrupt, Cancelled):
+        except KeyboardInterrupt:
+            self.emit(
+                "turn_cancelled",
+                turn_id=self._turn_id,
+            )
+            return
+        except Cancelled:
             self.emit(
                 "turn_cancelled",
                 turn_id=self._turn_id,
@@ -605,8 +611,6 @@ class Bridge:
                     error={"type": "ProtocolError", "message": str(error)},
                 )
                 raise SystemExit(1)
-            except KeyboardInterrupt:
-                continue  # Interrupted while idle: nothing to cancel.
 
             if message is None or message["type"] == "shutdown":
                 return

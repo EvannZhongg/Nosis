@@ -29,8 +29,8 @@ vi.mock('../src/bridge.js', () => ({
     send(message: any) {
       sent.push(message);
     }
-    cancel() {
-      sent.push({ type: '__cancel' });
+    cancel(turnId: string) {
+      sent.push({ type: '__cancel', turn_id: turnId });
     }
     shutdown() {}
     diagnostics() {
@@ -265,7 +265,7 @@ describe('App', () => {
     await waitFor(() => expect(lastFrame()).toContain('esc to cancel'));
 
     stdin.write('\u001b');
-    await waitFor(() => expect(sent.some((m) => m.type === '__cancel')).toBe(true));
+    await waitFor(() => expect(sent).toContainEqual({ type: '__cancel', turn_id: 'turn-1' }));
   });
 
   it('renders streamed reasoning before the answer', async () => {
