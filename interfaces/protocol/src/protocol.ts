@@ -28,6 +28,22 @@ export type Usage = {
   total_tokens: number | null;
 };
 
+export type UserQuestionOption = {
+  id: string;
+  label: string;
+  description?: string;
+  recommended?: boolean;
+};
+
+export type UserQuestion = {
+  type: 'user_question';
+  turn_id: string | null;
+  request_id: string;
+  question: string;
+  options: UserQuestionOption[];
+  allow_free_text: boolean;
+};
+
 export type Incoming =
   | {
       type: 'runtime_state';
@@ -42,6 +58,7 @@ export type Incoming =
         server?: string;
         tool_name?: string;
       } | null;
+      question: UserQuestion | null;
     }
   | { type: 'attachment_replaced'; running: boolean }
   | {
@@ -100,6 +117,7 @@ export type Incoming =
       server?: string;
       tool_name?: string;
     }
+  | UserQuestion
   | { type: 'mcp_server_status'; server: string; status: string; tool_count?: number; error?: string }
   | { type: 'turn_completed'; turn_id: string; usage: Usage | null }
   | { type: 'turn_cancelled'; turn_id: string }
@@ -122,6 +140,7 @@ export type Outgoing =
     }
   | { type: 'user_turn'; turn_id: string; text: string; attachments?: ImageAttachment[] }
   | { type: 'approval_response'; request_id: string; approved: boolean }
+  | { type: 'user_question_response'; request_id: string; option_id?: string; text?: string }
   | { type: 'shutdown' };
 
 /**

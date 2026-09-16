@@ -3,7 +3,7 @@ import { Box, Static, Text, useBoxMetrics } from 'ink';
 import type { DOMElement } from 'ink';
 import Spinner from 'ink-spinner';
 import { formatArguments } from '@nosis/protocol';
-import type { ApprovalChoice, Entry, State } from './state.js';
+import type { ApprovalChoice, Entry, State, UserQuestionState } from './state.js';
 
 function EntryView({ entry }: { entry: Entry }): React.ReactElement {
   if (entry.kind === 'user') {
@@ -316,6 +316,45 @@ export function ApprovalPrompt({
         <Option label="Deny" selected={choice === 'deny'} color="red" />
       </Box>
       <Text dimColor>←/→ select · enter confirm · esc deny</Text>
+    </Box>
+  );
+}
+
+export function UserQuestionPrompt({
+  question,
+}: {
+  question: UserQuestionState;
+}): React.ReactElement {
+  const choices = [
+    ...question.options,
+    ...(question.allowFreeText
+      ? [{ id: '__free_text__', label: '其他答案', description: '输入自定义答案' }]
+      : []),
+  ];
+  return (
+    <Box
+      marginTop={1}
+      flexDirection="column"
+      borderStyle="round"
+      borderColor="cyan"
+      paddingX={1}
+    >
+      <Text color="cyan" bold>{question.question}</Text>
+      <Box marginTop={1} flexDirection="column">
+        {choices.map((option, index) => {
+          const selected = question.selectedIndex === index;
+          return (
+            <Box key={option.id} flexDirection="column">
+              <Text color={selected ? 'cyan' : undefined} dimColor={!selected} bold={selected}>
+                {selected ? '❯ ' : '  '}{option.label}
+                {'recommended' in option && option.recommended ? '  推荐' : ''}
+              </Text>
+              {option.description ? <Text dimColor>    {option.description}</Text> : null}
+            </Box>
+          );
+        })}
+      </Box>
+      <Text dimColor>↑/↓ select · enter confirm · esc cancel</Text>
     </Box>
   );
 }

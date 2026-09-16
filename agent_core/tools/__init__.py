@@ -10,6 +10,7 @@ from .base import (
 )
 from .builtin import (
     AnalyzeImageTool,
+    AskUserTool,
     EditFileTool,
     ListDirectoryTool,
     ReadFileTool,
@@ -30,6 +31,7 @@ from .policy import CompositeToolPolicy, McpApprovalPolicy, ShellApprovalPolicy
 
 __all__ = [
     "AnalyzeImageTool",
+    "AskUserTool",
     "CompositeToolPolicy",
     "EditFileTool",
     "JSONValue",

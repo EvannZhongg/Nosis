@@ -180,12 +180,14 @@ class ProtocolTest(unittest.TestCase):
             runtime_state_message(
                 running=True,
                 approval=approval,
+                question=None,
                 provider="second",
             ),
             {
                 "type": "runtime_state",
                 "running": True,
                 "approval": approval,
+                "question": None,
                 "provider": "second",
             },
         )
@@ -338,6 +340,51 @@ class BridgeApprovalTest(unittest.TestCase):
         ]
         self.assertEqual(len(request_ids), approvals)
         self.assertEqual(len(set(request_ids)), approvals)
+
+
+class BridgeUserQuestionTest(unittest.TestCase):
+    OPTIONS = [
+        {"id": "memory", "label": "Memory"},
+        {"id": "sqlite", "label": "SQLite"},
+    ]
+
+    def test_returns_the_selected_option(self) -> None:
+        bridge, stdout = make_bridge(
+            ['{"type": "user_question_response", "request_id": "None:1",'
+             ' "option_id": "sqlite"}']
+        )
+
+        self.assertEqual(
+            bridge.request_user_choice("Cache?", self.OPTIONS, False),
+            {"type": "option", "id": "sqlite", "label": "SQLite"},
+        )
+        self.assertEqual(emitted(stdout)[0]["type"], "user_question")
+
+    def test_returns_trimmed_free_text(self) -> None:
+        bridge, _ = make_bridge(
+            ['{"type": "user_question_response", "request_id": "None:1",'
+             ' "text": "  Redis  "}']
+        )
+
+        self.assertEqual(
+            bridge.request_user_choice("Cache?", self.OPTIONS, True),
+            {"type": "text", "text": "Redis"},
+        )
+
+    def test_ignores_invalid_answers(self) -> None:
+        bridge, _ = make_bridge(
+            [
+                '{"type": "user_question_response", "request_id": "None:1",'
+                ' "option_id": "unknown"}',
+                '{"type": "user_question_response", "request_id": "None:1",'
+                ' "option_id": "memory"}',
+            ]
+        )
+
+        self.assertEqual(
+            bridge.request_user_choice("Cache?", self.OPTIONS, False)["id"],
+            "memory",
+        )
 
 
 class BridgeServeTest(unittest.TestCase):
@@ -838,7 +885,47 @@ class SubagentRoleStartTest(unittest.TestCase):
                 )
             )
 
-            self.assertEqual(bridge._agent._tools.definitions, ())
+            self.assertEqual(
+                [definition.name for definition in bridge._agent._tools.definitions],
+                ["ask_user"],
+            )
+
+    def test_ask_user_is_registered_only_for_the_main_agent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bridge, _ = make_bridge([])
+            bridge.start(
+                start_message(
+                    Path(directory),
+                    agent_config={
+                        "max_same_tool_calls": 5,
+                        "output_reserve_tokens": 100,
+                        "main_agent": {"tools": {"subagent": True}},
+                        "subagent_roles": {
+                            "researcher": {
+                                "description": "Reads.",
+                                "tools": {"read_file": True},
+                            }
+                        },
+                    },
+                )
+            )
+
+            main_names = {
+                definition.name for definition in bridge._agent._tools.definitions
+            }
+            subagent = bridge._agent._tools._context.subagents
+            assert subagent is not None
+            role = subagent.roles.get("researcher")
+            role_context = bridge._agent._tools._context
+            role_names = {
+                definition.name
+                for definition in subagent._catalog.select(
+                    role.tools, role_context
+                ).definitions
+            }
+
+            self.assertIn("ask_user", main_names)
+            self.assertNotIn("ask_user", role_names)
 
 
 VISION_MODEL = "vision/model"

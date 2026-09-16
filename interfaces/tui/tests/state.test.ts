@@ -246,6 +246,32 @@ describe('reducer', () => {
     expect(state.status).toBe('running');
   });
 
+  it('tracks a user question and selects the recommended option', () => {
+    let state = ready();
+    state = reducer(state, {
+      type: 'message',
+      message: {
+        type: 'user_question',
+        turn_id: 't1',
+        request_id: 't1:1',
+        question: 'Which cache?',
+        options: [
+          { id: 'memory', label: 'Memory' },
+          { id: 'sqlite', label: 'SQLite', recommended: true },
+        ],
+        allow_free_text: true,
+      },
+    });
+
+    expect(state.status).toBe('awaiting_user');
+    expect(state.question?.selectedIndex).toBe(1);
+    state = reducer(state, { type: 'question_choice', selectedIndex: 2 });
+    expect(state.question?.selectedIndex).toBe(2);
+    state = reducer(state, { type: 'question_resolved' });
+    expect(state.question).toBeNull();
+    expect(state.status).toBe('running');
+  });
+
   it('records usage when a turn completes', () => {
     let state = ready();
     state = reducer(state, {

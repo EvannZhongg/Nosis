@@ -1,5 +1,5 @@
 import type { ThreadMessageLike } from "@assistant-ui/react";
-import type { Incoming, Usage } from "@nosis/protocol";
+import type { Incoming, Usage, UserQuestion } from "@nosis/protocol";
 import { attachmentUrl, type SessionItem } from "./api";
 
 /** A transcript item, plus the streaming state the live turn needs. */
@@ -20,6 +20,7 @@ export type Applied = {
     server?: string;
     toolName?: string;
   } | null;
+  question?: UserQuestion | null;
   /** Tokens the finished turn used, or null when the model reported none. */
   usage?: Usage | null;
   /** Set once the turn ended, so the caller can reload the session. */
@@ -116,13 +117,17 @@ export function applyMessage(
         },
       };
 
+    case "user_question":
+      return { items, question: message };
+
     case "turn_completed":
-      return { items, approval: null, finished: true, usage: message.usage };
+      return { items, approval: null, question: null, finished: true, usage: message.usage };
 
     case "turn_cancelled":
       return {
         items: settle(items),
         approval: null,
+        question: null,
         finished: true,
         notice: {
           level: "info",
@@ -135,6 +140,7 @@ export function applyMessage(
       return {
         items: settle(items),
         approval: null,
+        question: null,
         finished: true,
         notice: {
           level: "error",

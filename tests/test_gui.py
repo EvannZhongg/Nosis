@@ -297,6 +297,97 @@ class GuiTest(unittest.TestCase):
         self.assertTrue(bridge.sent[-1]["approved"])
         self.assertTrue(bridge.closed)
 
+    def test_relays_user_question_round_trip_in_both_directions(self) -> None:
+        question = {
+            "type": "user_question",
+            "turn_id": "t1",
+            "request_id": "t1:1",
+            "question": "Which cache?",
+            "options": [{"id": "sqlite", "label": "SQLite"}],
+            "allow_free_text": True,
+        }
+        bridge = FakeBridge(
+            replies={
+                "start": [{"type": "ready", "session_id": "s1"}],
+                "user_turn": [question],
+                "user_question_response": [
+                    {"type": "turn_completed", "turn_id": "t1", "usage": None},
+                    None,
+                ],
+            }
+        )
+        with self.client(bridge) as client:
+            with client.websocket_connect("/api/session") as socket:
+                socket.send_json(
+                    {"type": "start", "session_id": "s1", "attachment_id": "page-1"}
+                )
+                self.assertEqual(socket.receive_json()["type"], "ready")
+                socket.send_json(
+                    {"type": "user_turn", "turn_id": "t1", "text": "choose"}
+                )
+                self.assertEqual(socket.receive_json(), question)
+                socket.send_json(
+                    {
+                        "type": "user_question_response",
+                        "request_id": "t1:1",
+                        "option_id": "sqlite",
+                    }
+                )
+                self.assertEqual(socket.receive_json()["type"], "turn_completed")
+
+        self.assertEqual(bridge.sent[-1]["option_id"], "sqlite")
+
+    def test_reconnect_restores_a_user_question(self) -> None:
+        question = {
+            "type": "user_question",
+            "turn_id": "t1",
+            "request_id": "t1:1",
+            "question": "Which cache?",
+            "options": [{"id": "sqlite", "label": "SQLite"}],
+            "allow_free_text": False,
+        }
+        bridge = FakeBridge(
+            replies={
+                "start": [{"type": "ready", "session_id": "shared"}],
+                "user_turn": [question],
+                "user_question_response": [
+                    {"type": "turn_completed", "turn_id": "t1", "usage": None},
+                    None,
+                ],
+            }
+        )
+        with self.client(bridge) as client:
+            with client.websocket_connect("/api/session") as first:
+                first.send_json(
+                    {"type": "start", "session_id": "shared", "attachment_id": "page-1"}
+                )
+                self.assertEqual(first.receive_json()["type"], "ready")
+                first.send_json(
+                    {"type": "user_turn", "turn_id": "t1", "text": "choose"}
+                )
+                self.assertEqual(first.receive_json()["type"], "user_question")
+
+            with client.websocket_connect("/api/session") as second:
+                second.send_json(
+                    {
+                        "type": "start",
+                        "session_id": "shared",
+                        "attachment_id": "page-1",
+                        "attach_only": True,
+                        "after_event": 2,
+                    }
+                )
+                state = second.receive_json()
+                self.assertEqual(state["question"], question)
+                second.send_json(
+                    {
+                        "type": "user_question_response",
+                        "request_id": "t1:1",
+                        "option_id": "sqlite",
+                    }
+                )
+                self.assertEqual(second.receive_json()["type"], "turn_completed")
+
     def test_does_not_forward_unknown_or_lifecycle_messages(self) -> None:
         bridge = FakeBridge(
             replies={

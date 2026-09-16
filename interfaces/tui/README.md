@@ -20,7 +20,8 @@ nosis --config path/to/provider_config.json \
 | `Ctrl+J` | 在输入框内换行（所有终端可用） |
 | `Shift+Enter` | 在输入框内换行（需终端支持 kitty keyboard protocol） |
 | `←` / `→` | 移动光标；在 shell 授权中切换 Allow / Deny |
-| `Enter` | 确认授权选项 |
+| `↑` / `↓` | 移动光标行；在提问中切换选项（含「其他答案」） |
+| `Enter` | 确认授权选项或提问选项 |
 | `Esc` | 拒绝授权；执行中取消当前轮次 |
 | `Ctrl+C` | 取消当前轮次；空输入时退出 |
 | `Ctrl+D` | 退出 |

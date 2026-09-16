@@ -85,6 +85,7 @@ def runtime_state_message(
     *,
     running: bool,
     approval: dict[str, object] | None,
+    question: dict[str, object] | None,
     provider: str | None,
 ) -> dict[str, object]:
     """Describe a GUI server-owned runtime when a WebSocket attaches."""
@@ -92,6 +93,7 @@ def runtime_state_message(
         "type": "runtime_state",
         "running": running,
         "approval": approval,
+        "question": question,
         "provider": provider,
     }
 

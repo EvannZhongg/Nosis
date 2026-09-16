@@ -219,6 +219,26 @@ describe("applyMessage", () => {
     expect(completed.finished).toBe(true);
   });
 
+  it("raises and then clears a user question", () => {
+    const question = {
+      type: "user_question" as const,
+      turn_id: "t1",
+      request_id: "t1:1",
+      question: "Which cache?",
+      options: [{ id: "sqlite", label: "SQLite", recommended: true }],
+      allow_free_text: true,
+    };
+    const requested = applyMessage([], question);
+    expect(requested.question).toEqual(question);
+
+    const completed = applyMessage([], {
+      type: "turn_completed",
+      turn_id: "t1",
+      usage: null,
+    });
+    expect(completed.question).toBeNull();
+  });
+
   it("accumulates reasoning deltas and keeps them before the answer", () => {
     const { items } = fold([
       { type: "reasoning_delta", turn_id: "t1", text: "weighing ", model_call_index: 1 },

@@ -59,11 +59,11 @@ class Bridge:
         self._stdin = stdin
         self._stdout = stdout
         self._deferred: deque[dict[str, object]] = deque()
-        self._approval_ids = count(1)
-        # Parallel tool calls share this one protocol channel. An approval
+        self._interaction_ids = count(1)
+        # Parallel tool calls share this one protocol channel. An interaction
         # is a read-modify-write on it, so two of them must not interleave:
         # one thread would consume the other's response and both would hang.
-        self._approval_lock = Lock()
+        self._interaction_lock = Lock()
         self._turn_id: str | None = None
         self._agent: Agent | None = None
         self._session: Session | None = None
@@ -104,8 +104,8 @@ class Bridge:
     ) -> bool:
         # Serialized so concurrent tool calls queue their prompts instead of
         # racing for each other's answers; the user still answers one at a time.
-        with self._approval_lock:
-            request_id = f"{self._turn_id}:{next(self._approval_ids)}"
+        with self._interaction_lock:
+            request_id = f"{self._turn_id}:{next(self._interaction_ids)}"
             self.emit(
                 "approval_request",
                 turn_id=self._turn_id,
@@ -127,6 +127,51 @@ class Bridge:
                     and message.get("request_id") == request_id
                 ):
                     return bool(message.get("approved"))
+                self._deferred.append(message)
+
+    def request_user_choice(
+        self,
+        question: str,
+        options: list[dict[str, object]],
+        allow_free_text: bool,
+    ) -> object:
+        with self._interaction_lock:
+            request_id = f"{self._turn_id}:{next(self._interaction_ids)}"
+            self.emit(
+                "user_question",
+                turn_id=self._turn_id,
+                request_id=request_id,
+                question=question,
+                options=options,
+                allow_free_text=allow_free_text,
+            )
+            option_by_id = {
+                str(option["id"]): option for option in options
+            }
+            while True:
+                message = self._read_incoming()
+                if message is None or message["type"] == "shutdown":
+                    raise Cancelled
+                if (
+                    message["type"] == "user_question_response"
+                    and message.get("request_id") == request_id
+                ):
+                    option_id = message.get("option_id")
+                    text = message.get("text")
+                    if isinstance(option_id, str) and option_id in option_by_id:
+                        option = option_by_id[option_id]
+                        return {
+                            "type": "option",
+                            "id": option_id,
+                            "label": option["label"],
+                        }
+                    if (
+                        allow_free_text
+                        and isinstance(text, str)
+                        and text.strip()
+                    ):
+                        return {"type": "text", "text": text.strip()}
+                    continue
                 self._deferred.append(message)
 
     def request_mcp_permission(self, call) -> bool:
@@ -226,6 +271,7 @@ class Bridge:
             mcp=self._mcp,
             subagents=subagents,
             skills=skills,
+            ask_user=self.request_user_choice,
         )
         self._agent = Agent(
             provider=main_provider,
@@ -242,6 +288,7 @@ class Bridge:
                         ),
                         skills,
                     ),
+                    "ask_user",
                     *self._mcp.tool_names,
                 ),
                 context,

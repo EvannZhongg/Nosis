@@ -1,9 +1,10 @@
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from ..session_paths import default_sessions_directory
 from ..workspace import Workspace
+from .base import JSONValue
 
 if TYPE_CHECKING:
     from ..execution import CommandExecutor
@@ -43,6 +44,9 @@ class ToolExecutionContext:
     mcp: "McpClientManager | None" = None
     subagents: "SubagentRuntime | None" = None
     skills: "SkillRegistry | None" = None
+    ask_user: (
+        Callable[[str, list[dict[str, JSONValue]], bool], JSONValue] | None
+    ) = None
 
     def __post_init__(self) -> None:
         object.__setattr__(

@@ -12,6 +12,7 @@ export type PromptProps = {
   busy: boolean;
   /** True when the prompt grows upward from a fixed bottom edge. */
   docked?: boolean;
+  placeholder?: string;
 };
 
 /**
@@ -79,6 +80,7 @@ export function Prompt({
   focus,
   busy,
   docked = false,
+  placeholder,
 }: PromptProps): React.ReactElement {
   const boxRef = React.useRef<DOMElement>(null);
   const metrics = useBoxMetrics(boxRef);
@@ -185,7 +187,7 @@ export function Prompt({
       paddingX={1}
     >
       {value === '' ? (
-        <Text dimColor>{busy ? 'type to queue a message…' : 'ask anything…'}</Text>
+        <Text dimColor>{placeholder ?? (busy ? 'type to queue a message…' : 'ask anything…')}</Text>
       ) : (
         <Text>{renderedValue}</Text>
       )}

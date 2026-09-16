@@ -136,6 +136,19 @@ pre { overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-famil
 .approval-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .approval-actions button { border: 1px solid #ded8c9; border-radius: 5px; background: #fff; font-size: 11px; padding: 7px 12px; }
 .approval-actions .approve-button { background: #806b47; border-color: #806b47; color: white; }
+.question-card { margin-bottom: 15px; padding: 16px; border: 1px solid #d9e1ef; border-radius: 11px; background: #f9fbff; box-shadow: 0 4px 18px #304d7a08; }
+.question-title { display: flex; align-items: flex-start; gap: 9px; color: #455a82; font-size: 13px; font-weight: 600; line-height: 1.5; }
+.question-title svg { margin-top: 1px; color: #667eae; }
+.question-options { display: grid; gap: 8px; margin-top: 13px; }
+.question-option { display: flex; flex-direction: column; gap: 3px; width: 100%; padding: 10px 12px; border: 1px solid #dde4ef; border-radius: 8px; background: #fff; text-align: left; color: #4d596d; }
+.question-option:hover { border-color: #9eafd0; background: #f5f7fc; box-shadow: 0 2px 8px #304d7a0a; }
+.question-option-heading { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; }
+.question-option-description { color: #8a95a7; font-size: 11px; line-height: 1.5; }
+.recommended-badge { padding: 2px 6px; border-radius: 999px; background: #e7edf9; color: #58709f; font-size: 9px; font-weight: 600; }
+.question-free-text { display: flex; gap: 8px; margin-top: 11px; }
+.question-free-text input { flex: 1; min-width: 0; padding: 8px 10px; border: 1px solid #dce3ee; border-radius: 7px; outline: none; background: #fff; color: #3e485a; font-size: 11px; }
+.question-free-text input:focus { border-color: #9eafd0; box-shadow: 0 0 0 3px #7187b513; }
+.question-free-text button { padding: 8px 13px; border: 1px solid #667eae; border-radius: 7px; background: #667eae; color: #fff; font-size: 11px; }
 .error-banner { color: #a45151; background: #fcf2f1; border-radius: 6px; padding: 10px 14px; margin: 8px 0 12px; font-size: 12px; overflow-wrap: anywhere; }
 .notice-banner { color: #6f7b90; background: #f4f6fa; border-radius: 6px; padding: 10px 14px; margin: 8px 0 12px; font-size: 12px; overflow-wrap: anywhere; }
 .attachment-replaced { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #6f7b90; background: #f4f6fa; border-radius: 6px; padding: 10px 14px; margin: 8px 0 12px; font-size: 12px; }

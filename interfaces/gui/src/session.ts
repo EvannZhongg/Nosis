@@ -14,7 +14,7 @@ export type SessionSocketOptions = {
 
 /** What the browser may send: relayed bridge messages plus 'cancel'. */
 type Sendable =
-  | Extract<Outgoing, { type: "user_turn" | "approval_response" }>
+  | Extract<Outgoing, { type: "user_turn" | "approval_response" | "user_question_response" }>
   | { type: "cancel" };
 
 /**

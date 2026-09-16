@@ -58,6 +58,7 @@ from .tool_result import (
 )
 from .tools import (
     AnalyzeImageTool,
+    AskUserTool,
     CompositeToolPolicy,
     EditFileTool,
     JSONValue,
@@ -104,6 +105,7 @@ __all__ = [
     "AgentEvent",
     "AgentRunResult",
     "AnalyzeImageTool",
+    "AskUserTool",
     "AssistantMessageDeltaEvent",
     "AssistantMessageEvent",
     "CommandExecutionResult",

@@ -9,6 +9,7 @@ from .web_search import WebSearchTool
 from .subagent import SubagentTool
 from .analyze_image import AnalyzeImageTool
 from .write_file import WriteFileTool
+from .ask_user import AskUserTool
 
 
 def builtin_catalog():
@@ -33,12 +34,14 @@ def builtin_catalog():
             AnalyzeImageTool(),
             ReadSkillTool(),
             SubagentTool(),
+            AskUserTool(),
         )
     )
 
 
 __all__ = [
     "AnalyzeImageTool",
+    "AskUserTool",
     "EditFileTool",
     "ListDirectoryTool",
     "ReadFileTool",

@@ -5,12 +5,12 @@ import {
   type AppendMessage, type ReasoningMessagePartProps, type ToolCallMessagePartProps,
 } from "@assistant-ui/react";
 import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
-import { ArrowUp, Check, ChevronDown, ChevronRight, LoaderCircle, Paperclip, ShieldCheck, Square, Terminal, X } from "lucide-react";
+import { ArrowUp, Check, ChevronDown, ChevronRight, LoaderCircle, MessageCircleQuestion, Paperclip, ShieldCheck, Square, Terminal, X } from "lucide-react";
 import remarkGfm from "remark-gfm";
 import { get, selectWorkspace, sessionUrl, updateSessionWorkspace, uploadAttachments, type ImageAttachment, type ModelOption, type Session } from "./api";
 import { SessionSocket } from "./session";
 import { applyMessage, isTurnActivity, toMessages, type Notice, type TranscriptItem } from "./transcript";
-import type { Usage } from "@nosis/protocol";
+import type { Usage, UserQuestion } from "@nosis/protocol";
 
 type Approval = {
   requestId: string;
@@ -90,6 +90,8 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
   const [notice, setNotice] = useState<Notice | null>(null);
   const [compressionNotice, setCompressionNotice] = useState("");
   const [approval, setApproval] = useState<Approval | null>(null);
+  const [question, setQuestion] = useState<UserQuestion | null>(null);
+  const [questionDraft, setQuestionDraft] = useState("");
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [workspaceDraft, setWorkspaceDraft] = useState(session.workspace ?? "");
   const [workspaceSaving, setWorkspaceSaving] = useState(false);
@@ -192,6 +194,8 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
     setRunning(false);
     onBusyChange(false);
     setApproval(null);
+    setQuestion(null);
+    setQuestionDraft("");
     try {
       // The protocol omits tool output; the stored session has it.
       const stored = await get<Session>(sessionUrl(session.session_id));
@@ -231,6 +235,7 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
           setAttachmentReplaced(true);
           setAttaching(false);
           setApproval(null);
+          setQuestion(null);
           const wasRunning = runningRef.current;
           runningRef.current = message.running;
           setRunning(message.running);
@@ -263,6 +268,7 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
             server: message.approval.server,
             toolName: message.approval.tool_name,
           } : null);
+          setQuestion(message.question);
           if (wasRunning && !message.running) void endTurn();
           return;
         }
@@ -285,6 +291,10 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
         if (applied.notice) showNotice(applied.notice, message.type === "mcp_server_status");
         if (applied.archivedCheckpoint !== undefined) showCompressionNotice(applied.archivedCheckpoint);
         if (applied.approval !== undefined) setApproval(applied.approval);
+        if (applied.question !== undefined) {
+          setQuestion(applied.question);
+          setQuestionDraft("");
+        }
         if (applied.usage !== undefined) onUsageChange(applied.usage);
         if (applied.finished) void endTurn();
       },
@@ -381,6 +391,17 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
     setApproval(null);
   }
 
+  function answerQuestion(answer: { option_id: string } | { text: string }) {
+    if (!question) return;
+    socketRef.current?.send({
+      type: "user_question_response",
+      request_id: question.request_id,
+      ...answer,
+    });
+    setQuestion(null);
+    setQuestionDraft("");
+  }
+
   async function saveWorkspace(value = workspaceDraft) {
     const nextWorkspace = value.trim();
     if (!nextWorkspace || nextWorkspace === session.workspace) return;
@@ -446,9 +467,20 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
       <div className="composer-area">
         {attachmentReplaced && <div className="attachment-replaced" role="status"><span>{running ? "此会话已在另一个页面接管。任务仍在后台运行，本页已暂停实时更新。" : "此会话已在另一个页面接管，本页已暂停实时更新。"}</span><button type="button" onClick={takeOverAttachment} disabled={attaching}>{attaching ? "正在接管…" : "在此页面接管"}</button></div>}
         {!attachmentReplaced && approval && <div className="approval-card" role="region" aria-label="工具执行确认"><div className="approval-title"><ShieldCheck size={17} /> 允许执行此工具调用？</div><pre>{approval.command}</pre><div className="approval-actions"><button onClick={() => respond(false)}>拒绝</button><button className="approve-button" onClick={() => respond(true)}>允许执行</button></div></div>}
+        {!attachmentReplaced && question && <div className="question-card" role="region" aria-label="需要你的选择">
+          <div className="question-title"><MessageCircleQuestion size={18} /><span>{question.question}</span></div>
+          <div className="question-options">{question.options.map((option) => <button type="button" className="question-option" key={option.id} onClick={() => answerQuestion({ option_id: option.id })}>
+            <span className="question-option-heading"><span>{option.label}</span>{option.recommended && <span className="recommended-badge">推荐</span>}</span>
+            {option.description && <span className="question-option-description">{option.description}</span>}
+          </button>)}</div>
+          {question.allow_free_text && <form className="question-free-text" onSubmit={(event) => { event.preventDefault(); const text = questionDraft.trim(); if (text) answerQuestion({ text }); }}>
+            <input value={questionDraft} onChange={(event) => setQuestionDraft(event.target.value)} placeholder="输入其他答案…" aria-label="其他答案" />
+            <button type="submit" disabled={!questionDraft.trim()}>提交</button>
+          </form>}
+        </div>}
         {notice && <div className={notice.level === "error" ? "error-banner" : "notice-banner"} role="alert">{notice.text}</div>}
-        {running && !attachmentReplaced && <div className="activity" role="status"><LoaderCircle size={13} className="spin" />{approval ? "等待你的确认" : "Nosis 正在处理…"}
-          {!approval && <button className="stop-button" aria-label="停止执行" onClick={() => socketRef.current?.send({ type: "cancel" })}><Square size={11} /> 停止</button>}
+        {running && !attachmentReplaced && <div className="activity" role="status"><LoaderCircle size={13} className="spin" />{approval ? "等待你的确认" : question ? "等待你的选择" : "Nosis 正在处理…"}
+          {!approval && !question && <button className="stop-button" aria-label="停止执行" onClick={() => socketRef.current?.send({ type: "cancel" })}><Square size={11} /> 停止</button>}
         </div>}
         {pendingFiles.length > 0 && <div className="attachment-list" aria-label="待发送图片">{pendingFiles.map((file, index) => <PendingAttachment key={`${file.name}-${file.lastModified}-${index}`} file={file} onRemove={() => setPendingFiles((files) => files.filter((_, itemIndex) => itemIndex !== index))} />)}</div>}
         {compressionNotice && <div className="compression-notice" role="status">{compressionNotice}</div>}

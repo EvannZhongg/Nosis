@@ -16,6 +16,7 @@ nosis / nosis-gui
 
 - 首条消息必须是 `start`，否则返回 `fatal`。
 - shell 和 MCP Tool 在执行前发送 `approval_request`，前端回复 `approval_response`。
+- main Agent 的 `ask_user` Tool 发送 `user_question`，前端回复 `user_question_response`；Bridge 等待回答并将其作为 Tool Result 返回。
 - `Esc`、`Ctrl+C`、GUI 的「停止」都会取消当前轮次；取消前真实发生的 Turn、Message 与 Tool 状态都已由 Runtime 写入 Journal。未取得结果的 Tool Call 不会被删除，只会被 Provider projection 排除。
 - TUI 直接拥有 Bridge 进程；GUI 服务按 Session 拥有活动 Bridge，浏览器 WebSocket 只做 attach/detach。浏览器断开不会取消正在执行的轮次，GUI 服务会暂存断线期间的事件和审批状态供重连恢复。
 - Runtime 关闭或 TUI 发送 `shutdown` 时，不会执行尚未获批的命令。

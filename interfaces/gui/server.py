@@ -50,7 +50,9 @@ SHUTDOWN_TIMEOUT_SECONDS = 2
 # Messages the browser may forward to the bridge verbatim. 'start' is
 # excluded: the server builds it so a page cannot point the agent at an
 # arbitrary configuration file.
-RELAYED_MESSAGE_TYPES = frozenset({"user_turn", "approval_response"})
+RELAYED_MESSAGE_TYPES = frozenset(
+    {"user_turn", "approval_response", "user_question_response"}
+)
 
 
 class BridgeProcess:
@@ -182,6 +184,7 @@ class ActiveRuntime:
         self.bridge = bridge
         self.running = False
         self.approval: dict[str, object] | None = None
+        self.question: dict[str, object] | None = None
         self.done = False
         self._closed = False
         self._terminal_pending = False
@@ -222,6 +225,7 @@ class ActiveRuntime:
                     state = runtime_state_message(
                         running=self.running,
                         approval=self.approval,
+                        question=self.question,
                         provider=self.provider,
                     )
                     if self.done:
@@ -261,6 +265,7 @@ class ActiveRuntime:
         if message.get("type") == "user_turn":
             self.running = True
             self.approval = None
+            self.question = None
             content: object = str(message.get("text", ""))
             attachments = message.get("attachments")
             if isinstance(attachments, list) and attachments:
@@ -271,6 +276,8 @@ class ActiveRuntime:
             self.items.append({"role": "user", "content": content})
         elif message.get("type") == "approval_response":
             self.approval = None
+        elif message.get("type") == "user_question_response":
+            self.question = None
         self.bridge.send(message)
 
     def cancel_turn(self) -> None:
@@ -307,9 +314,14 @@ class ActiveRuntime:
                 message_type = message.get("type")
                 if message_type == "approval_request":
                     self.approval = message
+                    self.question = None
+                elif message_type == "user_question":
+                    self.approval = None
+                    self.question = message
                 elif message_type in TERMINAL_MESSAGE_TYPES:
                     self.running = False
                     self.approval = None
+                    self.question = None
                     self._terminal_pending = True
                 async with self._lock:
                     self._events.append(message)
@@ -320,6 +332,7 @@ class ActiveRuntime:
         finally:
             self.running = False
             self.approval = None
+            self.question = None
             self.done = True
             if not self._closed:
                 self._closed = True
@@ -679,6 +692,7 @@ def create_app(
                 runtime_state_message(
                     running=False,
                     approval=None,
+                    question=None,
                     provider=None,
                 )
             )

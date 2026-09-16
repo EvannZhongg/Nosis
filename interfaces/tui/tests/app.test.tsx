@@ -85,6 +85,7 @@ const waitForReady = (lastFrame: Frame) =>
   waitFor(() => expect(lastFrame()).toContain('test/model'));
 
 const approvalResponse = () => sent.find((m) => m.type === 'approval_response');
+const questionResponse = () => sent.find((m) => m.type === 'user_question_response');
 const turns = () => sent.filter((m) => m.type === 'user_turn');
 
 /** Types text and waits until Ink has parsed it into the draft. */
@@ -99,6 +100,20 @@ async function typeDraft(
 
 const requestApproval = (command: string): void => {
   emit({ type: 'approval_request', turn_id: 't1', request_id: 't1:1', command });
+};
+
+const requestQuestion = (allowFreeText = true): void => {
+  emit({
+    type: 'user_question',
+    turn_id: 't1',
+    request_id: 't1:1',
+    question: 'Which cache?',
+    options: [
+      { id: 'memory', label: 'Memory', description: 'Fast' },
+      { id: 'sqlite', label: 'SQLite', description: 'Persistent', recommended: true },
+    ],
+    allow_free_text: allowFreeText,
+  });
 };
 
 function lineContaining(frame: string | undefined, text: string): number {
@@ -216,6 +231,31 @@ describe('App', () => {
 
     stdin.write('\u001b');
     await waitFor(() => expect(approvalResponse()).toMatchObject({ approved: false }));
+  });
+
+  it('selects and returns a question option', async () => {
+    const { stdin, lastFrame } = renderApp();
+    await waitForReady(lastFrame);
+    requestQuestion(false);
+    await waitFor(() => expect(lastFrame()).toContain('❯ SQLite'));
+
+    stdin.write('\u001b[A');
+    await waitFor(() => expect(lastFrame()).toContain('❯ Memory'));
+    stdin.write('\r');
+    await waitFor(() => expect(questionResponse()).toMatchObject({ option_id: 'memory' }));
+  });
+
+  it('accepts a free-text question answer', async () => {
+    const { stdin, lastFrame } = renderApp();
+    await waitForReady(lastFrame);
+    requestQuestion(true);
+    await waitFor(() => expect(lastFrame()).toContain('Which cache?'));
+
+    stdin.write('\u001b[B');
+    await waitFor(() => expect(lastFrame()).toContain('❯ 其他答案'));
+    await typeDraft(stdin, lastFrame, 'Redis');
+    stdin.write('\r');
+    await waitFor(() => expect(questionResponse()).toMatchObject({ text: 'Redis' }));
   });
 
   it('cancels the active turn on escape', async () => {

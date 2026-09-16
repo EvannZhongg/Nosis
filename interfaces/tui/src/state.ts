@@ -1,4 +1,4 @@
-import type { Incoming, ProtocolError, Usage } from '@nosis/protocol';
+import type { Incoming, ProtocolError, Usage, UserQuestionOption } from '@nosis/protocol';
 
 export type Status =
   | 'starting'
@@ -6,6 +6,7 @@ export type Status =
   | 'streaming'
   | 'running'
   | 'awaiting_approval'
+  | 'awaiting_user'
   | 'cancelling'
   | 'fatal';
 
@@ -27,6 +28,14 @@ export type Entry =
 
 export type ApprovalChoice = 'deny' | 'allow';
 
+export type UserQuestionState = {
+  requestId: string;
+  question: string;
+  options: UserQuestionOption[];
+  allowFreeText: boolean;
+  selectedIndex: number;
+};
+
 export type State = {
   status: Status;
   sessionId: string | null;
@@ -43,6 +52,7 @@ export type State = {
     toolName?: string;
     choice: ApprovalChoice;
   } | null;
+  question: UserQuestionState | null;
   turnId: string | null;
   usage: Usage | null;
 };
@@ -52,6 +62,8 @@ export type Action =
   | { type: 'submit'; turnId: string; text: string }
   | { type: 'approval_choice'; choice: ApprovalChoice }
   | { type: 'approval_resolved' }
+  | { type: 'question_choice'; selectedIndex: number }
+  | { type: 'question_resolved' }
   | { type: 'cancelling' }
   | { type: 'exited'; code: number | null };
 
@@ -63,6 +75,7 @@ export const initialState: State = {
   entries: [],
   mcpStatus: null,
   approval: null,
+  question: null,
   turnId: null,
   usage: null,
 };
@@ -172,10 +185,21 @@ function reduceAction(state: State, action: Action): State {
       // The runtime resumes the turn once the answer is sent.
       return { ...state, status: 'running', approval: null };
 
+    case 'question_choice':
+      return state.question === null
+        ? state
+        : {
+            ...state,
+            question: { ...state.question, selectedIndex: action.selectedIndex },
+          };
+
+    case 'question_resolved':
+      return { ...state, status: 'running', question: null };
+
     case 'cancelling':
       return state.status === 'idle' || state.status === 'fatal'
         ? state
-        : { ...state, status: 'cancelling', approval: null };
+        : { ...state, status: 'cancelling', approval: null, question: null };
 
     case 'exited':
       return {
@@ -324,8 +348,23 @@ function applyMessage(state: State, message: Incoming): State {
         },
       };
 
+    case 'user_question': {
+      const recommendedIndex = message.options.findIndex((option) => option.recommended);
+      return {
+        ...state,
+        status: 'awaiting_user',
+        question: {
+          requestId: message.request_id,
+          question: message.question,
+          options: message.options,
+          allowFreeText: message.allow_free_text,
+          selectedIndex: recommendedIndex >= 0 ? recommendedIndex : 0,
+        },
+      };
+    }
+
     case 'turn_completed':
-      return { ...state, status: 'idle', turnId: null, approval: null, usage: message.usage };
+      return { ...state, status: 'idle', turnId: null, approval: null, question: null, usage: message.usage };
 
     case 'turn_cancelled':
       return {
@@ -333,6 +372,7 @@ function applyMessage(state: State, message: Incoming): State {
         status: 'idle',
         turnId: null,
         approval: null,
+        question: null,
         entries: [
           ...state.entries,
           {
@@ -350,6 +390,7 @@ function applyMessage(state: State, message: Incoming): State {
         status: 'idle',
         turnId: null,
         approval: null,
+        question: null,
         entries: [
           ...state.entries,
           {
