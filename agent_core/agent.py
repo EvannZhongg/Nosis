@@ -194,9 +194,8 @@ class Agent:
         attachments: tuple[ImagePart, ...] = (),
         turn_id: str | None = None,
     ) -> AgentRunResult:
-        turn_start = len(self._session.items)
+        run_item_start = len(self._session.items)
         turn_id = self._session.begin_turn(turn_id)
-        self._context.begin_turn(turn_start)
         model_call_index = 0
         previous_tool_call_key: tuple[str, str] | None = None
         identical_tool_calls = 0
@@ -548,7 +547,7 @@ class Agent:
             return AgentRunResult(
                 request=request,
                 response=response,
-                items=tuple(self._session.items[turn_start:]),
+                items=tuple(self._session.items[run_item_start:]),
                 user_input=user_input,
                 request_timestamp_utc=request_timestamp_utc,
                 response_timestamp_utc=response_timestamp_utc,

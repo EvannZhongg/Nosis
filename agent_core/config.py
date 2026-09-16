@@ -9,6 +9,7 @@ from .mcp.config import McpConfig, load_mcp_config
 class ContextCompressionConfig:
     enabled: bool = True
     trigger_ratio: float | None = None
+    keep_recent_units: int = 6
 
 
 @dataclass(frozen=True)
@@ -133,7 +134,11 @@ def _context_config(value: object) -> ContextCompressionConfig:
         return ContextCompressionConfig()
     if not isinstance(compression, dict):
         raise ValueError("config field 'context.compression' must be an object")
-    unknown = set(compression) - {"enabled", "trigger_ratio"}
+    unknown = set(compression) - {
+        "enabled",
+        "trigger_ratio",
+        "keep_recent_units",
+    }
     if unknown:
         fields = ", ".join(sorted(unknown))
         raise ValueError(
@@ -144,7 +149,17 @@ def _context_config(value: object) -> ContextCompressionConfig:
     if not isinstance(enabled, bool):
         raise ValueError("config field 'context.compression.enabled' must be a boolean")
     trigger = _optional_ratio(compression, "trigger_ratio")
-    return ContextCompressionConfig(enabled, trigger)
+    keep_recent_units = compression.get("keep_recent_units", 6)
+    if (
+        isinstance(keep_recent_units, bool)
+        or not isinstance(keep_recent_units, int)
+        or keep_recent_units < 1
+    ):
+        raise ValueError(
+            "config field 'context.compression.keep_recent_units' must be "
+            "a positive integer"
+        )
+    return ContextCompressionConfig(enabled, trigger, keep_recent_units)
 
 
 def _optional_ratio(data: dict[str, object], field: str) -> float | None:

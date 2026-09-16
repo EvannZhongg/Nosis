@@ -179,9 +179,9 @@ class EstimateImageTokensTest(unittest.TestCase):
     def test_never_under_prices_area_billing(self) -> None:
         """Under-counting defeats the compression guard.
 
-        An image cannot be compressed away mid-turn, so an estimate
-        below what the provider bills makes the runtime skip compression
-        and ship a request the provider rejects.
+        An image retained in the recent ContextUnit tail is still sent inline,
+        so an estimate below what the provider bills can make the runtime ship
+        a request the provider rejects.
         """
         for width, height in [
             (1024, 1024),

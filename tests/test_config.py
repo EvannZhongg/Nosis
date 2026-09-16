@@ -120,6 +120,10 @@ class ConfigTest(unittest.TestCase):
                 },
             )
             self.assertEqual(agent_config["max_same_tool_calls"], 5)
+            self.assertEqual(
+                agent_config["context"]["compression"]["keep_recent_units"],
+                6,
+            )
             self.assertTrue((config_directory / "skills").is_dir())
             self.assertNotIn("shell_timeout_seconds", agent_config)
             self.assertTrue(agent_config["main_agent"]["tools"]["read_file"])

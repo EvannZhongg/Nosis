@@ -6,7 +6,7 @@ from .config import AgentConfig
 from .content import historical_content
 from .llm import LLMProvider, LLMRequest, with_generation_limit
 from .prompts import load_consolidator_prompt
-from .projection import project_provider_messages
+from .projection import ContextUnit, project_context_units
 from .session import Message, Session
 from .tools import ToolDefinition
 
@@ -35,6 +35,7 @@ class ContextLimits:
     hard_limit: int
     compression_enabled: bool
     compression_threshold: int
+    keep_recent_units: int
 
 
 class ContextManager:
@@ -53,7 +54,6 @@ class ContextManager:
         self._system_prompt = system_prompt
         self._output_reserve_tokens = config.output_reserve_tokens
         self._max_generation_tokens = config.max_generation_tokens
-        self._turn_start: int | None = None
         self._media_root = media_root
 
         if self._output_reserve_tokens >= provider.max_context_tokens:
@@ -79,6 +79,7 @@ class ContextManager:
             hard_limit=hard_limit,
             compression_enabled=compression.enabled,
             compression_threshold=threshold,
+            keep_recent_units=compression.keep_recent_units,
         )
 
     @property
@@ -88,9 +89,6 @@ class ContextManager:
     @property
     def compression_enabled(self) -> bool:
         return self.limits.compression_enabled
-
-    def begin_turn(self, turn_start: int) -> None:
-        self._turn_start = turn_start
 
     def build_request(
         self,
@@ -149,36 +147,27 @@ class ContextManager:
         return self._session.archived_item_cursor
 
     def _archivable_items(self) -> tuple[int, list[Message]]:
-        """Return only complete turns preceding the active run."""
-        turn_start = self._turn_start
-        if turn_start is None:
-            raise RuntimeError(
-                "begin_turn must be called before archiving context"
-            )
+        """Return complete context units before the retained tail."""
         archive_start = self._session.archived_item_cursor
-        archive_end = max(
-            archive_start,
-            min(turn_start, len(self._session.items)),
+        units = project_context_units(
+            self._session.items[archive_start:],
+            start_index=archive_start,
         )
-        items = self._session.items[archive_start:archive_end]
-        return archive_end, list(project_provider_messages(items))
+        visible_units = [unit for unit in units if unit.messages]
+        if len(visible_units) <= self.limits.keep_recent_units:
+            return archive_start, []
+        retained_start = visible_units[-self.limits.keep_recent_units].start
+        archived = [unit for unit in units if unit.end <= retained_start]
+        return retained_start, _unit_messages(archived)
 
     def _context_messages(self) -> list[Message]:
         archive_start = self._session.archived_item_cursor
-        recent_items = self._session.items[archive_start:]
-        if self._turn_start is None:
-            return list(project_provider_messages(recent_items))
-        historical_end = max(
-            archive_start,
-            min(self._turn_start, len(self._session.items)),
+        visible = _unit_messages(
+            project_context_units(
+                self._session.items[archive_start:],
+                start_index=archive_start,
+            )
         )
-        historical_items = self._session.items[archive_start:historical_end]
-        active_items = self._session.items[historical_end:]
-        historical = [
-            _historical_message(item)
-            for item in project_provider_messages(historical_items)
-        ]
-        visible = historical + list(project_provider_messages(active_items))
         result: list[Message] = []
         for index, item in enumerate(visible):
             # A turn begins where the person spoke. A synthesized media
@@ -194,6 +183,10 @@ class ContextManager:
                 result.append(_timeline_message(visible[index:end]))
             result.append(item)
         return result
+
+
+def _unit_messages(units: Iterable[ContextUnit]) -> list[Message]:
+    return [message for unit in units for message in unit.messages]
 
 
 def _historical_message(item: Message) -> Message:

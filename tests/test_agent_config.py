@@ -185,6 +185,38 @@ class AgentConfigTest(unittest.TestCase):
                 }
             )
 
+    def test_loads_context_unit_retention(self) -> None:
+        config = self.load(
+            {
+                "context": {
+                    "compression": {
+                        "keep_recent_units": 7,
+                    }
+                },
+                "main_agent": {"tools": ENABLED_TOOLS},
+            }
+        )
+
+        self.assertEqual(config.context.keep_recent_units, 7)
+
+    def test_rejects_invalid_context_unit_retention(self) -> None:
+        for value in (0, -1, True, "4"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "keep_recent_units.*positive integer",
+                ):
+                    self.load(
+                        {
+                            "context": {
+                                "compression": {
+                                    "keep_recent_units": value,
+                                }
+                            },
+                            "main_agent": {"tools": ENABLED_TOOLS},
+                        }
+                    )
+
     def test_rejects_missing_tool_config(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "agent_config.json"

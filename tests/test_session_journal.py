@@ -3,11 +3,38 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from agent_core import JsonlSessionStore, Message, Session, ToolCall
-from agent_core.projection import project_provider_messages
+from agent_core import ImagePart, JsonlSessionStore, Message, Session, ToolCall
+from agent_core.projection import project_context_units, project_provider_messages
 
 
 class SessionJournalTest(unittest.TestCase):
+    def test_context_unit_keeps_parallel_tool_results_and_media_together(self):
+        calls = (
+            ToolCall("call-a", "read", {}),
+            ToolCall("call-b", "read", {}),
+        )
+        items = [
+            Message("assistant", None, tool_calls=calls),
+            Message("tool", "B", tool_call_id="call-b"),
+            Message("tool", "A", tool_call_id="call-a"),
+            Message(
+                "user",
+                (ImagePart(path="result.png"),),
+                origin="tool_media",
+            ),
+            Message("assistant", "next"),
+        ]
+
+        units = project_context_units(items, start_index=10)
+
+        self.assertEqual([(unit.start, unit.end) for unit in units], [(10, 14), (14, 15)])
+        self.assertEqual(
+            [message.tool_call_id for message in units[0].messages
+             if message.role == "tool"],
+            ["call-a", "call-b"],
+        )
+        self.assertTrue(units[0].messages[-1].is_tool_media)
+
     def test_reused_client_turn_id_does_not_replace_previous_turn(self):
         session = Session("s")
         first = session.begin_turn("turn-1")

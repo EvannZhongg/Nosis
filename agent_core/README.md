@@ -35,7 +35,7 @@
 | `max_same_tool_calls` | 单轮内完全相同 Tool Call 的连续次数上限 |
 | `output_reserve_tokens` | 为下一次模型输出预留的上下文空间，只参与输入 hard limit 和压缩阈值计算 |
 | `max_generation_tokens` | 可选的单次生成策略上限；默认 `null` 时不向 Provider 传生成上限，显式设置时由模型最大输出能力裁剪 |
-| `context.compression` | 可选上下文压缩设置：`enabled`、`trigger_ratio`；达到输入 hard limit 的指定比例时归档历史 turn |
+| `context.compression` | 可选上下文压缩设置：`enabled`、`trigger_ratio`、`keep_recent_units`；达到输入 hard limit 的指定比例时，将最近 K 个完整 ContextUnit 之前的内容归档为 checkpoint |
 | `main_agent.tools` | 主 Agent 的内置 Tool 开关；显式写 `true` 才启用 |
 | `subagent_roles` | 子 Agent 角色表；每个角色有 `enabled`、`description` 和自己的 `tools` |
 
@@ -79,9 +79,9 @@
 
 图片进入上下文有两条通路：用户在输入框里上传的附件，以及模型自己调用 `read_image` 读到的文件。后者的像素无法放进 `tool` 消息（OpenAI 兼容的 Chat API 不接受），因此 Runtime 在一批 Tool Result **全部写入之后**追加一条 `origin="tool_media"` 的 `user` 消息来承载它们——一批工具调用最多追加一条，否则会在 `assistant` 的 tool_calls 和它的结果之间插入消息，Provider 会直接拒绝。这条消息不是用户说的话：它不会被子 Agent 当作用户附件继承，UI 也会把它并入助手的回复而不是渲染成一个用户气泡。
 
-图片只在当前 turn 内联；turn 结束后历史里只留下路径占位符，所以同一张图不会在后续每次模型调用里反复上传。计数不走 base64：图片按像素尺寸估算 token（只读文件头，不读整个文件），编码结果按 `(路径, mtime, 大小)` 缓存，一个 turn 里多次模型调用只编码一次。
+图片在被归档进 checkpoint 之前一直内联；归档后历史里只留下路径占位符，所以只有最近 `context.compression.keep_recent_units` 个单元内的图片会在后续每次模型调用里反复上传。计数不走 base64：图片按像素尺寸估算 token（只读文件头，不读整个文件），编码结果按 `(路径, mtime, 大小)` 缓存，一个 turn 里多次模型调用只编码一次。
 
-token 估算刻意取各家计价模型的**上界**（固定 tile 与按面积两种口径取大），而不是取平均：图片在 turn 内无法被压缩掉，低估会让 Runtime 以为还有余量而不触发压缩，最终被 Provider 直接拒绝——那是一个不透明的上游错误，而压缩检查存在的意义正是把它变成可控失败。高估只是稍微提前压缩。无法从文件头读出尺寸时按上界计价，而不是按某个中间值。
+token 估算刻意取各家计价模型的**上界**（固定 tile 与按面积两种口径取大），而不是取平均：保留区内的图片仍会内联，低估会让 Runtime 以为还有余量而不触发压缩，最终被 Provider 直接拒绝——那是一个不透明的上游错误，而压缩检查存在的意义正是把它变成可控失败。高估只是稍微提前压缩。无法从文件头读出尺寸时按上界计价，而不是按某个中间值。
 
 单张图片上限 5 MiB（仅约束送进模型的图片；GUI 展示不受此限），媒体类型按文件 magic bytes 识别而不是按扩展名，`read_image` 单次最多读 4 张、并在路径解析之后去重（`a.png`、`./a.png`、`b/../a.png` 只算一张）。
 
@@ -151,6 +151,8 @@ Skills 放在 Provider 配置文件同目录的 `skills/<目录>/SKILL.md`；默
 Session 文件是 append-only Runtime Journal。每条 JSONL record 都有单调递增的 `seq`、唯一 `event_id`、`turn_id`，Tool 事件另有 `tool_call_id`；turn、message、model call、context archive 以及 Tool 的 started/completed/failed/cancelled/unknown 状态均按发生顺序逐条 flush/fsync。Journal 不保存完整 Provider request、system prompt 或重复的 Tool schema。
 
 Execution History 直接由 Journal replay；Provider Conversation 由独立 projection 构建。未完整配对的 Tool batch 仍保留在真实历史中，但不会进入下一次模型请求。进程异常退出后，尚在 running/started 的 Turn 与 Tool 会恢复为 unknown，可能已产生副作用的 Tool 不会自动重放；正常取消与失败则分别保留 cancelled/failed 状态。JSONL 最后一条若因进程退出而只写入一部分，恢复时以前一条完整且已 fsync 的 record 为准。
+
+上下文压缩以 `ContextUnit` 为边界，而不是以 turn 或裸 Message 为边界。普通消息各自构成单元；包含 Tool Call 的 assistant 消息、该批次的全部 Tool Result 和尾随 Tool Media 共同构成一个不可拆分单元。触发压缩时，最近 `context.compression.keep_recent_units` 个完整单元保留原文，更早的单元合并进 checkpoint，因此归档 cursor 可以在仍执行的 turn 内推进，但不会落到 Tool batch 中间。
 
 Session 位于 `~/.nosis/sessions/<WORKSPACE_KEY>/<SESSION_ID>/<SESSION_ID>.jsonl`。同一 Workspace 下的 Session 在 GUI 中分组显示，Workspace 目录的 `workspace.json` 记录该分组的绝对路径。修改 Workspace 会将 Session 目录移动到新的 Workspace 分组。超过回灌上限的 Tool Result 保存为同目录下的 `<TOOL_CALL_ID>.txt`；使用 `nosis --session SESSION_ID` 恢复。子代理的 Journal 写在父 Session 的 `subagents` 目录下，因此不会出现在会话列表中，但仍可查阅。
 

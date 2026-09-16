@@ -10,6 +10,7 @@ from agent_core import (
     AssistantMessageDeltaEvent,
     AssistantMessageEvent,
     ContextManager,
+    ContextCompressionConfig,
     ContextWindowExceededError,
     LLMProvider,
     LLMRequest,
@@ -59,12 +60,14 @@ class MockProvider(LLMProvider):
     def __init__(
         self,
         responses: list[str | LLMResponse],
-        input_tokens: int = 1,
+        input_tokens: int | list[int] = 1,
         max_context_tokens: int = 1000,
         max_output_tokens: int | None = None,
     ) -> None:
         self._responses = iter(responses)
-        self._input_tokens = input_tokens
+        self._input_tokens = (
+            iter(input_tokens) if isinstance(input_tokens, list) else input_tokens
+        )
         self._max_context_tokens = max_context_tokens
         self._max_output_tokens = max_output_tokens
         self.counted_requests: list[LLMRequest] = []
@@ -80,7 +83,9 @@ class MockProvider(LLMProvider):
 
     def count_input_tokens(self, request: LLMRequest) -> int:
         self.counted_requests.append(request)
-        return self._input_tokens
+        if isinstance(self._input_tokens, int):
+            return self._input_tokens
+        return next(self._input_tokens)
 
     def stream(
         self,
@@ -126,7 +131,7 @@ def clock(*values: datetime):
 
 
 class AgentTest(unittest.TestCase):
-    def test_archive_cursor_advances_by_a_complete_raw_turn(self) -> None:
+    def test_archive_cursor_advances_by_complete_context_units(self) -> None:
         call = ToolCall("call-old", "echo", {"text": "old"})
         session = Session("session-1")
         session.add_item("user", "old request")
@@ -140,7 +145,12 @@ class AgentTest(unittest.TestCase):
             provider,
             session,
             "You are helpful.",
-            AGENT_CONFIG,
+            AgentConfig(
+                max_same_tool_calls=5,
+                output_reserve_tokens=100,
+                tools=ToolConfig(enabled=()),
+                context=ContextCompressionConfig(keep_recent_units=1),
+            ),
             tool_set(EchoTool(), session=session),
             ToolExecutionContext(workspace=TEST_WORKSPACE, session=session),
             now=clock(REQUEST_TIME, RESPONSE_TIME),
@@ -179,14 +189,17 @@ class AgentTest(unittest.TestCase):
             provider,
             session,
             "You are helpful.",
-            AGENT_CONFIG,
+            AgentConfig(
+                max_same_tool_calls=5,
+                output_reserve_tokens=100,
+                tools=ToolConfig(enabled=()),
+                context=ContextCompressionConfig(keep_recent_units=1),
+            ),
         )
 
-        context.begin_turn(2)
         session.add_item("user", "second")
         context.archive()
         session.add_item("assistant", "two")
-        context.begin_turn(4)
         session.add_item("user", "third")
         context.archive()
 
@@ -235,8 +248,6 @@ class AgentTest(unittest.TestCase):
             "You are helpful.",
             AGENT_CONFIG,
         )
-        context.begin_turn(4)
-
         request = context.build_request()
 
         self.assertFalse(any(message.role == "tool" for message in request.messages))
@@ -245,6 +256,116 @@ class AgentTest(unittest.TestCase):
             [message.content for message in request.messages
              if message.role != "system"],
             ["old answer", "new request"],
+        )
+
+    def test_archive_keeps_a_multi_tool_media_unit_whole(self) -> None:
+        calls = (
+            ToolCall("call-a", "read", {}),
+            ToolCall("call-b", "read", {}),
+        )
+        session = Session(
+            "session-1",
+            items=[
+                Message("user", "goal"),
+                Message("assistant", "preparing"),
+                Message("assistant", None, tool_calls=calls),
+                Message("tool", "B", tool_call_id="call-b"),
+                Message("tool", "A", tool_call_id="call-a"),
+                Message(
+                    "user",
+                    (ImagePart(path="result.png"),),
+                    origin="tool_media",
+                ),
+            ],
+        )
+        provider = MockProvider(["summary"])
+        context = ContextManager(
+            provider,
+            session,
+            "You are helpful.",
+            AgentConfig(
+                max_same_tool_calls=5,
+                output_reserve_tokens=100,
+                tools=ToolConfig(enabled=()),
+                context=ContextCompressionConfig(keep_recent_units=1),
+            ),
+        )
+
+        context.archive()
+
+        self.assertEqual(session.archived_item_cursor, 2)
+        retained = [
+            message for message in context.build_request().messages
+            if message.role != "system"
+        ]
+        self.assertEqual(
+            [message.role for message in retained],
+            ["assistant", "tool", "tool", "user"],
+        )
+        self.assertEqual(retained[0].tool_calls, calls)
+        self.assertEqual(
+            [message.tool_call_id for message in retained[1:3]],
+            ["call-a", "call-b"],
+        )
+        self.assertTrue(retained[3].is_tool_media)
+
+    def test_archive_compresses_a_multi_tool_media_unit_whole(self) -> None:
+        calls = (
+            ToolCall("call-a", "read", {}),
+            ToolCall("call-b", "read", {}),
+        )
+        session = Session(
+            "session-1",
+            items=[
+                Message("user", "goal"),
+                Message("assistant", None, tool_calls=calls),
+                Message("tool", "B", tool_call_id="call-b"),
+                Message("tool", "A", tool_call_id="call-a"),
+                Message(
+                    "user",
+                    (ImagePart(path="result.png"),),
+                    origin="tool_media",
+                ),
+                Message("assistant", "next"),
+            ],
+        )
+        provider = MockProvider(["summary"])
+        context = ContextManager(
+            provider,
+            session,
+            "You are helpful.",
+            AgentConfig(
+                max_same_tool_calls=5,
+                output_reserve_tokens=100,
+                tools=ToolConfig(enabled=()),
+                context=ContextCompressionConfig(keep_recent_units=1),
+            ),
+        )
+
+        context.archive()
+
+        self.assertEqual(session.archived_item_cursor, 5)
+        archived = [
+            message for message in provider.requests[0].messages
+            if message.role != "system"
+        ]
+        self.assertEqual(
+            [message.role for message in archived],
+            ["user", "assistant", "tool", "tool", "user"],
+        )
+        self.assertEqual(archived[1].tool_calls, calls)
+        self.assertEqual(
+            [message.tool_call_id for message in archived[2:4]],
+            ["call-a", "call-b"],
+        )
+        self.assertEqual(
+            archived[4].content,
+            "[Image attachment omitted from historical context]",
+        )
+        self.assertEqual(
+            [message.content for message in context.build_request().messages
+             if message.role != "system"],
+            ["next"],
         )
 
     def test_new_turn_projects_around_an_incomplete_historical_tool_batch(self):
@@ -699,7 +820,7 @@ class AgentTest(unittest.TestCase):
             ),
         )
 
-    def test_keeps_historical_tool_chain_without_intermediate_timestamps(
+    def test_keeps_recent_tool_chain_with_original_timestamps(
         self,
     ) -> None:
         tool_call = ToolCall(
@@ -758,7 +879,7 @@ class AgentTest(unittest.TestCase):
         self.assertEqual(history[3].tool_call_id, "call-1")
         self.assertEqual(
             [message.timestamp_utc for message in history[1:5]],
-            [REQUEST_TIME, None, None, RESPONSE_TIME],
+            [REQUEST_TIME, TOOL_CALL_TIME, TOOL_RESULT_TIME, RESPONSE_TIME],
         )
         self.assertEqual(
             [message.reasoning for message in history[1:5]],
@@ -767,10 +888,10 @@ class AgentTest(unittest.TestCase):
         historical_timeline = history[0].content or ""
         self.assertIn("user", historical_timeline)
         self.assertIn("assistant", historical_timeline)
-        self.assertNotIn("assistant step", historical_timeline)
-        self.assertNotIn("tool result", historical_timeline)
+        self.assertIn("assistant step", historical_timeline)
+        self.assertIn("tool result", historical_timeline)
 
-    def test_historical_image_is_not_carried_into_next_request(self) -> None:
+    def test_recent_image_is_carried_into_next_request(self) -> None:
         session = Session(session_id="images")
         session.add_item(
             "user",
@@ -793,8 +914,85 @@ class AgentTest(unittest.TestCase):
         self.assertEqual(provider.requests[0].media_root, TEST_WORKSPACE.path)
         historical = provider.requests[0].messages[1]
         self.assertEqual(historical.role, "user")
-        self.assertEqual(historical.content, "look at this\n[Image attachment omitted from historical context]")
-        self.assertEqual(historical.parts, (TextPart(text=historical.content),))
+        self.assertEqual(
+            historical.parts,
+            (
+                TextPart(text="look at this"),
+                ImagePart(path=".nosis/attachments/a1.png"),
+            ),
+        )
+
+    def test_compresses_completed_units_inside_the_active_turn(self) -> None:
+        calls = tuple(
+            ToolCall(f"call-{name}", "echo", {"text": name})
+            for name in ("A", "B", "C")
+        )
+        provider = MockProvider(
+            [
+                LLMResponse(content=None, tool_calls=(calls[0],)),
+                LLMResponse(content=None, tool_calls=(calls[1],)),
+                LLMResponse(content=None, tool_calls=(calls[2],)),
+                "active turn checkpoint",
+                "done",
+            ],
+            input_tokens=[100, 100, 100, 800, 100],
+        )
+        session = Session(session_id="session-1")
+        agent = Agent(
+            provider=provider,
+            session=session,
+            system_prompt="You are helpful.",
+            config=AgentConfig(
+                max_same_tool_calls=5,
+                output_reserve_tokens=100,
+                tools=ToolConfig(enabled=()),
+                context=ContextCompressionConfig(keep_recent_units=1),
+            ),
+            tools=tool_set(EchoTool(), session=session),
+            context=ToolExecutionContext(
+                workspace=TEST_WORKSPACE,
+                session=session,
+            ),
+            now=clock(
+                REQUEST_TIME,
+                TOOL_CALL_TIME,
+                TOOL_RESULT_TIME,
+                datetime(2026, 9, 9, 8, 0, 20, tzinfo=timezone.utc),
+                datetime(2026, 9, 9, 8, 0, 21, tzinfo=timezone.utc),
+                datetime(2026, 9, 9, 8, 0, 30, tzinfo=timezone.utc),
+                datetime(2026, 9, 9, 8, 0, 31, tzinfo=timezone.utc),
+                RESPONSE_TIME,
+            ),
+        )
+
+        agent.run("finish the task")
+
+        self.assertEqual(session.archived_item_cursor, 5)
+        self.assertEqual(session.archived_summary, "active turn checkpoint")
+        consolidation = provider.requests[3]
+        self.assertEqual(
+            [message.content for message in consolidation.messages
+             if message.role == "tool"],
+            [
+                '{"ok": true, "output": {"text": "A"}}',
+                '{"ok": true, "output": {"text": "B"}}',
+            ],
+        )
+        resumed = provider.requests[4]
+        self.assertTrue(
+            resumed.system_prompt.endswith(
+                "[Archived Context Summary]\nactive turn checkpoint"
+            )
+        )
+        retained = [
+            message for message in resumed.messages if message.role != "system"
+        ]
+        self.assertEqual(
+            [message.role for message in retained],
+            ["assistant", "tool"],
+        )
+        self.assertEqual(retained[0].tool_calls, (calls[2],))
+        self.assertEqual(retained[1].tool_call_id, calls[2].id)
 
     def test_stops_on_sixth_identical_tool_call(self) -> None:
         responses = [

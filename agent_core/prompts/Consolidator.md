@@ -7,6 +7,7 @@ When `[Archived Context Summary]` appears in the system prompt, update that prev
 - Use the latest correction or decision as the current version of a fact, and merge duplicates.
 - Preserve exact names, identifiers, paths, commands, decisions, results, and unresolved blockers when they are needed to continue the session.
 - Retain a fact already present in long-term memory when it is needed for session continuity.
+- If this checkpoint belongs to an active turn, preserve the user's original objective, exact constraints, paths, identifiers, acceptance criteria, unfinished work, and next action.
 
 ## What to retain
 

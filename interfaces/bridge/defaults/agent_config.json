@@ -5,7 +5,8 @@
   "context": {
     "compression": {
       "enabled": true,
-      "trigger_ratio": null
+      "trigger_ratio": null,
+      "keep_recent_units": 6
     }
   },
   "main_agent": {

@@ -158,10 +158,8 @@ def estimate_image_tokens(width: int, height: int) -> int:
     :class:`~agent_core.context_manager.ContextWindowExceededError`, and
     the provider rejects the request instead -- surfacing as an opaque
     upstream error rather than the graceful failure the check exists to
-    produce.  An image also cannot be compressed away mid-turn: it stays
-    inline until the turn ends.  So the estimate is deliberately the
-    maximum over the pricing models this runtime talks to, not the
-    average.
+    produce.  So the estimate is deliberately the maximum over the pricing
+    models this runtime talks to, not the average.
 
     Two families are priced and the larger wins:
 
