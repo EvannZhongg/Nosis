@@ -46,7 +46,6 @@ class McpClientManager:
         workspace: Path,
         on_status: Callable[[McpServerStatus], None] | None = None,
     ) -> None:
-        self._config = config
         self._workspace = workspace
         self._on_status = on_status
         self._requests: queue.Queue[_Request | _Stop] = queue.Queue()
@@ -239,13 +238,9 @@ class McpClientManager:
             client = await stack.enter_async_context(
                 httpx2.AsyncClient(headers=config.headers)
             )
-            streams = await stack.enter_async_context(
+            read, write = await stack.enter_async_context(
                 streamable_http_client(config.url or "", http_client=client)
             )
-            if len(streams) == 2:
-                read, write = streams
-            else:
-                read, write, _ = streams
         session = await stack.enter_async_context(
             ClientSession(
                 read,
@@ -273,20 +268,15 @@ class McpClientManager:
                     and remote.name not in config.tools.enabled
                 ):
                     continue
-                input_schema = getattr(remote, "input_schema", None)
-                if input_schema is None:
-                    input_schema = getattr(remote, "inputSchema")
                 discovered.append(
                     McpTool(
                         config.name,
                         remote.name,
                         remote.description,
-                        input_schema,
+                        remote.input_schema,
                     )
                 )
-            cursor = getattr(result, "next_cursor", None)
-            if cursor is None:
-                cursor = getattr(result, "nextCursor", None)
+            cursor = result.next_cursor
             if not cursor:
                 break
         return tuple(discovered)
@@ -305,10 +295,7 @@ class McpClientManager:
             timeout=config.call_timeout_seconds,
         )
         data = result.model_dump(mode="json", exclude_none=True)
-        is_error = getattr(result, "is_error", None)
-        if is_error is None:
-            is_error = getattr(result, "isError", False)
-        if is_error:
+        if result.is_error:
             message = _error_message(data)
             raise RuntimeError(
                 f"MCP tool '{request.server}/{request.tool}' failed: {message}"

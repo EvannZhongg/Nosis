@@ -698,7 +698,7 @@ class BridgeStartTest(unittest.TestCase):
             "openai/second",
         )
 
-    def test_falls_back_to_the_configured_provider_when_unset(self) -> None:
+    def test_uses_the_configured_provider_when_selection_is_null(self) -> None:
         self.assertEqual(self.started_model(provider=None), "openai/first")
 
     def test_rejects_an_unconfigured_provider(self) -> None:

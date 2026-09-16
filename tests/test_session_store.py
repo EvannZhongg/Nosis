@@ -3,10 +3,9 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 from agent_core import JsonlSessionStore, Session, ToolCall
-from agent_core.session_paths import default_sessions_directory, session_log_path
+from agent_core.session_paths import session_log_path
 
 
 def persist(store: JsonlSessionStore, workspace: Path, session: Session) -> None:
@@ -15,10 +14,6 @@ def persist(store: JsonlSessionStore, workspace: Path, session: Session) -> None
 
 
 class JsonlSessionStoreTest(unittest.TestCase):
-    def test_default_sessions_directory_survives_empty_environment(self) -> None:
-        with patch.dict(os.environ, {}, clear=True):
-            self.assertTrue(default_sessions_directory().is_absolute())
-
     def test_appends_incremental_events_without_request_snapshots(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)

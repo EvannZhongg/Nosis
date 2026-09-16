@@ -9,7 +9,7 @@ from ..paths import resolve_image
 class AnalyzeImageTool(Tool):
     """Ask a vision-capable provider about an image stored in the workspace.
 
-    This is the fallback for a model that cannot see images: it spends a
+    This is the image path for a model that cannot see images: it spends a
     second provider call to turn pixels into text.  A model that accepts
     image input gets ``read_image`` instead and looks for itself.
     """

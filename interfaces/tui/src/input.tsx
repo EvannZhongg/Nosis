@@ -61,8 +61,8 @@ export function caretPosition({
  * Top and bottom rules mark the input area; the dimmed border is the only
  * cue that a submission will be queued rather than sent.
  *
- * The draft is edited here rather than with ink-text-input because the real
- * terminal cursor has to sit on the caret: an IME draws its preedit ("nihao"
+ * The draft is edited here because the real terminal cursor has to sit on
+ * the caret: an IME draws its preedit ("nihao"
  * on the way to "你好") wherever that cursor is, and Ink parks it below the
  * last rendered line unless told otherwise. Owning the caret offset is what
  * makes it placeable, and it also lets Enter insert a newline mid-draft.
@@ -126,7 +126,7 @@ export function Prompt({
         }
         return;
       }
-      // Ignored so they stay available for future history navigation.
+      // These keys do not edit the current draft.
       if (key.upArrow || key.downArrow || key.tab) return;
       if (input === '') return;
 

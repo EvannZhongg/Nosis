@@ -13,6 +13,7 @@ import signal
 import shutil
 import subprocess
 import sys
+from contextlib import asynccontextmanager
 from uuid import uuid4
 from pathlib import Path
 
@@ -312,11 +313,25 @@ def create_app(
     models: dict[str, str],
     default_model: str,
 ) -> FastAPI:
-    app = FastAPI(title="Nosis", docs_url=None, redoc_url=None)
-    app.add_middleware(TrustedHostMiddleware, allowed_hosts=[HOST, "localhost"])
     runtimes: dict[str, ActiveRuntime] = {}
     runtime_lock = asyncio.Lock()
     pending_workspaces: dict[str, Path] = {}
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        yield
+        await asyncio.gather(
+            *(runtime.close() for runtime in tuple(runtimes.values())),
+            return_exceptions=True,
+        )
+
+    app = FastAPI(
+        title="Nosis",
+        docs_url=None,
+        redoc_url=None,
+        lifespan=lifespan,
+    )
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=[HOST, "localhost"])
 
     async def runtime_for(
         start: dict[str, object],
@@ -348,13 +363,6 @@ def create_app(
             runtimes[session_id] = runtime
             bridge.send(start)
             return runtime, True
-
-    @app.on_event("shutdown")
-    async def close_runtimes() -> None:
-        await asyncio.gather(
-            *(runtime.close() for runtime in tuple(runtimes.values())),
-            return_exceptions=True,
-        )
 
     @app.get("/api/models")
     def list_models() -> dict[str, object]:

@@ -1,23 +1,10 @@
-import os
 from pathlib import Path
 from urllib.parse import quote
 
 
 def default_sessions_directory() -> Path:
     """Return the user-wide Session root used by library callers."""
-    try:
-        home = Path.home()
-    except RuntimeError:
-        # Tests and embedded callers may intentionally provide an empty
-        # environment.  Keep session paths usable without requiring a
-        # platform-specific home variable to be present.
-        home_value = (
-            os.environ.get("USERPROFILE")
-            or os.environ.get("HOME")
-            or os.getcwd()
-        )
-        home = Path(home_value)
-    return home / ".nosis" / "sessions"
+    return Path.home() / ".nosis" / "sessions"
 
 
 def workspace_key(workspace: Path | str) -> str:

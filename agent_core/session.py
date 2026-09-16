@@ -86,10 +86,6 @@ class Session:
     _current_turn_id: str | None = field(default=None, repr=False, compare=False)
     _journal_lock: Lock = field(default_factory=Lock, repr=False, compare=False)
 
-    @property
-    def current_turn_id(self) -> str | None:
-        return self._current_turn_id
-
     def attach_journal_sink(self, sink: JournalSink | None) -> None:
         self._sink = sink
 

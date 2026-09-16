@@ -64,7 +64,7 @@ _TILE_TOKENS = 170
 _AREA_MAX_EDGE = 1568
 _AREA_PIXELS_PER_TOKEN = 750
 
-#: Fallback pixel size for a file whose format is recognized but whose
+#: Conservative pixel size for a file whose format is recognized but whose
 #: dimensions are not in the probed prefix.  It is priced at the ceiling
 #: rather than at some middling guess, because an unknown image that
 #: turns out to be large must not be the reason a turn overflows.

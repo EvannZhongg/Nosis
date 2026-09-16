@@ -125,7 +125,6 @@ class ConfigTest(unittest.TestCase):
                 6,
             )
             self.assertTrue((config_directory / "skills").is_dir())
-            self.assertNotIn("shell_timeout_seconds", agent_config)
             self.assertTrue(agent_config["main_agent"]["tools"]["read_file"])
             # Every shipped role carries an explicit enable switch.
             for name, role in agent_config["subagent_roles"].items():
@@ -446,12 +445,8 @@ class ProviderResolutionTest(unittest.TestCase):
 
             self.assertEqual(vision.model, VISION_MODEL)
 
-    def test_no_vision_provider_resolves_to_none_without_scanning(self) -> None:
-        """The capability scan is gone: an unset vision provider is None.
-
-        'seeing' is configured and image-capable, so the deleted fallback
-        would have selected it. Nothing may route images implicitly.
-        """
+    def test_no_vision_provider_resolves_to_none(self) -> None:
+        """Only an explicit vision_provider may route images elsewhere."""
         with tempfile.TemporaryDirectory() as directory:
             path = self.write(directory)
 

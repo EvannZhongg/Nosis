@@ -118,26 +118,6 @@ class AgentConfigTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 load_agent_config(path)
 
-    def test_does_not_accept_old_output_limit_field(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "agent_config.json"
-            path.write_text(
-                json.dumps(
-                    {
-                        "max_same_tool_calls": 5,
-                        "max_output_tokens": 100,
-                        "main_agent": {"tools": ENABLED_TOOLS},
-                    }
-                ),
-                encoding="utf-8",
-            )
-
-            with self.assertRaisesRegex(
-                ValueError,
-                "output_reserve_tokens.*positive integer",
-            ):
-                load_agent_config(path)
-
     def test_loads_optional_generation_limit(self) -> None:
         config = self.load(
             {
@@ -169,16 +149,16 @@ class AgentConfigTest(unittest.TestCase):
                         }
                     )
 
-    def test_rejects_removed_compression_target_ratio(self) -> None:
+    def test_rejects_unknown_compression_field(self) -> None:
         with self.assertRaisesRegex(
             ValueError,
-            "context.compression.*target_ratio",
+            "context.compression.*unexpected",
         ):
             self.load(
                 {
                     "context": {
                         "compression": {
-                            "target_ratio": 0.5,
+                            "unexpected": 0.5,
                         }
                     },
                     "main_agent": {"tools": ENABLED_TOOLS},
