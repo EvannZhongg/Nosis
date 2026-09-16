@@ -55,6 +55,7 @@ RELAYED_MESSAGE_TYPES = frozenset(
         "user_turn",
         "user_steer",
         "approval_response",
+        "permission_set",
         "user_question_response",
     }
 )
@@ -194,6 +195,7 @@ class ActiveRuntime:
         self.turn_id: str | None = None
         self.approval: dict[str, object] | None = None
         self.question: dict[str, object] | None = None
+        self.permission_preset = "ask_for_approval"
         self.done = False
         self._closed = False
         self._terminal_pending = False
@@ -237,6 +239,7 @@ class ActiveRuntime:
                         approval=self.approval,
                         question=self.question,
                         provider=self.provider,
+                        permission_preset=self.permission_preset,
                     )
                     if self.done:
                         queue.put_nowait(None)
@@ -329,6 +332,10 @@ class ActiveRuntime:
                 elif message_type == "user_question":
                     self.approval = None
                     self.question = message
+                elif message_type in {"ready", "permission_changed"}:
+                    preset = message.get("permission_preset", message.get("preset"))
+                    if isinstance(preset, str):
+                        self.permission_preset = preset
                 elif message_type in TERMINAL_MESSAGE_TYPES:
                     self.running = False
                     self.turn_id = None
@@ -434,6 +441,7 @@ def create_app(
                     "workspace": runtime.workspace,
                     "items": runtime.items,
                     "running": runtime.running,
+                    "permission_preset": runtime.permission_preset,
                 }
                 for runtime in runtimes.values()
                 if runtime.attachable
@@ -452,6 +460,7 @@ def create_app(
                     "session_id": runtime.session_id,
                     "items": runtime.items,
                     "workspace": runtime.workspace,
+                    "permission_preset": runtime.permission_preset,
                 }
             session = store.load(
                 session_id,
@@ -462,6 +471,7 @@ def create_app(
                     "session_id": session.session_id,
                     "items": session.items,
                     "workspace": session.workspace,
+                    "permission_preset": session.permission_preset.value,
                 }
             )
         except ValueError as error:
@@ -707,6 +717,7 @@ def create_app(
                     approval=None,
                     question=None,
                     provider=None,
+                    permission_preset="ask_for_approval",
                 )
             )
             await websocket.close()

@@ -8,7 +8,12 @@ import { deleteSession, get, sessionUrl, type ModelOption, type ModelOptions, ty
 type ActiveRuntime = Session & { provider: string | null; running: boolean };
 
 function newSession(workspace?: string | null): Session {
-  return { session_id: crypto.randomUUID(), items: [], workspace };
+  return {
+    session_id: crypto.randomUUID(),
+    items: [],
+    workspace,
+    permission_preset: "ask_for_approval",
+  };
 }
 
 export function App() {

@@ -21,6 +21,7 @@ vi.mock('../src/bridge.js', () => ({
               model: 'test/model',
               resumed: false,
               message_count: 0,
+              permission_preset: 'ask_for_approval',
             }),
           10,
         );
@@ -148,6 +149,24 @@ describe('App', () => {
     await waitFor(() =>
       expect(sent.find((m) => m.type === 'user_turn')).toMatchObject({ text: 'hello there' }),
     );
+  });
+
+  it('opens /permissions and sends the selected preset', async () => {
+    const { stdin, lastFrame } = renderApp();
+    await waitForReady(lastFrame);
+    await typeDraft(stdin, lastFrame, '/permissions');
+    stdin.write('\r');
+    await waitFor(() => expect(lastFrame()).toContain('Ask for approval'));
+
+    stdin.write('\u001b[B');
+    await waitFor(() => expect(lastFrame()).toContain('❯ Full Access'));
+    stdin.write('\r');
+
+    await waitFor(() => expect(sent).toContainEqual({
+      type: 'permission_set',
+      preset: 'full_access',
+    }));
+    expect(turns()).toHaveLength(0);
   });
 
   it('sends steering while the agent is busy', async () => {
@@ -418,6 +437,7 @@ describe('App', () => {
       model: 'test/model',
       resumed: false,
       message_count: 0,
+      permission_preset: 'ask_for_approval',
     });
     await waitForReady(lastFrame);
 

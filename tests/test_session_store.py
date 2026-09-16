@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agent_core import JsonlSessionStore, Session, ToolCall
+from agent_core import JsonlSessionStore, PermissionPreset, Session, ToolCall
 from agent_core.session_paths import session_log_path
 
 
@@ -86,9 +86,34 @@ class JsonlSessionStoreTest(unittest.TestCase):
             store = JsonlSessionStore(workspace / "sessions")
             store.bind_workspace("orphan", workspace)
             orphan = next(store.directory.iterdir()) / "orphan"
-            orphan.mkdir()
 
             self.assertEqual(store.list_sessions(), [])
+
+    def test_stores_permission_preset_in_session_workspace_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            store = JsonlSessionStore(workspace / "sessions")
+            store.bind_workspace("session-1", workspace)
+
+            store.set_permission_preset(
+                "session-1", PermissionPreset.FULL_ACCESS, workspace
+            )
+            session = Session("session-1")
+            session.set_permission_preset(PermissionPreset.FULL_ACCESS)
+            store.append_events("session-1", session.journal, workspace=workspace)
+
+            metadata = json.loads(
+                (
+                    session_log_path(store.directory, workspace, "session-1").parent
+                    / "workspace.json"
+                ).read_text(encoding="utf-8")
+            )
+            self.assertEqual(metadata["workspace"], str(workspace.resolve()))
+            self.assertEqual(metadata["permission_preset"], "full_access")
+            self.assertEqual(
+                JsonlSessionStore(store.directory).load("session-1").permission_preset,
+                PermissionPreset.FULL_ACCESS,
+            )
 
     def test_moves_session_to_new_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

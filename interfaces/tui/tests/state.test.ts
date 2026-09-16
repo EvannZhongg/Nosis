@@ -9,6 +9,7 @@ const READY = {
   model: 'deepseek/deepseek-chat',
   resumed: false,
   message_count: 0,
+  permission_preset: 'ask_for_approval' as const,
 };
 
 function ready(): State {
@@ -36,6 +37,24 @@ describe('MessageDecoder', () => {
   it('throws on malformed json', () => {
     const decoder = new MessageDecoder();
     expect(() => decoder.push('not json\n')).toThrow();
+  });
+});
+
+describe('permissions', () => {
+  it('restores the preset from ready and records later changes', () => {
+    let state = ready();
+    expect(state.permissionPreset).toBe('ask_for_approval');
+
+    state = reducer(state, {
+      type: 'message',
+      message: { type: 'permission_changed', preset: 'full_access' },
+    });
+
+    expect(state.permissionPreset).toBe('full_access');
+    expect(state.entries.at(-1)).toMatchObject({
+      kind: 'notice',
+      text: 'Permissions changed to Full Access.',
+    });
   });
 });
 

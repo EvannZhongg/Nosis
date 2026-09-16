@@ -69,6 +69,7 @@ def ready_message(
     model: str,
     resumed: bool,
     message_count: int,
+    permission_preset: str,
     skill_warnings: tuple[str, ...] = (),
 ) -> dict[str, object]:
     return {
@@ -78,6 +79,7 @@ def ready_message(
         "model": model,
         "resumed": resumed,
         "message_count": message_count,
+        "permission_preset": permission_preset,
         "skill_warnings": list(skill_warnings),
     }
 
@@ -89,6 +91,7 @@ def runtime_state_message(
     approval: dict[str, object] | None,
     question: dict[str, object] | None,
     provider: str | None,
+    permission_preset: str,
 ) -> dict[str, object]:
     """Describe a GUI server-owned runtime when a WebSocket attaches."""
     return {
@@ -98,6 +101,7 @@ def runtime_state_message(
         "approval": approval,
         "question": question,
         "provider": provider,
+        "permission_preset": permission_preset,
     }
 
 

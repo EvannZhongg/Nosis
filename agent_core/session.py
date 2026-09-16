@@ -6,6 +6,7 @@ from threading import Lock
 from uuid import uuid4
 
 from .content import Content, ImagePart, TextPart, content_parts
+from .permissions import PermissionPreset
 from .tools import ToolCall
 
 MessageRole = Literal["system", "user", "assistant", "tool"]
@@ -79,6 +80,7 @@ class Session:
     workspace: str | None = None
     archived_summary: str | None = None
     archived_item_cursor: int = 0
+    permission_preset: PermissionPreset = PermissionPreset.ASK_FOR_APPROVAL
     journal: list[JournalEvent] = field(default_factory=list, repr=False)
     turns: dict[str, Turn] = field(default_factory=dict, repr=False)
     tool_executions: dict[str, ToolExecution] = field(default_factory=dict, repr=False)
@@ -158,6 +160,8 @@ class Session:
                 else None
             )
             self.archived_item_cursor = int(payload["item_cursor"])
+        elif event.event_type == "permission_preset_changed":
+            self.permission_preset = PermissionPreset(str(payload["preset"]))
 
     def recover(self) -> tuple[JournalEvent, ...]:
         recovered: list[JournalEvent] = []
@@ -279,6 +283,16 @@ class Session:
             "context_archived",
             self._current_turn_id,
             {"summary": summary, "item_cursor": item_cursor},
+        )
+        self.apply_event(event)
+
+    def set_permission_preset(self, preset: PermissionPreset) -> None:
+        if preset is self.permission_preset:
+            return
+        event = self._event(
+            "permission_preset_changed",
+            self._current_turn_id,
+            {"preset": preset.value},
         )
         self.apply_event(event)
 

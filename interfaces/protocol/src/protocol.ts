@@ -28,6 +28,8 @@ export type Usage = {
   total_tokens: number | null;
 };
 
+export type PermissionPreset = 'ask_for_approval' | 'full_access';
+
 export type UserQuestionOption = {
   id: string;
   label: string;
@@ -50,6 +52,7 @@ export type Incoming =
       running: boolean;
       turn_id: string | null;
       provider: string | null;
+      permission_preset: PermissionPreset;
       approval: {
         type: 'approval_request';
         turn_id: string | null;
@@ -69,6 +72,7 @@ export type Incoming =
       model: string;
       resumed: boolean;
       message_count: number;
+      permission_preset: PermissionPreset;
       skill_warnings?: string[];
     }
   | { type: 'assistant_delta'; turn_id: string; text: string; model_call_index: number }
@@ -127,6 +131,7 @@ export type Incoming =
       server?: string;
       tool_name?: string;
     }
+  | { type: 'permission_changed'; preset: PermissionPreset }
   | UserQuestion
   | { type: 'mcp_server_status'; server: string; status: string; tool_count?: number; error?: string }
   | { type: 'turn_completed'; turn_id: string; usage: Usage | null }
@@ -151,6 +156,7 @@ export type Outgoing =
   | { type: 'user_turn'; turn_id: string; text: string; attachments?: ImageAttachment[] }
   | { type: 'user_steer'; turn_id: string; steer_id: string; text: string }
   | { type: 'approval_response'; request_id: string; approved: boolean }
+  | { type: 'permission_set'; preset: PermissionPreset }
   | { type: 'cancel'; turn_id: string }
   | { type: 'user_question_response'; request_id: string; option_id?: string; text?: string }
   | { type: 'shutdown' };

@@ -1,4 +1,4 @@
-import type { ToolCall } from "@nosis/protocol";
+import type { PermissionPreset, ToolCall } from "@nosis/protocol";
 
 export type SessionItem = {
   role: "user" | "assistant" | "tool";
@@ -14,7 +14,12 @@ export type SessionItem = {
   origin?: "conversation" | "tool_media";
 };
 
-export type Session = { session_id: string; items: SessionItem[]; workspace?: string | null };
+export type Session = {
+  session_id: string;
+  items: SessionItem[];
+  workspace?: string | null;
+  permission_preset: PermissionPreset;
+};
 export type SessionSummary = { session_id: string; title: string };
 export type WorkspaceSessions = { workspace: string; sessions: SessionSummary[] };
 export type ModelOption = { id: string; model: string };

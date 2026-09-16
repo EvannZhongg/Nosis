@@ -46,6 +46,25 @@ function fold(messages: Incoming[], initial: TranscriptItem[] = []) {
 }
 
 describe("applyMessage", () => {
+  it("reports permission state from ready and permission changes", () => {
+    const ready = applyMessage([], {
+      type: "ready",
+      session_id: "s1",
+      workspace: "/tmp/work",
+      model: "test/model",
+      resumed: false,
+      message_count: 0,
+      permission_preset: "ask_for_approval",
+    });
+    expect(ready.permissionPreset).toBe("ask_for_approval");
+
+    const changed = applyMessage([], {
+      type: "permission_changed",
+      preset: "full_access",
+    });
+    expect(changed.permissionPreset).toBe("full_access");
+  });
+
   it("appends steering only when the runtime applies it", () => {
     const applied = applyMessage([], {
       type: "user_steer_applied",
@@ -71,6 +90,7 @@ describe("applyMessage", () => {
       model: "test/model",
       resumed: false,
       message_count: 0,
+      permission_preset: "ask_for_approval",
       skill_warnings: ["Skipping invalid skill."],
     });
 
@@ -350,6 +370,7 @@ describe("applyMessage", () => {
         model: "m",
         resumed: false,
         message_count: 0,
+        permission_preset: "ask_for_approval" as const,
       },
       {
         type: "tool_call" as const,

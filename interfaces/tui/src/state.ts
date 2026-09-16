@@ -1,4 +1,4 @@
-import type { Incoming, ProtocolError, Usage, UserQuestionOption } from '@nosis/protocol';
+import type { Incoming, PermissionPreset, ProtocolError, Usage, UserQuestionOption } from '@nosis/protocol';
 
 export type Status =
   | 'starting'
@@ -41,6 +41,7 @@ export type State = {
   sessionId: string | null;
   workspace: string;
   model: string;
+  permissionPreset: PermissionPreset;
   entries: Entry[];
   /** Latest MCP startup status; cleared once the agent is ready. */
   mcpStatus: string | null;
@@ -74,6 +75,7 @@ export const initialState: State = {
   sessionId: null,
   workspace: '',
   model: '',
+  permissionPreset: 'ask_for_approval',
   entries: [],
   mcpStatus: null,
   approval: null,
@@ -254,6 +256,7 @@ function applyMessage(state: State, message: Incoming): State {
         sessionId: message.session_id,
         workspace: message.workspace,
         model: message.model,
+        permissionPreset: message.permission_preset,
         mcpStatus: null,
         entries: message.resumed
           ? [
@@ -380,6 +383,21 @@ function applyMessage(state: State, message: Incoming): State {
           toolName: message.tool_name,
           choice: 'allow',
         },
+      };
+
+    case 'permission_changed':
+      return {
+        ...state,
+        permissionPreset: message.preset,
+        entries: [
+          ...state.entries,
+          {
+            kind: 'notice',
+            id: nextId('notice'),
+            level: 'info',
+            text: `Permissions changed to ${message.preset === 'full_access' ? 'Full Access' : 'Ask for approval'}.`,
+          },
+        ],
       };
 
     case 'user_question': {

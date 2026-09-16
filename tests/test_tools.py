@@ -18,6 +18,8 @@ from agent_core import (
     ListDirectoryTool,
     LLMProvider,
     LLMResponse,
+    PermissionController,
+    PermissionPreset,
     ReadFileTool,
     SearchFilesTool,
     Session,
@@ -2015,6 +2017,82 @@ class ShellApprovalPolicyTest(unittest.TestCase):
         )
 
         self.assertEqual(requested_commands, [])
+
+
+class PermissionControllerTest(unittest.TestCase):
+    def test_ask_for_approval_delegates_to_the_approval_policy(self) -> None:
+        calls = []
+
+        class RecordingPolicy:
+            def authorize(self, call: ToolCall) -> None:
+                calls.append(call)
+
+        controller = PermissionController(Session("s"), RecordingPolicy())
+        call = ToolCall("call-1", "shell", {"command": "pwd"})
+
+        controller.authorize(call)
+
+        self.assertEqual(calls, [call])
+
+    def test_full_access_skips_approval_without_changing_the_tool_set(self) -> None:
+        class RejectingPolicy:
+            def authorize(self, call: ToolCall) -> None:
+                raise AssertionError("approval policy should not run")
+
+        class EchoTool(Tool):
+            name = "echo"
+
+            def definition(self, context) -> ToolDefinition:
+                return ToolDefinition(
+                    name=self.name,
+                    description="Echo text.",
+                    parameters={"type": "object"},
+                )
+
+            def execute(self, arguments, context):
+                return dict(arguments)
+
+        session = Session("s")
+        controller = PermissionController(session, RejectingPolicy())
+        controller.set_preset(PermissionPreset.FULL_ACCESS)
+        tools = ToolCatalog([EchoTool()]).select(
+            ["echo"],
+            ToolExecutionContext(workspace=_TMP_WORKSPACE, session=session),
+            policy=controller,
+        )
+
+        result = tools.execute(ToolCall("call-1", "echo", {"text": "ok"}))
+
+        self.assertEqual([definition.name for definition in tools.definitions], ["echo"])
+        self.assertEqual(result.output, {"text": "ok"})
+
+    def test_pending_approval_keeps_its_original_decision(self) -> None:
+        entered = threading.Event()
+        release = threading.Event()
+
+        class BlockingPolicy:
+            def authorize(self, call: ToolCall) -> None:
+                entered.set()
+                release.wait(2)
+                raise PermissionError("not approved")
+
+        controller = PermissionController(Session("s"), BlockingPolicy())
+        errors = []
+
+        def authorize() -> None:
+            try:
+                controller.authorize(ToolCall("call-1", "shell", {"command": "pwd"}))
+            except PermissionError as error:
+                errors.append(str(error))
+
+        thread = threading.Thread(target=authorize)
+        thread.start()
+        self.assertTrue(entered.wait(1))
+        controller.set_preset(PermissionPreset.FULL_ACCESS)
+        release.set()
+        thread.join(2)
+
+        self.assertEqual(errors, ["not approved"])
 
 
 if __name__ == "__main__":

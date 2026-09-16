@@ -2,6 +2,8 @@
 
 GUI 由 FastAPI 中继服务和 React + assistant-ui 前端组成。它与 TUI 共用 Agent Runtime、Provider、Tool、授权、Session 和取消行为。
 
+模型选择器右侧的权限选择器控制当前 Session 的 `Ask for approval` / `Full Access` preset；浏览器只发送协议消息，实际权限判断由 Runtime 的 `PermissionController` 完成。
+
 ## 使用
 
 构建并启动：

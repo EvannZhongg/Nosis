@@ -7,10 +7,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
+from .permissions import PermissionPreset
 from .session import JournalEvent, Session
 from .session_paths import (
     _validate_session_id,
     default_sessions_directory,
+    session_directory,
     session_log_path,
     workspace_directory,
 )
@@ -31,6 +33,7 @@ class JsonlSessionStore:
             else default_sessions_directory()
         )
         self._group_by_workspace = group_by_workspace
+        self._session_directories: dict[str, Path] = {}
 
     @property
     def directory(self) -> Path:
@@ -76,9 +79,7 @@ class JsonlSessionStore:
             groups.append(
                 {
                     "workspace": (
-                        _workspace_from_metadata(
-                            workspace_dir / "workspace.json"
-                        )
+                        _workspace_from_session_directories(workspace_dir)
                         or workspace_dir.name
                     ),
                     "sessions": [
@@ -125,6 +126,7 @@ class JsonlSessionStore:
                 event = _event_from_dict(record)
                 session.apply_event(event)
                 session.journal.append(event)
+        session.permission_preset = self.permission_preset_for(session_id)
         if recover:
             # Read projections expose stale running work as unknown.  A
             # Runtime attaches a sink first and persists these recovery facts.
@@ -143,19 +145,45 @@ class JsonlSessionStore:
                     f"session already exists in workspace: {session_id!r}"
                 )
             shutil.move(str(current), str(target))
-        with (target_group / "workspace.json").open(
-            "w", encoding="utf-8"
-        ) as file:
-            json.dump({"workspace": str(resolved)}, file, ensure_ascii=False)
-            file.flush()
-            os.fsync(file.fileno())
+        target.mkdir(parents=True, exist_ok=True)
+        self._session_directories[session_id] = target
+        metadata = _session_metadata(target)
+        metadata["workspace"] = str(resolved)
+        metadata.setdefault(
+            "permission_preset",
+            PermissionPreset.ASK_FOR_APPROVAL.value,
+        )
+        _write_session_metadata(target, metadata)
 
     def workspace_for(self, session_id: str) -> str | None:
         _validate_session_id(session_id)
         current = self._find_session_directory(session_id)
         if current is None:
             return None
-        return _workspace_from_metadata(current.parent / "workspace.json")
+        value = _session_metadata(current).get("workspace")
+        return value if isinstance(value, str) and value else None
+
+    def permission_preset_for(self, session_id: str) -> PermissionPreset:
+        _validate_session_id(session_id)
+        if not self._group_by_workspace:
+            return PermissionPreset.ASK_FOR_APPROVAL
+        current = self._find_session_directory(session_id)
+        if current is None:
+            return PermissionPreset.ASK_FOR_APPROVAL
+        return PermissionPreset(str(_session_metadata(current)["permission_preset"]))
+
+    def set_permission_preset(
+        self,
+        session_id: str,
+        preset: PermissionPreset,
+        workspace: Path | str,
+    ) -> None:
+        directory = session_directory(self._directory, workspace, session_id)
+        directory.mkdir(parents=True, exist_ok=True)
+        metadata = _session_metadata(directory)
+        metadata["workspace"] = str(Path(workspace).expanduser().resolve())
+        metadata["permission_preset"] = preset.value
+        _write_session_metadata(directory, metadata)
 
     def append_events(
         self,
@@ -186,6 +214,16 @@ class JsonlSessionStore:
             os.fsync(file.fileno())
 
     def _find_session_directory(self, session_id: str) -> Path | None:
+        known = self._session_directories.get(session_id)
+        if known is not None:
+            return known
+        if not self._group_by_workspace:
+            candidate = self._directory / session_id
+            return (
+                candidate
+                if (candidate / f"{session_id}.jsonl").is_file()
+                else None
+            )
         if not self._directory.is_dir():
             return None
         for group in self._directory.iterdir():
@@ -243,14 +281,34 @@ def _event_from_dict(data: dict[str, object]) -> JournalEvent:
     )
 
 
-def _workspace_from_metadata(path: Path) -> str | None:
+def _session_metadata(directory: Path) -> dict[str, object]:
     try:
-        value = json.loads(path.read_text(encoding="utf-8")).get(
-            "workspace"
-        )
-    except (OSError, json.JSONDecodeError):
-        return None
-    return value if isinstance(value, str) and value else None
+        data = json.loads((directory / "workspace.json").read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    if not isinstance(data, dict):
+        raise ValueError("session workspace metadata must be an object")
+    return data
+
+
+def _write_session_metadata(
+    directory: Path,
+    metadata: dict[str, object],
+) -> None:
+    with (directory / "workspace.json").open("w", encoding="utf-8") as file:
+        json.dump(metadata, file, ensure_ascii=False)
+        file.flush()
+        os.fsync(file.fileno())
+
+
+def _workspace_from_session_directories(directory: Path) -> str | None:
+    for session in directory.iterdir():
+        if not session.is_dir():
+            continue
+        value = _session_metadata(session).get("workspace")
+        if isinstance(value, str) and value:
+            return value
+    return None
 
 
 def _session_title(path: Path, session_id: str) -> str:

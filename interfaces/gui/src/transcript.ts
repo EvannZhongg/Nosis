@@ -1,5 +1,5 @@
 import type { ThreadMessageLike } from "@assistant-ui/react";
-import type { Incoming, Usage, UserQuestion } from "@nosis/protocol";
+import type { Incoming, PermissionPreset, Usage, UserQuestion } from "@nosis/protocol";
 import { attachmentUrl, type SessionItem } from "./api";
 
 /** A transcript item, plus the streaming state the live turn needs. */
@@ -21,6 +21,7 @@ export type Applied = {
     toolName?: string;
   } | null;
   question?: UserQuestion | null;
+  permissionPreset?: PermissionPreset;
   /** Tokens the finished turn used, or null when the model reported none. */
   usage?: Usage | null;
   /** Set once the turn ended, so the caller can reload the session. */
@@ -51,6 +52,7 @@ export function applyMessage(
     case "ready":
       return {
         items,
+        permissionPreset: message.permission_preset,
         notice: message.skill_warnings?.length
           ? {
               level: "info",
@@ -138,6 +140,16 @@ export function applyMessage(
           kind: message.kind,
           server: message.server,
           toolName: message.tool_name,
+        },
+      };
+
+    case "permission_changed":
+      return {
+        items,
+        permissionPreset: message.preset,
+        notice: {
+          level: "info",
+          text: `权限模式已切换为${message.preset === "full_access" ? "完全访问" : "请求批准"}。`,
         },
       };
 

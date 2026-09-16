@@ -26,6 +26,8 @@ nosis --config path/to/provider_config.json \
 | `Ctrl+C` | 取消当前轮次；空输入时退出 |
 | `Ctrl+D` | 退出 |
 
+输入 `/permissions` 可在 `Ask for approval` 与 `Full Access` 之间切换当前 Session 的权限模式。`Full Access` 只跳过人工确认，仍直接在当前 Host 环境执行，不提供新的 Tool。
+
 传统终端把 `Shift+Enter` 和 `Enter` 发送为同一个字节，程序无法区分，因此只有支持 kitty
 keyboard protocol 的终端才能用 `Shift+Enter` 换行。目前按环境变量识别 kitty、Ghostty、WezTerm
 （Windows 与 Linux 同样适用）；其他终端（Apple Terminal、旧版 iTerm2 等）请用 `Ctrl+J`。

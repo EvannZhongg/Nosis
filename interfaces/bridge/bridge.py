@@ -23,6 +23,8 @@ from agent_core import (
     Session,
     CompositeToolPolicy,
     McpApprovalPolicy,
+    PermissionController,
+    PermissionPreset,
     ShellApprovalPolicy,
     SkillRegistry,
     SubagentRole,
@@ -83,6 +85,7 @@ class Bridge:
         self._store: JsonlSessionStore | None = None
         self._mcp: McpClientManager | None = None
         self._workspace: Workspace | None = None
+        self._permissions: PermissionController | None = None
 
     def emit(self, type: str, **fields: object) -> None:
         with self._stdout_lock:
@@ -144,6 +147,12 @@ class Bridge:
                 if waiter is not None:
                     waiter.put(message)
             return
+        if message_type == "permission_set":
+            if self._permissions is None:
+                self._messages.put(message)
+            else:
+                self._set_permission_preset(message)
+            return
         if message_type == "user_steer":
             self._route_steer(message)
             return
@@ -159,6 +168,14 @@ class Bridge:
                 with self._router_lock:
                     self._queued_turn_ids.add(turn_id)
         self._messages.put(message)
+
+    def _set_permission_preset(self, message: dict[str, object]) -> None:
+        preset = PermissionPreset(str(message.get("preset")))
+        controller = self._permissions
+        if controller is None:
+            raise RuntimeError("received 'permission_set' before 'start'")
+        controller.set_preset(preset)
+        self.emit("permission_changed", preset=preset.value)
 
     def _route_steer(self, message: dict[str, object]) -> None:
         steer_id = message.get("steer_id")
@@ -393,13 +410,28 @@ class Bridge:
         )
         catalog = catalog.extend(self._mcp.start())
 
-        shell_policy = ShellApprovalPolicy(self.request_permission)
+        approval_policy = CompositeToolPolicy(
+            ShellApprovalPolicy(self.request_permission),
+            McpApprovalPolicy(
+                self.request_mcp_permission,
+                self._mcp.requires_approval,
+            ),
+        )
+        self._permissions = PermissionController(
+            self._session,
+            approval_policy,
+            lambda preset: self._store.set_permission_preset(
+                self._session.session_id,
+                preset,
+                workspace.path,
+            ),
+        )
         subagents = self._subagent_runtime(
             agent_config,
             catalog,
             config_path,
             workspace,
-            shell_policy,
+            self._permissions,
         )
         context = ToolExecutionContext(
             workspace=workspace,
@@ -435,13 +467,7 @@ class Bridge:
                     *self._mcp.tool_names,
                 ),
                 context,
-                policy=CompositeToolPolicy(
-                    shell_policy,
-                    McpApprovalPolicy(
-                        self.request_mcp_permission,
-                        self._mcp.requires_approval,
-                    ),
-                ),
+                policy=self._permissions,
             ),
             context=context,
         )
@@ -452,6 +478,7 @@ class Bridge:
             model=config.model,
             resumed=resumed,
             message_count=len(self._session.items),
+            permission_preset=self._permissions.preset.value,
             skill_warnings=skills.warnings,
         ))
 
@@ -476,7 +503,7 @@ class Bridge:
         catalog,
         config_path: Path,
         workspace: Workspace,
-        shell_policy: ShellApprovalPolicy,
+        permission_controller: PermissionController,
     ) -> SubagentRuntime | None:
         """Build the sub-agent runtime, or None when no role is configured."""
         if not agent_config.tools.is_enabled("subagent"):
@@ -514,7 +541,7 @@ class Bridge:
             config=agent_config,
             catalog=catalog,
             roles=roles,
-            tool_policy=shell_policy,
+            tool_policy=permission_controller,
         )
 
     def _emit_mcp_status(self, status: McpServerStatus) -> None:
@@ -628,6 +655,8 @@ class Bridge:
                 started = True
             elif message["type"] == "user_turn":
                 self.run_turn(message)
+            elif message["type"] == "permission_set":
+                self._set_permission_preset(message)
 
     def close(self) -> None:
         self._route_shutdown(notify_commands=False)

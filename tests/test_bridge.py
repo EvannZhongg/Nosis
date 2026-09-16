@@ -15,6 +15,8 @@ from agent_core import (
     AssistantMessageEvent,
     JsonlSessionStore,
     Message,
+    PermissionController,
+    PermissionPreset,
     ReasoningDeltaEvent,
     Session,
     ToolBatchStartedEvent,
@@ -179,6 +181,7 @@ class ProtocolTest(unittest.TestCase):
                 model="test/model",
                 resumed=False,
                 message_count=0,
+                permission_preset="ask_for_approval",
                 skill_warnings=("Skipped invalid skill.",),
             )["skill_warnings"],
             ["Skipped invalid skill."],
@@ -198,6 +201,7 @@ class ProtocolTest(unittest.TestCase):
                 approval=approval,
                 question=None,
                 provider="second",
+                permission_preset="full_access",
             ),
             {
                 "type": "runtime_state",
@@ -206,6 +210,7 @@ class ProtocolTest(unittest.TestCase):
                 "approval": approval,
                 "question": None,
                 "provider": "second",
+                "permission_preset": "full_access",
             },
         )
 
@@ -240,6 +245,28 @@ def emitted(stdout: io.StringIO) -> list[dict]:
         for line in stdout.getvalue().splitlines()
         if line.strip()
     ]
+
+
+class PermissionProtocolTest(unittest.TestCase):
+    def test_bridge_updates_runtime_permission_and_emits_event(self) -> None:
+        bridge, stdout = make_bridge([])
+
+        class UnusedPolicy:
+            def authorize(self, call: ToolCall) -> None:
+                raise AssertionError("no tool call expected")
+
+        session = Session("s")
+        bridge._permissions = PermissionController(session, UnusedPolicy())
+
+        bridge._route_message(
+            {"type": "permission_set", "preset": "full_access"}
+        )
+
+        self.assertEqual(session.permission_preset, PermissionPreset.FULL_ACCESS)
+        self.assertEqual(
+            emitted(stdout)[-1],
+            {"type": "permission_changed", "preset": "full_access"},
+        )
 
 
 class _SlowStdin:
@@ -840,6 +867,31 @@ class BridgeStartTest(unittest.TestCase):
 
     def test_uses_the_configured_provider_when_selection_is_null(self) -> None:
         self.assertEqual(self.started_model(provider=None), "openai/first")
+
+    def test_restores_the_session_permission_preset(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = JsonlSessionStore(root / "sessions")
+            session = Session("saved")
+            session.set_permission_preset(PermissionPreset.FULL_ACCESS)
+            store.bind_workspace(session.session_id, root)
+            store.set_permission_preset(
+                session.session_id,
+                PermissionPreset.FULL_ACCESS,
+                root,
+            )
+            store.append_events(session.session_id, session.journal, workspace=root)
+            bridge, stdout = make_bridge([])
+
+            bridge.start(start_message(root, session_id=session.session_id))
+
+            ready = emitted(stdout)[-1]
+            self.assertEqual(ready["permission_preset"], "full_access")
+            assert bridge._permissions is not None
+            bridge._permissions.authorize(TOOL_CALL)
+            self.assertFalse(
+                any(message["type"] == "approval_request" for message in emitted(stdout))
+            )
 
     def test_rejects_an_unconfigured_provider(self) -> None:
         with self.assertRaisesRegex(ValueError, "not configured"):

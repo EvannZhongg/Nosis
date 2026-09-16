@@ -299,6 +299,60 @@ class GuiTest(unittest.TestCase):
         self.assertTrue(bridge.sent[-1]["approved"])
         self.assertTrue(bridge.closed)
 
+    def test_relays_permission_changes_and_restores_runtime_state(self) -> None:
+        bridge = FakeBridge(
+            replies={
+                "start": [
+                    {
+                        "type": "ready",
+                        "session_id": "s1",
+                        "permission_preset": "ask_for_approval",
+                    }
+                ],
+                "permission_set": [
+                    {"type": "permission_changed", "preset": "full_access"}
+                ],
+            }
+        )
+        with self.client(bridge) as client:
+            with client.websocket_connect("/api/session") as first:
+                first.send_json(
+                    {
+                        "type": "start",
+                        "session_id": "s1",
+                        "attachment_id": "page-1",
+                    }
+                )
+                self.assertEqual(first.receive_json()["type"], "ready")
+                first.send_json(
+                    {"type": "user_turn", "turn_id": "t1", "text": "work"}
+                )
+                first.send_json(
+                    {"type": "permission_set", "preset": "full_access"}
+                )
+                self.assertEqual(
+                    first.receive_json(),
+                    {"type": "permission_changed", "preset": "full_access"},
+                )
+
+            with client.websocket_connect("/api/session") as second:
+                second.send_json(
+                    {
+                        "type": "start",
+                        "session_id": "s1",
+                        "attachment_id": "page-1",
+                        "attach_only": True,
+                        "after_event": 2,
+                    }
+                )
+                self.assertEqual(
+                    second.receive_json()["permission_preset"],
+                    "full_access",
+                )
+                second.send_json({"type": "cancel", "turn_id": "t1"})
+
+        self.assertEqual(bridge.sent[-1]["type"], "permission_set")
+
     def test_relays_user_question_round_trip_in_both_directions(self) -> None:
         question = {
             "type": "user_question",
@@ -740,6 +794,7 @@ class GuiTest(unittest.TestCase):
             data = client.get("/api/sessions/from-tui").json()
 
         self.assertEqual(data["items"][0]["content"], "TUI 对话")
+        self.assertEqual(data["permission_preset"], "ask_for_approval")
         # Only the transcript is exposed, never the request configuration.
         self.assertNotIn("request", data)
         self.assertNotIn("private prompt", json.dumps(data))

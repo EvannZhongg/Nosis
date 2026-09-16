@@ -121,6 +121,13 @@ pre { overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-famil
 .model-selector select:focus-visible { outline: 2px solid #a7b5d2; }
 .model-selector select:disabled { opacity: .55; cursor: default; }
 .model-selector > svg { position: absolute; right: 5px; pointer-events: none; }
+.permission-selector { display: flex; align-items: center; position: relative; color: #74829b; }
+.permission-selector > svg:first-child { flex: none; margin-left: 4px; }
+.permission-selector select { appearance: none; border: 0; border-radius: 5px; background: transparent; padding: 6px 20px 6px 5px; color: inherit; font-size: 11px; cursor: pointer; }
+.permission-selector select:hover { background: #f3f5f9; }
+.permission-selector select:focus-visible { outline: 2px solid #a7b5d2; }
+.permission-selector select:disabled { opacity: .55; cursor: default; }
+.permission-selector > svg:last-child { position: absolute; right: 5px; pointer-events: none; }
 .composer-bottom .composer-hint { margin-left: auto; padding: 0 12px; }
 .send-button { display: grid; place-items: center; border: 0; background: #556b97; color: white; width: 30px; height: 30px; border-radius: 8px; }
 .send-button:disabled { background: #e9edf3; color: #a9b2c2; opacity: 1; }

@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { Box, Text, useApp, useInput, useWindowSize } from 'ink';
+import type { PermissionPreset } from '@nosis/protocol';
 import { BridgeClient } from './bridge.js';
 import { Prompt } from './input.js';
-import { ApprovalPrompt, StatusBar, Transcript, UserQuestionPrompt } from './renderer.js';
+import { ApprovalPrompt, PermissionPrompt, StatusBar, Transcript, UserQuestionPrompt } from './renderer.js';
 import { initialState, reducer } from './state.js';
 
 export type AppProps = {
@@ -24,6 +25,7 @@ export function App(props: AppProps): React.ReactElement {
   const [state, dispatch] = useReducer(reducer, initialState);
   const [draft, setDraft] = useState('');
   const [questionDraft, setQuestionDraft] = useState('');
+  const [permissionChoice, setPermissionChoice] = useState<PermissionPreset | null>(null);
   const [elapsed, setElapsed] = useState(0);
   const turnCounter = useRef(0);
   const steerCounter = useRef(0);
@@ -164,6 +166,22 @@ export function App(props: AppProps): React.ReactElement {
     { isActive: state.approval !== null },
   );
 
+  useInput(
+    (_input, key) => {
+      if (key.upArrow || key.downArrow || key.tab || key.leftArrow || key.rightArrow) {
+        setPermissionChoice((current) => current === 'full_access' ? 'ask_for_approval' : 'full_access');
+        return;
+      }
+      if (key.return && permissionChoice) {
+        bridge.send({ type: 'permission_set', preset: permissionChoice });
+        setPermissionChoice(null);
+        return;
+      }
+      if (key.escape) setPermissionChoice(null);
+    },
+    { isActive: permissionChoice !== null },
+  );
+
   // Global keys. Ink delivers Ctrl+C as input, so cancelling is explicit.
   useInput(
     (input, key) => {
@@ -191,13 +209,17 @@ export function App(props: AppProps): React.ReactElement {
 
       if (key.ctrl && input === 'd' && !busy && draft === '') exit();
     },
-    { isActive: state.approval === null && state.question === null },
+    { isActive: state.approval === null && state.question === null && permissionChoice === null },
   );
 
   const submit = (value: string): void => {
     const text = value.trim();
     if (text === '') return;
     setDraft('');
+    if (text === '/permissions') {
+      setPermissionChoice(state.permissionPreset);
+      return;
+    }
     if (state.status !== 'idle' && state.turnId !== null) {
       steerCounter.current += 1;
       dispatch({ type: 'steer_submitted' });
@@ -240,13 +262,18 @@ export function App(props: AppProps): React.ReactElement {
             <UserQuestionPrompt question={state.question} />
           </Box>
         ) : null}
+        {permissionChoice ? (
+          <Box flexShrink={0}>
+            <PermissionPrompt selected={permissionChoice} />
+          </Box>
+        ) : null}
       </Box>
 
       {state.status === 'fatal' ? (
         <Box flexShrink={0} marginTop={1}>
           <Text dimColor>Press Ctrl+C to exit.</Text>
         </Box>
-      ) : state.question && freeTextSelected ? (
+      ) : permissionChoice ? null : state.question && freeTextSelected ? (
         <Prompt
           value={questionDraft}
           onChange={setQuestionDraft}
@@ -264,7 +291,7 @@ export function App(props: AppProps): React.ReactElement {
           value={draft}
           onChange={setDraft}
           onSubmit={submit}
-          focus={state.approval === null}
+          focus={state.approval === null && permissionChoice === null}
           busy={state.status !== 'idle'}
           docked
           placeholder={state.status === 'idle' ? undefined : 'steer the current turn…'}

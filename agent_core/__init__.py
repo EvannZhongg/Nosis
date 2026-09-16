@@ -43,6 +43,7 @@ from .session import (
     MessageOrigin,
     Session,
 )
+from .permissions import PermissionController, PermissionPreset
 from .session_store import JsonlSessionStore
 from .skills import Skill, SkillRegistry
 from .subagent import (
@@ -139,6 +140,8 @@ __all__ = [
     "McpToolConfig",
     "Message",
     "MessageOrigin",
+    "PermissionController",
+    "PermissionPreset",
     "ProviderCapabilities",
     "ReadFileTool",
     "ReadImageTool",

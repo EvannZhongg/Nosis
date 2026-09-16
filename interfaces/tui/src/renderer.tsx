@@ -3,6 +3,7 @@ import { Box, Static, Text, useBoxMetrics } from 'ink';
 import type { DOMElement } from 'ink';
 import Spinner from 'ink-spinner';
 import { formatArguments } from '@nosis/protocol';
+import type { PermissionPreset } from '@nosis/protocol';
 import type { ApprovalChoice, Entry, State, UserQuestionState } from './state.js';
 
 function EntryView({ entry }: { entry: Entry }): React.ReactElement {
@@ -316,6 +317,35 @@ export function ApprovalPrompt({
         <Option label="Deny" selected={choice === 'deny'} color="red" />
       </Box>
       <Text dimColor>←/→ select · enter confirm · esc deny</Text>
+    </Box>
+  );
+}
+
+export function PermissionPrompt({
+  selected,
+}: {
+  selected: PermissionPreset;
+}): React.ReactElement {
+  return (
+    <Box
+      marginTop={1}
+      flexDirection="column"
+      borderStyle="round"
+      borderColor="cyan"
+      paddingX={1}
+    >
+      <Text color="cyan" bold>Permissions</Text>
+      <Box marginTop={1} flexDirection="column">
+        <Text color={selected === 'ask_for_approval' ? 'cyan' : undefined} dimColor={selected !== 'ask_for_approval'} bold={selected === 'ask_for_approval'}>
+          {selected === 'ask_for_approval' ? '❯ ' : '  '}Ask for approval
+        </Text>
+        <Text dimColor>    Ask before Shell and configured MCP tool calls.</Text>
+        <Text color={selected === 'full_access' ? 'cyan' : undefined} dimColor={selected !== 'full_access'} bold={selected === 'full_access'}>
+          {selected === 'full_access' ? '❯ ' : '  '}Full Access
+        </Text>
+        <Text dimColor>    Skip approval and execute directly on the current host.</Text>
+      </Box>
+      <Text dimColor>↑/↓ select · enter confirm · esc close</Text>
     </Box>
   );
 }

@@ -10,7 +10,7 @@ import remarkGfm from "remark-gfm";
 import { get, selectWorkspace, sessionUrl, updateSessionWorkspace, uploadAttachments, type ImageAttachment, type ModelOption, type Session } from "./api";
 import { SessionSocket } from "./session";
 import { applyMessage, isTurnActivity, toMessages, type Notice, type TranscriptItem } from "./transcript";
-import type { Usage, UserQuestion } from "@nosis/protocol";
+import type { PermissionPreset, Usage, UserQuestion } from "@nosis/protocol";
 
 type Approval = {
   requestId: string;
@@ -110,6 +110,7 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
   const [compressionNotice, setCompressionNotice] = useState("");
   const [approval, setApproval] = useState<Approval | null>(null);
   const [question, setQuestion] = useState<UserQuestion | null>(null);
+  const [permissionPreset, setPermissionPreset] = useState<PermissionPreset>(session.permission_preset);
   const [questionDraft, setQuestionDraft] = useState("");
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [workspaceDraft, setWorkspaceDraft] = useState(session.workspace ?? "");
@@ -296,6 +297,7 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
             toolName: message.approval.tool_name,
           } : null);
           setQuestion(message.question);
+          setPermissionPreset(message.permission_preset);
           if (wasRunning && !message.running) void endTurn();
           return;
         }
@@ -325,6 +327,7 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
           setQuestion(applied.question);
           setQuestionDraft("");
         }
+        if (applied.permissionPreset !== undefined) setPermissionPreset(applied.permissionPreset);
         if (applied.usage !== undefined) onUsageChange(applied.usage);
         if (applied.finished) void endTurn();
       },
@@ -437,6 +440,11 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
     if (!approval) return;
     socketRef.current?.send({ type: "approval_response", request_id: approval.requestId, approved });
     setApproval(null);
+  }
+
+  function changePermissionPreset(preset: PermissionPreset) {
+    const socket = socketRef.current ?? connect();
+    socket.send({ type: "permission_set", preset });
   }
 
   function answerQuestion(answer: { option_id: string } | { text: string }) {
@@ -583,6 +591,13 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
           <label className="model-selector" title={models.find((option) => option.id === model)?.model}>
             <select aria-label="选择模型" value={model} disabled={controlsDisabled || running} onChange={(event) => onModelChange(event.target.value)}>
               {models.map((option) => <option key={option.id} value={option.id}>{option.model}</option>)}
+            </select><ChevronDown size={12} />
+          </label>
+          <label className="permission-selector" title="权限模式">
+            <ShieldCheck size={13} />
+            <select aria-label="权限模式" value={permissionPreset} disabled={controlsDisabled} onChange={(event) => changePermissionPreset(event.target.value as PermissionPreset)}>
+              <option value="ask_for_approval">请求批准</option>
+              <option value="full_access">完全访问</option>
             </select><ChevronDown size={12} />
           </label>
           <span className="composer-hint">{running ? "Enter 引导当前任务" : "Enter 发送"} · Shift + Enter 换行</span><ComposerPrimitive.Send className="send-button" aria-label={running ? "发送引导" : "发送消息"}><ArrowUp size={19} /></ComposerPrimitive.Send></div></ComposerPrimitive.Root>
