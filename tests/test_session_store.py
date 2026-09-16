@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 
 from agent_core import JsonlSessionStore, PermissionPreset, Session, ToolCall
-from agent_core.session_paths import session_log_path
+from agent_core.session_paths import session_log_path, workspace_directory
 
 
 def persist(store: JsonlSessionStore, workspace: Path, session: Session) -> None:
@@ -84,10 +84,11 @@ class JsonlSessionStoreTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             store = JsonlSessionStore(workspace / "sessions")
-            store.bind_workspace("orphan", workspace)
-            orphan = next(store.directory.iterdir()) / "orphan"
+            orphan = workspace_directory(store.directory, workspace) / "orphan"
+            orphan.mkdir(parents=True)
 
             self.assertEqual(store.list_sessions(), [])
+            self.assertIsNone(store.workspace_for("orphan"))
 
     def test_stores_permission_preset_in_session_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -108,12 +109,72 @@ class JsonlSessionStoreTest(unittest.TestCase):
                     / "session.json"
                 ).read_text(encoding="utf-8")
             )
-            self.assertEqual(metadata["session_id"], "session-1")
-            self.assertEqual(metadata["workspace"], str(workspace.resolve()))
-            self.assertEqual(metadata["permission_preset"], "full_access")
+            self.assertEqual(metadata, {"permission_preset": "full_access"})
             self.assertEqual(
                 JsonlSessionStore(store.directory).load("session-1").permission_preset,
                 PermissionPreset.FULL_ACCESS,
+            )
+
+    def test_session_without_metadata_uses_its_group_workspace_and_default_permission(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory) / "项目 space"
+            workspace.mkdir()
+            store = JsonlSessionStore(Path(directory) / "sessions")
+            session = Session("session-1")
+            session.add_item("user", "hello")
+            store.append_events(
+                session.session_id,
+                session.journal,
+                workspace=workspace,
+            )
+
+            loaded = JsonlSessionStore(store.directory).load("session-1")
+
+            self.assertEqual(loaded.workspace, str(workspace.resolve()))
+            self.assertEqual(
+                loaded.permission_preset,
+                PermissionPreset.ASK_FOR_APPROVAL,
+            )
+            self.assertEqual(
+                store.list_sessions()[0]["workspace"],
+                str(workspace.resolve()),
+            )
+
+    def test_permission_metadata_can_exist_before_the_first_journal_event(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory) / "workspace"
+            workspace.mkdir()
+            store = JsonlSessionStore(Path(directory) / "sessions")
+
+            store.set_permission_preset(
+                "session-1", PermissionPreset.FULL_ACCESS, workspace
+            )
+
+            reopened = JsonlSessionStore(store.directory)
+            self.assertEqual(
+                reopened.workspace_for("session-1"),
+                str(workspace.resolve()),
+            )
+            self.assertEqual(
+                reopened.permission_preset_for("session-1"),
+                PermissionPreset.FULL_ACCESS,
+            )
+            self.assertEqual(reopened.list_sessions(), [])
+
+    def test_ungrouped_store_reports_no_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "subagents"
+            store = JsonlSessionStore(root, group_by_workspace=False)
+            session = Session("child-1")
+            session.add_item("user", "hello")
+            store.append_events(session.session_id, session.journal)
+
+            reopened = JsonlSessionStore(root, group_by_workspace=False)
+            self.assertIsNone(reopened.workspace_for("child-1"))
+            self.assertIsNone(reopened.load("child-1").workspace)
+            self.assertEqual(
+                [item.content for item in reopened.load("child-1").items],
+                ["hello"],
             )
 
     def test_moves_session_to_new_workspace(self) -> None:

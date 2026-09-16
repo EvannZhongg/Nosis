@@ -15,6 +15,7 @@ from .session_paths import (
     session_directory,
     session_log_path,
     workspace_directory,
+    workspace_from_key,
 )
 
 SESSION_METADATA_FILENAME = "session.json"
@@ -35,7 +36,6 @@ class JsonlSessionStore:
             else default_sessions_directory()
         )
         self._group_by_workspace = group_by_workspace
-        self._session_directories: dict[str, Path] = {}
 
     @property
     def directory(self) -> Path:
@@ -81,8 +81,7 @@ class JsonlSessionStore:
             groups.append(
                 {
                     "workspace": (
-                        _workspace_from_session_directories(workspace_dir)
-                        or workspace_dir.name
+                        workspace_from_key(workspace_dir.name)
                     ),
                     "sessions": [
                         {
@@ -147,24 +146,17 @@ class JsonlSessionStore:
                     f"session already exists in workspace: {session_id!r}"
                 )
             shutil.move(str(current), str(target))
-        target.mkdir(parents=True, exist_ok=True)
-        self._session_directories[session_id] = target
-        metadata = _session_metadata(target)
-        metadata["session_id"] = session_id
-        metadata["workspace"] = str(resolved)
-        metadata.setdefault(
-            "permission_preset",
-            PermissionPreset.ASK_FOR_APPROVAL.value,
-        )
-        _write_session_metadata(target, metadata)
 
     def workspace_for(self, session_id: str) -> str | None:
         _validate_session_id(session_id)
+        if not self._group_by_workspace:
+            # Sessions lie directly in the root, so their parent directory
+            # is that root and not an encoded Workspace path.
+            return None
         current = self._find_session_directory(session_id)
         if current is None:
             return None
-        value = _session_metadata(current).get("workspace")
-        return value if isinstance(value, str) and value else None
+        return workspace_from_key(current.parent.name)
 
     def permission_preset_for(self, session_id: str) -> PermissionPreset:
         _validate_session_id(session_id)
@@ -173,7 +165,10 @@ class JsonlSessionStore:
         current = self._find_session_directory(session_id)
         if current is None:
             return PermissionPreset.ASK_FOR_APPROVAL
-        return PermissionPreset(str(_session_metadata(current)["permission_preset"]))
+        value = _session_metadata(current).get("permission_preset")
+        if value is None:
+            return PermissionPreset.ASK_FOR_APPROVAL
+        return PermissionPreset(str(value))
 
     def set_permission_preset(
         self,
@@ -184,8 +179,6 @@ class JsonlSessionStore:
         directory = session_directory(self._directory, workspace, session_id)
         directory.mkdir(parents=True, exist_ok=True)
         metadata = _session_metadata(directory)
-        metadata["session_id"] = session_id
-        metadata["workspace"] = str(Path(workspace).expanduser().resolve())
         metadata["permission_preset"] = preset.value
         _write_session_metadata(directory, metadata)
 
@@ -218,9 +211,6 @@ class JsonlSessionStore:
             os.fsync(file.fileno())
 
     def _find_session_directory(self, session_id: str) -> Path | None:
-        known = self._session_directories.get(session_id)
-        if known is not None:
-            return known
         if not self._group_by_workspace:
             candidate = self._directory / session_id
             return (
@@ -232,7 +222,10 @@ class JsonlSessionStore:
             return None
         for group in self._directory.iterdir():
             candidate = group / session_id
-            if (candidate / f"{session_id}.jsonl").is_file():
+            if (
+                (candidate / f"{session_id}.jsonl").is_file()
+                or (candidate / SESSION_METADATA_FILENAME).is_file()
+            ):
                 return candidate
         return None
 
@@ -307,16 +300,6 @@ def _write_session_metadata(
         json.dump(metadata, file, ensure_ascii=False)
         file.flush()
         os.fsync(file.fileno())
-
-
-def _workspace_from_session_directories(directory: Path) -> str | None:
-    for session in directory.iterdir():
-        if not session.is_dir():
-            continue
-        value = _session_metadata(session).get("workspace")
-        if isinstance(value, str) and value:
-            return value
-    return None
 
 
 def _session_title(path: Path, session_id: str) -> str:

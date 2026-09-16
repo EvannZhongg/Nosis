@@ -1,5 +1,5 @@
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 
 def default_sessions_directory() -> Path:
@@ -10,6 +10,11 @@ def default_sessions_directory() -> Path:
 def workspace_key(workspace: Path | str) -> str:
     """Return a filesystem-safe stable key for an absolute workspace path."""
     return quote(str(Path(workspace).expanduser().resolve()), safe="")
+
+
+def workspace_from_key(key: str) -> str:
+    """Restore the absolute Workspace path encoded in a group directory."""
+    return unquote(key)
 
 
 def workspace_directory(sessions_directory: Path, workspace: Path | str) -> Path:
