@@ -89,7 +89,7 @@ class JsonlSessionStoreTest(unittest.TestCase):
 
             self.assertEqual(store.list_sessions(), [])
 
-    def test_stores_permission_preset_in_session_workspace_metadata(self) -> None:
+    def test_stores_permission_preset_in_session_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             store = JsonlSessionStore(workspace / "sessions")
@@ -105,9 +105,10 @@ class JsonlSessionStoreTest(unittest.TestCase):
             metadata = json.loads(
                 (
                     session_log_path(store.directory, workspace, "session-1").parent
-                    / "workspace.json"
+                    / "session.json"
                 ).read_text(encoding="utf-8")
             )
+            self.assertEqual(metadata["session_id"], "session-1")
             self.assertEqual(metadata["workspace"], str(workspace.resolve()))
             self.assertEqual(metadata["permission_preset"], "full_access")
             self.assertEqual(

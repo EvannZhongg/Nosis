@@ -17,6 +17,8 @@ from .session_paths import (
     workspace_directory,
 )
 
+SESSION_METADATA_FILENAME = "session.json"
+
 
 class JsonlSessionStore:
     """Persist one durable JSON record for every runtime journal event."""
@@ -148,6 +150,7 @@ class JsonlSessionStore:
         target.mkdir(parents=True, exist_ok=True)
         self._session_directories[session_id] = target
         metadata = _session_metadata(target)
+        metadata["session_id"] = session_id
         metadata["workspace"] = str(resolved)
         metadata.setdefault(
             "permission_preset",
@@ -181,6 +184,7 @@ class JsonlSessionStore:
         directory = session_directory(self._directory, workspace, session_id)
         directory.mkdir(parents=True, exist_ok=True)
         metadata = _session_metadata(directory)
+        metadata["session_id"] = session_id
         metadata["workspace"] = str(Path(workspace).expanduser().resolve())
         metadata["permission_preset"] = preset.value
         _write_session_metadata(directory, metadata)
@@ -283,7 +287,9 @@ def _event_from_dict(data: dict[str, object]) -> JournalEvent:
 
 def _session_metadata(directory: Path) -> dict[str, object]:
     try:
-        data = json.loads((directory / "workspace.json").read_text(encoding="utf-8"))
+        data = json.loads(
+            (directory / SESSION_METADATA_FILENAME).read_text(encoding="utf-8")
+        )
     except FileNotFoundError:
         return {}
     if not isinstance(data, dict):
@@ -295,7 +301,9 @@ def _write_session_metadata(
     directory: Path,
     metadata: dict[str, object],
 ) -> None:
-    with (directory / "workspace.json").open("w", encoding="utf-8") as file:
+    with (directory / SESSION_METADATA_FILENAME).open(
+        "w", encoding="utf-8"
+    ) as file:
         json.dump(metadata, file, ensure_ascii=False)
         file.flush()
         os.fsync(file.fileno())
