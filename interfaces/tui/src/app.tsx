@@ -1,16 +1,22 @@
-import React, { useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import React, { useEffect, useReducer, useRef, useState } from 'react';
 import { Box, Text, useApp, useInput, useWindowSize } from 'ink';
-import type { PermissionPreset } from '@nosis/protocol';
+import type { PermissionPreset, SessionSummary } from '@nosis/protocol';
 import { BridgeClient } from './bridge.js';
 import { COMMANDS, findCommand } from './commands.js';
 import { Prompt } from './input.js';
-import { ApprovalPrompt, PermissionPrompt, StatusBar, Transcript, UserQuestionPrompt } from './renderer.js';
+import {
+  ApprovalPrompt,
+  PermissionPrompt,
+  SessionPicker,
+  StatusBar,
+  Transcript,
+  UserQuestionPrompt,
+} from './renderer.js';
 import { initialState, reducer } from './state.js';
 
 export type AppProps = {
   python: string;
   workspace: string;
-  sessionId: string | null;
   providerConfigPath: string;
   agentConfigPath: string;
 };
@@ -27,44 +33,59 @@ export function App(props: AppProps): React.ReactElement {
   const [draft, setDraft] = useState('');
   const [questionDraft, setQuestionDraft] = useState('');
   const [permissionChoice, setPermissionChoice] = useState<PermissionPreset | null>(null);
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const [elapsed, setElapsed] = useState(0);
+  const bridgeRef = useRef<BridgeClient | null>(null);
   const turnCounter = useRef(0);
   const steerCounter = useRef(0);
   const startedAt = useRef<number | null>(null);
 
-  const bridge = useMemo(
-    () =>
-      new BridgeClient({
-        python: props.python,
-        cwd: props.workspace,
-        onMessage: (message) => dispatch({ type: 'message', message }),
-        onExit: (code) => {
-          if (code === 0) exit();
-          else dispatch({ type: 'exited', code });
-        },
-        onProtocolError: (error) =>
-          dispatch({
-            type: 'message',
-            message: {
-              type: 'fatal',
-              error: { type: 'ProtocolError', message: error.message },
-            },
-          }),
-      }),
-    // Created once for the process lifetime.
-    [],
-  );
-
+  /**
+   * One bridge per Session: the runtime binds its workspace, tools and store
+   * when it starts, so switching conversations replaces the process.
+   *
+   * Messages from a replaced process are dropped, so a turn it is still
+   * unwinding cannot leak into the new transcript.
+   */
   useEffect(() => {
-    bridge.send({
+    const client = new BridgeClient({
+      python: props.python,
+      cwd: props.workspace,
+      onMessage: (message) => {
+        if (bridgeRef.current === client) dispatch({ type: 'message', message });
+      },
+      onExit: (code) => {
+        if (bridgeRef.current !== client) return;
+        if (code === 0) exit();
+        else dispatch({ type: 'exited', code });
+      },
+      onProtocolError: (error) => {
+        if (bridgeRef.current !== client) return;
+        dispatch({
+          type: 'message',
+          message: {
+            type: 'fatal',
+            error: { type: 'ProtocolError', message: error.message },
+          },
+        });
+      },
+    });
+    bridgeRef.current = client;
+    client.send({
       type: 'start',
       workspace: protocolPath(props.workspace),
-      session_id: props.sessionId,
+      session_id: sessionId,
       provider_config_path: protocolPath(props.providerConfigPath),
       agent_config_path: protocolPath(props.agentConfigPath),
     });
-    return () => bridge.shutdown();
-  }, [bridge]);
+    // The stored conversation is not part of `ready`: it is sent only when
+    // asked, so a frontend that reads it elsewhere never pays for it.
+    client.send({ type: 'load_session' });
+    return () => {
+      bridgeRef.current = null;
+      client.shutdown();
+    };
+  }, [sessionId]);
 
   const busy =
     state.status === 'streaming' ||
@@ -88,7 +109,7 @@ export function App(props: AppProps): React.ReactElement {
 
   const answerApproval = (approved: boolean): void => {
     if (!state.approval) return;
-    bridge.send({
+    bridgeRef.current?.send({
       type: 'approval_response',
       request_id: state.approval.requestId,
       approved,
@@ -98,7 +119,7 @@ export function App(props: AppProps): React.ReactElement {
 
   const answerQuestion = (answer: { option_id: string } | { text: string }): void => {
     if (!state.question) return;
-    bridge.send({
+    bridgeRef.current?.send({
       type: 'user_question_response',
       request_id: state.question.requestId,
       ...answer,
@@ -119,7 +140,7 @@ export function App(props: AppProps): React.ReactElement {
     (_input, key) => {
       if (!state.question) return;
       if ((key.ctrl && _input === 'c') || key.escape) {
-        if (state.turnId) bridge.cancel(state.turnId);
+        if (state.turnId) bridgeRef.current?.cancel(state.turnId);
         dispatch({ type: 'cancelling' });
         return;
       }
@@ -174,7 +195,7 @@ export function App(props: AppProps): React.ReactElement {
         return;
       }
       if (key.return && permissionChoice) {
-        bridge.send({ type: 'permission_set', preset: permissionChoice });
+        bridgeRef.current?.send({ type: 'permission_set', preset: permissionChoice });
         setPermissionChoice(null);
         return;
       }
@@ -183,12 +204,51 @@ export function App(props: AppProps): React.ReactElement {
     { isActive: permissionChoice !== null },
   );
 
+  /** Hands the runtime to another conversation in this workspace. */
+  const switchSession = (choice: SessionSummary): void => {
+    // `restart` also closes the picker and empties the transcript.
+    dispatch({ type: 'restart' });
+    setSessionId(choice.session_id);
+  };
+
+  useInput(
+    (_input, key) => {
+      const sessions = state.sessions;
+      if (sessions === null) return;
+      if (key.escape) {
+        dispatch({ type: 'sessions_closed' });
+        return;
+      }
+      if (sessions.list.length === 0) return;
+      if (key.upArrow || (key.tab && key.shift)) {
+        dispatch({
+          type: 'sessions_choice',
+          selectedIndex:
+            (sessions.selectedIndex - 1 + sessions.list.length) % sessions.list.length,
+        });
+        return;
+      }
+      if (key.downArrow || key.tab) {
+        dispatch({
+          type: 'sessions_choice',
+          selectedIndex: (sessions.selectedIndex + 1) % sessions.list.length,
+        });
+        return;
+      }
+      if (key.return) {
+        const choice = sessions.list[sessions.selectedIndex];
+        if (choice) switchSession(choice);
+      }
+    },
+    { isActive: state.sessions !== null },
+  );
+
   // Global keys. Ink delivers Ctrl+C as input, so cancelling is explicit.
   useInput(
     (input, key) => {
       if (key.ctrl && input === 'c') {
         if (busy) {
-          if (state.turnId) bridge.cancel(state.turnId);
+          if (state.turnId) bridgeRef.current?.cancel(state.turnId);
           dispatch({ type: 'cancelling' });
         } else if (draft === '') {
           exit();
@@ -200,7 +260,7 @@ export function App(props: AppProps): React.ReactElement {
 
       if (key.escape) {
         if (busy) {
-          if (state.turnId) bridge.cancel(state.turnId);
+          if (state.turnId) bridgeRef.current?.cancel(state.turnId);
           dispatch({ type: 'cancelling' });
         } else {
           setDraft('');
@@ -210,7 +270,11 @@ export function App(props: AppProps): React.ReactElement {
 
       if (key.ctrl && input === 'd' && !busy && draft === '') exit();
     },
-    { isActive: state.approval === null && state.question === null && permissionChoice === null },
+    {
+      isActive:
+        state.approval === null && state.question === null && permissionChoice === null
+        && state.sessions === null,
+    },
   );
 
   const submit = (value: string): void => {
@@ -221,12 +285,16 @@ export function App(props: AppProps): React.ReactElement {
     const command = findCommand(text);
     if (command) {
       if (command.name === '/permissions') setPermissionChoice(state.permissionPreset);
+      else if (command.name === '/sessions') {
+        bridgeRef.current?.send({ type: 'list_sessions' });
+        dispatch({ type: 'sessions_opened' });
+      }
       return;
     }
     if (state.status !== 'idle' && state.turnId !== null) {
       steerCounter.current += 1;
       dispatch({ type: 'steer_submitted' });
-      bridge.send({
+      bridgeRef.current?.send({
         type: 'user_steer',
         turn_id: state.turnId,
         steer_id: `steer-${steerCounter.current}`,
@@ -241,7 +309,7 @@ export function App(props: AppProps): React.ReactElement {
     turnCounter.current += 1;
     const turnId = `turn-${turnCounter.current}`;
     dispatch({ type: 'submit', turnId, text });
-    bridge.send({ type: 'user_turn', turn_id: turnId, text });
+    bridgeRef.current?.send({ type: 'user_turn', turn_id: turnId, text });
   };
 
   return (
@@ -270,13 +338,21 @@ export function App(props: AppProps): React.ReactElement {
             <PermissionPrompt selected={permissionChoice} />
           </Box>
         ) : null}
+        {state.sessions ? (
+          <Box flexShrink={0}>
+            <SessionPicker
+              sessions={state.sessions.list}
+              selectedIndex={state.sessions.selectedIndex}
+            />
+          </Box>
+        ) : null}
       </Box>
 
       {state.status === 'fatal' ? (
         <Box flexShrink={0} marginTop={1}>
           <Text dimColor>Press Ctrl+C to exit.</Text>
         </Box>
-      ) : permissionChoice ? null : state.question && freeTextSelected ? (
+      ) : permissionChoice || state.sessions ? null : state.question && freeTextSelected ? (
         <Prompt
           value={questionDraft}
           onChange={setQuestionDraft}
@@ -294,7 +370,7 @@ export function App(props: AppProps): React.ReactElement {
           value={draft}
           onChange={setDraft}
           onSubmit={submit}
-          focus={state.approval === null && permissionChoice === null}
+          focus={state.approval === null && permissionChoice === null && state.sessions === null}
           busy={state.status !== 'idle'}
           docked
           commands={COMMANDS}

@@ -42,6 +42,7 @@ from .session import (
     Message,
     MessageOrigin,
     Session,
+    message_to_dict,
 )
 from .permissions import PermissionController, PermissionPreset
 from .session_store import JsonlSessionStore
@@ -193,6 +194,7 @@ __all__ = [
     "load_agent_config",
     "load_mcp_config",
     "load_tool_config",
+    "message_to_dict",
     "probe_image",
     "resolve_image",
     "resolve_readable_path",

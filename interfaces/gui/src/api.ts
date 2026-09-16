@@ -1,18 +1,6 @@
-import type { PermissionPreset, ToolCall } from "@nosis/protocol";
+import type { PermissionPreset, SessionItem, SessionSummary } from "@nosis/protocol";
 
-export type SessionItem = {
-  role: "user" | "assistant" | "tool";
-  // Text or structured content parts for multimodal turns.
-  content: any;
-  timestamp_utc?: string;
-  tool_calls?: ToolCall[];
-  tool_call_id?: string;
-  reasoning?: string | null;
-  // "tool_media" marks a user-role item the runtime synthesized to carry
-  // images a tool loaded. It is not something the person said, so the
-  // transcript renders it as part of the assistant's work.
-  origin?: "conversation" | "tool_media";
-};
+export type { SessionItem, SessionSummary };
 
 export type Session = {
   session_id: string;
@@ -20,7 +8,6 @@ export type Session = {
   workspace?: string | null;
   permission_preset: PermissionPreset;
 };
-export type SessionSummary = { session_id: string; title: string };
 export type WorkspaceSessions = { workspace: string; sessions: SessionSummary[] };
 export type ModelOption = { id: string; model: string };
 export type ModelOptions = { default: string; models: ModelOption[] };

@@ -6,7 +6,6 @@ import { App } from './app.js';
 
 type Options = {
   workspace: string;
-  sessionId: string | null;
   providerConfigPath: string;
   agentConfigPath: string;
 };
@@ -15,7 +14,6 @@ const USAGE = `Usage: nosis [options]
 
 Options:
   --workspace <path>      Workspace directory (default: current directory)
-  --session <id>          Resume an existing session
   --config <path>         Provider configuration file
   --agent-config <path>   Agent behaviour configuration file
   -h, --help              Show this message
@@ -25,7 +23,6 @@ function parseArguments(argv: string[]): Options {
   const configDirectory = join(homedir(), '.nosis');
   const options: Options = {
     workspace: process.cwd(),
-    sessionId: null,
     providerConfigPath: join(configDirectory, 'provider_config.json'),
     agentConfigPath: join(configDirectory, 'agent_config.json'),
   };
@@ -45,9 +42,6 @@ function parseArguments(argv: string[]): Options {
     switch (argument) {
       case '--workspace':
         options.workspace = resolve(value);
-        break;
-      case '--session':
-        options.sessionId = value;
         break;
       case '--config':
         options.providerConfigPath = resolve(value);
@@ -97,7 +91,6 @@ render(
   <App
     python={python}
     workspace={options.workspace}
-    sessionId={options.sessionId}
     providerConfigPath={options.providerConfigPath}
     agentConfigPath={options.agentConfigPath}
   />,

@@ -520,6 +520,52 @@ class BridgeServeTest(unittest.TestCase):
             bridge.serve()
         self.assertEqual(emitted(stdout)[0]["type"], "fatal")
 
+    def test_answers_the_workspace_sessions_and_the_stored_conversation(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = JsonlSessionStore(root / "sessions")
+            session = Session("saved")
+            session.begin_turn("t")
+            session.add_item("user", "hello there")
+            session.add_item("assistant", "hi")
+            session.finish_turn("completed")
+            store.bind_workspace(session.session_id, root)
+            store.append_events(
+                session.session_id, session.journal, workspace=root
+            )
+
+            bridge, stdout = make_bridge(
+                [
+                    json.dumps(start_message(root, session_id="saved")),
+                    '{"type": "load_session"}',
+                    '{"type": "list_sessions"}',
+                    '{"type": "shutdown"}',
+                ]
+            )
+            bridge.serve()
+
+            messages = emitted(stdout)
+            loaded = next(
+                message
+                for message in messages
+                if message["type"] == "session_items"
+            )
+            self.assertEqual(
+                [item["content"] for item in loaded["items"]],
+                ["hello there", "hi"],
+            )
+            listed = next(
+                message
+                for message in messages
+                if message["type"] == "sessions_listed"
+            )
+            self.assertEqual(
+                listed["sessions"],
+                [{"session_id": "saved", "title": "hello there"}],
+            )
+
 
 def start_message(
     directory: Path,

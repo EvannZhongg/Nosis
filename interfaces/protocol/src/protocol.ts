@@ -30,6 +30,33 @@ export type Usage = {
 
 export type PermissionPreset = 'ask_for_approval' | 'full_access';
 
+export type SessionSummary = {
+  session_id: string;
+  title: string;
+};
+
+export type SessionContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image'; path: string; mime_type: string };
+
+/**
+ * One stored conversation item, as the Session journal holds it.
+ *
+ * A turn is several items: the user's message, an assistant step per model
+ * call, and one item per Tool result answering that step's calls.
+ */
+export type SessionItem = {
+  role: 'user' | 'assistant' | 'tool';
+  content: string | SessionContentPart[] | null;
+  timestamp_utc?: string;
+  tool_calls?: ToolCall[];
+  tool_call_id?: string;
+  reasoning?: string | null;
+  // "tool_media" marks a user-role item the runtime synthesized to carry
+  // images a Tool loaded; the person never wrote it.
+  origin?: 'conversation' | 'tool_media';
+};
+
 export type UserQuestionOption = {
   id: string;
   label: string;
@@ -132,6 +159,8 @@ export type Incoming =
       tool_name?: string;
     }
   | { type: 'permission_changed'; preset: PermissionPreset }
+  | { type: 'sessions_listed'; sessions: SessionSummary[] }
+  | { type: 'session_items'; items: SessionItem[] }
   | UserQuestion
   | { type: 'mcp_server_status'; server: string; status: string; tool_count?: number; error?: string }
   | { type: 'turn_completed'; turn_id: string; usage: Usage | null }
@@ -159,6 +188,9 @@ export type Outgoing =
   | { type: 'permission_set'; preset: PermissionPreset }
   | { type: 'cancel'; turn_id: string }
   | { type: 'user_question_response'; request_id: string; option_id?: string; text?: string }
+  // Ask for the Workspace's stored Sessions, and for the one just started.
+  | { type: 'list_sessions' }
+  | { type: 'load_session' }
   | { type: 'shutdown' };
 
 /**

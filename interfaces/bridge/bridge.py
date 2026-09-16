@@ -37,6 +37,7 @@ from agent_core import (
     ImagePart,
     builtin_catalog,
     load_agent_config,
+    message_to_dict,
     probe_image,
     vision_aware_tool_names,
     skill_aware_tool_names,
@@ -55,6 +56,8 @@ from .protocol import (
     encode,
     event_to_message,
     ready_message,
+    session_items_message,
+    sessions_listed_message,
     usage_to_dict,
 )
 
@@ -482,6 +485,26 @@ class Bridge:
             skill_warnings=skills.warnings,
         ))
 
+    def _emit_sessions(self) -> None:
+        """Answer ``list_sessions`` with this Workspace's stored Sessions."""
+        if self._store is None or self._workspace is None:
+            raise RuntimeError("received 'list_sessions' before 'start'")
+        self.emit(
+            **sessions_listed_message(
+                self._store.list_workspace_sessions(self._workspace.path)
+            )
+        )
+
+    def _emit_session_items(self) -> None:
+        """Answer ``load_session`` with the conversation to render."""
+        if self._session is None:
+            raise RuntimeError("received 'load_session' before 'start'")
+        self.emit(
+            **session_items_message(
+                [message_to_dict(item) for item in self._session.items]
+            )
+        )
+
     def _provider_for(
         self,
         config,
@@ -657,6 +680,10 @@ class Bridge:
                 self.run_turn(message)
             elif message["type"] == "permission_set":
                 self._set_permission_preset(message)
+            elif message["type"] == "list_sessions":
+                self._emit_sessions()
+            elif message["type"] == "load_session":
+                self._emit_session_items()
 
     def close(self) -> None:
         self._route_shutdown(notify_commands=False)

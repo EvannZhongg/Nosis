@@ -74,7 +74,6 @@ function renderApp() {
     <App
       python="python3"
       workspace="/w"
-      sessionId={null}
       providerConfigPath="/p"
       agentConfigPath="/a"
     />,
@@ -186,6 +185,95 @@ describe('App', () => {
     await waitFor(() => expect(lastFrame()).toContain('Ask for approval'));
     // The command opened the permission card instead of becoming a turn.
     expect(turns()).toHaveLength(0);
+  });
+
+  it('switches to another conversation and replays it', async () => {
+    const { stdin, lastFrame } = renderApp();
+    await waitForReady(lastFrame);
+
+    await typeDraft(stdin, lastFrame, '/sessions');
+    stdin.write('\r');
+    await waitFor(() => expect(sent.find((m) => m.type === 'list_sessions')).toBeDefined());
+    await waitFor(() => expect(lastFrame()).toContain('Sessions'));
+
+    emit({
+      type: 'sessions_listed',
+      sessions: [
+        { session_id: 'newer', title: 'about the parser' },
+        { session_id: 'older', title: 'about the tests' },
+      ],
+    });
+    await waitFor(() => expect(lastFrame()).toContain('❯ about the parser'));
+
+    stdin.write('\u001b[B');
+    await waitFor(() => expect(lastFrame()).toContain('❯ about the tests'));
+    stdin.write('\r');
+
+    // The runtime is replaced rather than re-pointed, so a second bridge
+    // starts on the chosen session and the picker closes.
+    await waitFor(() => expect(sent.filter((m) => m.type === 'start')).toHaveLength(2));
+    expect(sent.filter((m) => m.type === 'start')[1]).toMatchObject({
+      session_id: 'older',
+    });
+    expect(lastFrame()).not.toContain('❯ about the tests');
+
+    emit({
+      type: 'session_items',
+      items: [
+        { role: 'user', content: 'earlier question' },
+        {
+          role: 'assistant',
+          content: 'earlier answer',
+          timestamp_utc: '2026-09-16T10:00:00Z',
+        },
+      ],
+    });
+    await waitFor(() => expect(lastFrame()).toContain('earlier question'));
+    expect(lastFrame()).toContain('earlier answer');
+    expect(turns()).toHaveLength(0);
+  });
+
+  it('replays a long conversation without walking into the render limit', async () => {
+    const { stdin, lastFrame } = renderApp();
+    await waitForReady(lastFrame);
+
+    await typeDraft(stdin, lastFrame, '/sessions');
+    stdin.write('\r');
+    await waitFor(() => expect(lastFrame()).toContain('Sessions'));
+    emit({
+      type: 'sessions_listed',
+      sessions: [{ session_id: 'older', title: 'a long conversation' }],
+    });
+    await waitFor(() => expect(lastFrame()).toContain('a long conversation'));
+    stdin.write('\r');
+    await waitFor(() => expect(sent.filter((m) => m.type === 'start')).toHaveLength(2));
+
+    // The whole conversation arrives in one message, so the transcript has
+    // to commit it in one step: committing item by item from a single
+    // update exhausts React's nested-update limit.
+    emit({
+      type: 'session_items',
+      items: Array.from({ length: 60 }, (_, index) => ({
+        role: index % 2 === 0 ? 'user' : 'assistant',
+        content: `replayed line ${index + 1}`,
+      })),
+    });
+
+    await waitFor(() => expect(lastFrame()).toContain('replayed line 60'));
+    expect(lastFrame()).toContain('ask anything…');
+  });
+
+  it('closes the session picker on escape without switching', async () => {
+    const { stdin, lastFrame } = renderApp();
+    await waitForReady(lastFrame);
+
+    await typeDraft(stdin, lastFrame, '/sessions');
+    stdin.write('\r');
+    await waitFor(() => expect(lastFrame()).toContain('Sessions'));
+
+    stdin.write('\u001b');
+    await waitFor(() => expect(lastFrame()).not.toContain('Loading…'));
+    expect(sent.filter((m) => m.type === 'start')).toHaveLength(1);
   });
 
   it('sends steering while the agent is busy', async () => {

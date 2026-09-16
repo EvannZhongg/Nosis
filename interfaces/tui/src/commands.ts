@@ -14,6 +14,10 @@ export const COMMANDS: Command[] = [
     name: '/permissions',
     description: 'Choose between Ask for approval and Full Access',
   },
+  {
+    name: '/sessions',
+    description: 'Switch to another conversation in this workspace',
+  },
 ];
 
 export function findCommand(name: string): Command | undefined {

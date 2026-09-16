@@ -66,28 +66,16 @@ class JsonlSessionStore:
         for workspace_dir in self._directory.iterdir():
             if not workspace_dir.is_dir():
                 continue
-            sessions = []
-            for session_dir in workspace_dir.iterdir():
-                path = session_dir / f"{session_dir.name}.jsonl"
-                if path.is_file():
-                    sessions.append(
-                        (path.stat().st_mtime_ns, session_dir.name, path)
-                    )
+            sessions = _scan_sessions(workspace_dir)
             if not sessions:
                 continue
-            sessions.sort(
-                key=lambda entry: (entry[0], entry[1]), reverse=True
-            )
             groups.append(
                 {
                     "workspace": (
                         workspace_from_key(workspace_dir.name)
                     ),
                     "sessions": [
-                        {
-                            "session_id": session_id,
-                            "title": _session_title(path, session_id),
-                        }
+                        _session_summary(session_id, path)
                         for _, session_id, path in sessions
                     ],
                     "updated": max(entry[0] for entry in sessions),
@@ -97,6 +85,17 @@ class JsonlSessionStore:
         for group in groups:
             group.pop("updated", None)
         return groups
+
+    def list_workspace_sessions(
+        self, workspace: Path | str
+    ) -> list[dict[str, object]]:
+        """List one Workspace's Sessions, most recently written first."""
+        return [
+            _session_summary(session_id, path)
+            for _, session_id, path in _scan_sessions(
+                workspace_directory(self._directory, workspace)
+            )
+        ]
 
     def load(
         self,
@@ -300,6 +299,23 @@ def _write_session_metadata(
         json.dump(metadata, file, ensure_ascii=False)
         file.flush()
         os.fsync(file.fileno())
+
+
+def _scan_sessions(directory: Path) -> list[tuple[int, str, Path]]:
+    """Return one Workspace's journals as (mtime, session_id, path)."""
+    if not directory.is_dir():
+        return []
+    found = [
+        (path.stat().st_mtime_ns, session_dir.name, path)
+        for session_dir in directory.iterdir()
+        if (path := session_dir / f"{session_dir.name}.jsonl").is_file()
+    ]
+    found.sort(key=lambda entry: (entry[0], entry[1]), reverse=True)
+    return found
+
+
+def _session_summary(session_id: str, path: Path) -> dict[str, object]:
+    return {"session_id": session_id, "title": _session_title(path, session_id)}
 
 
 def _session_title(path: Path, session_id: str) -> str:

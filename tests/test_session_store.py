@@ -80,6 +80,26 @@ class JsonlSessionStoreTest(unittest.TestCase):
                 [item["session_id"] for item in listed], ["newer", "older"]
             )
 
+    def test_lists_only_the_sessions_of_one_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = JsonlSessionStore(root / "sessions")
+            for workspace, session_id in (
+                (root / "here", "mine"),
+                (root / "elsewhere", "theirs"),
+            ):
+                session = Session(session_id)
+                session.begin_turn("t")
+                session.add_item("user", session_id)
+                session.finish_turn("completed")
+                persist(store, workspace, session)
+
+            self.assertEqual(
+                store.list_workspace_sessions(root / "here"),
+                [{"session_id": "mine", "title": "mine"}],
+            )
+            self.assertEqual(store.list_workspace_sessions(root / "empty"), [])
+
     def test_ignores_session_directories_without_a_journal(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)

@@ -323,7 +323,7 @@ class Session:
         event = self._event(
             "message_appended",
             self._current_turn_id,
-            {"message": _message_to_dict(message)},
+            {"message": message_to_dict(message)},
             tool_call_id,
         )
         self.apply_event(event)
@@ -351,7 +351,7 @@ class Session:
         return event
 
 
-def _message_to_dict(message: Message) -> dict[str, object]:
+def message_to_dict(message: Message) -> dict[str, object]:
     data: dict[str, object] = {
         "role": message.role,
         "content": _content_to_dict(message),

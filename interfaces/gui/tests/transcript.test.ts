@@ -170,7 +170,7 @@ describe("applyMessage", () => {
       tool_calls: [TOOL_CALL],
     });
     // The protocol carries no output, only the status.
-    expect(JSON.parse(items[1].content!)).toEqual({ ok: true });
+    expect(JSON.parse(items[1].content as string)).toEqual({ ok: true });
   });
 
   it("applies a later tool result before earlier calls finish", () => {
@@ -227,7 +227,7 @@ describe("applyMessage", () => {
       },
     ]);
 
-    expect(JSON.parse(items[0].content!)).toEqual({
+    expect(JSON.parse(items[0].content as string)).toEqual({
       ok: false,
       error: { type: "PermissionError", message: "denied" },
     });

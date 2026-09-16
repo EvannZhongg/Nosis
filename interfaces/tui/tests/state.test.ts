@@ -357,3 +357,161 @@ describe('reducer', () => {
     expect(reducer(state, { type: 'cancelling' })).toBe(state);
   });
 });
+
+describe('sessions', () => {
+  it('fills the open picker with the workspace sessions', () => {
+    let state = reducer(ready(), { type: 'sessions_opened' });
+    expect(state.sessions).toEqual({ list: [], selectedIndex: 0 });
+
+    state = reducer(state, {
+      type: 'message',
+      message: {
+        type: 'sessions_listed',
+        sessions: [
+          { session_id: 'newer', title: 'about the parser' },
+          { session_id: 'older', title: 'about the tests' },
+        ],
+      },
+    });
+    expect(state.sessions?.list.map((session) => session.session_id)).toEqual([
+      'newer',
+      'older',
+    ]);
+
+    state = reducer(state, { type: 'sessions_choice', selectedIndex: 1 });
+    expect(state.sessions?.selectedIndex).toBe(1);
+
+    state = reducer(state, { type: 'sessions_closed' });
+    expect(state.sessions).toBeNull();
+  });
+
+  it('drops a listing that arrives after the picker closed', () => {
+    const state = ready();
+    expect(
+      reducer(state, {
+        type: 'message',
+        message: {
+          type: 'sessions_listed',
+          sessions: [{ session_id: 'newer', title: 'about the parser' }],
+        },
+      }),
+    ).toBe(state);
+  });
+
+  it('keeps the resumed notice above the replayed conversation', () => {
+    let state = reducer(ready(), {
+      type: 'message',
+      message: { ...READY, resumed: true, message_count: 2 },
+    });
+    state = reducer(state, {
+      type: 'message',
+      message: {
+        type: 'session_items',
+        items: [
+          { role: 'user', content: 'first question' },
+          { role: 'assistant', content: 'first answer', timestamp_utc: '2026-09-16T10:00:00Z' },
+        ],
+      },
+    });
+
+    expect(state.entries.map((entry) => entry.kind)).toEqual([
+      'notice',
+      'user',
+      'assistant',
+    ]);
+    expect(state.entries.at(-1)).toMatchObject({
+      kind: 'assistant',
+      text: 'first answer',
+      settled: true,
+    });
+  });
+
+  it('rebuilds a stored turn as reasoning, a tool call and its outcome', () => {
+    const state = reducer(ready(), {
+      type: 'message',
+      message: {
+        type: 'session_items',
+        items: [
+          { role: 'user', content: [{ type: 'text', text: 'run it' }] },
+          {
+            role: 'assistant',
+            content: null,
+            reasoning: 'weighing it',
+            tool_calls: [
+              { id: 'call-1', name: 'shell', arguments: { command: 'ls' } },
+              { id: 'call-2', name: 'shell', arguments: { command: 'pwd' } },
+            ],
+          },
+          {
+            role: 'tool',
+            tool_call_id: 'call-1',
+            content: JSON.stringify({ ok: true, output: 'file.txt' }),
+          },
+          {
+            role: 'tool',
+            tool_call_id: 'call-2',
+            content: JSON.stringify({
+              ok: false,
+              error: { type: 'PermissionError', message: 'denied' },
+            }),
+          },
+        ],
+      },
+    });
+
+    expect(state.entries).toMatchObject([
+      { kind: 'user', text: 'run it' },
+      { kind: 'reasoning', text: 'weighing it' },
+      { kind: 'tool', name: 'shell', index: 1, count: 2, state: 'ok' },
+      {
+        kind: 'tool',
+        name: 'shell',
+        index: 2,
+        count: 2,
+        state: 'error',
+        error: { type: 'PermissionError', message: 'denied' },
+      },
+    ]);
+  });
+
+  it('renders an interrupted tool call as failed and images as a notice', () => {
+    const state = reducer(ready(), {
+      type: 'message',
+      message: {
+        type: 'session_items',
+        items: [
+          {
+            role: 'assistant',
+            content: null,
+            tool_calls: [{ id: 'call-1', name: 'shell', arguments: { command: 'ls' } }],
+          },
+          {
+            role: 'user',
+            origin: 'tool_media',
+            content: [
+              { type: 'text', text: 'tool media' },
+              { type: 'image', path: '.nosis/a.png', mime_type: 'image/png' },
+            ],
+          },
+        ],
+      },
+    });
+
+    expect(state.entries).toMatchObject([
+      { kind: 'tool', state: 'error' },
+      { kind: 'notice', text: 'Viewing 1 image(s): .nosis/a.png' },
+    ]);
+  });
+
+  it('drops everything the previous runtime reported on a restart', () => {
+    let state = reducer(ready(), {
+      type: 'message',
+      message: { type: 'assistant_delta', turn_id: 't1', text: 'partial', model_call_index: 1 },
+    });
+    state = reducer(state, { type: 'sessions_opened' });
+
+    state = reducer(state, { type: 'restart' });
+
+    expect(state).toEqual(initialState);
+  });
+});

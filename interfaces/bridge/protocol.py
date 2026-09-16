@@ -113,6 +113,26 @@ def attachment_replaced_message(*, running: bool) -> dict[str, object]:
     }
 
 
+def sessions_listed_message(
+    sessions: list[dict[str, object]],
+) -> dict[str, object]:
+    """Answer ``list_sessions`` with the Workspace's stored Sessions."""
+    return {
+        "type": "sessions_listed",
+        "sessions": sessions,
+    }
+
+
+def session_items_message(
+    items: list[dict[str, object]],
+) -> dict[str, object]:
+    """Answer ``load_session`` with the stored conversation to render."""
+    return {
+        "type": "session_items",
+        "items": items,
+    }
+
+
 def event_to_message(
     event: AgentEvent,
     turn_id: str,

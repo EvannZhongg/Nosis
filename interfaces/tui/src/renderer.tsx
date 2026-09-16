@@ -3,7 +3,7 @@ import { Box, Static, Text, useBoxMetrics } from 'ink';
 import type { DOMElement } from 'ink';
 import Spinner from 'ink-spinner';
 import { formatArguments } from '@nosis/protocol';
-import type { PermissionPreset } from '@nosis/protocol';
+import type { PermissionPreset, SessionSummary } from '@nosis/protocol';
 import type { ApprovalChoice, Entry, State, UserQuestionState } from './state.js';
 
 function EntryView({ entry }: { entry: Entry }): React.ReactElement {
@@ -198,10 +198,21 @@ export function Transcript({ state }: { state: State }): React.ReactElement {
     viewport.hasMeasured && content.hasMeasured && content.height > viewport.height;
 
   React.useEffect(() => {
+    // Committed in one step rather than one item per render: a resumed
+    // conversation arrives as a whole transcript, and a per-item cascade
+    // walks into React's nested-update limit. Items only become committable
+    // once they are settled, so no live entry is written early.
     if (overflowing && committedCount < committableCount) {
-      setCommittedCount((count) => Math.min(count + 1, committableCount));
+      setCommittedCount(committableCount);
     }
   }, [committableCount, committedCount, overflowing]);
+
+  React.useEffect(() => {
+    // A new conversation replaces the transcript. Following it keeps the
+    // cursor on settled items: a stale one would commit the live turn to
+    // Static, which writes it once and never updates it again.
+    if (committedCount > committableCount) setCommittedCount(committableCount);
+  }, [committableCount, committedCount]);
 
   const committed = items.slice(0, committedCount);
   const visible = items.slice(committedCount);
@@ -346,6 +357,49 @@ export function PermissionPrompt({
         <Text dimColor>    Skip approval and execute directly on the current host.</Text>
       </Box>
       <Text dimColor>↑/↓ select · enter confirm · esc close</Text>
+    </Box>
+  );
+}
+
+export function SessionPicker({
+  sessions,
+  selectedIndex,
+}: {
+  sessions: SessionSummary[];
+  selectedIndex: number;
+}): React.ReactElement {
+  return (
+    <Box
+      marginTop={1}
+      flexDirection="column"
+      borderStyle="round"
+      borderColor="cyan"
+      paddingX={1}
+    >
+      <Text color="cyan" bold>Sessions</Text>
+      <Box marginTop={1} flexDirection="column">
+        {sessions.length === 0 ? (
+          <Text dimColor>Loading…</Text>
+        ) : (
+          sessions.map((session, index) => {
+            const selected = index === selectedIndex;
+            return (
+              <Box key={session.session_id}>
+                <Text
+                  color={selected ? 'cyan' : undefined}
+                  dimColor={!selected}
+                  bold={selected}
+                  wrap="truncate-end"
+                >
+                  {selected ? '❯ ' : '  '}
+                  {session.title}
+                </Text>
+              </Box>
+            );
+          })
+        )}
+      </Box>
+      <Text dimColor>↑/↓ select · enter switch · esc close</Text>
     </Box>
   );
 }

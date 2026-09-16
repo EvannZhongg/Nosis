@@ -156,6 +156,6 @@ Execution History 直接由 Journal replay；Provider Conversation 由独立 pro
 
 运行中用户 steering 在安全点作为普通 `user` Message 追加，因此它自然构成新的 `ContextUnit`，沿用同一套 token 统计、hard limit 与压缩保留规则，不维护额外的上下文计数。
 
-Session 位于 `~/.nosis/sessions/<WORKSPACE_KEY>/<SESSION_ID>/`，其中 `<SESSION_ID>.jsonl` 是运行日志，`session.json` 保存该 Session 的权限 preset。Session ID 来自目录名，Workspace 路径由可逆的 `<WORKSPACE_KEY>` 取得，不在配置中重复保存。修改 Workspace 会将整个 Session 目录移动到新的 Workspace 分组。超过回灌上限的 Tool Result 保存为同目录下的 `<TOOL_CALL_ID>.txt`；使用 `nosis --session SESSION_ID` 恢复。子代理的 Journal 写在父 Session 的 `subagents` 目录下，因此不会出现在会话列表中，但仍可查阅。
+Session 位于 `~/.nosis/sessions/<WORKSPACE_KEY>/<SESSION_ID>/`，其中 `<SESSION_ID>.jsonl` 是运行日志，`session.json` 保存该 Session 的权限 preset。Session ID 来自目录名，Workspace 路径由可逆的 `<WORKSPACE_KEY>` 取得，不在配置中重复保存。修改 Workspace 会将整个 Session 目录移动到新的 Workspace 分组。超过回灌上限的 Tool Result 保存为同目录下的 `<TOOL_CALL_ID>.txt`；TUI 用 `/sessions` 列出当前 Workspace 的 Session 并切换，GUI 直接读取同一份存储。子代理的 Journal 写在父 Session 的 `subagents` 目录下，因此不会出现在会话列表中，但仍可查阅。
 
 GUI 上传的图片保存在 Workspace 的 `.nosis/attachments/<id>.<ext>`，Session 只记录路径和 MIME 类型。Runtime 请求 Provider 时才读取图片，并通过 `LLMRequest(media_root=workspace.path)` 解析工作区路径。

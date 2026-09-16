@@ -1,4 +1,12 @@
-import type { Incoming, PermissionPreset, ProtocolError, Usage, UserQuestionOption } from '@nosis/protocol';
+import type {
+  Incoming,
+  PermissionPreset,
+  ProtocolError,
+  SessionItem,
+  SessionSummary,
+  Usage,
+  UserQuestionOption,
+} from '@nosis/protocol';
 
 export type Status =
   | 'starting'
@@ -54,6 +62,8 @@ export type State = {
     choice: ApprovalChoice;
   } | null;
   question: UserQuestionState | null;
+  /** Open session picker, filled once the bridge answers `list_sessions`. */
+  sessions: { list: SessionSummary[]; selectedIndex: number } | null;
   turnId: string | null;
   usage: Usage | null;
   pendingSteers: number;
@@ -67,6 +77,11 @@ export type Action =
   | { type: 'approval_resolved' }
   | { type: 'question_choice'; selectedIndex: number }
   | { type: 'question_resolved' }
+  | { type: 'sessions_opened' }
+  | { type: 'sessions_choice'; selectedIndex: number }
+  | { type: 'sessions_closed' }
+  /** Drops everything the previous runtime reported, for a new Session. */
+  | { type: 'restart' }
   | { type: 'cancelling' }
   | { type: 'exited'; code: number | null };
 
@@ -80,6 +95,7 @@ export const initialState: State = {
   mcpStatus: null,
   approval: null,
   question: null,
+  sessions: null,
   turnId: null,
   usage: null,
   pendingSteers: 0,
@@ -157,6 +173,122 @@ function resolveTool(
   );
 }
 
+type ToolOutcome = { ok: boolean; error?: ProtocolError };
+
+/** Stored Tool results keyed by the call each one answers. */
+function toolOutcomes(items: SessionItem[]): Map<string, ToolOutcome> {
+  const outcomes = new Map<string, ToolOutcome>();
+  for (const item of items) {
+    if (
+      item.role !== 'tool'
+      || item.tool_call_id === undefined
+      || typeof item.content !== 'string'
+    ) {
+      continue;
+    }
+    const parsed = JSON.parse(item.content) as { ok?: boolean; error?: ProtocolError };
+    outcomes.set(item.tool_call_id, {
+      ok: parsed.ok !== false,
+      ...(parsed.error ? { error: parsed.error } : {}),
+    });
+  }
+  return outcomes;
+}
+
+function itemText(content: SessionItem['content']): string {
+  if (typeof content === 'string') return content;
+  if (content === null) return '';
+  const texts: string[] = [];
+  for (const part of content) {
+    if (part.type === 'text') texts.push(part.text);
+  }
+  return texts.join('\n');
+}
+
+function itemImagePaths(content: SessionItem['content']): string[] {
+  if (content === null || typeof content === 'string') return [];
+  const paths: string[] = [];
+  for (const part of content) {
+    if (part.type === 'image') paths.push(part.path);
+  }
+  return paths;
+}
+
+/**
+ * Rebuilds transcript entries from a stored conversation.
+ *
+ * A resumed Session is replayed from the items the model itself saw, so the
+ * entries mirror what the live protocol messages would have produced: one
+ * user entry per turn, reasoning ahead of the answer, and one entry per Tool
+ * call whose outcome comes from the item answering it.
+ */
+function historyEntries(items: SessionItem[]): Entry[] {
+  const outcomes = toolOutcomes(items);
+  const entries: Entry[] = [];
+
+  for (const item of items) {
+    // Tool results only carry an outcome; the call entry shows it.
+    if (item.role === 'tool') continue;
+
+    if (item.origin === 'tool_media') {
+      const paths = itemImagePaths(item.content);
+      if (paths.length > 0) {
+        entries.push({
+          kind: 'notice',
+          id: nextId('notice'),
+          level: 'info',
+          text: `Viewing ${paths.length} image(s): ${paths.join(', ')}`,
+        });
+      }
+      continue;
+    }
+
+    if (item.reasoning) {
+      entries.push({
+        kind: 'reasoning',
+        id: nextId('reasoning'),
+        text: item.reasoning,
+        settled: true,
+      });
+    }
+
+    const text = itemText(item.content);
+    if (item.role === 'user') {
+      if (text) entries.push({ kind: 'user', id: nextId('user'), text });
+      continue;
+    }
+
+    if (text) {
+      entries.push({
+        kind: 'assistant',
+        id: nextId('assistant'),
+        text,
+        settled: true,
+        ...(item.timestamp_utc ? { timestamp_utc: item.timestamp_utc } : {}),
+      });
+    }
+
+    const calls = item.tool_calls ?? [];
+    calls.forEach((call, index) => {
+      const outcome = outcomes.get(call.id);
+      entries.push({
+        kind: 'tool',
+        id: call.id,
+        name: call.name,
+        args: call.arguments,
+        index: index + 1,
+        count: calls.length,
+        // A call the journal never settled was interrupted, and nothing
+        // in a replay is still running.
+        state: outcome === undefined || !outcome.ok ? 'error' : 'ok',
+        ...(outcome?.error ? { error: outcome.error } : {}),
+      });
+    });
+  }
+
+  return entries;
+}
+
 export function reducer(state: State, action: Action): State {
   const next = reduceAction(state, action);
   // Reasoning deltas extend the open entry; any other action means the model
@@ -203,6 +335,24 @@ function reduceAction(state: State, action: Action): State {
 
     case 'question_resolved':
       return { ...state, status: 'running', question: null };
+
+    case 'sessions_opened':
+      return { ...state, sessions: { list: [], selectedIndex: 0 } };
+
+    case 'sessions_choice':
+      return state.sessions === null
+        ? state
+        : {
+            ...state,
+            sessions: { ...state.sessions, selectedIndex: action.selectedIndex },
+          };
+
+    case 'sessions_closed':
+      return { ...state, sessions: null };
+
+    case 'restart':
+      // The next runtime reports its own workspace, model and preset.
+      return initialState;
 
     case 'cancelling':
       return state.status === 'idle' || state.status === 'fatal'
@@ -399,6 +549,16 @@ function applyMessage(state: State, message: Incoming): State {
           },
         ],
       };
+
+    case 'sessions_listed':
+      return state.sessions === null
+        ? state
+        : { ...state, sessions: { list: message.sessions, selectedIndex: 0 } };
+
+    case 'session_items':
+      // Appended rather than prepended: the restart already emptied the
+      // transcript, so the resumed notice stays above the stored turns.
+      return { ...state, entries: [...state.entries, ...historyEntries(message.items)] };
 
     case 'user_question': {
       const recommendedIndex = message.options.findIndex((option) => option.recommended);
