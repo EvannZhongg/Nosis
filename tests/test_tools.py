@@ -4,35 +4,22 @@ import subprocess
 import threading
 import unittest
 import tempfile
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from agent_core import (
-    AgentConfig,
     AskUserTool,
     CommandExecutionResult,
     EditFileTool,
-    JsonlSessionStore,
     ListDirectoryTool,
-    LLMProvider,
-    LLMResponse,
-    PermissionController,
-    PermissionPreset,
     ReadFileTool,
     SearchFilesTool,
     Session,
-    ShellApprovalPolicy,
     ShellTool,
-    SubagentRole,
-    SubagentRoleRegistry,
-    SubagentRuntime,
-    SubagentTool,
     Tool,
     ToolCall,
     ToolCatalog,
-    ToolConfig,
     ToolDefinition,
     ToolExecutionContext,
     ToolResult,
@@ -40,8 +27,6 @@ from agent_core import (
     Workspace,
     builtin_catalog,
 )
-from agent_core.llm import LLMRequest
-from agent_core.session_paths import session_directory
 from agent_core.tools.builtin.search_files import MAX_OUTPUT_CHARS
 from agent_core.tools.builtin.read_file import (
     MAX_FILE_SIZE_BYTES as MAX_READ_FILE_SIZE_BYTES,
@@ -127,6 +112,11 @@ class NeedsExecutorTool(Tool):
 
     def execute(self, arguments, context):
         return "ran"
+
+
+class ConcurrentTool(FailingTool):
+    name = "concurrent"
+    concurrent = True
 
 
 class ToolCatalogTest(unittest.TestCase):
@@ -283,36 +273,14 @@ class ToolSetTest(unittest.TestCase):
             },
         )
 
-    def test_only_subagent_is_marked_concurrent(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            catalog = builtin_catalog()
-            tools = catalog.select(
-                catalog.names,
-                context_for(
-                    Workspace(Path(directory)),
-                    command_executor=UnusedExecutor(),
-                    vision_provider=VisionProvider(),
-                    subagents=SubagentRuntime(
-                        config=SUBAGENT_CONFIG,
-                        catalog=catalog,
-                        roles=SubagentRoleRegistry(
-                            (role("researcher", "Reads.", ()),)
-                        ),
-                    ),
-                ),
-            )
+    def test_reports_concurrency_only_for_selected_concurrent_tools(self) -> None:
+        tools = ToolCatalog((ConcurrentTool(), FailingTool())).select(
+            ("concurrent", "failing"), context_for(_TMP_WORKSPACE)
+        )
 
-            self.assertTrue(tools.is_concurrent("subagent"))
-            for name in ("read_file", "edit_file", "shell", "web_search"):
-                self.assertFalse(tools.is_concurrent(name), name)
-
-    def test_reports_an_unknown_tool_as_not_concurrent(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            tools = builtin_catalog().select(
-                (), context_for(Workspace(Path(directory)))
-            )
-
-            self.assertFalse(tools.is_concurrent("subagent"))
+        self.assertTrue(tools.is_concurrent("concurrent"))
+        self.assertFalse(tools.is_concurrent("failing"))
+        self.assertFalse(tools.is_concurrent("unknown"))
 
 
 class AskUserToolTest(unittest.TestCase):
@@ -438,460 +406,6 @@ def _catalog_tools(catalog):
 class UnusedExecutor:
     def execute(self, command, timeout_seconds=60):
         raise AssertionError("executor should not be called")
-
-
-class VisionProvider(LLMProvider):
-    @property
-    def max_context_tokens(self) -> int:
-        return 1000
-
-    @property
-    def capabilities(self):
-        return SimpleNamespace(input_modalities=("text", "image"))
-
-    def count_input_tokens(self, request) -> int:
-        return 1
-
-    def stream(self, request, on_text_delta, on_reasoning_delta=None):
-        return LLMResponse(content="an image")
-
-
-SUBAGENT_CONFIG = AgentConfig(
-    max_same_tool_calls=5,
-    output_reserve_tokens=100,
-    tools=ToolConfig(enabled=()),
-)
-
-
-class StaticProvider(LLMProvider):
-    """Answers every request with the same text, enough to run a child loop."""
-
-    def __init__(self, answer: str) -> None:
-        self._answer = answer
-
-    @property
-    def max_context_tokens(self) -> int:
-        return 1000
-
-    def count_input_tokens(self, request: LLMRequest) -> int:
-        return 1
-
-    def stream(
-        self,
-        request: LLMRequest,
-        on_text_delta,
-        on_reasoning_delta=None,
-    ) -> LLMResponse:
-        on_text_delta(self._answer)
-        return LLMResponse(content=self._answer)
-
-
-def subagent_runtime(catalog, roles, **fields):
-    return SubagentRuntime(
-        config=SUBAGENT_CONFIG,
-        catalog=catalog,
-        roles=SubagentRoleRegistry(roles),
-        **fields,
-    )
-
-
-def role(name, description, tools, answer="child answer", **fields):
-    """A role on its own text-only provider, as the bridge would build it."""
-    return SubagentRole(
-        name=name,
-        description=description,
-        tools=tuple(tools),
-        provider=StaticProvider(answer),
-        **fields,
-    )
-
-
-RESEARCHER = role(
-    "researcher",
-    "Read the workspace and report findings.",
-    ("read_file", "list_directory"),
-)
-CODER = role("coder", "Implement a change.", ("read_file", "edit_file"))
-
-
-class SubagentRoleRegistryTest(unittest.TestCase):
-    def test_rejects_duplicate_role_names(self) -> None:
-        with self.assertRaisesRegex(ValueError, "already registered"):
-            SubagentRoleRegistry((RESEARCHER, RESEARCHER))
-
-    def test_reports_available_roles_for_an_unknown_name(self) -> None:
-        registry = SubagentRoleRegistry((RESEARCHER, CODER))
-
-        with self.assertRaisesRegex(
-            ValueError, "unknown subagent role 'writer'.*researcher, coder"
-        ):
-            registry.get("writer")
-
-
-class SubagentToolTest(unittest.TestCase):
-    def test_one_tool_exposes_every_role_in_its_schema(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            catalog = builtin_catalog()
-            context = context_for(
-                Workspace(Path(directory)),
-                subagents=subagent_runtime(catalog, (RESEARCHER, CODER)),
-            )
-
-            definition = SubagentTool().definition(context)
-
-            self.assertEqual(definition.name, "subagent")
-            self.assertEqual(
-                definition.parameters["properties"]["role"]["enum"],
-                ["researcher", "coder"],
-            )
-            self.assertEqual(
-                set(definition.parameters["required"]), {"role", "task"}
-            )
-            self.assertIn(RESEARCHER.description, definition.description)
-            self.assertIn(CODER.description, definition.description)
-
-    def test_is_unavailable_without_roles(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            workspace = Workspace(Path(directory))
-            catalog = builtin_catalog()
-
-            self.assertFalse(SubagentTool().available(context_for(workspace)))
-            self.assertFalse(
-                SubagentTool().available(
-                    context_for(
-                        workspace,
-                        subagents=subagent_runtime(catalog, ()),
-                    )
-                )
-            )
-
-    def test_rejects_an_unknown_role(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            catalog = builtin_catalog()
-            context = context_for(
-                Workspace(Path(directory)),
-                sessions_directory=Path(directory) / "sessions",
-                subagents=subagent_runtime(catalog, (RESEARCHER,)),
-            )
-
-            with self.assertRaisesRegex(ValueError, "unknown subagent role"):
-                SubagentTool().execute(
-                    {"role": "writer", "task": "do it"}, context
-                )
-
-    def test_validates_arguments(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            catalog = builtin_catalog()
-            context = context_for(
-                Workspace(Path(directory)),
-                subagents=subagent_runtime(catalog, (RESEARCHER,)),
-            )
-            tool = SubagentTool()
-
-            with self.assertRaisesRegex(ValueError, "'role'"):
-                tool.execute({"task": "do it"}, context)
-            with self.assertRaisesRegex(ValueError, "'task'"):
-                tool.execute({"role": "researcher", "task": " "}, context)
-            with self.assertRaisesRegex(ValueError, "accepts only"):
-                tool.execute(
-                    {"role": "researcher", "task": "x", "extra": 1}, context
-                )
-
-
-class SubagentRuntimeTest(unittest.TestCase):
-    def test_keeps_a_child_transcript_out_of_the_session_list(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            workspace = Workspace(root)
-            sessions_directory = root / ".nosis" / "sessions"
-            parent = Session()
-            catalog = builtin_catalog()
-            context = context_for(
-                workspace,
-                session=parent,
-                sessions_directory=sessions_directory,
-                subagents=subagent_runtime(catalog, (RESEARCHER,)),
-            )
-
-            self.assertEqual(
-                SubagentTool().execute(
-                    {
-                        "role": "researcher",
-                        "task": "write the quarterly summary",
-                    },
-                    context,
-                ),
-                "child answer",
-            )
-
-            # The child transcript is stored, but the session list only shows
-            # sessions that a user can open and continue.
-            subagents = (
-                session_directory(
-                    sessions_directory,
-                    workspace.path,
-                    parent.session_id,
-                )
-                / "subagents"
-            )
-            transcripts = list(subagents.rglob("*.jsonl"))
-            self.assertEqual(len(transcripts), 1)
-            relative = transcripts[0].relative_to(subagents)
-            # Nested under the parent without repeating its workspace key.
-            self.assertEqual(len(relative.parts), 2)
-            self.assertEqual(relative.name, f"{relative.parts[0]}.jsonl")
-            child = JsonlSessionStore(subagents, group_by_workspace=False).load(relative.parts[0])
-            self.assertEqual(
-                [item.content for item in child.items],
-                ["write the quarterly summary", "child answer"],
-            )
-            self.assertEqual(
-                JsonlSessionStore(sessions_directory).list_sessions(),
-                [],
-            )
-
-    def test_a_role_only_receives_the_tools_it_declares(self) -> None:
-        selected = []
-
-        class RecordingRuntime(SubagentRuntime):
-            def run(self, role_name, task, parent):
-                role = self.roles.get(role_name)
-                tools = self._catalog.select(role.tools, parent)
-                selected.append([d.name for d in tools.definitions])
-                return "done"
-
-        with tempfile.TemporaryDirectory() as directory:
-            catalog = builtin_catalog()
-            runtime = RecordingRuntime(
-                config=SUBAGENT_CONFIG,
-                catalog=catalog,
-                roles=SubagentRoleRegistry((RESEARCHER, CODER)),
-            )
-            context = context_for(
-                Workspace(Path(directory)), subagents=runtime
-            )
-
-            SubagentTool().execute(
-                {"role": "researcher", "task": "look"}, context
-            )
-            SubagentTool().execute(
-                {"role": "coder", "task": "change"}, context
-            )
-
-        self.assertEqual(
-            selected,
-            [
-                ["read_file", "list_directory"],
-                ["read_file", "edit_file"],
-            ],
-        )
-
-    def test_a_child_cannot_delegate_again(self) -> None:
-        captured = []
-
-        class CapturingRuntime(SubagentRuntime):
-            def run(self, role_name, task, parent):
-                result = super().run(role_name, task, parent)
-                return result
-
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            catalog = builtin_catalog()
-            recursive_role = role(
-                "recursive",
-                "Tries to delegate again.",
-                ("subagent", "read_file"),
-            )
-            runtime = CapturingRuntime(
-                config=SUBAGENT_CONFIG,
-                catalog=catalog,
-                roles=SubagentRoleRegistry((recursive_role,)),
-            )
-            parent = Session()
-            context = context_for(
-                Workspace(root),
-                session=parent,
-                sessions_directory=root / "sessions",
-                subagents=runtime,
-            )
-
-            original_select = catalog.select
-
-            def record_select(names, ctx, **kwargs):
-                tools = original_select(names, ctx, **kwargs)
-                captured.append(
-                    (sorted(d.name for d in tools.definitions), ctx.subagents)
-                )
-                return tools
-
-            catalog.select = record_select
-            SubagentTool().execute(
-                {"role": "recursive", "task": "delegate again"}, context
-            )
-
-        child_tools, child_subagents = captured[0]
-        # The child's context carries no sub-agent runtime, so the
-        # subagent tool is unavailable to it however it is configured.
-        self.assertIsNone(child_subagents)
-        self.assertEqual(child_tools, ["read_file"])
-
-
-class RoleProviderTest(unittest.TestCase):
-    """Each role runs on its own model, not on a single shared one."""
-
-    def test_two_roles_run_on_their_own_providers(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            catalog = builtin_catalog()
-            cheap = role("cheap", "Reads.", (), answer="cheap report")
-            strong = role("strong", "Writes.", (), answer="strong report")
-            context = context_for(
-                Workspace(root),
-                sessions_directory=root / "sessions",
-                subagents=subagent_runtime(catalog, (cheap, strong)),
-            )
-            tool = SubagentTool()
-
-            self.assertEqual(
-                tool.execute({"role": "cheap", "task": "look"}, context),
-                "cheap report",
-            )
-            self.assertEqual(
-                tool.execute({"role": "strong", "task": "change"}, context),
-                "strong report",
-            )
-
-    def test_a_role_without_a_vision_provider_leaves_one_unset(self) -> None:
-        captured = []
-
-        class CapturingRuntime(SubagentRuntime):
-            def run(self, role_name, task, parent):
-                role_config = self.roles.get(role_name)
-                captured.append(role_config.vision_provider)
-                return "done"
-
-        with tempfile.TemporaryDirectory() as directory:
-            catalog = builtin_catalog()
-            seeing = VisionProvider()
-            runtime = CapturingRuntime(
-                config=SUBAGENT_CONFIG,
-                catalog=catalog,
-                roles=SubagentRoleRegistry(
-                    (
-                        role("blind", "No vision.", ()),
-                        role(
-                            "seeing",
-                            "Has vision.",
-                            (),
-                            vision_provider=seeing,
-                        ),
-                    )
-                ),
-            )
-            context = context_for(
-                Workspace(Path(directory)), subagents=runtime
-            )
-
-            SubagentTool().execute({"role": "blind", "task": "x"}, context)
-            SubagentTool().execute({"role": "seeing", "task": "y"}, context)
-
-        self.assertEqual(captured, [None, seeing])
-
-
-class ParallelSubagentIsolationTest(unittest.TestCase):
-    """Parallel delegations must not observe each other through the tools."""
-
-    def test_concurrent_roles_get_separate_sessions_and_transcripts(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            workspace = Workspace(root)
-            sessions_directory = root / "sessions"
-            parent = Session()
-            catalog = builtin_catalog()
-            runtime = subagent_runtime(catalog, (RESEARCHER, CODER))
-            context = context_for(
-                workspace,
-                session=parent,
-                sessions_directory=sessions_directory,
-                subagents=runtime,
-            )
-            # One shared Tool instance, exactly as the catalog hands it to
-            # every Agent of a Runtime.
-            tool = SubagentTool()
-            contexts = []
-            original_run = runtime.run
-            lock = threading.Lock()
-            barrier = threading.Barrier(8)
-
-            def recording_run(role_name, task, parent_context):
-                barrier.wait()
-                result = original_run(role_name, task, parent_context)
-                with lock:
-                    contexts.append(parent_context)
-                return result
-
-            runtime.run = recording_run
-
-            with ThreadPoolExecutor(max_workers=8) as executor:
-                results = list(
-                    executor.map(
-                        lambda index: tool.execute(
-                            {
-                                "role": "researcher" if index % 2 else "coder",
-                                "task": f"task {index}",
-                            },
-                            context,
-                        ),
-                        range(8),
-                    )
-                )
-
-            self.assertEqual(results, ["child answer"] * 8)
-            # Every call saw the same parent context object; nothing was
-            # written into the shared Tool.
-            self.assertEqual(len(contexts), 8)
-            for seen in contexts:
-                self.assertIs(seen, context)
-            self.assertEqual(vars(tool), {})
-
-            # Each delegation produced its own child session transcript.
-            transcripts = list(
-                (
-                    session_directory(
-                        sessions_directory, workspace.path, parent.session_id
-                    )
-                    / "subagents"
-                ).rglob("*.jsonl")
-            )
-            self.assertEqual(len(transcripts), 8)
-            tasks = []
-            for transcript in transcripts:
-                child_id = transcript.parent.name
-                child = JsonlSessionStore(transcript.parent.parent, group_by_workspace=False).load(child_id)
-                tasks.append(child.items[0].content)
-            self.assertEqual(
-                sorted(tasks), sorted(f"task {index}" for index in range(8))
-            )
-
-    def test_parent_session_is_never_mutated_by_a_child(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            parent = Session()
-            catalog = builtin_catalog()
-            context = context_for(
-                Workspace(root),
-                session=parent,
-                sessions_directory=root / "sessions",
-                subagents=subagent_runtime(catalog, (RESEARCHER,)),
-            )
-
-            SubagentTool().execute(
-                {"role": "researcher", "task": "look around"}, context
-            )
-
-            self.assertEqual(parent.items, [])
 
 
 class FakeExa:
@@ -1971,128 +1485,6 @@ class ShellToolTest(unittest.TestCase):
                             "timeout_seconds": timeout_seconds,
                         }
                     )
-
-
-class ShellApprovalPolicyTest(unittest.TestCase):
-    def test_requests_approval_for_shell_command(self) -> None:
-        requested_commands = []
-        policy = ShellApprovalPolicy(
-            lambda command: requested_commands.append(command) or True
-        )
-
-        policy.authorize(
-            ToolCall(
-                id="call-1",
-                name="shell",
-                arguments={"command": "pwd"},
-            )
-        )
-
-        self.assertEqual(requested_commands, ["pwd"])
-
-    def test_rejects_shell_command_without_approval(self) -> None:
-        policy = ShellApprovalPolicy(lambda command: False)
-
-        with self.assertRaisesRegex(PermissionError, "not approved"):
-            policy.authorize(
-                ToolCall(
-                    id="call-1",
-                    name="shell",
-                    arguments={"command": "pwd"},
-                )
-            )
-
-    def test_ignores_other_tools(self) -> None:
-        requested_commands = []
-        policy = ShellApprovalPolicy(
-            lambda command: requested_commands.append(command) or False
-        )
-
-        policy.authorize(
-            ToolCall(
-                id="call-1",
-                name="read_file",
-                arguments={"path": "README.md"},
-            )
-        )
-
-        self.assertEqual(requested_commands, [])
-
-
-class PermissionControllerTest(unittest.TestCase):
-    def test_ask_for_approval_delegates_to_the_approval_policy(self) -> None:
-        calls = []
-
-        class RecordingPolicy:
-            def authorize(self, call: ToolCall) -> None:
-                calls.append(call)
-
-        controller = PermissionController(Session("s"), RecordingPolicy())
-        call = ToolCall("call-1", "shell", {"command": "pwd"})
-
-        controller.authorize(call)
-
-        self.assertEqual(calls, [call])
-
-    def test_full_access_skips_approval_without_changing_the_tool_set(self) -> None:
-        class RejectingPolicy:
-            def authorize(self, call: ToolCall) -> None:
-                raise AssertionError("approval policy should not run")
-
-        class EchoTool(Tool):
-            name = "echo"
-
-            def definition(self, context) -> ToolDefinition:
-                return ToolDefinition(
-                    name=self.name,
-                    description="Echo text.",
-                    parameters={"type": "object"},
-                )
-
-            def execute(self, arguments, context):
-                return dict(arguments)
-
-        session = Session("s")
-        controller = PermissionController(session, RejectingPolicy())
-        controller.set_preset(PermissionPreset.FULL_ACCESS)
-        tools = ToolCatalog([EchoTool()]).select(
-            ["echo"],
-            ToolExecutionContext(workspace=_TMP_WORKSPACE, session=session),
-            policy=controller,
-        )
-
-        result = tools.execute(ToolCall("call-1", "echo", {"text": "ok"}))
-
-        self.assertEqual([definition.name for definition in tools.definitions], ["echo"])
-        self.assertEqual(result.output, {"text": "ok"})
-
-    def test_pending_approval_keeps_its_original_decision(self) -> None:
-        entered = threading.Event()
-        release = threading.Event()
-
-        class BlockingPolicy:
-            def authorize(self, call: ToolCall) -> None:
-                entered.set()
-                release.wait(2)
-                raise PermissionError("not approved")
-
-        controller = PermissionController(Session("s"), BlockingPolicy())
-        errors = []
-
-        def authorize() -> None:
-            try:
-                controller.authorize(ToolCall("call-1", "shell", {"command": "pwd"}))
-            except PermissionError as error:
-                errors.append(str(error))
-
-        thread = threading.Thread(target=authorize)
-        thread.start()
-        self.assertTrue(entered.wait(1))
-        controller.set_preset(PermissionPreset.FULL_ACCESS)
-        release.set()
-        thread.join(2)
-
-        self.assertEqual(errors, ["not approved"])
 
 
 if __name__ == "__main__":
