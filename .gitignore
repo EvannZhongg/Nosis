@@ -12,3 +12,5 @@ interfaces/tui/dist/
 interfaces/gui/static/
 CubeSandbox/
 nanobot/
+.DS_Store
+agent_core/.DS_Store
