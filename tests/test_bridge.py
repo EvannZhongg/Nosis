@@ -35,6 +35,7 @@ from interfaces.bridge.protocol import (
     event_to_message,
     format_timestamp,
     ready_message,
+    runtime_state_message,
     usage_to_dict,
 )
 
@@ -165,6 +166,27 @@ class ProtocolTest(unittest.TestCase):
                 skill_warnings=("Skipped invalid skill.",),
             )["skill_warnings"],
             ["Skipped invalid skill."],
+        )
+
+    def test_runtime_state_message_restores_gui_attachment_state(self) -> None:
+        approval = {
+            "type": "approval_request",
+            "turn_id": "t1",
+            "request_id": "t1:1",
+            "command": "ls",
+        }
+        self.assertEqual(
+            runtime_state_message(
+                running=True,
+                approval=approval,
+                provider="second",
+            ),
+            {
+                "type": "runtime_state",
+                "running": True,
+                "approval": approval,
+                "provider": "second",
+            },
         )
 
     def test_format_timestamp_normalizes_to_utc(self) -> None:

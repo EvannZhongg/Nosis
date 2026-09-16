@@ -11,6 +11,8 @@ export type Notice = { level: "info" | "error"; text: string };
 export type Applied = {
   items: TranscriptItem[];
   notice?: Notice;
+  /** Checkpoint number emitted when the runtime archives old context. */
+  archivedCheckpoint?: number;
   approval?: {
     requestId: string;
     command: string;
@@ -74,7 +76,7 @@ export function applyMessage(
       return { items: settleAssistant(items, message.content, message.timestamp_utc) };
 
     case "context_archived":
-      return { items, notice: { level: "info", text: `上下文已压缩（checkpoint ${message.checkpoint_number}）。` } };
+      return { items, archivedCheckpoint: message.checkpoint_number };
 
     case "tool_batch_started":
       return {

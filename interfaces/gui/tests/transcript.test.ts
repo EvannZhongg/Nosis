@@ -74,6 +74,17 @@ describe("applyMessage", () => {
     ]);
   });
 
+  it("reports context compression separately from persistent notices", () => {
+    const applied = applyMessage([], {
+      type: "context_archived",
+      turn_id: "t1",
+      checkpoint_number: 2,
+    });
+
+    expect(applied.archivedCheckpoint).toBe(2);
+    expect(applied.notice).toBeUndefined();
+  });
+
   it("settles the streamed item with its runtime timestamp", () => {
     const { items } = fold([
       { type: "assistant_delta", turn_id: "t1", text: "hi", model_call_index: 1 },

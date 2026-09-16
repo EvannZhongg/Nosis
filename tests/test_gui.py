@@ -72,6 +72,10 @@ class FakeBridge:
     async def read(self) -> dict | None:
         return await self._messages.get()
 
+    def emit(self, *messages: dict | None) -> None:
+        for message in messages:
+            self._messages.put_nowait(message)
+
     def cancel_turn(self) -> None:
         self.cancelled += 1
         self._messages.put_nowait(None)
@@ -257,7 +261,7 @@ class GuiTest(unittest.TestCase):
         )
         with self.client(bridge) as client:
             with client.websocket_connect("/api/session") as socket:
-                socket.send_json({"type": "start", "session_id": None})
+                socket.send_json({"type": "start", "session_id": "s1"})
                 self.assertEqual(socket.receive_json()["type"], "ready")
 
                 socket.send_json(
@@ -290,7 +294,7 @@ class GuiTest(unittest.TestCase):
         )
         with self.client(bridge) as client:
             with client.websocket_connect("/api/session") as socket:
-                socket.send_json({"type": "start", "session_id": None})
+                socket.send_json({"type": "start", "session_id": "s1"})
                 self.assertEqual(socket.receive_json()["type"], "ready")
                 # A page must not shut the bridge down or restart it.
                 socket.send_json({"type": "shutdown"})
@@ -311,7 +315,7 @@ class GuiTest(unittest.TestCase):
         bridge = FakeBridge(replies={"start": [{"type": "ready"}]})
         with self.client(bridge) as client:
             with client.websocket_connect("/api/session") as socket:
-                socket.send_json({"type": "start", "session_id": None})
+                socket.send_json({"type": "start", "session_id": "s1"})
                 self.assertEqual(socket.receive_json()["type"], "ready")
                 # The fake ends its stream on cancel, as an exiting
                 # bridge would.
@@ -321,30 +325,112 @@ class GuiTest(unittest.TestCase):
         self.assertEqual(bridge.cancelled, 1)
         self.assertEqual([m["type"] for m in bridge.sent], ["start"])
 
-    def test_refuses_a_second_page_for_the_same_session(self) -> None:
-        """Locks are per session: a second page on it must be turned away."""
-        bridge = FakeBridge(replies={"start": [{"type": "ready"}]})
-        with (
-            patch.object(server, "HANDOVER_TIMEOUT_SECONDS", 0.05),
-            self.client(bridge) as client,
-        ):
+    def test_reconnects_to_the_same_runtime_and_restores_approval(self) -> None:
+        bridge = FakeBridge(
+            replies={
+                "start": [{"type": "ready", "session_id": "shared"}],
+                "user_turn": [
+                    {
+                        "type": "approval_request",
+                        "turn_id": "t1",
+                        "request_id": "t1:1",
+                        "command": "ls",
+                    }
+                ],
+                "approval_response": [
+                    {"type": "turn_completed", "turn_id": "t1", "usage": None},
+                    None,
+                ],
+            }
+        )
+        with self.client(bridge) as client:
             with client.websocket_connect("/api/session") as first:
                 first.send_json({"type": "start", "session_id": "shared"})
                 self.assertEqual(first.receive_json()["type"], "ready")
+                first.send_json(
+                    {"type": "user_turn", "turn_id": "t1", "text": "list"}
+                )
+                self.assertEqual(
+                    first.receive_json()["type"], "approval_request"
+                )
 
-                # The session id arrives in the opening frame, so the
-                # second page must announce it before the server can
-                # tell that another page already drives that session.
-                with client.websocket_connect("/api/session") as second:
-                    second.send_json(
-                        {"type": "start", "session_id": "shared"}
-                    )
-                    message = second.receive_json()
+            self.assertFalse(bridge.closed)
+            with client.websocket_connect("/api/session") as second:
+                second.send_json(
+                    {
+                        "type": "start",
+                        "session_id": "shared",
+                        "attach_only": True,
+                        "after_event": 2,
+                    }
+                )
+                state = second.receive_json()
+                self.assertTrue(state["running"])
+                self.assertEqual(state["approval"]["request_id"], "t1:1")
+                second.send_json(
+                    {
+                        "type": "approval_response",
+                        "request_id": "t1:1",
+                        "approved": True,
+                    }
+                )
+                self.assertEqual(
+                    second.receive_json()["type"], "turn_completed"
+                )
 
-                first.send_json({"type": "cancel"})
-                _wait_for(lambda: bridge.closed)
+        self.assertEqual(
+            [message["type"] for message in bridge.sent],
+            ["start", "user_turn", "approval_response"],
+        )
 
-        self.assertEqual(message["error"]["type"], "SessionBusy")
+    def test_replays_events_and_completion_emitted_while_detached(self) -> None:
+        bridge = FakeBridge(
+            replies={"start": [{"type": "ready", "session_id": "shared"}]}
+        )
+        with self.client(bridge) as client:
+            with client.websocket_connect("/api/session") as first:
+                first.send_json({"type": "start", "session_id": "shared"})
+                self.assertEqual(first.receive_json()["type"], "ready")
+                first.send_json(
+                    {"type": "user_turn", "turn_id": "t1", "text": "hi"}
+                )
+
+            self.assertFalse(bridge.closed)
+            bridge.emit(
+                {
+                    "type": "assistant_delta",
+                    "turn_id": "t1",
+                    "text": "done",
+                    "model_call_index": 0,
+                },
+                {"type": "turn_completed", "turn_id": "t1", "usage": None},
+            )
+            _wait_for(lambda: bridge.closed)
+
+            runtimes = client.get("/api/runtimes").json()
+            self.assertEqual(runtimes[0]["session_id"], "shared")
+            with client.websocket_connect("/api/session") as second:
+                second.send_json(
+                    {
+                        "type": "start",
+                        "session_id": "shared",
+                        "attach_only": True,
+                        "after_event": 1,
+                    }
+                )
+                delta = second.receive_json()
+                completed = second.receive_json()
+                state = second.receive_json()
+
+            self.assertFalse(state["running"])
+            self.assertEqual(delta["text"], "done")
+            self.assertEqual(completed["type"], "turn_completed")
+            _wait_for(lambda: client.get("/api/runtimes").json() == [])
+
+        self.assertEqual(
+            [message["type"] for message in bridge.sent],
+            ["start", "user_turn"],
+        )
 
     def test_runs_different_sessions_concurrently(self) -> None:
         """Two pages on different sessions must not block each other."""
@@ -358,7 +444,6 @@ class GuiTest(unittest.TestCase):
             return bridge
 
         with (
-            patch.object(server, "HANDOVER_TIMEOUT_SECONDS", 0.05),
             patch.object(
                 server.BridgeProcess,
                 "spawn",
@@ -389,22 +474,22 @@ class GuiTest(unittest.TestCase):
             ["one", "two"],
         )
 
-    def test_accepts_a_reconnect_once_the_previous_page_is_gone(self) -> None:
-        """Switching model reconnects; the agent must not look busy."""
-        bridge = FakeBridge(replies={"start": [{"type": "ready"}]})
+    def test_attach_only_does_not_start_a_missing_runtime(self) -> None:
+        bridge = FakeBridge()
         with self.client(bridge) as client:
-            for _ in range(2):
-                with client.websocket_connect("/api/session") as socket:
-                    socket.send_json({"type": "start", "provider": "second"})
-                    self.assertEqual(socket.receive_json()["type"], "ready")
-                    socket.send_json({"type": "cancel"})
-                    _wait_for(lambda: bridge.closed)
-                bridge.closed = False
+            with client.websocket_connect("/api/session") as socket:
+                socket.send_json(
+                    {
+                        "type": "start",
+                        "session_id": "missing",
+                        "provider": "second",
+                        "attach_only": True,
+                    }
+                )
+                state = socket.receive_json()
 
-        self.assertEqual(
-            [message["type"] for message in bridge.sent],
-            ["start", "start"],
-        )
+        self.assertFalse(state["running"])
+        self.assertEqual(bridge.sent, [])
 
     def test_lists_models_without_requiring_keys(self) -> None:
         with self.client() as client:

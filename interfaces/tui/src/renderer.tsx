@@ -56,8 +56,7 @@ function EntryView({ entry }: { entry: Entry }): React.ReactElement {
       <Text color="red">✗</Text>
     );
 
-  // Single calls pad to the width of an index tag so markers line up.
-  const index = (entry.count > 1 ? `[${entry.index}/${entry.count}] ` : '').padEnd(6);
+  const index = `[${entry.index}/${entry.count}] `;
 
   return (
     <Box>

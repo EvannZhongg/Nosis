@@ -81,6 +81,21 @@ def ready_message(
     }
 
 
+def runtime_state_message(
+    *,
+    running: bool,
+    approval: dict[str, object] | None,
+    provider: str | None,
+) -> dict[str, object]:
+    """Describe a GUI server-owned runtime when a WebSocket attaches."""
+    return {
+        "type": "runtime_state",
+        "running": running,
+        "approval": approval,
+        "provider": provider,
+    }
+
+
 def event_to_message(
     event: AgentEvent,
     turn_id: str,

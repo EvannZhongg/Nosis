@@ -440,4 +440,19 @@ describe('App', () => {
       expect(frame).toContain('subagent task=C');
     });
   });
+
+  it('shows the index for a single tool call', async () => {
+    const { lastFrame } = renderApp();
+    await waitForReady(lastFrame);
+
+    emit({
+      type: 'tool_call',
+      turn_id: 't1',
+      tool_call: { id: 'call-1', name: 'shell', arguments: { command: 'ls' } },
+      tool_index: 1,
+      tool_count: 1,
+    });
+
+    await waitFor(() => expect(lastFrame()).toContain('[1/1]'));
+  });
 });

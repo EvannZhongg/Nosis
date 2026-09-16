@@ -199,6 +199,11 @@ function reduceAction(state: State, action: Action): State {
 
 function applyMessage(state: State, message: Incoming): State {
   switch (message.type) {
+    // Attachment bookkeeping belongs to the GUI server; the bridge
+    // never sends it to this frontend.
+    case 'runtime_state':
+      return state;
+
     case 'mcp_server_status':
       return {
         ...state,

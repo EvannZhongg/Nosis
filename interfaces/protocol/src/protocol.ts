@@ -30,6 +30,20 @@ export type Usage = {
 
 export type Incoming =
   | {
+      type: 'runtime_state';
+      running: boolean;
+      provider: string | null;
+      approval: {
+        type: 'approval_request';
+        turn_id: string | null;
+        request_id: string;
+        command: string;
+        kind?: 'shell' | 'mcp';
+        server?: string;
+        tool_name?: string;
+      } | null;
+    }
+  | {
       type: 'ready';
       session_id: string;
       workspace: string;
@@ -98,6 +112,8 @@ export type Outgoing =
       session_id: string | null;
       provider_config_path: string;
       agent_config_path: string;
+      attach_only?: boolean;
+      after_event?: number;
       // Omitted to use the provider selected in the configuration file.
       provider?: string;
     }

@@ -3,6 +3,8 @@ import type { Incoming, Outgoing } from "@nosis/protocol";
 export type SessionSocketOptions = {
   sessionId: string | null;
   provider: string;
+  attachOnly?: boolean;
+  afterEvent?: number;
   onMessage: (message: Incoming) => void;
   onClose: () => void;
   onError: () => void;
@@ -32,6 +34,8 @@ export class SessionSocket {
         type: "start",
         session_id: options.sessionId,
         provider: options.provider,
+        ...(options.attachOnly ? { attach_only: true } : {}),
+        ...(options.afterEvent ? { after_event: options.afterEvent } : {}),
       });
       for (const message of this.queued) this.write(message);
       this.queued = [];

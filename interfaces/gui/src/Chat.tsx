@@ -74,17 +74,20 @@ function PendingAttachment({ file, onRemove }: { file: File; onRemove: () => voi
   return <span className="attachment-chip"><img src={url} alt={file.name} /><span>{file.name}</span><button type="button" aria-label={`移除 ${file.name}`} onClick={onRemove}><X size={12} /></button></span>;
 }
 
-export function Chat({ session, workspaceOptions = [], disabled, models, model, onModelChange, onBusyChange, onUsageChange, onSessionAvailable, onTurnEnd, onWorkspaceChange }: {
-  session: Session; disabled: boolean; onBusyChange: (busy: boolean) => void; onTurnEnd: () => void;
+export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeActive = false, models, model, onModelChange, onBusyChange, onUsageChange, onSessionAvailable, onTurnEnd, onWorkspaceChange }: {
+  session: Session; inputDisabled: boolean; onBusyChange: (busy: boolean) => void; onTurnEnd: () => void;
   onUsageChange: (usage: Usage | null) => void;
   onSessionAvailable: () => void;
   models: ModelOption[]; model: string; onModelChange: (model: string) => void;
+  runtimeActive?: boolean;
   workspaceOptions?: string[];
   onWorkspaceChange?: (workspace: string) => void;
 }) {
   const [items, setItems] = useState<TranscriptItem[]>(session.items);
   const [running, setRunning] = useState(false);
+  const [attaching, setAttaching] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
+  const [compressionNotice, setCompressionNotice] = useState("");
   const [approval, setApproval] = useState<Approval | null>(null);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [workspaceDraft, setWorkspaceDraft] = useState(session.workspace ?? "");
@@ -92,8 +95,13 @@ export function Chat({ session, workspaceOptions = [], disabled, models, model, 
   const [workspaceEditing, setWorkspaceEditing] = useState(false);
   const workspacePickerRef = useRef<HTMLDivElement | null>(null);
   const socketRef = useRef<SessionSocket | null>(null);
+  const socketModelRef = useRef("");
+  const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mountedRef = useRef(true);
   const noticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const compressionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const turnCounter = useRef(0);
+  const eventCounterRef = useRef(0);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const messages = useMemo(() => toMessages(items, session.session_id), [items, session.session_id]);
 
@@ -123,29 +131,37 @@ export function Chat({ session, workspaceOptions = [], disabled, models, model, 
     setItems(next);
   }, []);
 
-  // A new provider takes effect on the next connection; the transcript
-  // is reloaded from the stored session, so context carries over.
+  // A Chat owns its attachment independently of whether it is visible. Only
+  // unmounting detaches it; opening a historical session does not connect.
   useEffect(() => {
-    socketRef.current?.close();
-    socketRef.current = null;
-    // Establish the bridge as soon as the session is mounted.  The GUI and
-    // runtime therefore come up together; sending a prompt is no longer what
-    // starts the agent process. Defer the side effect by one task so React
-    // StrictMode can run its setup/cleanup probe without spawning a throwaway
-    // bridge and its MCP servers.
-    let connectionTimer: ReturnType<typeof setTimeout> | null = null;
-    if (!disabled && model) {
-      connectionTimer = setTimeout(() => {
-        if (socketRef.current === null) connect();
-      }, 0);
-    }
+    mountedRef.current = true;
     return () => {
-      if (connectionTimer !== null) clearTimeout(connectionTimer);
+      mountedRef.current = false;
+      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
       socketRef.current?.close();
       socketRef.current = null;
       if (noticeTimeoutRef.current) clearTimeout(noticeTimeoutRef.current);
+      if (compressionTimeoutRef.current) clearTimeout(compressionTimeoutRef.current);
     };
-  }, [model, disabled, session.session_id]);
+  }, []);
+
+  // Model selection belongs to this session. It detaches only this Chat and
+  // is applied when its next turn attaches or starts a runtime.
+  useEffect(() => {
+    if (!socketRef.current || socketModelRef.current === model) return;
+    const socket = socketRef.current;
+    socketRef.current = null;
+    socketModelRef.current = "";
+    eventCounterRef.current = 0;
+    socket.close();
+  }, [model]);
+
+  useEffect(() => {
+    if (runtimeActive && model && socketRef.current === null) {
+      setAttaching(true);
+      connect(true);
+    }
+  }, [runtimeActive, model]);
 
   const showNotice = useCallback((next: Notice, transient = false) => {
     if (noticeTimeoutRef.current) clearTimeout(noticeTimeoutRef.current);
@@ -156,6 +172,15 @@ export function Chat({ session, workspaceOptions = [], disabled, models, model, 
         setNotice(null);
       }, 4000);
     }
+  }, []);
+
+  const showCompressionNotice = useCallback((checkpoint: number) => {
+    if (compressionTimeoutRef.current) clearTimeout(compressionTimeoutRef.current);
+    setCompressionNotice(`上下文已压缩（checkpoint ${checkpoint}）。`);
+    compressionTimeoutRef.current = setTimeout(() => {
+      compressionTimeoutRef.current = null;
+      setCompressionNotice("");
+    }, 30_000);
   }, []);
 
   const endTurn = useCallback(async () => {
@@ -175,17 +200,41 @@ export function Chat({ session, workspaceOptions = [], disabled, models, model, 
     onTurnEnd();
   }, [session.session_id, onBusyChange, onTurnEnd, showItems]);
 
-  function connect(): SessionSocket {
+  function connect(attachOnly = false): SessionSocket {
+    if (!attachOnly) eventCounterRef.current = 0;
     let socket: SessionSocket;
     socket = new SessionSocket({
       sessionId: session.session_id,
       provider: model,
+      attachOnly,
+      afterEvent: attachOnly ? eventCounterRef.current : 0,
       onMessage: (message) => {
         // A socket that was replaced during a model switch may still have
         // messages queued in the browser event loop. Ignore those messages
         // so stale transcript, notice, usage, and turn callbacks cannot
         // mutate the active connection's state.
         if (socketRef.current !== socket) return;
+        if (message.type === "runtime_state") {
+          setAttaching(false);
+          if (message.provider) {
+            socketModelRef.current = message.provider;
+            if (message.provider !== model) onModelChange(message.provider);
+          }
+          const wasRunning = runningRef.current;
+          runningRef.current = message.running;
+          setRunning(message.running);
+          onBusyChange(message.running);
+          setApproval(message.approval ? {
+            requestId: message.approval.request_id,
+            command: message.approval.command,
+            kind: message.approval.kind,
+            server: message.approval.server,
+            toolName: message.approval.tool_name,
+          } : null);
+          if (wasRunning && !message.running) void endTurn();
+          return;
+        }
+        eventCounterRef.current += 1;
         if (message.type === "ready") {
           if (noticeTimeoutRef.current) {
             clearTimeout(noticeTimeoutRef.current);
@@ -200,6 +249,7 @@ export function Chat({ session, workspaceOptions = [], disabled, models, model, 
         const applied = applyMessage(itemsRef.current, message);
         showItems(applied.items);
         if (applied.notice) showNotice(applied.notice, message.type === "mcp_server_status");
+        if (applied.archivedCheckpoint !== undefined) showCompressionNotice(applied.archivedCheckpoint);
         if (applied.approval !== undefined) setApproval(applied.approval);
         if (applied.usage !== undefined) onUsageChange(applied.usage);
         if (applied.finished) void endTurn();
@@ -210,12 +260,17 @@ export function Chat({ session, workspaceOptions = [], disabled, models, model, 
         // the newer connection in that case.
         if (socketRef.current !== socket) return;
         socketRef.current = null;
+        socketModelRef.current = "";
+        setAttaching(false);
         if (runningRef.current) {
           showNotice({
             level: "error",
-            text: "连接已断开，本轮对话未完成。已执行的工具操作不会撤销。",
+            text: "连接已断开，Nosis 仍在后台运行，正在重新连接。",
           });
-          void endTurn();
+          reconnectTimeoutRef.current = setTimeout(() => {
+            reconnectTimeoutRef.current = null;
+            if (mountedRef.current && runningRef.current && socketRef.current === null) connect(true);
+          }, 1000);
         }
       },
       onError: () => {
@@ -230,6 +285,7 @@ export function Chat({ session, workspaceOptions = [], disabled, models, model, 
       },
     });
     socketRef.current = socket;
+    socketModelRef.current = model;
     return socket;
   }
 
@@ -291,11 +347,12 @@ export function Chat({ session, workspaceOptions = [], disabled, models, model, 
       const savedWorkspace = await updateSessionWorkspace(session.session_id, nextWorkspace);
       setWorkspaceDraft(savedWorkspace);
       onWorkspaceChange?.(savedWorkspace);
-      // Restart the bridge so prompts, tools and vision provider all use the
-      // newly selected workspace for subsequent turns.
-      socketRef.current?.close();
+      // Detach this session. The next turn starts/attaches its runtime with
+      // the newly selected workspace; no other Chat is affected.
+      const socket = socketRef.current;
       socketRef.current = null;
-      if (!disabled && model) connect();
+      socketModelRef.current = "";
+      socket?.close();
       showNotice({ level: "info", text: `工作区已切换为 ${savedWorkspace}` }, true);
     } catch (error) {
       showNotice({ level: "error", text: String(error) });
@@ -332,7 +389,8 @@ export function Chat({ session, workspaceOptions = [], disabled, models, model, 
     if (!event.clipboardData.getData("text/plain")) event.preventDefault();
   }
 
-  const runtime = useExternalStoreRuntime({ messages, convertMessage: (message) => message, isRunning: running, isDisabled: disabled, onNew });
+  const controlsDisabled = inputDisabled || attaching || (runtimeActive && socketRef.current === null);
+  const runtime = useExternalStoreRuntime({ messages, convertMessage: (message) => message, isRunning: running, isDisabled: controlsDisabled, onNew });
   const availableWorkspaces = Array.from(new Set([...workspaceOptions, workspaceDraft].filter(Boolean)));
 
   return <AssistantRuntimeProvider runtime={runtime}>
@@ -350,11 +408,12 @@ export function Chat({ session, workspaceOptions = [], disabled, models, model, 
           {!approval && <button className="stop-button" aria-label="停止执行" onClick={() => socketRef.current?.send({ type: "cancel" })}><Square size={11} /> 停止</button>}
         </div>}
         {pendingFiles.length > 0 && <div className="attachment-list" aria-label="待发送图片">{pendingFiles.map((file, index) => <PendingAttachment key={`${file.name}-${file.lastModified}-${index}`} file={file} onRemove={() => setPendingFiles((files) => files.filter((_, itemIndex) => itemIndex !== index))} />)}</div>}
-        <ComposerPrimitive.Root className="composer"><div ref={workspacePickerRef} className="workspace-picker-wrap"><button type="button" className="workspace-picker" onClick={() => setWorkspaceEditing((value) => { if (value && !workspaceDraft.trim()) setWorkspaceDraft(session.workspace ?? ""); return !value; })} disabled={disabled || running} aria-expanded={workspaceEditing}><span className="workspace-picker-icon">⌂</span><span className="workspace-picker-value">{workspaceDraft || "选择项目"}</span><ChevronDown size={14} /></button>{workspaceEditing && <div className="workspace-menu" role="menu"><div className="workspace-menu-heading">选择工作区</div>{availableWorkspaces.map((path) => <button type="button" role="menuitem" className={`workspace-option ${path === workspaceDraft ? "selected" : ""}`} key={path} onClick={() => { void saveWorkspace(path); setWorkspaceEditing(false); }} disabled={disabled || running || workspaceSaving} title={path}><span className="workspace-option-path">{path}</span></button>)}<div className="workspace-menu-divider" /><button type="button" role="menuitem" className="workspace-new-option" onClick={() => { void chooseNewWorkspace(); }} disabled={disabled || running || workspaceSaving}>＋ 新建工作区</button></div>}</div><ComposerPrimitive.Input placeholder="Ask Nosis…" aria-label="消息" rows={2} autoFocus onPaste={onPaste} /><div className="composer-bottom">
-          <button type="button" className="attachment-button" aria-label="添加图片" title="添加图片" disabled={disabled || running} onClick={() => fileInputRef.current?.click()}><Paperclip size={15} /></button>
+        {compressionNotice && <div className="compression-notice" role="status">{compressionNotice}</div>}
+        <ComposerPrimitive.Root className="composer"><div ref={workspacePickerRef} className="workspace-picker-wrap"><button type="button" className="workspace-picker" onClick={() => setWorkspaceEditing((value) => { if (value && !workspaceDraft.trim()) setWorkspaceDraft(session.workspace ?? ""); return !value; })} disabled={controlsDisabled || running} aria-expanded={workspaceEditing}><span className="workspace-picker-icon">⌂</span><span className="workspace-picker-value">{workspaceDraft || "选择项目"}</span><ChevronDown size={14} /></button>{workspaceEditing && <div className="workspace-menu" role="menu"><div className="workspace-menu-heading">选择工作区</div>{availableWorkspaces.map((path) => <button type="button" role="menuitem" className={`workspace-option ${path === workspaceDraft ? "selected" : ""}`} key={path} onClick={() => { void saveWorkspace(path); setWorkspaceEditing(false); }} disabled={controlsDisabled || running || workspaceSaving} title={path}><span className="workspace-option-path">{path}</span></button>)}<div className="workspace-menu-divider" /><button type="button" role="menuitem" className="workspace-new-option" onClick={() => { void chooseNewWorkspace(); }} disabled={controlsDisabled || running || workspaceSaving}>＋ 新建工作区</button></div>}</div><ComposerPrimitive.Input placeholder="Ask Nosis…" aria-label="消息" rows={2} autoFocus onPaste={onPaste} /><div className="composer-bottom">
+          <button type="button" className="attachment-button" aria-label="添加图片" title="添加图片" disabled={controlsDisabled || running} onClick={() => fileInputRef.current?.click()}><Paperclip size={15} /></button>
           <input ref={fileInputRef} className="attachment-input" type="file" accept="image/*" multiple onChange={(event) => { setPendingFiles((files) => [...files, ...Array.from(event.target.files ?? [])]); event.currentTarget.value = ""; }} />
           <label className="model-selector" title={models.find((option) => option.id === model)?.model}>
-            <select aria-label="选择模型" value={model} disabled={disabled || running} onChange={(event) => onModelChange(event.target.value)}>
+            <select aria-label="选择模型" value={model} disabled={controlsDisabled || running} onChange={(event) => onModelChange(event.target.value)}>
               {models.map((option) => <option key={option.id} value={option.id}>{option.model}</option>)}
             </select><ChevronDown size={12} />
           </label>
