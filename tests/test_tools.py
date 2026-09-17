@@ -247,7 +247,7 @@ class ToolSetTest(unittest.TestCase):
                 return None
 
         class DenyPolicy:
-            def authorize(self, call):
+            def authorize(self, call, context):
                 raise PermissionError(f"{call.name} was denied")
 
         with tempfile.TemporaryDirectory() as directory:

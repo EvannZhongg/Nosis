@@ -27,8 +27,10 @@ from agent_core import (
     ToolError,
     ToolResult,
     ToolResultEvent,
+    ToolExecutionContext,
     UserSteerAppliedEvent,
     TurnControl,
+    Workspace,
 )
 from agent_core.llm import TokenUsage
 from agent_core.projection import project_context_units
@@ -293,7 +295,7 @@ class PermissionProtocolTest(unittest.TestCase):
         bridge, stdout = make_bridge([])
 
         class UnusedPolicy:
-            def authorize(self, call: ToolCall) -> None:
+            def authorize(self, call: ToolCall, context) -> None:
                 raise AssertionError("no tool call expected")
 
         session = Session("s")
@@ -975,7 +977,13 @@ class BridgeStartTest(unittest.TestCase):
             ready = emitted(stdout)[-1]
             self.assertEqual(ready["permission_preset"], "full_access")
             assert bridge._permissions is not None
-            bridge._permissions.authorize(TOOL_CALL)
+            bridge._permissions.authorize(
+                TOOL_CALL,
+                ToolExecutionContext(
+                    workspace=Workspace(Path(__file__).parent),
+                    session=bridge._permissions._session,
+                ),
+            )
             self.assertFalse(
                 any(message["type"] == "approval_request" for message in emitted(stdout))
             )

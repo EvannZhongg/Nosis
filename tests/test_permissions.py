@@ -7,7 +7,16 @@ from agent_core import (
     Session,
     ShellApprovalPolicy,
     ToolCall,
+    ToolExecutionContext,
+    Workspace,
 )
+from pathlib import Path
+
+
+def context(session: Session | None = None) -> ToolExecutionContext:
+    return ToolExecutionContext(
+        Workspace(Path(__file__).parent), session or Session()
+    )
 
 
 class ShellApprovalPolicyTest(unittest.TestCase):
@@ -17,7 +26,7 @@ class ShellApprovalPolicyTest(unittest.TestCase):
             lambda command: requested_commands.append(command) or True
         )
 
-        policy.authorize(ToolCall("call-1", "shell", {"command": "pwd"}))
+        policy.authorize(ToolCall("call-1", "shell", {"command": "pwd"}), context())
 
         self.assertEqual(requested_commands, ["pwd"])
 
@@ -26,7 +35,7 @@ class ShellApprovalPolicyTest(unittest.TestCase):
 
         with self.assertRaisesRegex(PermissionError, "not approved"):
             policy.authorize(
-                ToolCall("call-1", "shell", {"command": "pwd"})
+                ToolCall("call-1", "shell", {"command": "pwd"}), context()
             )
 
     def test_ignores_other_tools(self) -> None:
@@ -36,7 +45,7 @@ class ShellApprovalPolicyTest(unittest.TestCase):
         )
 
         policy.authorize(
-            ToolCall("call-1", "read_file", {"path": "README.md"})
+            ToolCall("call-1", "read_file", {"path": "README.md"}), context()
         )
 
         self.assertEqual(requested_commands, [])
@@ -47,19 +56,19 @@ class PermissionControllerTest(unittest.TestCase):
         calls = []
 
         class RecordingPolicy:
-            def authorize(self, call: ToolCall) -> None:
+            def authorize(self, call: ToolCall, context) -> None:
                 calls.append(call)
 
         controller = PermissionController(Session("s"), RecordingPolicy())
         call = ToolCall("call-1", "shell", {"command": "pwd"})
 
-        controller.authorize(call)
+        controller.authorize(call, context())
 
         self.assertEqual(calls, [call])
 
     def test_records_an_approval_decision_as_a_user_anchor(self) -> None:
         class ApprovalPolicy:
-            def authorize(self, call: ToolCall) -> bool:
+            def authorize(self, call: ToolCall, context) -> bool:
                 return True
 
         session = Session("s")
@@ -67,7 +76,8 @@ class PermissionControllerTest(unittest.TestCase):
         controller = PermissionController(session, ApprovalPolicy())
 
         controller.authorize(
-            ToolCall("call-1", "shell", {"command": "pwd"})
+            ToolCall("call-1", "shell", {"command": "pwd"}),
+            context(session),
         )
 
         anchor = session.user_anchors[-1]
@@ -77,7 +87,7 @@ class PermissionControllerTest(unittest.TestCase):
 
     def test_records_a_denied_approval_as_a_user_anchor(self) -> None:
         class DenialPolicy:
-            def authorize(self, call: ToolCall) -> bool:
+            def authorize(self, call: ToolCall, context) -> bool:
                 raise PermissionError("not approved")
 
         session = Session("s")
@@ -86,7 +96,8 @@ class PermissionControllerTest(unittest.TestCase):
 
         with self.assertRaises(PermissionError):
             controller.authorize(
-                ToolCall("call-1", "shell", {"command": "rm output"})
+                ToolCall("call-1", "shell", {"command": "rm output"}),
+                context(session),
             )
 
         anchor = session.user_anchors[-1]
@@ -97,7 +108,7 @@ class PermissionControllerTest(unittest.TestCase):
         calls = []
 
         class RecordingPolicy:
-            def authorize(self, call: ToolCall) -> None:
+            def authorize(self, call: ToolCall, context) -> None:
                 calls.append(call)
 
         session = Session("s")
@@ -105,7 +116,7 @@ class PermissionControllerTest(unittest.TestCase):
         controller.set_preset(PermissionPreset.FULL_ACCESS)
 
         controller.authorize(
-            ToolCall("call-1", "shell", {"command": "pwd"})
+            ToolCall("call-1", "shell", {"command": "pwd"}), context()
         )
 
         self.assertEqual(session.permission_preset, PermissionPreset.FULL_ACCESS)
@@ -116,7 +127,7 @@ class PermissionControllerTest(unittest.TestCase):
         release = threading.Event()
 
         class BlockingPolicy:
-            def authorize(self, call: ToolCall) -> None:
+            def authorize(self, call: ToolCall, context) -> None:
                 entered.set()
                 release.wait(2)
                 raise PermissionError("not approved")
@@ -127,7 +138,7 @@ class PermissionControllerTest(unittest.TestCase):
         def authorize() -> None:
             try:
                 controller.authorize(
-                    ToolCall("call-1", "shell", {"command": "pwd"})
+                    ToolCall("call-1", "shell", {"command": "pwd"}), context()
                 )
             except PermissionError as error:
                 errors.append(str(error))

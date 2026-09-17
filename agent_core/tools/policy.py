@@ -1,6 +1,7 @@
 from typing import Callable
 
 from .base import ToolCall, ToolPolicy
+from .context import ToolExecutionContext
 
 
 class ShellApprovalPolicy:
@@ -10,7 +11,9 @@ class ShellApprovalPolicy:
     ) -> None:
         self._request_permission = request_permission
 
-    def authorize(self, call: ToolCall) -> bool:
+    def authorize(
+        self, call: ToolCall, context: ToolExecutionContext
+    ) -> bool:
         if call.name != "shell":
             return False
 
@@ -26,10 +29,12 @@ class CompositeToolPolicy:
     def __init__(self, *policies: ToolPolicy) -> None:
         self._policies = tuple(policies)
 
-    def authorize(self, call: ToolCall) -> bool:
+    def authorize(
+        self, call: ToolCall, context: ToolExecutionContext
+    ) -> bool:
         consulted = False
         for policy in self._policies:
-            consulted = bool(policy.authorize(call)) or consulted
+            consulted = bool(policy.authorize(call, context)) or consulted
         return consulted
 
 
@@ -42,7 +47,9 @@ class McpApprovalPolicy:
         self._request_permission = request_permission
         self._requires_approval = requires_approval
 
-    def authorize(self, call: ToolCall) -> bool:
+    def authorize(
+        self, call: ToolCall, context: ToolExecutionContext
+    ) -> bool:
         if not self._requires_approval(call.name):
             return False
         if not self._request_permission(call):

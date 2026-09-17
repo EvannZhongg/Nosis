@@ -237,13 +237,16 @@ class McpToolTest(unittest.TestCase):
 
     def test_approval_policy_only_prompts_required_tools(self) -> None:
         prompts = []
+        context = ToolExecutionContext(
+            workspace=Workspace(Path.cwd()), session=Session()
+        )
         policy = McpApprovalPolicy(
             lambda call: prompts.append(call.name) or False,
             lambda name: name == "mcp__demo__echo",
         )
         with self.assertRaises(PermissionError):
-            policy.authorize(ToolCall("1", "mcp__demo__echo", {}))
-        policy.authorize(ToolCall("2", "mcp__other__echo", {}))
+            policy.authorize(ToolCall("1", "mcp__demo__echo", {}), context)
+        policy.authorize(ToolCall("2", "mcp__other__echo", {}), context)
         self.assertEqual(prompts, ["mcp__demo__echo"])
 
 

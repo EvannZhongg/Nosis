@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Callable
 if TYPE_CHECKING:
     from .session import Session
     from .tools.base import ToolCall, ToolPolicy
+    from .tools.context import ToolExecutionContext
 
 
 class PermissionPreset(StrEnum):
@@ -42,20 +43,29 @@ class PermissionController:
             if self._persist_preset is not None:
                 self._persist_preset(preset)
 
-    def authorize(self, call: "ToolCall") -> None:
+    def authorize(
+        self,
+        call: "ToolCall",
+        context: "ToolExecutionContext",
+    ) -> None:
         with self._lock:
             preset = self._session.permission_preset
         if preset is PermissionPreset.ASK_FOR_APPROVAL:
             try:
-                consulted = self._approval_policy.authorize(call)
+                consulted = self._approval_policy.authorize(call, context)
             except PermissionError:
-                self._record_approval(call, False)
+                self._record_approval(call, context, False)
                 raise
             if consulted:
-                self._record_approval(call, True)
+                self._record_approval(call, context, True)
 
-    def _record_approval(self, call: "ToolCall", approved: bool) -> None:
-        self._session.record_user_interaction(
+    def _record_approval(
+        self,
+        call: "ToolCall",
+        context: "ToolExecutionContext",
+        approved: bool,
+    ) -> None:
+        context.session.record_user_interaction(
             f"Tool approval: {call.name}"
             f"({json.dumps(call.arguments, ensure_ascii=False)})\n"
             f"User response: {'approved' if approved else 'denied'}",

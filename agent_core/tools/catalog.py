@@ -101,7 +101,7 @@ class ToolSet:
 
         try:
             if self._policy is not None:
-                self._policy.authorize(call)
+                self._policy.authorize(call, self._context)
             output = tool.execute(call.arguments, self._context)
         except Exception as error:
             return ToolResult(
