@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent, type PropsWithChildren } from "react";
 import {
   AssistantRuntimeProvider, ComposerPrimitive, MessagePrimitive,
   ThreadPrimitive, useAuiState, useExternalStoreRuntime,
@@ -9,7 +9,7 @@ import { ArrowUp, Check, ChevronDown, ChevronRight, LoaderCircle, MessageCircleQ
 import remarkGfm from "remark-gfm";
 import { get, releaseRuntime, selectWorkspace, sessionUrl, updateSessionWorkspace, uploadAttachments, type ImageAttachment, type ModelOption, type Session } from "./api";
 import { SessionSocket } from "./session";
-import { applyMessage, isTurnActivity, toMessages, type Notice, type TranscriptItem } from "./transcript";
+import { applyMessage, groupTurnParts, isTurnActivity, toMessages, TURN_PROCESS_GROUP, type Notice, type TranscriptItem } from "./transcript";
 import type { PermissionPreset, Usage, UserQuestion } from "@nosis/protocol";
 
 type Approval = {
@@ -75,10 +75,28 @@ function ReasoningText({ text }: ReasoningMessagePartProps) {
   return <div className="reasoning-text">{text}</div>;
 }
 
+function TurnPartGroup({ groupKey, children }: PropsWithChildren<{ groupKey: string | undefined }>) {
+  const active = useAuiState((state) => state.thread.isRunning && state.message.isLast);
+  const [expanded, setExpanded] = useState(active);
+  const wasActiveRef = useRef(active);
+  useEffect(() => {
+    if (active) setExpanded(true);
+    else if (wasActiveRef.current) setExpanded(false);
+    wasActiveRef.current = active;
+  }, [active]);
+  if (groupKey !== TURN_PROCESS_GROUP) return <>{children}</>;
+  return <details className="turn-process" open={active || expanded} onToggle={(event) => {
+    if (!active) setExpanded(event.currentTarget.open);
+  }}>
+    <summary onClick={(event) => { if (active) event.preventDefault(); }}><ChevronRight size={14} className="turn-process-chevron" />推理与执行过程</summary>
+    <div className="turn-process-content">{children}</div>
+  </details>;
+}
+
 function AssistantMessage() {
   return <MessagePrimitive.Root className="assistant-message">
     <div className="assistant-label"><span className="assistant-avatar"><img src="/nosis-avatar-128.png" alt="" /></span>Nosis</div>
-    <div className="assistant-content"><MessagePrimitive.Parts components={{ Text: MarkdownText, Reasoning: ReasoningText, tools: { Fallback: ToolCard } }} /><MessageTimestamp /></div>
+    <div className="assistant-content"><MessagePrimitive.Unstable_PartsGrouped groupingFunction={groupTurnParts} components={{ Text: MarkdownText, Reasoning: ReasoningText, tools: { Fallback: ToolCard }, Group: TurnPartGroup }} /><MessageTimestamp /></div>
   </MessagePrimitive.Root>;
 }
 
@@ -132,7 +150,7 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
   const eventCounterRef = useRef(session.event_sequence ?? 0);
   const [attachmentId] = useState(() => crypto.randomUUID());
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const messages = useMemo(() => toMessages(items, session.session_id), [items, session.session_id]);
+  const messages = useMemo(() => toMessages(items, session.session_id, running), [items, running, session.session_id]);
 
   // Socket callbacks fire outside React's render, so the transcript and
   // turn state they fold onto are kept in refs.

@@ -61,6 +61,12 @@ svg { flex-shrink: 0; }
 .assistant-avatar img { width: 100%; height: 100%; display: block; object-fit: cover; border-radius: inherit; }
 .assistant-content { padding-left: 33px; line-height: 1.9; font-size: 13px; overflow-wrap: anywhere; }
 .message-timestamp { display: block; margin-top: 5px; color: #a5acb8; font-size: 10px; line-height: 1.4; }
+.turn-process { margin: 0 0 14px; }
+.turn-process > summary { display: flex; align-items: center; gap: 6px; width: fit-content; list-style: none; color: #8d97a7; font-size: 11px; line-height: 1.5; cursor: pointer; user-select: none; }
+.turn-process > summary::-webkit-details-marker { display: none; }
+.turn-process[open] .turn-process-chevron { transform: rotate(90deg); }
+.turn-process-content { margin-top: 10px; padding-left: 12px; border-left: 1px solid #e5e8ee; }
+.turn-process-content > :last-child { margin-bottom: 0; }
 .reasoning-text { margin: 0 0 14px; color: #98a1b0; font-size: 12px; font-style: italic; line-height: 1.8; white-space: pre-wrap; overflow-wrap: anywhere; }
 .assistant-content p { margin: 0 0 14px; }
 .assistant-content h1, .assistant-content h2, .assistant-content h3 { font-size: 16px; margin: 20px 0 10px; }
