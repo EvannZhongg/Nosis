@@ -58,6 +58,17 @@ class ShellTool(Tool):
             else "Calls may run for up to "
             f"{MAX_FOREGROUND_SHELL_TIMEOUT_SECONDS} seconds."
         )
+        timeout_description = (
+            "Optional timeout in seconds. Defaults to "
+            f"{DEFAULT_SHELL_TIMEOUT_SECONDS} seconds, with a foreground "
+            f"maximum of {MAX_FOREGROUND_SHELL_TIMEOUT_SECONDS}. Values up "
+            f"to {MAX_BACKGROUND_SHELL_TIMEOUT_SECONDS} require "
+            "background=true."
+            if supports_background
+            else "Optional timeout in seconds. Defaults to "
+            f"{DEFAULT_SHELL_TIMEOUT_SECONDS} seconds, with a maximum of "
+            f"{MAX_FOREGROUND_SHELL_TIMEOUT_SECONDS}."
+        )
         description = (
             "Execute a shell command with the workspace as the current "
             f"directory. {shell_note} Every call starts a fresh shell, so "
@@ -78,14 +89,7 @@ class ShellTool(Tool):
                 "type": "integer",
                 "minimum": 1,
                 "maximum": maximum_timeout,
-                "description": (
-                    "Optional timeout in seconds. Defaults to "
-                    f"{DEFAULT_SHELL_TIMEOUT_SECONDS} seconds, "
-                    "with a foreground maximum of "
-                    f"{MAX_FOREGROUND_SHELL_TIMEOUT_SECONDS}. Values up to "
-                    f"{MAX_BACKGROUND_SHELL_TIMEOUT_SECONDS} require "
-                    "background=true."
-                ),
+                "description": timeout_description,
             },
         }
         if supports_background:

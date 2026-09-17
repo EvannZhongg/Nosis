@@ -1494,6 +1494,9 @@ class ShellToolTest(unittest.TestCase):
         self.assertNotIn("background", definition.description)
         self.assertNotIn("86400", definition.description)
         self.assertNotIn("background", definition.parameters["properties"])
+        serialized_schema = json.dumps(definition.parameters)
+        self.assertNotIn("background", serialized_schema)
+        self.assertNotIn("86400", serialized_schema)
         self.assertIn(
             "Git Bash" if os.name == "nt" else "/bin/sh",
             definition.description,
@@ -1524,6 +1527,8 @@ class ShellToolTest(unittest.TestCase):
         self.assertIn("background", definition.parameters["properties"])
         self.assertIn("background=true", definition.description)
         self.assertIn("86400", definition.description)
+        self.assertIn("background=true", timeout_schema["description"])
+        self.assertIn("86400", timeout_schema["description"])
         jobs.close()
 
     def test_validates_arguments(self) -> None:
