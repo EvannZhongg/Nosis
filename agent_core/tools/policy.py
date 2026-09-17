@@ -10,24 +10,27 @@ class ShellApprovalPolicy:
     ) -> None:
         self._request_permission = request_permission
 
-    def authorize(self, call: ToolCall) -> None:
+    def authorize(self, call: ToolCall) -> bool:
         if call.name != "shell":
-            return
+            return False
 
         command = call.arguments.get("command")
         if not isinstance(command, str) or not command:
-            return
+            return False
         if not self._request_permission(command):
             raise PermissionError("shell command was not approved")
+        return True
 
 
 class CompositeToolPolicy:
     def __init__(self, *policies: ToolPolicy) -> None:
         self._policies = tuple(policies)
 
-    def authorize(self, call: ToolCall) -> None:
+    def authorize(self, call: ToolCall) -> bool:
+        consulted = False
         for policy in self._policies:
-            policy.authorize(call)
+            consulted = bool(policy.authorize(call)) or consulted
+        return consulted
 
 
 class McpApprovalPolicy:
@@ -39,8 +42,9 @@ class McpApprovalPolicy:
         self._request_permission = request_permission
         self._requires_approval = requires_approval
 
-    def authorize(self, call: ToolCall) -> None:
+    def authorize(self, call: ToolCall) -> bool:
         if not self._requires_approval(call.name):
-            return
+            return False
         if not self._request_permission(call):
             raise PermissionError("MCP tool call was not approved")
+        return True

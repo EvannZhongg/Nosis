@@ -1,5 +1,6 @@
 """Runtime permission state and Tool authorization policy."""
 
+import json
 from enum import StrEnum
 from threading import Lock
 from typing import TYPE_CHECKING, Callable
@@ -45,4 +46,18 @@ class PermissionController:
         with self._lock:
             preset = self._session.permission_preset
         if preset is PermissionPreset.ASK_FOR_APPROVAL:
-            self._approval_policy.authorize(call)
+            try:
+                consulted = self._approval_policy.authorize(call)
+            except PermissionError:
+                self._record_approval(call, False)
+                raise
+            if consulted:
+                self._record_approval(call, True)
+
+    def _record_approval(self, call: "ToolCall", approved: bool) -> None:
+        self._session.record_user_interaction(
+            f"Tool approval: {call.name}"
+            f"({json.dumps(call.arguments, ensure_ascii=False)})\n"
+            f"User response: {'approved' if approved else 'denied'}",
+            "approval_response",
+        )

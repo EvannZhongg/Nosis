@@ -633,6 +633,7 @@ def _append_steering(
             "user",
             steer.text,
             timestamp_utc=timestamp_utc,
+            user_source="steering",
         )
         if on_event is not None:
             on_event(

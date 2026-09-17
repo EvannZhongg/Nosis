@@ -359,6 +359,133 @@ class AgentTest(unittest.TestCase):
         self.assertNotIn("private reasoning", record)
         self.assertEqual(session.items[1].reasoning, "private reasoning")
 
+    def test_context_keeps_current_and_previous_turn_user_anchors(self) -> None:
+        session = Session("session-1")
+        session.begin_turn("turn-1")
+        session.add_item("user", "first command", REQUEST_TIME)
+        session.add_item("assistant", "first answer", RESPONSE_TIME)
+        session.record_user_interaction(
+            "Question: Which target?\nUser answer: api",
+            "question_response",
+        )
+        session.finish_turn("completed")
+        session.begin_turn("turn-2")
+        session.add_item("user", "second command", REQUEST_TIME)
+        session.add_item("assistant", "working", TOOL_CALL_TIME)
+        session.add_item("user", "keep it concise", TOOL_RESULT_TIME)
+        session.set_archived_summary("lossy state", 5)
+        context = ContextManager(
+            MockProvider([]),
+            session,
+            "You are helpful.",
+            AGENT_CONFIG,
+        )
+
+        request = context.build_request()
+
+        anchors = request.messages[0].content or ""
+        self.assertIn("[Lossless User Anchors]", anchors)
+        self.assertIn("previous turn, user_input", anchors)
+        self.assertIn("first command", anchors)
+        self.assertIn("Which target?", anchors)
+        self.assertIn("User answer: api", anchors)
+        self.assertIn("current turn, user_input", anchors)
+        self.assertIn("second command", anchors)
+        self.assertIn("keep it concise", anchors)
+        self.assertIn(
+            "[Archived Context Summary]\nlossy state",
+            request.system_prompt,
+        )
+
+    def test_context_does_not_duplicate_user_anchor_still_in_recent_tail(self) -> None:
+        session = Session("session-1")
+        session.begin_turn("turn-1")
+        session.add_item("user", "first command")
+        session.add_item("assistant", "first answer")
+        session.finish_turn("completed")
+        session.begin_turn("turn-2")
+        session.add_item("user", "second command")
+        session.set_archived_summary("lossy state", 2)
+        context = ContextManager(
+            MockProvider([]),
+            session,
+            "You are helpful.",
+            AGENT_CONFIG,
+        )
+
+        request = context.build_request()
+
+        anchors = request.messages[0].content or ""
+        self.assertIn("first command", anchors)
+        self.assertNotIn("second command", anchors)
+        self.assertEqual(
+            [message.content for message in request.messages
+             if message.role == "user" and message.content == "second command"],
+            ["second command"],
+        )
+
+    def test_context_excludes_user_anchors_older_than_previous_turn(self) -> None:
+        session = Session("session-1")
+        for turn_id, command in (
+            ("turn-1", "old command"),
+            ("turn-2", "previous command"),
+        ):
+            session.begin_turn(turn_id)
+            session.add_item("user", command)
+            session.add_item("assistant", "done")
+            session.finish_turn("completed")
+        session.begin_turn("turn-3")
+        session.add_item("user", "current command")
+        session.set_archived_summary("lossy state", len(session.items))
+        context = ContextManager(
+            MockProvider([]),
+            session,
+            "You are helpful.",
+            AGENT_CONFIG,
+        )
+
+        request = context.build_request()
+
+        anchors = request.messages[0].content or ""
+        self.assertNotIn("old command", anchors)
+        self.assertIn("previous command", anchors)
+        self.assertIn("current command", anchors)
+
+    def test_repeated_active_turn_archives_reinject_the_user_command(self) -> None:
+        first_call = ToolCall("call-1", "echo", {"text": "first"})
+        second_call = ToolCall("call-2", "echo", {"text": "second"})
+        session = Session("session-1")
+        session.begin_turn("turn-1")
+        session.add_item("user", "complete the migration")
+        session.add_item("assistant", None, tool_calls=(first_call,))
+        session.add_item("tool", "first result", tool_call_id=first_call.id)
+        session.add_item("assistant", "continuing")
+        provider = MockProvider(["first checkpoint", "second checkpoint"])
+        context = ContextManager(
+            provider,
+            session,
+            "You are helpful.",
+            AgentConfig(
+                max_same_tool_calls=5,
+                output_reserve_tokens=100,
+                tools=ToolConfig(enabled=()),
+                context=ContextCompressionConfig(keep_recent_units=1),
+            ),
+        )
+
+        context.archive()
+        session.add_item("assistant", None, tool_calls=(second_call,))
+        session.add_item("tool", "second result", tool_call_id=second_call.id)
+        session.add_item("assistant", "almost done")
+        context.archive()
+
+        second_record = provider.requests[1].messages[0].content or ""
+        self.assertIn("[Lossless User Anchors]", second_record)
+        self.assertIn("complete the migration", second_record)
+        self.assertIn("[Conversation Record]", second_record)
+        self.assertIn("second result", second_record)
+        self.assertNotIn("USER\ncomplete the migration", second_record)
+
     def test_projection_repairs_a_tool_chain_after_the_archive_cursor(self) -> None:
         call = ToolCall("call-old", "echo", {"text": "old"})
         session = Session(
@@ -1136,6 +1263,8 @@ class AgentTest(unittest.TestCase):
         consolidation = provider.requests[3]
         self.assertEqual(len(consolidation.messages), 1)
         consolidation_record = consolidation.messages[0].content or ""
+        self.assertNotIn("[Lossless User Anchors]", consolidation_record)
+        self.assertIn("finish the task", consolidation_record)
         self.assertIn('{"ok": true, "output": {"text": "A"}}', consolidation_record)
         self.assertIn('{"ok": true, "output": {"text": "B"}}', consolidation_record)
         resumed = provider.requests[4]
@@ -1144,8 +1273,13 @@ class AgentTest(unittest.TestCase):
                 "[Archived Context Summary]\nactive turn checkpoint"
             )
         )
+        anchor = resumed.messages[0]
+        self.assertEqual(anchor.role, "user")
+        self.assertIn("[Lossless User Anchors]", anchor.content or "")
+        self.assertIn("finish the task", anchor.content or "")
         retained = [
-            message for message in resumed.messages if message.role != "system"
+            message for message in resumed.messages
+            if message.role not in {"system", "user"}
         ]
         self.assertEqual(
             [message.role for message in retained],

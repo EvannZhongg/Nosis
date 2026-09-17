@@ -57,6 +57,42 @@ class PermissionControllerTest(unittest.TestCase):
 
         self.assertEqual(calls, [call])
 
+    def test_records_an_approval_decision_as_a_user_anchor(self) -> None:
+        class ApprovalPolicy:
+            def authorize(self, call: ToolCall) -> bool:
+                return True
+
+        session = Session("s")
+        session.begin_turn("turn-1")
+        controller = PermissionController(session, ApprovalPolicy())
+
+        controller.authorize(
+            ToolCall("call-1", "shell", {"command": "pwd"})
+        )
+
+        anchor = session.user_anchors[-1]
+        self.assertEqual(anchor.source, "approval_response")
+        self.assertIn('"command": "pwd"', anchor.content)
+        self.assertIn("approved", anchor.content)
+
+    def test_records_a_denied_approval_as_a_user_anchor(self) -> None:
+        class DenialPolicy:
+            def authorize(self, call: ToolCall) -> bool:
+                raise PermissionError("not approved")
+
+        session = Session("s")
+        session.begin_turn("turn-1")
+        controller = PermissionController(session, DenialPolicy())
+
+        with self.assertRaises(PermissionError):
+            controller.authorize(
+                ToolCall("call-1", "shell", {"command": "rm output"})
+            )
+
+        anchor = session.user_anchors[-1]
+        self.assertEqual(anchor.source, "approval_response")
+        self.assertIn("denied", anchor.content)
+
     def test_full_access_skips_approval(self) -> None:
         calls = []
 

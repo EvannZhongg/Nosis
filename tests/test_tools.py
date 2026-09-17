@@ -286,9 +286,12 @@ class ToolSetTest(unittest.TestCase):
 class AskUserToolTest(unittest.TestCase):
     def test_returns_the_runtime_answer(self) -> None:
         requests = []
+        session = Session("s")
+        session.begin_turn("turn-1")
         tool = _Bound(
             AskUserTool(),
             _TMP_WORKSPACE,
+            session=session,
             ask_user=lambda question, options, allow_free_text: (
                 requests.append((question, options, allow_free_text))
                 or {"type": "option", "id": "sqlite", "label": "SQLite"}
@@ -317,6 +320,9 @@ class AskUserToolTest(unittest.TestCase):
         )
         self.assertEqual(requests[0][0], "Which cache?")
         self.assertTrue(requests[0][2])
+        anchor = session.user_anchors[-1]
+        self.assertEqual(anchor.source, "question_response")
+        self.assertIn("sqlite (SQLite)", anchor.content)
 
     def test_requires_unique_option_ids(self) -> None:
         tool = _Bound(
@@ -335,6 +341,28 @@ class AskUserToolTest(unittest.TestCase):
                     ],
                 }
             )
+
+    def test_records_free_text_as_a_user_anchor(self) -> None:
+        session = Session("s")
+        session.begin_turn("turn-1")
+        tool = _Bound(
+            AskUserTool(),
+            _TMP_WORKSPACE,
+            session=session,
+            ask_user=lambda *_args: {"type": "text", "text": "Redis"},
+        )
+
+        tool.execute(
+            {
+                "question": "Which cache?",
+                "options": [{"id": "sqlite", "label": "SQLite"}],
+                "allow_free_text": True,
+            }
+        )
+
+        anchor = session.user_anchors[-1]
+        self.assertEqual(anchor.source, "question_response")
+        self.assertIn("User answer: Redis", anchor.content)
 
     def test_is_unavailable_without_an_interaction_callback(self) -> None:
         tools = builtin_catalog().select(

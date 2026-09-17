@@ -154,6 +154,8 @@ Execution History 直接由 Journal replay；Provider Conversation 由独立 pro
 
 上下文压缩以 `ContextUnit` 为边界，而不是以 turn 或裸 Message 为边界。普通消息各自构成单元；包含 Tool Call 的 assistant 消息、该批次的全部 Tool Result 和尾随 Tool Media 共同构成一个不可拆分单元。触发压缩时，最近 `context.compression.keep_recent_units` 个完整单元保留原文，更早的单元合并进 checkpoint，因此归档 cursor 可以在仍执行的 turn 内推进，但不会落到 Tool batch 中间。
 
+模型上下文分为三层：当前 turn 与上一 turn 的用户原文和交互决策作为 `Lossless User Anchors` 保留；更早的目标、结论和工作状态进入 `Archived Context Summary`；最近 `context.compression.keep_recent_units` 个 `ContextUnit` 作为原始 tail 保留。仍在 tail 中的用户消息不会重复写入 anchors。用户 steering、`ask_user` 回答和审批响应都归入对应 turn 的 anchors，因此 active turn 内压缩不会丢失这些输入。
+
 运行中用户 steering 在安全点作为普通 `user` Message 追加，因此它自然构成新的 `ContextUnit`，沿用同一套 token 统计、hard limit 与压缩保留规则，不维护额外的上下文计数。
 
 Session 位于 `~/.nosis/sessions/<WORKSPACE_KEY>/<SESSION_ID>/`，其中 `<SESSION_ID>.jsonl` 是运行日志，`session.json` 保存该 Session 的权限 preset。Session ID 来自目录名，Workspace 路径由可逆的 `<WORKSPACE_KEY>` 取得，不在配置中重复保存。修改 Workspace 会将整个 Session 目录移动到新的 Workspace 分组。超过回灌上限的 Tool Result 保存为同目录下的 `<TOOL_CALL_ID>.txt`；TUI 用 `/sessions` 列出当前 Workspace 的 Session 并切换，GUI 直接读取同一份存储。子代理的 Journal 写在父 Session 的 `subagents` 目录下，因此不会出现在会话列表中，但仍可查阅。

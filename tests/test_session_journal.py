@@ -168,6 +168,49 @@ class SessionJournalTest(unittest.TestCase):
             {"summary": "summary", "item_cursor": 2},
         )
 
+    def test_replay_restores_user_anchors_with_turn_membership(self):
+        session = Session("s")
+        session.begin_turn("turn-1")
+        session.add_item("user", "first command")
+        session.record_user_interaction(
+            "Question: Which target?\nUser answer: api",
+            "question_response",
+        )
+        session.finish_turn("completed")
+        session.begin_turn("turn-2")
+        session.add_item("user", "second command")
+
+        replayed = Session("s")
+        for event in session.journal:
+            replayed.journal.append(event)
+            replayed.apply_event(event)
+
+        self.assertEqual(
+            [anchor.content for anchor in replayed.user_anchors],
+            [
+                "first command",
+                "Question: Which target?\nUser answer: api",
+                "second command",
+            ],
+        )
+
+    def test_steering_replays_with_its_anchor_source(self):
+        session = Session("s")
+        session.begin_turn("turn-1")
+        session.add_item(
+            "user",
+            "check tests first",
+            user_source="steering",
+        )
+
+        replayed = Session("s")
+        for event in session.journal:
+            replayed.journal.append(event)
+            replayed.apply_event(event)
+
+        self.assertEqual(replayed.user_anchors[0].source, "steering")
+        self.assertEqual(replayed.user_anchors[0].content, "check tests first")
+
     def test_replay_ignores_only_a_truncated_final_record(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)

@@ -128,4 +128,21 @@ class AskUserTool(Tool):
             raise ValueError("'allow_free_text' must be a boolean")
         if context.ask_user is None:
             raise RuntimeError("user interaction is unavailable")
-        return context.ask_user(question.strip(), options, allow_free_text)
+        question = question.strip()
+        result = context.ask_user(question, options, allow_free_text)
+        if isinstance(result, dict) and result.get("type") == "option":
+            option_id = result.get("id")
+            label = result.get("label")
+            context.session.record_user_interaction(
+                f"Question: {question}\n"
+                f"User selected: {option_id} ({label})",
+                "question_response",
+            )
+        elif isinstance(result, dict) and result.get("type") == "text":
+            answer = result.get("text")
+            if isinstance(answer, str):
+                context.session.record_user_interaction(
+                    f"Question: {question}\nUser answer: {answer}",
+                    "question_response",
+                )
+        return result

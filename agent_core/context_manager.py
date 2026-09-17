@@ -8,7 +8,7 @@ from .content import historical_content
 from .llm import LLMProvider, LLMRequest, with_generation_limit
 from .prompts import load_consolidator_prompt
 from .projection import ContextUnit, project_context_units
-from .session import Message, Session
+from .session import Message, Session, UserAnchor
 from .tools import ToolDefinition
 
 
@@ -95,15 +95,15 @@ class ContextManager:
         self,
         tools: Iterable[ToolDefinition] = (),
     ) -> LLMRequest:
-        system_prompt = self._system_prompt
-        if self._session.archived_summary is not None:
-            system_prompt = (
-                f"{system_prompt}\n\n[Archived Context Summary]\n"
-                f"{self._session.archived_summary}"
-            )
+        messages = self._context_messages()
+        anchor = self._lossless_user_anchor_message()
+        if anchor is not None:
+            messages.insert(0, anchor)
         return LLMRequest(
-            system_prompt=system_prompt,
-            messages=tuple(self._context_messages()),
+            system_prompt=self._system_prompt_with_summary(
+                self._system_prompt
+            ),
+            messages=tuple(messages),
             tools=tuple(tools),
             media_root=self._media_root,
         )
@@ -120,18 +120,18 @@ class ContextManager:
     def archive(self) -> int:
         """Compress the unarchived transcript into the session checkpoint."""
         archive_end, items = self._archivable_items()
-        previous = self._session.archived_summary
-        system_prompt = load_consolidator_prompt()
-        if previous is not None:
-            system_prompt = (
-                f"{system_prompt}\n\n[Archived Context Summary]\n{previous}"
-            )
+        content = _compression_record(items)
+        anchors = self._lossless_user_anchor_content()
+        if anchors is not None:
+            content = f"{anchors}\n\n{content}"
         request = LLMRequest(
-            system_prompt=system_prompt,
+            system_prompt=self._system_prompt_with_summary(
+                load_consolidator_prompt()
+            ),
             messages=(
                 Message(
                     role="user",
-                    content=_compression_record(items),
+                    content=content,
                 ),
             ),
             media_root=self._media_root,
@@ -150,6 +150,27 @@ class ContextManager:
             archive_end,
         )
         return self._session.archived_item_cursor
+
+    def _system_prompt_with_summary(self, base: str) -> str:
+        if self._session.archived_summary is None:
+            return base
+        return (
+            f"{base}\n\n[Archived Context Summary]\n"
+            f"{self._session.archived_summary}"
+        )
+
+    def _lossless_user_anchor_content(self) -> str | None:
+        return _lossless_user_anchors(
+            self._session.recent_user_anchors(),
+            self._session.archived_item_cursor,
+            self._session.current_turn_id,
+        )
+
+    def _lossless_user_anchor_message(self) -> Message | None:
+        content = self._lossless_user_anchor_content()
+        if content is None:
+            return None
+        return Message(role="user", content=content)
 
     def _archivable_items(self) -> tuple[int, list[Message]]:
         """Return complete context units before the retained tail."""
@@ -192,6 +213,41 @@ class ContextManager:
 
 def _unit_messages(units: Iterable[ContextUnit]) -> list[Message]:
     return [message for unit in units for message in unit.messages]
+
+
+def _lossless_user_anchors(
+    anchors: Iterable[UserAnchor],
+    archive_cursor: int,
+    active_turn_id: str | None,
+) -> str | None:
+    visible = [
+        anchor for anchor in anchors
+        if anchor.item_index is None or anchor.item_index < archive_cursor
+    ]
+    if not visible:
+        return None
+    sections = [
+        "[Lossless User Anchors]",
+        "These preserve exact user-authored input and interaction decisions "
+        "from the active turn and the immediately preceding turn. Treat "
+        "them as authoritative user instructions.",
+    ]
+    for anchor in visible:
+        timestamp = anchor.timestamp_utc.astimezone().isoformat(
+            timespec="seconds"
+        )
+        content = historical_content(anchor.content)
+        if content:
+            turn = (
+                "current turn"
+                if anchor.turn_id == active_turn_id
+                else "previous turn"
+            )
+            sections.append(
+                f"USER INPUT {timestamp} ({turn}, {anchor.source})\n"
+                f"{content}"
+            )
+    return "\n\n".join(sections)
 
 
 def _compression_record(items: list[Message]) -> str:

@@ -141,5 +141,6 @@ class Tool(ABC):
 
 
 class ToolPolicy(Protocol):
-    def authorize(self, call: ToolCall) -> None:
+    def authorize(self, call: ToolCall) -> bool | None:
+        """Authorize a call and report whether the user was consulted."""
         raise NotImplementedError

@@ -11,6 +11,12 @@ from .tools import ToolCall
 
 MessageRole = Literal["system", "user", "assistant", "tool"]
 MessageOrigin = Literal["conversation", "tool_media"]
+UserAnchorSource = Literal[
+    "user_input",
+    "steering",
+    "question_response",
+    "approval_response",
+]
 TurnStatus = Literal[
     "running", "completed", "cancelled", "interrupted", "unknown", "failed"
 ]
@@ -70,6 +76,15 @@ class ToolExecution:
     error: str | None = None
 
 
+@dataclass(frozen=True)
+class UserAnchor:
+    turn_id: str
+    content: Content
+    timestamp_utc: datetime
+    source: UserAnchorSource
+    item_index: int | None = None
+
+
 JournalSink = Callable[[tuple[JournalEvent, ...]], None]
 
 
@@ -84,6 +99,11 @@ class Session:
     journal: list[JournalEvent] = field(default_factory=list, repr=False)
     turns: dict[str, Turn] = field(default_factory=dict, repr=False)
     tool_executions: dict[str, ToolExecution] = field(default_factory=dict, repr=False)
+    user_anchors: list[UserAnchor] = field(
+        default_factory=list,
+        repr=False,
+        compare=False,
+    )
     _sink: JournalSink | None = field(default=None, repr=False, compare=False)
     _current_turn_id: str | None = field(default=None, repr=False, compare=False)
     _journal_lock: Lock = field(default_factory=Lock, repr=False, compare=False)
@@ -97,7 +117,27 @@ class Session:
         if event.event_type == "message_appended" and isinstance(
             payload.get("message"), dict
         ):
-            self.items.append(message_from_dict(payload["message"]))
+            message = message_from_dict(payload["message"])
+            item_index = len(self.items)
+            self.items.append(message)
+            if (
+                event.turn_id is not None
+                and message.role == "user"
+                and not message.is_tool_media
+            ):
+                self.user_anchors.append(
+                    UserAnchor(
+                        turn_id=event.turn_id,
+                        content=message.content,
+                        timestamp_utc=message.timestamp_utc or event.timestamp_utc,
+                        source=(
+                            payload.get("user_source")
+                            if payload.get("user_source") == "steering"
+                            else "user_input"
+                        ),
+                        item_index=item_index,
+                    )
+                )
         elif event.event_type == "turn_started" and event.turn_id:
             self.turns[event.turn_id] = Turn(
                 event.turn_id,
@@ -160,6 +200,25 @@ class Session:
                 else None
             )
             self.archived_item_cursor = int(payload["item_cursor"])
+        elif event.event_type == "user_interaction_recorded" and event.turn_id:
+            content = payload.get("content")
+            source = payload.get("source")
+            anchor_source: UserAnchorSource | None
+            if isinstance(content, str) and source == "question_response":
+                anchor_source = "question_response"
+            elif isinstance(content, str) and source == "approval_response":
+                anchor_source = "approval_response"
+            else:
+                anchor_source = None
+            if anchor_source is not None:
+                self.user_anchors.append(
+                    UserAnchor(
+                        turn_id=event.turn_id,
+                        content=content,
+                        timestamp_utc=event.timestamp_utc,
+                        source=anchor_source,
+                    )
+                )
         elif event.event_type == "permission_preset_changed":
             self.permission_preset = PermissionPreset(str(payload["preset"]))
 
@@ -208,6 +267,42 @@ class Session:
         self.apply_event(event)
         self._current_turn_id = turn_id
         return turn_id
+
+    @property
+    def current_turn_id(self) -> str | None:
+        return self._current_turn_id
+
+    def recent_user_anchors(self) -> tuple[UserAnchor, ...]:
+        """Return user inputs from the active turn and its predecessor."""
+        active_turn_id = self._current_turn_id
+        if active_turn_id is None:
+            return ()
+        turn_ids = list(self.turns)
+        try:
+            active_index = turn_ids.index(active_turn_id)
+        except ValueError:
+            return ()
+        selected = {active_turn_id}
+        if active_index > 0:
+            selected.add(turn_ids[active_index - 1])
+        return tuple(
+            anchor for anchor in self.user_anchors
+            if anchor.turn_id in selected
+        )
+
+    def record_user_interaction(
+        self,
+        content: str,
+        source: UserAnchorSource,
+    ) -> None:
+        if self._current_turn_id is None:
+            return
+        event = self._event(
+            "user_interaction_recorded",
+            self._current_turn_id,
+            {"content": content, "source": source},
+        )
+        self.apply_event(event)
 
     def finish_turn(
         self,
@@ -306,6 +401,7 @@ class Session:
         reasoning: str | None = None,
         attachments: tuple[ImagePart, ...] = (),
         origin: MessageOrigin = "conversation",
+        user_source: UserAnchorSource = "user_input",
     ) -> None:
         if attachments:
             parts = list(content_parts(content))
@@ -323,7 +419,14 @@ class Session:
         event = self._event(
             "message_appended",
             self._current_turn_id,
-            {"message": message_to_dict(message)},
+            {
+                "message": message_to_dict(message),
+                **(
+                    {"user_source": user_source}
+                    if user_source != "user_input"
+                    else {}
+                ),
+            },
             tool_call_id,
         )
         self.apply_event(event)
