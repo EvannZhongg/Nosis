@@ -10,12 +10,12 @@
 git clone https://github.com/EvannZhongg/Nosis.git
 cd Nosis
 
-npm install --prefix interfaces/tui
-npm run build --prefix interfaces/tui
+npm install
+npm run build
 uv tool install --editable ".[gui]"
 ```
 
-该命令会安装 `nosis` 和 `nosis-gui`；仓库新增依赖后重新执行即可更新安装环境。
+`npm install` 在仓库根执行一次，workspaces 会把 TUI 与 GUI 的依赖装在根 `node_modules`；`npm run build` 构建两者（只想构建其中一个时用 `npm run build --workspace interfaces/tui`）。`package-lock.json` 只在仓库根存在一份。该命令会安装 `nosis` 和 `nosis-gui`；仓库新增依赖后重新执行即可更新安装环境。
 
 ## 初始化后的最小模型配置
 
@@ -54,8 +54,8 @@ nosis
 启动 GUI：
 
 ```bash
-npm install --prefix interfaces/gui
-npm run build --prefix interfaces/gui
+npm install
+npm run build --workspace interfaces/gui
 nosis-gui --workspace ~/projects/my-project
 ```
 
@@ -98,8 +98,6 @@ python -m unittest discover -s tests -v
 前端测试和类型检查：
 
 ```bash
-npm test --prefix interfaces/tui
-npm run typecheck --prefix interfaces/tui
-npm test --prefix interfaces/gui
-npm run typecheck --prefix interfaces/gui
+npm test
+npm run typecheck
 ```
