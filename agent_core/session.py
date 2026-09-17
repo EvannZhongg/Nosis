@@ -10,7 +10,7 @@ from .permissions import PermissionPreset
 from .tools import ToolCall
 
 MessageRole = Literal["system", "user", "assistant", "tool"]
-MessageOrigin = Literal["conversation", "tool_media"]
+MessageOrigin = Literal["conversation", "tool_media", "job_result"]
 UserAnchorSource = Literal[
     "user_input",
     "steering",
@@ -22,6 +22,9 @@ TurnStatus = Literal[
 ]
 ToolExecutionStatus = Literal[
     "started", "completed", "failed", "cancelled", "unknown"
+]
+JobExecutionStatus = Literal[
+    "submitted", "running", "completed", "failed", "cancelled", "interrupted"
 ]
 
 
@@ -42,6 +45,10 @@ class Message:
     @property
     def is_tool_media(self) -> bool:
         return self.origin == "tool_media"
+
+    @property
+    def is_user_authored(self) -> bool:
+        return self.role == "user" and self.origin == "conversation"
 
 
 @dataclass(frozen=True)
@@ -76,6 +83,18 @@ class ToolExecution:
     error: str | None = None
 
 
+@dataclass
+class JobExecution:
+    job_id: str
+    turn_id: str
+    kind: str
+    status: JobExecutionStatus
+    submitted_at: datetime | None = None
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    error: str | None = None
+
+
 @dataclass(frozen=True)
 class UserAnchor:
     turn_id: str
@@ -100,6 +119,7 @@ class Session:
     journal: list[JournalEvent] = field(default_factory=list, repr=False)
     turns: dict[str, Turn] = field(default_factory=dict, repr=False)
     tool_executions: dict[str, ToolExecution] = field(default_factory=dict, repr=False)
+    jobs: dict[str, JobExecution] = field(default_factory=dict, repr=False)
     user_anchors: list[UserAnchor] = field(
         default_factory=list,
         repr=False,
@@ -123,8 +143,7 @@ class Session:
             self.items.append(message)
             if (
                 event.turn_id is not None
-                and message.role == "user"
-                and not message.is_tool_media
+                and message.is_user_authored
             ):
                 self.user_anchors.append(
                     UserAnchor(
@@ -194,6 +213,60 @@ class Session:
             if execution is not None:
                 execution.status = "unknown"
                 execution.completed_at = event.timestamp_utc
+        elif event.event_type == "job_submitted":
+            job_id = payload.get("job_id")
+            if isinstance(job_id, str) and event.turn_id is not None:
+                self.jobs[job_id] = JobExecution(
+                    job_id=job_id,
+                    turn_id=event.turn_id,
+                    kind=str(payload.get("kind", "")),
+                    status="submitted",
+                    submitted_at=event.timestamp_utc,
+                )
+        elif event.event_type == "job_started":
+            job_id = payload.get("job_id")
+            if isinstance(job_id, str) and event.turn_id is not None:
+                job = self.jobs.get(job_id)
+                if job is None:
+                    job = JobExecution(
+                        job_id, event.turn_id, str(payload.get("kind", "")), "running"
+                    )
+                    self.jobs[job_id] = job
+                job.status = "running"
+                job.started_at = event.timestamp_utc
+        elif event.event_type in {
+            "job_completed", "job_failed", "job_cancelled", "job_interrupted"
+        }:
+            job_id = payload.get("job_id")
+            if isinstance(job_id, str) and event.turn_id is not None:
+                job = self.jobs.get(job_id)
+                if job is None:
+                    job = JobExecution(
+                        job_id,
+                        event.turn_id,
+                        str(payload.get("kind", "")),
+                        "interrupted",
+                    )
+                    self.jobs[job_id] = job
+                status = payload.get("status")
+                job.status = (
+                    status
+                    if status in {
+                        "submitted",
+                        "running",
+                        "completed",
+                        "failed",
+                        "cancelled",
+                        "interrupted",
+                    }
+                    else "interrupted"
+                )
+                job.completed_at = event.timestamp_utc
+                job.error = (
+                    payload.get("error")
+                    if isinstance(payload.get("error"), str)
+                    else None
+                )
         elif event.event_type == "context_archived":
             self.archived_summary = (
                 payload.get("summary")
@@ -252,6 +325,22 @@ class Session:
                         payload={"status": "unknown"},
                     )
                 )
+        for job in self.jobs.values():
+            if job.status in {"submitted", "running"}:
+                recovered.append(
+                    JournalEvent(
+                        seq=next_seq + len(recovered),
+                        event_id=str(uuid4()),
+                        event_type="job_interrupted",
+                        turn_id=job.turn_id,
+                        timestamp_utc=datetime.now(timezone.utc),
+                        payload={
+                            "job_id": job.job_id,
+                            "kind": job.kind,
+                            "status": "interrupted",
+                        },
+                    )
+                )
         if recovered and self._sink is not None:
             self._sink(tuple(recovered))
         self.journal.extend(recovered)
@@ -265,8 +354,7 @@ class Session:
         # existing turn state during recovery.
         if turn_id is None or turn_id in self.turns:
             turn_id = str(uuid4())
-        event = self._event("turn_started", turn_id, {"status": "running"})
-        self.apply_event(event)
+        self._event("turn_started", turn_id, {"status": "running"})
         self._current_turn_id = turn_id
         return turn_id
 
@@ -299,12 +387,11 @@ class Session:
     ) -> None:
         if self._current_turn_id is None:
             return
-        event = self._event(
+        self._event(
             "user_interaction_recorded",
             self._current_turn_id,
             {"content": content, "source": source},
         )
-        self.apply_event(event)
 
     def finish_turn(
         self,
@@ -319,20 +406,18 @@ class Session:
         payload: dict[str, object] = {"status": status}
         if error is not None:
             payload["error"] = error
-        event = self._event(f"turn_{status}", turn_id, payload)
-        self.apply_event(event)
+        self._event(f"turn_{status}", turn_id, payload)
         if turn_id == self._current_turn_id:
             self._current_turn_id = None
 
     def tool_started(self, call: ToolCall, turn_id: str | None = None) -> None:
         turn_id = turn_id or self._current_turn_id
-        event = self._event(
+        self._event(
             "tool_started",
             turn_id,
             {"name": call.name, "arguments": dict(call.arguments)},
             call.id,
         )
-        self.apply_event(event)
 
     def model_completed(
         self,
@@ -369,29 +454,58 @@ class Session:
         payload: dict[str, object] = {"status": status, "name": call.name}
         if error is not None:
             payload["error"] = error
-        event = self._event(f"tool_{status}", turn_id, payload, call.id)
-        self.apply_event(event)
+        self._event(f"tool_{status}", turn_id, payload, call.id)
+
+    def job_submitted(self, job_id: str, kind: str, turn_id: str) -> None:
+        self._event(
+            "job_submitted",
+            turn_id,
+            {"job_id": job_id, "kind": kind, "status": "submitted"},
+        )
+
+    def job_started(self, job_id: str, kind: str, turn_id: str) -> None:
+        self._event(
+            "job_started",
+            turn_id,
+            {"job_id": job_id, "kind": kind, "status": "running"},
+        )
+
+    def job_finished(
+        self,
+        job_id: str,
+        kind: str,
+        status: Literal["completed", "failed", "cancelled"],
+        *,
+        turn_id: str,
+        error: str | None = None,
+    ) -> None:
+        payload: dict[str, object] = {
+            "job_id": job_id,
+            "kind": kind,
+            "status": status,
+        }
+        if error is not None:
+            payload["error"] = error
+        self._event(f"job_{status}", turn_id, payload)
 
     def set_archived_summary(
         self, summary: str, item_cursor: int
     ) -> None:
         item_cursor = max(0, min(item_cursor, len(self.items)))
-        event = self._event(
+        self._event(
             "context_archived",
             self._current_turn_id,
             {"summary": summary, "item_cursor": item_cursor},
         )
-        self.apply_event(event)
 
     def set_permission_preset(self, preset: PermissionPreset) -> None:
         if preset is self.permission_preset:
             return
-        event = self._event(
+        self._event(
             "permission_preset_changed",
             self._current_turn_id,
             {"preset": preset.value},
         )
-        self.apply_event(event)
 
     def add_item(
         self,
@@ -418,7 +532,7 @@ class Session:
             reasoning,
             origin,
         )
-        event = self._event(
+        self._event(
             "message_appended",
             self._current_turn_id,
             {
@@ -431,7 +545,6 @@ class Session:
             },
             tool_call_id,
         )
-        self.apply_event(event)
 
     def _event(
         self,
@@ -453,6 +566,7 @@ class Session:
             if self._sink is not None:
                 self._sink((event,))
             self.journal.append(event)
+            self.apply_event(event)
         return event
 
 
@@ -515,8 +629,8 @@ def message_from_dict(data: dict[str, object]) -> Message:
             else None
         ),
         origin=(
-            "tool_media"
-            if data.get("origin") == "tool_media"
+            data["origin"]
+            if data.get("origin") in {"tool_media", "job_result"}
             else "conversation"
         ),
     )

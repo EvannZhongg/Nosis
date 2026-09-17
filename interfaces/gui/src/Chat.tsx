@@ -196,6 +196,7 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
   const [items, setItems] = useState<TranscriptItem[]>(session.items);
   const [running, setRunning] = useState(false);
   const [pendingSteers, setPendingSteers] = useState(0);
+  const [activeJobs, setActiveJobs] = useState(0);
   const [attaching, setAttaching] = useState(false);
   const [attachmentReplaced, setAttachmentReplaced] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
@@ -400,6 +401,7 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
             toolName: message.approval.tool_name,
           } : null);
           setQuestion(message.question);
+          setActiveJobs(message.jobs.length);
           setPermissionPreset(message.permission_preset);
           if (message.context_window) onContextWindowChange(message.context_window);
           if (wasRunning && !message.running) void endTurn();
@@ -410,6 +412,17 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
         }
         if (message.type === "user_steer_applied" || message.type === "user_steer_rejected") {
           setPendingSteers((count) => Math.max(0, count - 1));
+        }
+        if (message.type === "job_status") {
+          setActiveJobs((count) => (
+            message.status === "submitted"
+              ? count + 1
+              : message.status === "completed"
+                || message.status === "failed"
+                || message.status === "cancelled"
+                ? Math.max(0, count - 1)
+                : count
+          ));
         }
         if (message.type === "ready") {
           attachmentReplacedRef.current = false;
@@ -684,7 +697,7 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
           </form>}
         </div>}
         {notice && <div className={notice.level === "error" ? "error-banner" : "notice-banner"} role="alert">{notice.text}</div>}
-        {running && !attachmentReplaced && <div className="activity" role="status"><LoaderCircle size={13} className="spin" />{approval ? "等待你的确认" : question ? "等待你的选择" : pendingSteers ? `Nosis 正在处理… ${pendingSteers} 条引导待应用` : "Nosis 正在处理…"}
+        {running && !attachmentReplaced && <div className="activity" role="status"><LoaderCircle size={13} className="spin" />{approval ? "等待你的确认" : question ? "等待你的选择" : pendingSteers ? `Nosis 正在处理… ${pendingSteers} 条引导待应用` : activeJobs ? `Nosis 正在处理… ${activeJobs} 个后台任务` : "Nosis 正在处理…"}
           {!approval && !question && <button className="stop-button" aria-label="停止执行" onClick={() => { const turnId = activeTurnIdRef.current; if (turnId) socketRef.current?.send({ type: "cancel", turn_id: turnId }); }}><Square size={11} /> 停止</button>}
         </div>}
         {pendingFiles.length > 0 && <div className="attachment-list" aria-label="待发送图片">{pendingFiles.map((file, index) => <PendingAttachment key={`${file.name}-${file.lastModified}-${index}`} file={file} onRemove={() => setPendingFiles((files) => files.filter((_, itemIndex) => itemIndex !== index))} />)}</div>}

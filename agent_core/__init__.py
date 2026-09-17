@@ -13,6 +13,7 @@ from .agent import (
     ToolMediaEvent,
     ToolResultEvent,
     UserSteerAppliedEvent,
+    JobStatusEvent,
 )
 from .config import (
     AgentConfig,
@@ -22,11 +23,13 @@ from .config import (
 )
 from .context_manager import ContextManager, ContextWindow, ContextWindowExceededError
 from .execution import (
+    CommandCancelled,
     CommandExecutionResult,
     CommandOutputSpool,
     CommandExecutor,
     SubprocessCommandExecutor,
 )
+from .jobs import CancellationToken, JobCancelled, JobHandle, JobManager, JobUpdate
 from .llm import LLMProvider, LLMRequest, LLMResponse, TokenUsage, ProviderCapabilities
 from .content import Content, ContentPart, TextPart, ImagePart
 from .media import (
@@ -113,6 +116,7 @@ __all__ = [
     "AssistantMessageDeltaEvent",
     "AssistantMessageEvent",
     "CommandExecutionResult",
+    "CommandCancelled",
     "CommandOutputSpool",
     "CommandExecutor",
     "CompositeToolPolicy",
@@ -128,6 +132,12 @@ __all__ = [
     "EditFileTool",
     "ImageInfo",
     "ImagePart",
+    "JobCancelled",
+    "JobHandle",
+    "JobManager",
+    "JobStatusEvent",
+    "JobUpdate",
+    "CancellationToken",
     "JSONValue",
     "JsonlSessionStore",
     "LLMProvider",

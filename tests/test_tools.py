@@ -1467,9 +1467,9 @@ class ShellToolTest(unittest.TestCase):
         )
 
         tool.execute({"command": "pwd", "timeout_seconds": 61})
-        tool.execute({"command": "pwd", "timeout_seconds": 900})
+        tool.execute({"command": "pwd", "timeout_seconds": 86400})
 
-        self.assertEqual(executor.timeouts, [61, 900])
+        self.assertEqual(executor.timeouts, [61, 86400])
 
     def test_advertises_the_shell_and_timeout_it_uses(self) -> None:
         class UnusedExecutor:
@@ -1487,9 +1487,9 @@ class ShellToolTest(unittest.TestCase):
             "timeout_seconds"
         ]
 
-        self.assertEqual(timeout_schema["maximum"], 900)
+        self.assertEqual(timeout_schema["maximum"], 86400)
         self.assertIn("60 seconds by default", definition.description)
-        self.assertIn("maximum of 900", timeout_schema["description"])
+        self.assertIn("maximum of 86400", timeout_schema["description"])
         self.assertIn(
             "Git Bash" if os.name == "nt" else "/bin/sh",
             definition.description,
@@ -1508,9 +1508,9 @@ class ShellToolTest(unittest.TestCase):
             tool.execute({})
         with self.assertRaisesRegex(ValueError, "accepts only"):
             tool.execute({"command": "pwd", "extra": True})
-        for timeout_seconds in (0, 901, True, "10"):
+        for timeout_seconds in (0, 86401, True, "10"):
             with self.subTest(timeout_seconds=timeout_seconds):
-                with self.assertRaisesRegex(ValueError, "between 1 and 900"):
+                with self.assertRaisesRegex(ValueError, "between 1 and 86400"):
                     tool.execute(
                         {
                             "command": "pwd",

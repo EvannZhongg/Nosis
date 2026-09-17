@@ -13,6 +13,8 @@ if TYPE_CHECKING:
     from ..session import Session
     from ..skills import SkillRegistry
     from ..subagent import SubagentRuntime
+    from ..jobs import JobManager
+    from ..jobs import CancellationToken
 
 
 @dataclass(frozen=True)
@@ -43,6 +45,8 @@ class ToolExecutionContext:
     vision_provider: "LLMProvider | None" = None
     mcp: "McpClientManager | None" = None
     subagents: "SubagentRuntime | None" = None
+    jobs: "JobManager | None" = None
+    cancellation: "CancellationToken | None" = None
     skills: "SkillRegistry | None" = None
     ask_user: (
         Callable[[str, list[dict[str, JSONValue]], bool], JSONValue] | None

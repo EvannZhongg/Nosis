@@ -219,11 +219,10 @@ class ContextManager:
             # A turn begins where the person spoke. A synthesized media
             # message sits inside a turn, so it must not open a second
             # timeline block in the middle of one.
-            if item.role == "user" and not item.is_tool_media:
+            if item.is_user_authored:
                 end = next(
                     (offset for offset in range(index + 1, len(visible))
-                     if visible[offset].role == "user"
-                     and not visible[offset].is_tool_media),
+                     if visible[offset].is_user_authored),
                     len(visible),
                 )
                 result.append(_timeline_message(visible[index:end]))
@@ -284,6 +283,8 @@ def _compression_record(items: list[Message]) -> str:
                 lines.append(f"tool_call_id: {item.tool_call_id}")
         elif item.is_tool_media:
             lines = [f"TOOL MEDIA{timestamp}"]
+        elif item.origin == "job_result":
+            lines = [f"BACKGROUND JOB RESULT{timestamp}"]
         else:
             lines = [f"{item.role.upper()}{timestamp}"]
 
@@ -320,6 +321,8 @@ def _timeline_message(items: list[Message]) -> Message:
             # image can travel. Labelling it "user" would read as the
             # person speaking again in the middle of their own turn.
             detail = "tool images"
+        elif item.origin == "job_result":
+            detail = "background job result"
         lines.append(f"- {timestamp} — {detail}")
     return Message(
         role="system",

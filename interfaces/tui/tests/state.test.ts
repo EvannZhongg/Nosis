@@ -74,6 +74,23 @@ describe('helpers', () => {
 });
 
 describe('reducer', () => {
+  it('shows background job status updates', () => {
+    const state = reducer(ready(), {
+      type: 'message',
+      message: {
+        type: 'job_status',
+        turn_id: 't1',
+        job_id: 'job-1',
+        kind: 'shell',
+        status: 'running',
+      },
+    });
+    expect(state.entries.at(-1)).toMatchObject({
+      kind: 'notice',
+      text: 'Background shell job-1: running.',
+    });
+  });
+
   it('becomes idle when the runtime is ready', () => {
     const state = ready();
     expect(state.status).toBe('idle');

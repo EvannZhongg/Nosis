@@ -1,10 +1,11 @@
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
 
-from agent_core import SubprocessCommandExecutor
+from agent_core import CancellationToken, CommandCancelled, SubprocessCommandExecutor
 from agent_core.execution import (
     MAX_COMMAND_OUTPUT_CHARS,
     CommandOutputSpool,
@@ -75,6 +76,39 @@ class SubprocessCommandExecutorTest(unittest.TestCase):
 
             self.assertTrue(result.timed_out)
             self.assertEqual(result.timeout_seconds, 1)
+            self.assertFalse(
+                (working_directory / "child-output.txt").exists()
+            )
+
+    def test_cancellation_kills_the_command_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            working_directory = Path(directory)
+            executor = SubprocessCommandExecutor(working_directory)
+            cancellation = CancellationToken()
+            command = _python_script_command(
+                working_directory,
+                "import time\n"
+                "from pathlib import Path\n"
+                "time.sleep(3)\n"
+                "Path('child-output.txt').write_text('alive')\n",
+            )
+            errors = []
+
+            def execute() -> None:
+                try:
+                    executor.execute(command, cancellation=cancellation)
+                except BaseException as error:
+                    errors.append(error)
+
+            thread = threading.Thread(target=execute)
+            thread.start()
+            time.sleep(0.2)
+            cancellation.cancel()
+            thread.join(2)
+            time.sleep(3.2)
+
+            self.assertFalse(thread.is_alive())
+            self.assertIsInstance(errors[0], CommandCancelled)
             self.assertFalse(
                 (working_directory / "child-output.txt").exists()
             )

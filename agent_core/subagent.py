@@ -19,6 +19,8 @@ from .tools.catalog import ToolCatalog
 from .tools.context import ToolExecutionContext
 from .tools.base import ToolPolicy
 from .tools.builtin import AnalyzeImageTool, ReadImageTool, ReadSkillTool
+from .jobs import CancellationToken
+from .turn_control import TurnControl
 
 
 def vision_aware_tool_names(
@@ -129,6 +131,7 @@ class SubagentRuntime:
         role_name: str,
         task: str,
         parent: ToolExecutionContext,
+        cancellation: CancellationToken | None = None,
     ) -> str:
         from .agent import Agent
 
@@ -149,6 +152,8 @@ class SubagentRuntime:
             ),
             vision_provider=role.vision_provider,
             subagents=None,
+            jobs=None,
+            cancellation=cancellation,
         )
         child = Agent(
             provider=role.provider,
@@ -171,7 +176,15 @@ class SubagentRuntime:
         )
         # The child receives only the task text plus whatever the parent
         # was last shown, never the parent's transcript.
-        result = child.run(task, attachments=_latest_attachments(parent.session))
+        result = child.run(
+            task,
+            attachments=_latest_attachments(parent.session),
+            turn_control=(
+                TurnControl(external_cancelled=lambda: cancellation.cancelled)
+                if cancellation is not None
+                else None
+            ),
+        )
         # The parent sees the final report only: no child reasoning and
         # no intermediate tool calls.
         return result.response.content or ""
@@ -204,7 +217,7 @@ def _latest_attachments(session: Session) -> tuple[ImagePart, ...]:
     never mentioned.
     """
     for item in reversed(session.items):
-        if item.role == "user" and not item.is_tool_media:
+        if item.is_user_authored:
             return tuple(
                 part for part in item.parts if isinstance(part, ImagePart)
             )

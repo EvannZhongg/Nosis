@@ -13,7 +13,7 @@ from typing import Protocol
 
 
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 60
-MAX_COMMAND_TIMEOUT_SECONDS = 900
+MAX_COMMAND_TIMEOUT_SECONDS = 24 * 60 * 60
 MAX_COMMAND_OUTPUT_CHARS = 50 * 1024
 SPOOL_FILE_PREFIX = "nosis-shell-"
 STALE_SPOOL_AGE_SECONDS = 24 * 60 * 60
@@ -67,8 +67,18 @@ class CommandExecutor(Protocol):
         self,
         command: str,
         timeout_seconds: int = DEFAULT_COMMAND_TIMEOUT_SECONDS,
+        cancellation: "CancellationSignal | None" = None,
     ) -> CommandExecutionResult:
         raise NotImplementedError
+
+
+class CancellationSignal(Protocol):
+    @property
+    def cancelled(self) -> bool: ...
+
+
+class CommandCancelled(BaseException):
+    """The Runtime cancelled a running command and its process group."""
 
 
 class SubprocessCommandExecutor:
@@ -79,6 +89,7 @@ class SubprocessCommandExecutor:
         self,
         command: str,
         timeout_seconds: int = DEFAULT_COMMAND_TIMEOUT_SECONDS,
+        cancellation: CancellationSignal | None = None,
     ) -> CommandExecutionResult:
         if (
             isinstance(timeout_seconds, bool)
@@ -127,12 +138,22 @@ class SubprocessCommandExecutor:
                 stderr=stderr_file,
                 start_new_session=True,
             )
-            try:
-                process.wait(timeout=timeout_seconds)
-            except subprocess.TimeoutExpired:
-                timed_out = True
-                _kill_process_tree(process)
-                process.wait()
+            deadline = time.monotonic() + timeout_seconds
+            while process.poll() is None:
+                if cancellation is not None and cancellation.cancelled:
+                    _kill_process_tree(process)
+                    process.wait()
+                    raise CommandCancelled
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    timed_out = True
+                    _kill_process_tree(process)
+                    process.wait()
+                    break
+                try:
+                    process.wait(timeout=min(0.1, remaining))
+                except subprocess.TimeoutExpired:
+                    pass
         except BaseException:
             # The command runs in its own process group, so an interrupted
             # wait would otherwise leave it running detached.
@@ -240,7 +261,10 @@ def _kill_process_tree(process: subprocess.Popen[bytes]) -> None:
         )
         return
 
-    os.killpg(process.pid, signal.SIGKILL)
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
 
 
 def _decode_output(data: bytes | None) -> str:
@@ -367,5 +391,3 @@ def _read_text_preview_with_encoding(
         + ("".join(tail)[-tail_chars:] if tail_chars else ""),
         size_chars,
     )
-
-

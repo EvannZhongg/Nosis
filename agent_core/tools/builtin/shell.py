@@ -53,31 +53,42 @@ class ShellTool(Tool):
         return context.command_executor is not None
 
     def definition(self, context: ToolExecutionContext) -> ToolDefinition:
+        properties: dict[str, JSONValue] = {
+            "command": {
+                "type": "string",
+                "description": (
+                    "Shell command to execute with the workspace as "
+                    "the current directory."
+                ),
+            },
+            "timeout_seconds": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": MAX_SHELL_TIMEOUT_SECONDS,
+                "description": (
+                    "Optional timeout in seconds. Defaults to "
+                    f"{DEFAULT_SHELL_TIMEOUT_SECONDS} seconds, "
+                    "with a maximum of "
+                    f"{MAX_SHELL_TIMEOUT_SECONDS}."
+                ),
+            },
+        }
+        if context.jobs is not None:
+            properties["background"] = {
+                "type": "boolean",
+                "description": (
+                    "Run without blocking this tool batch. The call returns "
+                    "a job handle and the completed result is delivered "
+                    "automatically later in the same turn."
+                ),
+                "default": False,
+            }
         return ToolDefinition(
             name=self.name,
             description=_describe(),
             parameters={
                 "type": "object",
-                "properties": {
-                    "command": {
-                        "type": "string",
-                        "description": (
-                            "Shell command to execute with the workspace as "
-                            "the current directory."
-                        ),
-                    },
-                    "timeout_seconds": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": MAX_SHELL_TIMEOUT_SECONDS,
-                        "description": (
-                            "Optional timeout in seconds. Defaults to "
-                            f"{DEFAULT_SHELL_TIMEOUT_SECONDS} seconds, "
-                            "with a maximum of "
-                            f"{MAX_SHELL_TIMEOUT_SECONDS}."
-                        ),
-                    },
-                },
+                "properties": properties,
                 "required": ["command"],
                 "additionalProperties": False,
             },
@@ -93,6 +104,7 @@ class ShellTool(Tool):
             "timeout_seconds",
             DEFAULT_SHELL_TIMEOUT_SECONDS,
         )
+        background = arguments.get("background", False)
         if not isinstance(command, str) or not command:
             raise ValueError("shell requires a non-empty string 'command'")
         if (
@@ -105,37 +117,68 @@ class ShellTool(Tool):
                 "shell requires 'timeout_seconds' to be an integer "
                 f"between 1 and {MAX_SHELL_TIMEOUT_SECONDS}"
             )
-        if not set(arguments) <= {"command", "timeout_seconds"}:
+        if not isinstance(background, bool):
+            raise ValueError("shell requires 'background' to be a boolean")
+        if not set(arguments) <= {"command", "timeout_seconds", "background"}:
             raise ValueError(
-                "shell accepts only 'command' and 'timeout_seconds'"
+                "shell accepts only 'command', 'timeout_seconds' and 'background'"
             )
         executor = context.command_executor
         if executor is None:
             raise ValueError("this runtime has no command executor")
-        execution = executor.execute(command, timeout_seconds)
-        output = {
-            "command": execution.command,
-            "exit_code": execution.exit_code,
-            "stdout": execution.stdout,
-            "stderr": execution.stderr,
-            "timed_out": execution.timed_out,
-            "timeout_seconds": execution.timeout_seconds,
-        }
-        stdout_spool = execution.stdout_spool
-        stderr_spool = execution.stderr_spool
-        if stdout_spool is None and stderr_spool is None:
-            return output
+        if background:
+            jobs = context.jobs
+            turn_id = context.session.current_turn_id
+            if jobs is None or turn_id is None:
+                raise ValueError("background shell requires an active JobManager turn")
+            handle = jobs.submit(
+                "shell",
+                turn_id,
+                lambda cancellation: _command_output(
+                    executor.execute(
+                        command,
+                        timeout_seconds,
+                        cancellation=cancellation,
+                    )
+                ),
+            )
+            return handle.to_dict()
+        execution = (
+            executor.execute(command, timeout_seconds)
+            if context.cancellation is None
+            else executor.execute(
+                command,
+                timeout_seconds,
+                cancellation=context.cancellation,
+            )
+        )
+        return _command_output(execution)
 
-        writer = _shell_artifact_writer(
-            execution,
-            stdout_spool,
-            stderr_spool,
-        )
-        return ToolOutput(
-            output=output,
-            artifact_writer=writer,
-            artifact_cleanup=_cleanup_spools(stdout_spool, stderr_spool),
-        )
+
+def _command_output(execution: CommandExecutionResult) -> JSONValue | ToolOutput:
+    output = {
+        "command": execution.command,
+        "exit_code": execution.exit_code,
+        "stdout": execution.stdout,
+        "stderr": execution.stderr,
+        "timed_out": execution.timed_out,
+        "timeout_seconds": execution.timeout_seconds,
+    }
+    stdout_spool = execution.stdout_spool
+    stderr_spool = execution.stderr_spool
+    if stdout_spool is None and stderr_spool is None:
+        return output
+
+    writer = _shell_artifact_writer(
+        execution,
+        stdout_spool,
+        stderr_spool,
+    )
+    return ToolOutput(
+        output=output,
+        artifact_writer=writer,
+        artifact_cleanup=_cleanup_spools(stdout_spool, stderr_spool),
+    )
 
 
 def _cleanup_spools(

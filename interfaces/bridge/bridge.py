@@ -20,6 +20,8 @@ from agent_core import (
     Agent,
     AgentCancelled as Cancelled,
     JsonlSessionStore,
+    JobManager,
+    JobStatusEvent,
     Session,
     CompositeToolPolicy,
     McpApprovalPolicy,
@@ -90,6 +92,7 @@ class Bridge:
         self._mcp: McpClientManager | None = None
         self._workspace: Workspace | None = None
         self._permissions: PermissionController | None = None
+        self._jobs: JobManager | None = None
 
     def emit(self, type: str, **fields: object) -> None:
         with self._stdout_lock:
@@ -430,6 +433,19 @@ class Bridge:
                 workspace.path,
             ),
         )
+        self._jobs = JobManager(self._session)
+        self._jobs.set_update_callback(
+            lambda update: self.emit(
+                **event_to_message(
+                    JobStatusEvent(
+                        job_id=update.job_id,
+                        kind=update.kind,
+                        status=update.status,
+                    ),
+                    update.turn_id,
+                )
+            )
+        )
         subagents = self._subagent_runtime(
             agent_config,
             catalog,
@@ -449,6 +465,7 @@ class Bridge:
             vision_provider=vision_provider,
             mcp=self._mcp,
             subagents=subagents,
+            jobs=self._jobs,
             skills=skills,
             ask_user=self.request_user_choice,
         )
@@ -691,6 +708,9 @@ class Bridge:
 
     def close(self) -> None:
         self._route_shutdown(notify_commands=False)
+        if self._jobs is not None:
+            self._jobs.close()
+            self._jobs = None
         if self._mcp is not None:
             self._mcp.close()
             self._mcp = None

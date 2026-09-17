@@ -10,6 +10,7 @@ describe("isTurnActivity", () => {
     { type: "reasoning_delta", turn_id: "t1", text: "thinking", model_call_index: 1 },
     { type: "tool_batch_started", turn_id: "t1", model_call_index: 1, tool_calls: [] },
     { type: "assistant_message", turn_id: "t1", content: "hi", timestamp_utc: "2026-09-16T00:00:00Z", model_call_index: 1 },
+    { type: "job_status", turn_id: "t1", job_id: "job-1", kind: "shell", status: "running" },
   ] satisfies Incoming[])("recognizes $type", (message) => {
     expect(isTurnActivity(message)).toBe(true);
   });
@@ -20,6 +21,17 @@ describe("isTurnActivity", () => {
       turn_id: "t1",
       usage: null,
     })).toBe(false);
+  });
+
+  it("reports background job status", () => {
+    const result = applyMessage([], {
+      type: "job_status",
+      turn_id: "t1",
+      job_id: "job-1",
+      kind: "subagent",
+      status: "completed",
+    });
+    expect(result.notice?.text).toContain("job-1");
   });
 });
 

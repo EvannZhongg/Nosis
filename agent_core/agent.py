@@ -100,6 +100,13 @@ class UserSteerAppliedEvent:
     timestamp_utc: datetime
 
 
+@dataclass(frozen=True)
+class JobStatusEvent:
+    job_id: str
+    kind: str
+    status: str
+
+
 AgentEvent: TypeAlias = (
     AssistantMessageDeltaEvent
     | ReasoningDeltaEvent
@@ -110,6 +117,7 @@ AgentEvent: TypeAlias = (
     | ToolMediaEvent
     | ContextWindowEvent
     | UserSteerAppliedEvent
+    | JobStatusEvent
 )
 
 
@@ -151,6 +159,7 @@ class Agent:
         self._config = config
         self._now = now or (lambda: datetime.now(timezone.utc))
         self._tools = tools
+        self._execution_context = context
         self._tool_result_normalizer = (
             tool_result_normalizer
             or ToolResultNormalizer(
@@ -159,6 +168,8 @@ class Agent:
                 sessions_directory=context.sessions_directory,
             )
         )
+        if context.jobs is not None:
+            context.jobs.set_result_normalizer(self._tool_result_normalizer)
         self._context = ContextManager(
             provider=provider,
             session=session,
@@ -188,24 +199,34 @@ class Agent:
                 turn_control,
             )
         except KeyboardInterrupt:
+            self._cancel_jobs(self._session.current_turn_id)
             self._session.finish_turn("cancelled")
             raise
         except Exception as error:
+            self._cancel_jobs(self._session.current_turn_id)
             self._session.finish_turn(
                 "failed",
                 error=str(error),
             )
             raise
         except BaseException as error:
+            self._cancel_jobs(self._session.current_turn_id)
             self._session.finish_turn(
                 "cancelled"
-                if isinstance(error, AgentCancelled)
+                if (
+                    isinstance(error, AgentCancelled)
+                    or (turn_control is not None and turn_control.cancelled)
+                )
                 else "interrupted",
                 error=str(error),
             )
             raise
         self._session.finish_turn("completed")
         return result
+
+    def _cancel_jobs(self, turn_id: str | None) -> None:
+        if turn_id is not None and self._execution_context.jobs is not None:
+            self._execution_context.jobs.cancel_and_discard(turn_id)
 
     def _run(
         self,
@@ -230,6 +251,15 @@ class Agent:
         )
         while True:
             _raise_if_cancelled(turn_control)
+            applied_jobs, _pending_jobs = _apply_job_results(
+                self._session,
+                self._execution_context,
+                turn_id,
+                self._now,
+            )
+            if applied_jobs:
+                previous_tool_call_key = None
+                identical_tool_calls = 0
             request = self._context.build_request(self._tools.definitions)
             input_tokens = self._provider.count_input_tokens(request)
             if on_event is not None:
@@ -383,6 +413,7 @@ class Agent:
                         for index, call in indexed_calls:
                             self._session.tool_started(call, turn_id)
                             try:
+                                emit_call(call, index)
                                 future = executor.submit(
                                     self._tools.execute, call
                                 )
@@ -398,12 +429,6 @@ class Agent:
                             futures[future] = (index, call)
 
                         observed: set[int] = set()
-
-                        try:
-                            for index, call in futures.values():
-                                emit_call(call, index)
-                        except BaseException as error:
-                            first_error = error
 
                         def settle_future(future) -> None:
                             nonlocal first_error
@@ -547,6 +572,15 @@ class Agent:
                     for _, _, tool_result in executed:
                         _cleanup_tool_result(tool_result)
                 _raise_if_cancelled(turn_control)
+                applied_jobs, _pending_jobs = _apply_job_results(
+                    self._session,
+                    self._execution_context,
+                    turn_id,
+                    self._now,
+                )
+                if applied_jobs:
+                    previous_tool_call_key = None
+                    identical_tool_calls = 0
                 if _apply_steering(
                     self._session,
                     turn_control,
@@ -584,6 +618,33 @@ class Agent:
                     )
                 )
                 on_event(ContextWindowEvent(self.context_window()))
+            applied_jobs, pending_jobs = _apply_job_results(
+                self._session,
+                self._execution_context,
+                turn_id,
+                self._now,
+            )
+            if applied_jobs:
+                previous_tool_call_key = None
+                identical_tool_calls = 0
+                continue
+            jobs = self._execution_context.jobs
+            if jobs is not None and pending_jobs:
+                while jobs.has_pending(turn_id):
+                    _raise_if_cancelled(turn_control)
+                    if jobs.wait_for_update(turn_id):
+                        break
+                    if _apply_steering(
+                        self._session,
+                        turn_control,
+                        self._now,
+                        on_event,
+                    ):
+                        previous_tool_call_key = None
+                        identical_tool_calls = 0
+                        break
+                _raise_if_cancelled(turn_control)
+                continue
             if turn_control is not None:
                 steers = turn_control.finish()
                 if steers:
@@ -648,6 +709,49 @@ def _append_steering(
                     timestamp_utc=timestamp_utc,
                 )
             )
+
+
+def _apply_job_results(
+    session: Session,
+    context: ToolExecutionContext,
+    turn_id: str,
+    now: Callable[[], datetime],
+) -> tuple[bool, bool]:
+    jobs = context.jobs
+    if jobs is None:
+        return False, False
+    terminal, pending = jobs.drain_terminal_state(turn_id)
+    if not terminal:
+        return False, pending
+    blocks = []
+    for update in terminal:
+        if update.error is not None:
+            normalized = ToolResult(
+                tool_call_id=update.job_id,
+                name=update.kind,
+                error=update.error,
+            ).to_content()
+        elif update.status == "cancelled":
+            normalized = json.dumps(
+                {"ok": False, "error": {"type": "cancelled"}},
+                ensure_ascii=False,
+            )
+        else:
+            normalized = str(update.output)
+        blocks.append(
+            "[Background job result]\n"
+            f"job_id: {update.job_id}\n"
+            f"kind: {update.kind}\n"
+            f"status: {update.status}\n"
+            f"result: {normalized}"
+        )
+    session.add_item(
+        "user",
+        "\n\n".join(blocks),
+        timestamp_utc=now().astimezone(timezone.utc),
+        origin="job_result",
+    )
+    return True, pending
 
 def _tool_call_key(tool_call: ToolCall) -> tuple[str, str]:
     normalized_arguments = json.dumps(

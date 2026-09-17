@@ -34,7 +34,8 @@ export function isTurnActivity(message: Incoming): boolean {
   return message.type === "assistant_delta"
     || message.type === "reasoning_delta"
     || message.type === "tool_batch_started"
-    || message.type === "assistant_message";
+    || message.type === "assistant_message"
+    || message.type === "job_status";
 }
 
 /**
@@ -105,6 +106,15 @@ export function applyMessage(
             ),
           },
         ],
+      };
+
+    case "job_status":
+      return {
+        items,
+        notice: {
+          level: message.status === "failed" ? "error" : "info",
+          text: `后台 ${message.kind} ${message.job_id}：${message.status}`,
+        },
       };
 
     case "user_steer_applied":
@@ -317,6 +327,7 @@ export function toMessages(items: TranscriptItem[], sessionId?: string): ThreadM
       if (open) open.content.push(...parts.filter((part) => (part as any).type === "image"));
       return;
     }
+    if (item.role === "user" && item.origin === "job_result") return;
 
     if (item.role === "assistant" && open) {
       open.content.push(...parts);

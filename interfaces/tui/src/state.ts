@@ -245,6 +245,7 @@ function historyEntries(items: SessionItem[]): Entry[] {
       }
       continue;
     }
+    if (item.origin === 'job_result') continue;
 
     if (item.reasoning) {
       entries.push({
@@ -490,6 +491,20 @@ function applyMessage(state: State, message: Incoming): State {
             text: `Viewing ${message.attachments.length} image(s): ${message.attachments
               .map((attachment) => attachment.path)
               .join(', ')}`,
+          },
+        ],
+      };
+
+    case 'job_status':
+      return {
+        ...state,
+        entries: [
+          ...state.entries,
+          {
+            kind: 'notice',
+            id: nextId('notice'),
+            level: message.status === 'failed' ? 'error' : 'info',
+            text: `Background ${message.kind} ${message.job_id}: ${message.status}.`,
           },
         ],
       };

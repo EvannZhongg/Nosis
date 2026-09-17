@@ -2,10 +2,12 @@ import tempfile
 import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 
 from agent_core import (
     AgentConfig,
+    JobManager,
     JsonlSessionStore,
     LLMProvider,
     LLMResponse,
@@ -178,6 +180,33 @@ class SubagentToolTest(unittest.TestCase):
                     {"role": "researcher", "task": "x", "extra": 1},
                     tool_context,
                 )
+
+    def test_background_call_returns_a_job_handle(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            session = Session("parent")
+            base = context(root, (RESEARCHER,), session=session)
+            jobs = JobManager(session, max_workers=1)
+            tool_context = replace(base, jobs=jobs)
+            session.begin_turn("turn-1")
+
+            result = SubagentTool().execute(
+                {
+                    "role": "researcher",
+                    "task": "look around",
+                    "background": True,
+                },
+                tool_context,
+            )
+            jobs.wait_for_turn("turn-1")
+
+            self.assertEqual(result["kind"], "subagent")
+            self.assertEqual(result["status"], "running")
+            self.assertIn(
+                "background",
+                SubagentTool().definition(tool_context).parameters["properties"],
+            )
+            jobs.close()
 
 
 class SubagentRuntimeTest(unittest.TestCase):

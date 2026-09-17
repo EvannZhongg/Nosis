@@ -63,7 +63,7 @@ export type SessionItem = {
   reasoning?: string | null;
   // "tool_media" marks a user-role item the runtime synthesized to carry
   // images a Tool loaded; the person never wrote it.
-  origin?: 'conversation' | 'tool_media';
+  origin?: 'conversation' | 'tool_media' | 'job_result';
 };
 
 export type UserQuestionOption = {
@@ -91,6 +91,11 @@ export type Incoming = (
       permission_preset: PermissionPreset;
       context_window: ContextWindow | null;
       event_sequence: number;
+      jobs: {
+        job_id: string;
+        kind: string;
+        status: 'submitted' | 'running' | 'completed' | 'failed' | 'cancelled';
+      }[];
       approval: {
         type: 'approval_request';
         turn_id: string | null;
@@ -151,6 +156,13 @@ export type Incoming = (
       type: 'tool_media';
       turn_id: string;
       attachments: ImageAttachment[];
+    }
+  | {
+      type: 'job_status';
+      turn_id: string;
+      job_id: string;
+      kind: string;
+      status: 'submitted' | 'running' | 'completed' | 'failed' | 'cancelled';
     }
   | { type: 'user_steer_received'; turn_id: string | null; steer_id: string; text: string }
   | { type: 'user_steer_rejected'; turn_id: string | null; steer_id: string; text: string }

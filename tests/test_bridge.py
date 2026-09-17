@@ -16,6 +16,7 @@ from agent_core import (
     ContextWindow,
     ContextWindowEvent,
     JsonlSessionStore,
+    JobStatusEvent,
     Message,
     PermissionController,
     PermissionPreset,
@@ -176,6 +177,20 @@ class ProtocolTest(unittest.TestCase):
         self.assertEqual(message["steer_id"], "s1")
         self.assertEqual(message["text"], "check tests first")
 
+    def test_encodes_background_job_status(self) -> None:
+        self.assertEqual(
+            event_to_message(
+                JobStatusEvent("job-1", "shell", "running"), "t1"
+            ),
+            {
+                "type": "job_status",
+                "turn_id": "t1",
+                "job_id": "job-1",
+                "kind": "shell",
+                "status": "running",
+            },
+        )
+
     def test_tool_result_reports_error(self) -> None:
         message = event_to_message(
             ToolResultEvent(
@@ -243,6 +258,7 @@ class ProtocolTest(unittest.TestCase):
                 permission_preset="full_access",
                 context_window={"input_tokens": 120},
                 event_sequence=12,
+                jobs=[{"job_id": "j1", "kind": "shell", "status": "running"}],
             ),
             {
                 "type": "runtime_state",
@@ -254,6 +270,7 @@ class ProtocolTest(unittest.TestCase):
                 "permission_preset": "full_access",
                 "context_window": {"input_tokens": 120},
                 "event_sequence": 12,
+                "jobs": [{"job_id": "j1", "kind": "shell", "status": "running"}],
             },
         )
 

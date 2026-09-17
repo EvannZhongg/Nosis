@@ -4,6 +4,8 @@ Bridge 是 Runtime 与 TUI/GUI 之间的适配层。它通过 stdin/stdout 使�
 
 stdin 只由一个 Reader Thread 消费，再按消息类型路由：普通 turn 进入主队列，审批与用户问题响应进入对应 waiter，运行中的 `user_steer` 进入当前 `TurnControl`。steer 只会在模型调用结束、完整 Tool batch 已写回后，或最终回答 return 前的边界写入 Session。
 
+`shell` 和 `subagent` 的后台调用由 Core 的 `JobManager` 管理。Bridge 只负责装配 JobManager、转发 `job_status` 事件，并在 Runtime 关闭时取消和收束后台任务；Job 完成结果何时进入模型上下文由 Agent 的安全点决定。
+
 ## 进程关系
 
 ```text

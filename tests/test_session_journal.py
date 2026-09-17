@@ -212,6 +212,26 @@ class SessionJournalTest(unittest.TestCase):
         self.assertEqual(replayed.user_anchors[0].source, "steering")
         self.assertEqual(replayed.user_anchors[0].content, "check tests first")
 
+    def test_job_result_origin_survives_without_becoming_a_user_anchor(self):
+        session = Session("s")
+        session.begin_turn("turn-1")
+        session.add_item("user", "run it")
+        session.add_item(
+            "user",
+            "[Background job result]",
+            origin="job_result",
+        )
+
+        replayed = Session("s")
+        for event in session.journal:
+            replayed.journal.append(event)
+            replayed.apply_event(event)
+
+        self.assertEqual(replayed.items[-1].origin, "job_result")
+        self.assertEqual(
+            [anchor.content for anchor in replayed.user_anchors], ["run it"]
+        )
+
     def test_replay_ignores_only_a_truncated_final_record(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)

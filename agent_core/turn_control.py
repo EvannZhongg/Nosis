@@ -3,6 +3,7 @@
 from collections import deque
 from dataclasses import dataclass
 from threading import Lock
+from typing import Callable
 
 
 @dataclass(frozen=True)
@@ -50,11 +51,15 @@ class UserSteeringMailbox:
 class TurnControl:
     """Runtime-owned controls that may arrive while an Agent is executing."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        external_cancelled: Callable[[], bool] | None = None,
+    ) -> None:
         self._steering = UserSteeringMailbox()
         self._cancelled = False
         self._finished = False
         self._lock = Lock()
+        self._external_cancelled = external_cancelled
 
     def steer(self, steer_id: str, text: str) -> bool:
         with self._lock:
@@ -90,4 +95,8 @@ class TurnControl:
     @property
     def cancelled(self) -> bool:
         with self._lock:
-            return self._cancelled
+            cancelled = self._cancelled
+        return cancelled or (
+            self._external_cancelled is not None
+            and self._external_cancelled()
+        )

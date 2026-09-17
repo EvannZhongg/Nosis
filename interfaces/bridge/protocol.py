@@ -20,6 +20,7 @@ from agent_core import (
     ToolMediaEvent,
     ToolResultEvent,
     UserSteerAppliedEvent,
+    JobStatusEvent,
 )
 from agent_core.llm import TokenUsage
 
@@ -108,6 +109,7 @@ def runtime_state_message(
     permission_preset: str,
     context_window: dict[str, int] | None,
     event_sequence: int,
+    jobs: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     """Describe a GUI server-owned runtime when a WebSocket attaches."""
     return {
@@ -120,6 +122,7 @@ def runtime_state_message(
         "permission_preset": permission_preset,
         "context_window": context_window,
         "event_sequence": event_sequence,
+        "jobs": jobs or [],
     }
 
 
@@ -242,6 +245,15 @@ def event_to_message(
             "steer_id": event.steer_id,
             "text": event.text,
             "timestamp_utc": format_timestamp(event.timestamp_utc),
+        }
+
+    if isinstance(event, JobStatusEvent):
+        return {
+            "type": "job_status",
+            "turn_id": turn_id,
+            "job_id": event.job_id,
+            "kind": event.kind,
+            "status": event.status,
         }
 
     raise TypeError(f"unsupported agent event: {type(event).__name__}")

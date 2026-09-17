@@ -198,6 +198,7 @@ class ActiveRuntime:
         self.question: dict[str, object] | None = None
         self.permission_preset = "ask_for_approval"
         self.context_window: dict[str, object] | None = None
+        self.jobs: dict[str, dict[str, object]] = {}
         self.done = False
         self._closed = False
         self._fatal_pending = False
@@ -248,6 +249,7 @@ class ActiveRuntime:
                         provider=self.provider,
                         permission_preset=self.permission_preset,
                         context_window=self.context_window,
+                        jobs=list(self.jobs.values()),
                         # The page holds everything the stream emitted, so
                         # its cursor is the newest event; a pending fatal is
                         # left out of it so that a page attaching later
@@ -385,16 +387,27 @@ class ActiveRuntime:
                             "compression_count",
                         )
                     }
+                elif message_type == "job_status":
+                    job_id = message.get("job_id")
+                    if isinstance(job_id, str):
+                        if message.get("status") in {
+                            "completed", "failed", "cancelled"
+                        }:
+                            self.jobs.pop(job_id, None)
+                        else:
+                            self.jobs[job_id] = message
                 elif message_type in TURN_END_MESSAGE_TYPES:
                     self.running = False
                     self.turn_id = None
                     self.approval = None
                     self.question = None
+                    self.jobs.clear()
                 elif message_type == "fatal":
                     self.running = False
                     self.turn_id = None
                     self.approval = None
                     self.question = None
+                    self.jobs.clear()
                     self._fatal_pending = True
                 async with self._lock:
                     self._event_sequence += 1
@@ -408,6 +421,7 @@ class ActiveRuntime:
             self.running = False
             self.approval = None
             self.question = None
+            self.jobs.clear()
             self.done = True
             if not self._closed:
                 self._closed = True
@@ -845,6 +859,7 @@ def create_app(
                     permission_preset="ask_for_approval",
                     context_window=None,
                     event_sequence=0,
+                    jobs=[],
                 )
             )
             await websocket.close()
