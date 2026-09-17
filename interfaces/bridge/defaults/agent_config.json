@@ -24,7 +24,7 @@
   "subagent_roles": {
     "researcher": {
       "enabled": true,
-      "description": "Read and search the workspace to answer a question. Cannot modify files.",
+      "description": "Read and search the workspace to answer a question. Prefer delegating complex, independent investigation tasks to this role so the main agent can continue other work in parallel. Cannot modify files.",
       "tools": {
         "read_file": true,
         "search_files": true,
