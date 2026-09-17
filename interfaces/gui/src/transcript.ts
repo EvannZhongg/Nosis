@@ -5,12 +5,14 @@ import { attachmentUrl, type SessionItem } from "./api";
 /** A transcript item, plus the streaming state the live turn needs. */
 export type TranscriptItem = SessionItem & { streaming?: boolean };
 
-export type Notice = { level: "info" | "error"; text: string };
+export type Feedback =
+  | { kind: "toast"; level: "info"; text: string }
+  | { kind: "alert"; id: string; level: "warning" | "error"; text: string };
 
 /** What a protocol message changes about the view. */
 export type Applied = {
   items: TranscriptItem[];
-  notice?: Notice;
+  feedback?: Feedback;
   contextWindow?: ContextWindow;
   approval?: {
     requestId: string;
@@ -54,22 +56,28 @@ export function applyMessage(
         items,
         permissionPreset: message.permission_preset,
         contextWindow: message.context_window,
-        notice: message.skill_warnings?.length
+        feedback: message.skill_warnings?.length
           ? {
-              level: "info",
+              kind: "alert",
+              id: "skill-warnings",
+              level: "warning",
               text: message.skill_warnings.join("\n"),
             }
           : undefined,
       };
 
     case "mcp_server_status":
-      return {
-        items,
-        notice: {
-          level: "info",
-          text: `MCP ${message.server}: ${message.status}${message.tool_count === undefined ? "" : ` (${message.tool_count} tools)`}${message.error === undefined ? "" : ` — ${message.error}`}`,
-        },
-      };
+      return message.status === "unavailable" || message.error
+        ? {
+            items,
+            feedback: {
+              kind: "alert",
+              id: `mcp:${message.server}`,
+              level: "error",
+              text: `MCP ${message.server} 不可用${message.error === undefined ? "" : `：${message.error}`}`,
+            },
+          }
+        : { items };
 
     case "assistant_delta":
       return { items: appendDelta(items, message.text) };
@@ -109,13 +117,7 @@ export function applyMessage(
       };
 
     case "job_status":
-      return {
-        items,
-        notice: {
-          level: message.status === "failed" ? "error" : "info",
-          text: `后台 ${message.kind} ${message.job_id}：${message.status}`,
-        },
-      };
+      return { items };
 
     case "user_steer_applied":
       return {
@@ -135,7 +137,8 @@ export function applyMessage(
     case "user_steer_rejected":
       return {
         items,
-        notice: {
+        feedback: {
+          kind: "toast",
           level: "info",
           text: "这条引导消息到达时本轮已结束，未写入上下文。",
         },
@@ -157,7 +160,8 @@ export function applyMessage(
       return {
         items,
         permissionPreset: message.preset,
-        notice: {
+        feedback: {
+          kind: "toast",
           level: "info",
           text: `权限模式已切换为${message.preset === "full_access" ? "完全访问" : "请求批准"}。`,
         },
@@ -175,7 +179,8 @@ export function applyMessage(
         approval: null,
         question: null,
         finished: true,
-        notice: {
+        feedback: {
+          kind: "toast",
           level: "info",
           text: "已取消。",
         },
@@ -188,7 +193,9 @@ export function applyMessage(
         approval: null,
         question: null,
         finished: true,
-        notice: {
+        feedback: {
+          kind: "alert",
+          id: "turn-error",
           level: "error",
           text: `${message.error.type}: ${message.error.message}`,
         },

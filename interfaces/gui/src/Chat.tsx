@@ -5,12 +5,12 @@ import {
   type AppendMessage, type PartState, type ReasoningMessagePartProps, type ToolCallMessagePartProps,
 } from "@assistant-ui/react";
 import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
-import { ArrowUp, Check, ChevronDown, ChevronRight, LoaderCircle, MessageCircleQuestion, Paperclip, ShieldCheck, Square, Terminal, X } from "lucide-react";
+import { AlertTriangle, ArrowUp, Check, ChevronDown, ChevronRight, LoaderCircle, MessageCircleQuestion, Paperclip, ShieldCheck, Square, Terminal, X } from "lucide-react";
 import remarkGfm from "remark-gfm";
 import { get, releaseRuntime, selectWorkspace, sessionUrl, updateSessionWorkspace, uploadAttachments, type ImageAttachment, type ModelOption, type Session } from "./api";
 import { SessionSocket } from "./session";
-import { applyMessage, isTurnActivity, toMessages, TURN_PROCESS_GROUP, turnProcessPartIndexes, type Notice, type TranscriptItem } from "./transcript";
-import type { ContextWindow, PermissionPreset, UserQuestion } from "@nosis/protocol";
+import { applyMessage, isTurnActivity, toMessages, TURN_PROCESS_GROUP, turnProcessPartIndexes, type Feedback, type TranscriptItem } from "./transcript";
+import type { ContextWindow, Incoming, PermissionPreset, UserQuestion } from "@nosis/protocol";
 
 type Approval = {
   requestId: string;
@@ -19,6 +19,22 @@ type Approval = {
   server?: string;
   toolName?: string;
 };
+
+type JobStatusMessage = Extract<Incoming, { type: "job_status" }>;
+export type BackgroundJob = Pick<JobStatusMessage, "job_id" | "kind" | "status">;
+
+export function updateBackgroundJobs(
+  current: Record<string, BackgroundJob>,
+  update: BackgroundJob,
+): Record<string, BackgroundJob> {
+  const next = { ...current };
+  if (update.status === "submitted" || update.status === "running") {
+    next[update.job_id] = update;
+  } else {
+    delete next[update.job_id];
+  }
+  return next;
+}
 
 const MARKDOWN_PLUGINS = [remarkGfm];
 
@@ -44,14 +60,36 @@ function ToolCard({ toolName, args, result }: ToolCallMessagePartProps) {
   const running = useAuiState((state) => state.thread.isRunning);
   const output = result as { ok: boolean; output?: unknown; error?: { message: string } } | undefined;
   const detail = args.path ?? args.pattern ?? args.command;
+  const submittedBackgroundJob = args.background === true && output?.ok === true;
   return <details className="tool-card">
     <summary><ChevronRight size={14} className="tool-chevron" /><span className="tool-name">{toolName}</span><span className="tool-detail">{typeof detail === "string" ? detail : ""}</span>
-      {output ? output.ok ? <Check size={15} className="success" /> : <X size={15} className="failure" /> : running ? <LoaderCircle size={15} className="spin" /> : <span className="tool-status">未完成</span>}
+      {output ? output.ok ? submittedBackgroundJob ? <span className="tool-status success">已提交</span> : <Check size={15} className="success" /> : <X size={15} className="failure" /> : running ? <LoaderCircle size={15} className="spin" /> : <span className="tool-status">未完成</span>}
     </summary>
     <div className="tool-body"><div className="tool-caption">参数</div><pre>{JSON.stringify(args, null, 2)}</pre>
       {output && (output.ok
         ? output.output !== undefined && <><div className="tool-caption">结果</div><pre>{JSON.stringify(output.output, null, 2)}</pre></>
         : <><div className="tool-caption">执行失败</div><pre>{JSON.stringify(output.error, null, 2)}</pre></>)}
+    </div>
+  </details>;
+}
+
+function jobKindLabel(kind: string): string {
+  if (kind === "subagent") return "子代理";
+  if (kind === "shell") return "后台命令";
+  return kind;
+}
+
+function BackgroundJobs({ jobs }: { jobs: BackgroundJob[] }) {
+  if (jobs.length === 0) return null;
+  return <details className="background-jobs">
+    <summary>{jobs.length} 个后台任务</summary>
+    <div className="background-job-list">
+      {jobs.map((job) => <div className="background-job" key={job.job_id}>
+        <LoaderCircle size={12} className="spin" />
+        <span>{jobKindLabel(job.kind)}</span>
+        <code title={job.job_id}>{job.job_id}</code>
+        <small>{job.status === "submitted" ? "等待开始" : "运行中"}</small>
+      </div>)}
     </div>
   </details>;
 }
@@ -196,10 +234,12 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
   const [items, setItems] = useState<TranscriptItem[]>(session.items);
   const [running, setRunning] = useState(false);
   const [pendingSteers, setPendingSteers] = useState(0);
-  const [activeJobs, setActiveJobs] = useState(0);
+  const [jobs, setJobs] = useState<Record<string, BackgroundJob>>({});
   const [attaching, setAttaching] = useState(false);
   const [attachmentReplaced, setAttachmentReplaced] = useState(false);
-  const [notice, setNotice] = useState<Notice | null>(null);
+  const [toast, setToast] = useState<Extract<Feedback, { kind: "toast" }> | null>(null);
+  const [alerts, setAlerts] = useState<Record<string, Extract<Feedback, { kind: "alert" }>>>({});
+  const [reconnecting, setReconnecting] = useState(false);
   const [approval, setApproval] = useState<Approval | null>(null);
   const [question, setQuestion] = useState<UserQuestion | null>(null);
   const [permissionPreset, setPermissionPreset] = useState<PermissionPreset>(session.permission_preset);
@@ -214,7 +254,7 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
   const selectedModelRef = useRef(model);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
-  const noticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const compositionEndTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const composingRef = useRef(false);
   const turnCounter = useRef(0);
@@ -261,7 +301,7 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
       if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
       socketRef.current?.close();
       socketRef.current = null;
-      if (noticeTimeoutRef.current) clearTimeout(noticeTimeoutRef.current);
+      if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
       if (compositionEndTimeoutRef.current) clearTimeout(compositionEndTimeoutRef.current);
     };
   }, []);
@@ -306,15 +346,17 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
     }
   }, [runtimeActive, model]);
 
-  const showNotice = useCallback((next: Notice, transient = false) => {
-    if (noticeTimeoutRef.current) clearTimeout(noticeTimeoutRef.current);
-    setNotice(next);
-    if (transient) {
-      noticeTimeoutRef.current = setTimeout(() => {
-        noticeTimeoutRef.current = null;
-        setNotice(null);
-      }, 4000);
-    }
+  const showToast = useCallback((next: Extract<Feedback, { kind: "toast" }>) => {
+    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+    setToast(next);
+    toastTimeoutRef.current = setTimeout(() => {
+      toastTimeoutRef.current = null;
+      setToast(null);
+    }, 4000);
+  }, []);
+
+  const showAlert = useCallback((next: Extract<Feedback, { kind: "alert" }>) => {
+    setAlerts((current) => ({ ...current, [next.id]: next }));
   }, []);
 
   const endTurn = useCallback(async () => {
@@ -323,6 +365,8 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
     awaitingSessionActivityRef.current = false;
     setRunning(false);
     setPendingSteers(0);
+    setJobs({});
+    setReconnecting(false);
     onBusyChange(false);
     setApproval(null);
     setQuestion(null);
@@ -350,15 +394,17 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
       onMessage: (message) => {
         // A socket that was replaced during a model switch may still have
         // messages queued in the browser event loop. Ignore those messages
-        // so stale transcript, notice, usage, and turn callbacks cannot
+        // so stale transcript, feedback, usage, and turn callbacks cannot
         // mutate the active connection's state.
         if (socketRef.current !== socket) return;
         if (message.type === "attachment_replaced") {
-          if (noticeTimeoutRef.current) {
-            clearTimeout(noticeTimeoutRef.current);
-            noticeTimeoutRef.current = null;
+          if (toastTimeoutRef.current) {
+            clearTimeout(toastTimeoutRef.current);
+            toastTimeoutRef.current = null;
           }
-          setNotice(null);
+          setToast(null);
+          setJobs({});
+          setReconnecting(false);
           socketRef.current = null;
           socketModelRef.current = "";
           attachmentReplacedRef.current = true;
@@ -376,11 +422,12 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
         }
         if (message.type === "runtime_state") {
           eventCounterRef.current = message.event_sequence;
-          if (noticeTimeoutRef.current) {
-            clearTimeout(noticeTimeoutRef.current);
-            noticeTimeoutRef.current = null;
+          if (toastTimeoutRef.current) {
+            clearTimeout(toastTimeoutRef.current);
+            toastTimeoutRef.current = null;
           }
-          setNotice(null);
+          setToast(null);
+          setReconnecting(false);
           setAttaching(false);
           attachmentReplacedRef.current = false;
           setAttachmentReplaced(false);
@@ -401,7 +448,7 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
             toolName: message.approval.tool_name,
           } : null);
           setQuestion(message.question);
-          setActiveJobs(message.jobs.length);
+          setJobs(Object.fromEntries(message.jobs.map((job) => [job.job_id, job])));
           setPermissionPreset(message.permission_preset);
           if (message.context_window) onContextWindowChange(message.context_window);
           if (wasRunning && !message.running) void endTurn();
@@ -414,24 +461,31 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
           setPendingSteers((count) => Math.max(0, count - 1));
         }
         if (message.type === "job_status") {
-          setActiveJobs((count) => (
-            message.status === "submitted"
-              ? count + 1
-              : message.status === "completed"
-                || message.status === "failed"
-                || message.status === "cancelled"
-                ? Math.max(0, count - 1)
-                : count
-          ));
+          setJobs((current) => updateBackgroundJobs(current, message));
+          if (message.status === "failed") {
+            showAlert({
+              kind: "alert",
+              id: `job:${message.job_id}`,
+              level: "error",
+              text: `${jobKindLabel(message.kind)}任务失败。`,
+            });
+          }
         }
         if (message.type === "ready") {
           attachmentReplacedRef.current = false;
           setAttachmentReplaced(false);
-          if (noticeTimeoutRef.current) {
-            clearTimeout(noticeTimeoutRef.current);
-            noticeTimeoutRef.current = null;
+          setReconnecting(false);
+          if (toastTimeoutRef.current) {
+            clearTimeout(toastTimeoutRef.current);
+            toastTimeoutRef.current = null;
           }
-          setNotice(null);
+          setToast(null);
+          setAlerts((current) => {
+            if (!("connection" in current)) return current;
+            const next = { ...current };
+            delete next.connection;
+            return next;
+          });
         }
         if (awaitingSessionActivityRef.current && isTurnActivity(message)) {
           awaitingSessionActivityRef.current = false;
@@ -439,7 +493,8 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
         }
         const applied = applyMessage(itemsRef.current, message);
         showItems(applied.items);
-        if (applied.notice) showNotice(applied.notice, message.type === "mcp_server_status");
+        if (applied.feedback?.kind === "toast") showToast(applied.feedback);
+        if (applied.feedback?.kind === "alert") showAlert(applied.feedback);
         if (applied.contextWindow !== undefined) onContextWindowChange(applied.contextWindow);
         if (applied.approval !== undefined) setApproval(applied.approval);
         if (applied.question !== undefined) {
@@ -459,10 +514,7 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
         socketModelRef.current = "";
         setAttaching(false);
         if (runningRef.current && !attachmentReplacedRef.current) {
-          showNotice({
-            level: "error",
-            text: "连接已断开，Nosis 仍在后台运行，正在重新连接。",
-          });
+          setReconnecting(true);
           reconnectTimeoutRef.current = setTimeout(() => {
             reconnectTimeoutRef.current = null;
             if (mountedRef.current && runningRef.current && socketRef.current === null && !attachmentReplacedRef.current) {
@@ -477,8 +529,8 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
         // leave the idle UI quiet. The close callback clears the socket so
         // the next message can establish a fresh connection.
         if (socketRef.current !== socket) return;
-        if (runningRef.current) {
-          showNotice({ level: "error", text: "无法连接 Nosis。" });
+        if (!runningRef.current) {
+          showAlert({ kind: "alert", id: "connection", level: "error", text: "无法连接 Nosis。" });
         }
       },
     });
@@ -499,7 +551,7 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
     if (runningRef.current) {
       const turnId = activeTurnIdRef.current;
       if (pendingFiles.length > 0) {
-        showNotice({ level: "info", text: "任务运行中不能发送图片；待发送内容已保留，请停止或等待当前任务结束。" }, true);
+        showToast({ kind: "toast", level: "info", text: "任务运行中不能发送图片；待发送内容已保留，请停止或等待当前任务结束。" });
         return;
       }
       if (!turnId) return;
@@ -520,7 +572,7 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
       try {
       attachments = await uploadAttachments(pendingFiles, session.session_id);
       } catch (error) {
-        showNotice({ level: "error", text: String(error) });
+        showAlert({ kind: "alert", id: "attachment-upload", level: "error", text: String(error) });
         return;
       }
       setPendingFiles([]);
@@ -538,8 +590,11 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
     runningRef.current = true;
     setRunning(true);
     onBusyChange(true);
-    if (noticeTimeoutRef.current) clearTimeout(noticeTimeoutRef.current);
-    setNotice(null);
+    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+    setToast(null);
+    setAlerts({});
+    setJobs({});
+    setReconnecting(false);
     turnCounter.current += 1;
     activeTurnIdRef.current = `turn-${turnCounter.current}`;
     const socket = socketRef.current ?? connect();
@@ -589,9 +644,9 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
       socketModelRef.current = "";
       eventCounterRef.current = 0;
       socket?.close();
-      showNotice({ level: "info", text: `工作区已切换为 ${savedWorkspace}` }, true);
+      showToast({ kind: "toast", level: "info", text: `工作区已切换为 ${savedWorkspace}` });
     } catch (error) {
-      showNotice({ level: "error", text: String(error) });
+      showAlert({ kind: "alert", id: "workspace-update", level: "error", text: String(error) });
     } finally {
       setWorkspaceSaving(false);
     }
@@ -604,7 +659,7 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
       setWorkspaceEditing(false);
       await saveWorkspace(selected);
     } catch (error) {
-      showNotice({ level: "error", text: String(error) });
+      showAlert({ kind: "alert", id: "workspace-picker", level: "error", text: String(error) });
     }
   }
 
@@ -637,7 +692,7 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
     // Stop assistant-ui before it clears the draft; images cannot be steered
     // into an already running turn, so the whole pending message stays intact.
     event.preventDefault();
-    showNotice({ level: "info", text: "任务运行中不能发送图片；待发送内容已保留，请停止或等待当前任务结束。" }, true);
+    showToast({ kind: "toast", level: "info", text: "任务运行中不能发送图片；待发送内容已保留，请停止或等待当前任务结束。" });
   }
 
   function onCompositionStart() {
@@ -673,6 +728,8 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
     },
   });
   const availableWorkspaces = Array.from(new Set([...workspaceOptions, workspaceDraft].filter(Boolean)));
+  const activeJobs = Object.values(jobs);
+  const visibleAlerts = Object.values(alerts);
 
   return <AssistantRuntimeProvider runtime={runtime}>
     <ThreadPrimitive.Root className="thread">
@@ -696,8 +753,10 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
             <button type="submit" disabled={!questionDraft.trim()}>提交</button>
           </form>}
         </div>}
-        {notice && <div className={notice.level === "error" ? "error-banner" : "notice-banner"} role="alert">{notice.text}</div>}
-        {running && !attachmentReplaced && <div className="activity" role="status"><LoaderCircle size={13} className="spin" />{approval ? "等待你的确认" : question ? "等待你的选择" : pendingSteers ? `Nosis 正在处理… ${pendingSteers} 条引导待应用` : activeJobs ? `Nosis 正在处理… ${activeJobs} 个后台任务` : "Nosis 正在处理…"}
+        {visibleAlerts.length > 0 && <div className="feedback-alerts">{visibleAlerts.map((item) => <div className={`feedback-alert ${item.level}`} role="alert" key={item.id}><AlertTriangle size={15} /><span>{item.text}</span><button type="button" aria-label="关闭提示" onClick={() => setAlerts((current) => { const next = { ...current }; delete next[item.id]; return next; })}><X size={13} /></button></div>)}</div>}
+        {toast && <div className={`feedback-toast ${toast.level}`} role="status">{toast.text}</div>}
+        {running && !attachmentReplaced && <div className="activity" role="status"><LoaderCircle size={13} className="spin" /><span>{reconnecting ? "连接中断，任务仍在后台运行，正在重新连接…" : approval ? "等待你的确认" : question ? "等待你的选择" : pendingSteers ? `Nosis 正在处理… ${pendingSteers} 条引导待应用` : "Nosis 正在处理…"}</span>
+          {!reconnecting && !approval && !question && <BackgroundJobs jobs={activeJobs} />}
           {!approval && !question && <button className="stop-button" aria-label="停止执行" onClick={() => { const turnId = activeTurnIdRef.current; if (turnId) socketRef.current?.send({ type: "cancel", turn_id: turnId }); }}><Square size={11} /> 停止</button>}
         </div>}
         {pendingFiles.length > 0 && <div className="attachment-list" aria-label="待发送图片">{pendingFiles.map((file, index) => <PendingAttachment key={`${file.name}-${file.lastModified}-${index}`} file={file} onRemove={() => setPendingFiles((files) => files.filter((_, itemIndex) => itemIndex !== index))} />)}</div>}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { shouldBlockRunningAttachmentSubmit, shouldSubmitComposerEnter } from "../src/Chat";
+import { shouldBlockRunningAttachmentSubmit, shouldSubmitComposerEnter, updateBackgroundJobs } from "../src/Chat";
 
 const enter = {
   key: "Enter",
@@ -29,6 +29,52 @@ describe("composer Enter handling", () => {
 
   it("keeps Shift+Enter as a newline", () => {
     expect(shouldSubmitComposerEnter({ ...enter, shiftKey: true }, false)).toBe(false);
+  });
+});
+
+describe("background job state", () => {
+  it("updates a job in place and removes terminal jobs", () => {
+    const submitted = updateBackgroundJobs({}, {
+      job_id: "job-1",
+      kind: "subagent",
+      status: "submitted",
+    });
+    const running = updateBackgroundJobs(submitted, {
+      job_id: "job-1",
+      kind: "subagent",
+      status: "running",
+    });
+    const completed = updateBackgroundJobs(running, {
+      job_id: "job-1",
+      kind: "subagent",
+      status: "completed",
+    });
+
+    expect(Object.keys(submitted)).toEqual(["job-1"]);
+    expect(Object.keys(running)).toEqual(["job-1"]);
+    expect(running["job-1"]?.status).toBe("running");
+    expect(completed).toEqual({});
+  });
+
+  it("keeps concurrent jobs independent", () => {
+    const first = updateBackgroundJobs({}, {
+      job_id: "job-1",
+      kind: "subagent",
+      status: "running",
+    });
+    const both = updateBackgroundJobs(first, {
+      job_id: "job-2",
+      kind: "shell",
+      status: "running",
+    });
+    const secondOnly = updateBackgroundJobs(both, {
+      job_id: "job-1",
+      kind: "subagent",
+      status: "failed",
+    });
+
+    expect(Object.keys(both)).toEqual(["job-1", "job-2"]);
+    expect(Object.keys(secondOnly)).toEqual(["job-2"]);
   });
 });
 

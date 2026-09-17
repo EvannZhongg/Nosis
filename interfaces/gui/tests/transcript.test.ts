@@ -23,7 +23,7 @@ describe("isTurnActivity", () => {
     })).toBe(false);
   });
 
-  it("reports background job status", () => {
+  it("keeps background job status out of global feedback", () => {
     const result = applyMessage([], {
       type: "job_status",
       turn_id: "t1",
@@ -31,7 +31,7 @@ describe("isTurnActivity", () => {
       kind: "subagent",
       status: "completed",
     });
-    expect(result.notice?.text).toContain("job-1");
+    expect(result.feedback).toBeUndefined();
   });
 });
 
@@ -42,7 +42,7 @@ function fold(messages: Incoming[], initial: TranscriptItem[] = []) {
       const applied = applyMessage(state.items, message);
       return {
         items: applied.items,
-        notice: applied.notice ?? state.notice,
+        feedback: applied.feedback ?? state.feedback,
         approval:
           applied.approval !== undefined ? applied.approval : state.approval,
         finished: applied.finished ?? state.finished,
@@ -50,7 +50,7 @@ function fold(messages: Incoming[], initial: TranscriptItem[] = []) {
     },
     {
       items: initial,
-      notice: undefined,
+      feedback: undefined,
       approval: null,
       finished: false,
     } as ReturnType<typeof applyMessage> & { approval: unknown },
@@ -103,7 +103,7 @@ describe("applyMessage", () => {
     ]);
   });
   it("shows skill discovery warnings from ready", () => {
-    const { notice } = applyMessage([], {
+    const { feedback } = applyMessage([], {
       type: "ready",
       session_id: "s1",
       workspace: "/tmp/work",
@@ -122,9 +122,32 @@ describe("applyMessage", () => {
       skill_warnings: ["Skipping invalid skill."],
     });
 
-    expect(notice).toEqual({
-      level: "info",
+    expect(feedback).toEqual({
+      kind: "alert",
+      id: "skill-warnings",
+      level: "warning",
       text: "Skipping invalid skill.",
+    });
+  });
+
+  it("only persists MCP failures as alerts", () => {
+    expect(applyMessage([], {
+      type: "mcp_server_status",
+      server: "search",
+      status: "ready",
+      tool_count: 2,
+    }).feedback).toBeUndefined();
+
+    expect(applyMessage([], {
+      type: "mcp_server_status",
+      server: "search",
+      status: "unavailable",
+      error: "connection refused",
+    }).feedback).toEqual({
+      kind: "alert",
+      id: "mcp:search",
+      level: "error",
+      text: "MCP search 不可用：connection refused",
     });
   });
 
@@ -139,7 +162,7 @@ describe("applyMessage", () => {
     ]);
   });
 
-  it("reports context window state separately from persistent notices", () => {
+  it("reports context window state separately from feedback", () => {
     const applied = applyMessage([], {
       type: "context_window",
       turn_id: "t1",
@@ -152,7 +175,7 @@ describe("applyMessage", () => {
     });
 
     expect(applied.contextWindow?.compression_count).toBe(2);
-    expect(applied.notice).toBeUndefined();
+    expect(applied.feedback).toBeUndefined();
   });
 
   it("settles the streamed item with its runtime timestamp", () => {
@@ -342,7 +365,7 @@ describe("applyMessage", () => {
   });
 
   it("settles open text and reports a cancelled turn", () => {
-    const { items, notice, finished } = fold([
+    const { items, feedback, finished } = fold([
       { type: "assistant_delta", turn_id: "t1", text: "partial", model_call_index: 1 },
       { type: "turn_cancelled", turn_id: "t1" },
     ]);
@@ -350,12 +373,12 @@ describe("applyMessage", () => {
     expect(items).toEqual([
       { role: "assistant", content: "partial", streaming: false },
     ]);
-    expect(notice).toEqual({ level: "info", text: "已取消。" });
+    expect(feedback).toEqual({ kind: "toast", level: "info", text: "已取消。" });
     expect(finished).toBe(true);
   });
 
-  it("reports a failed turn as an error notice", () => {
-    const { notice, finished } = fold([
+  it("reports a failed turn as a persistent alert", () => {
+    const { feedback, finished } = fold([
       {
         type: "turn_failed",
         turn_id: "t1",
@@ -363,7 +386,9 @@ describe("applyMessage", () => {
       },
     ]);
 
-    expect(notice).toEqual({
+    expect(feedback).toEqual({
+      kind: "alert",
+      id: "turn-error",
       level: "error",
       text: "ContextWindowExceededError: too long",
     });
