@@ -1467,9 +1467,9 @@ class ShellToolTest(unittest.TestCase):
         )
 
         tool.execute({"command": "pwd", "timeout_seconds": 61})
-        tool.execute({"command": "pwd", "timeout_seconds": 86400})
+        tool.execute({"command": "pwd", "timeout_seconds": 900})
 
-        self.assertEqual(executor.timeouts, [61, 86400])
+        self.assertEqual(executor.timeouts, [61, 900])
 
     def test_advertises_the_shell_and_timeout_it_uses(self) -> None:
         class UnusedExecutor:
@@ -1487,13 +1487,37 @@ class ShellToolTest(unittest.TestCase):
             "timeout_seconds"
         ]
 
-        self.assertEqual(timeout_schema["maximum"], 86400)
+        self.assertEqual(timeout_schema["maximum"], 900)
         self.assertIn("60 seconds by default", definition.description)
-        self.assertIn("maximum of 86400", timeout_schema["description"])
+        self.assertIn("foreground maximum of 900", timeout_schema["description"])
         self.assertIn(
             "Git Bash" if os.name == "nt" else "/bin/sh",
             definition.description,
         )
+
+    def test_background_shell_advertises_the_longer_timeout(self) -> None:
+        from agent_core import JobManager
+
+        class UnusedExecutor:
+            def execute(self, command, timeout_seconds=60, cancellation=None):
+                raise AssertionError("executor should not be called")
+
+        session = Session("s")
+        jobs = JobManager(session)
+        context = context_for(
+            _TMP_WORKSPACE,
+            session=session,
+            command_executor=UnusedExecutor(),
+            jobs=jobs,
+        )
+
+        timeout_schema = ShellTool().definition(context).parameters[
+            "properties"
+        ]["timeout_seconds"]
+
+        self.assertEqual(timeout_schema["maximum"], 86400)
+        self.assertIn("background", ShellTool().definition(context).parameters["properties"])
+        jobs.close()
 
     def test_validates_arguments(self) -> None:
         class UnusedExecutor:
@@ -1508,16 +1532,15 @@ class ShellToolTest(unittest.TestCase):
             tool.execute({})
         with self.assertRaisesRegex(ValueError, "accepts only"):
             tool.execute({"command": "pwd", "extra": True})
-        for timeout_seconds in (0, 86401, True, "10"):
+        for timeout_seconds in (0, 901, True, "10"):
             with self.subTest(timeout_seconds=timeout_seconds):
-                with self.assertRaisesRegex(ValueError, "between 1 and 86400"):
+                with self.assertRaisesRegex(ValueError, "between 1 and 900"):
                     tool.execute(
                         {
                             "command": "pwd",
                             "timeout_seconds": timeout_seconds,
                         }
                     )
-
 
 if __name__ == "__main__":
     unittest.main()

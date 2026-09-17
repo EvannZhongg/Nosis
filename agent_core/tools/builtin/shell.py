@@ -18,7 +18,8 @@ from ..context import ToolExecutionContext
 # call may ask for.  Both are the executor's bounds, so the schema cannot
 # advertise a timeout the executor would refuse.
 DEFAULT_SHELL_TIMEOUT_SECONDS = DEFAULT_COMMAND_TIMEOUT_SECONDS
-MAX_SHELL_TIMEOUT_SECONDS = MAX_COMMAND_TIMEOUT_SECONDS
+MAX_FOREGROUND_SHELL_TIMEOUT_SECONDS = 15 * 60
+MAX_BACKGROUND_SHELL_TIMEOUT_SECONDS = MAX_COMMAND_TIMEOUT_SECONDS
 
 
 WINDOWS_SHELL_NOTE = (
@@ -41,8 +42,10 @@ def _describe() -> str:
         f"directory. {shell_note} Every call starts a fresh shell, so "
         "directory and environment changes do not persist. The command is "
         f"killed after {DEFAULT_SHELL_TIMEOUT_SECONDS} seconds by default; "
-        f"the timeout may be set up to {MAX_SHELL_TIMEOUT_SECONDS} "
-        "seconds. Its exit code, stdout and stderr are returned."
+        "foreground calls may run for up to "
+        f"{MAX_FOREGROUND_SHELL_TIMEOUT_SECONDS} seconds; background calls "
+        f"may run for up to {MAX_BACKGROUND_SHELL_TIMEOUT_SECONDS} seconds. "
+        "Its exit code, stdout and stderr are returned."
     )
 
 
@@ -53,6 +56,11 @@ class ShellTool(Tool):
         return context.command_executor is not None
 
     def definition(self, context: ToolExecutionContext) -> ToolDefinition:
+        maximum_timeout = (
+            MAX_BACKGROUND_SHELL_TIMEOUT_SECONDS
+            if context.jobs is not None
+            else MAX_FOREGROUND_SHELL_TIMEOUT_SECONDS
+        )
         properties: dict[str, JSONValue] = {
             "command": {
                 "type": "string",
@@ -64,12 +72,14 @@ class ShellTool(Tool):
             "timeout_seconds": {
                 "type": "integer",
                 "minimum": 1,
-                "maximum": MAX_SHELL_TIMEOUT_SECONDS,
+                "maximum": maximum_timeout,
                 "description": (
                     "Optional timeout in seconds. Defaults to "
                     f"{DEFAULT_SHELL_TIMEOUT_SECONDS} seconds, "
-                    "with a maximum of "
-                    f"{MAX_SHELL_TIMEOUT_SECONDS}."
+                    "with a foreground maximum of "
+                    f"{MAX_FOREGROUND_SHELL_TIMEOUT_SECONDS}. Values up to "
+                    f"{MAX_BACKGROUND_SHELL_TIMEOUT_SECONDS} require "
+                    "background=true."
                 ),
             },
         }
@@ -107,15 +117,20 @@ class ShellTool(Tool):
         background = arguments.get("background", False)
         if not isinstance(command, str) or not command:
             raise ValueError("shell requires a non-empty string 'command'")
+        maximum_timeout = (
+            MAX_BACKGROUND_SHELL_TIMEOUT_SECONDS
+            if background
+            else MAX_FOREGROUND_SHELL_TIMEOUT_SECONDS
+        )
         if (
             isinstance(timeout_seconds, bool)
             or not isinstance(timeout_seconds, int)
             or timeout_seconds < 1
-            or timeout_seconds > MAX_SHELL_TIMEOUT_SECONDS
+            or timeout_seconds > maximum_timeout
         ):
             raise ValueError(
                 "shell requires 'timeout_seconds' to be an integer "
-                f"between 1 and {MAX_SHELL_TIMEOUT_SECONDS}"
+                f"between 1 and {maximum_timeout}"
             )
         if not isinstance(background, bool):
             raise ValueError("shell requires 'background' to be a boolean")
