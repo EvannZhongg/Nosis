@@ -340,11 +340,18 @@ class McpClientManagerTest(unittest.TestCase):
 
         The stdio helpers charge themselves a startup delay, so starting
         them one after another would need both delays before the first
-        turn could run. The delay is well above the interpreter and
+        turn could run. The delay is far above the interpreter and
         handshake cost the two servers pay at the same time, so the sum
         stays separable from the slowest server.
+
+        The delay is also far above the fixed cost of a start (interpreter,
+        mcp import and handshake: roughly a second, and noisy). With a delay
+        near that fixed cost the budget sat on top of the concurrent startup
+        time and the test failed on a slow machine: 2.9s of a 3.0s budget.
+        A start that serialized the servers still costs the fixed work plus
+        both delays, well past this budget.
         """
-        delay = 1.5
+        delay = 3.0
         config = load_mcp_config(
             {
                 "enabled": True,
