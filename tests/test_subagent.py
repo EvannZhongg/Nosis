@@ -201,7 +201,7 @@ class SubagentToolTest(unittest.TestCase):
             jobs.wait_for_turn("turn-1")
 
             self.assertEqual(result["kind"], "subagent")
-            self.assertEqual(result["status"], "running")
+            self.assertEqual(result["status"], "submitted")
             self.assertIn(
                 "background",
                 SubagentTool().definition(tool_context).parameters["properties"],

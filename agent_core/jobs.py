@@ -136,7 +136,7 @@ class JobManager:
                 raise
             job.future = future
             self._condition.notify_all()
-        return JobHandle(job_id, kind, "running")
+        return JobHandle(job_id, kind, "submitted")
 
     def _run(
         self,

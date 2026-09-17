@@ -1,6 +1,7 @@
 import threading
 import unittest
 from pathlib import Path
+from datetime import datetime, timezone
 
 from agent_core import (
     Agent,
@@ -124,7 +125,7 @@ class BackgroundJobTest(unittest.TestCase):
             item for item in session.items
             if item.role == "tool" and item.tool_call_id == "call-1"
         )
-        self.assertIn('"status": "running"', str(handle.content))
+        self.assertIn('"status": "submitted"', str(handle.content))
 
         executor.release.set()
         thread.join(5)
@@ -168,14 +169,67 @@ class BackgroundJobTest(unittest.TestCase):
         tool = ShellTool()
 
         result = tool.execute(
-            {"command": "true", "background": True}, context
+            {
+                "command": "true",
+                "background": True,
+                "timeout_seconds": 86400,
+            },
+            context,
         )
         jobs.wait_for_turn("turn-1")
 
         self.assertIn("background", tool.definition(context).parameters["properties"])
         self.assertEqual(result["kind"], "shell")
-        self.assertEqual(result["status"], "running")
+        self.assertEqual(result["status"], "submitted")
         self.assertTrue(str(result["job_id"]).startswith("job_"))
+        jobs.close()
+
+    def test_queued_job_handle_reports_submitted(self) -> None:
+        session = Session("session-1")
+        session.begin_turn("turn-1")
+        jobs = JobManager(session, max_workers=1)
+        entered = threading.Event()
+        release = threading.Event()
+
+        first = jobs.submit(
+            "shell",
+            "turn-1",
+            lambda cancellation: entered.set() or release.wait(2),
+        )
+        self.assertTrue(entered.wait(1))
+        second = jobs.submit("shell", "turn-1", lambda cancellation: None)
+
+        self.assertEqual(first.status, "submitted")
+        self.assertEqual(second.status, "submitted")
+        self.assertEqual(session.jobs[second.job_id].status, "submitted")
+        release.set()
+        jobs.wait_for_turn("turn-1")
+        jobs.close()
+
+    def test_unormalized_dict_result_is_injected_as_json(self) -> None:
+        from agent_core.agent import _apply_job_results
+
+        session = Session("session-1")
+        session.begin_turn("turn-1")
+        jobs = JobManager(session, max_workers=1)
+        jobs.submit("test", "turn-1", lambda cancellation: {"a": 1})
+        jobs.wait_for_turn("turn-1")
+        context = ToolExecutionContext(
+            workspace=Workspace(Path(__file__).parent),
+            session=session,
+            jobs=jobs,
+        )
+
+        applied, pending = _apply_job_results(
+            session,
+            context,
+            "turn-1",
+            lambda: datetime.now(timezone.utc),
+        )
+
+        self.assertTrue(applied)
+        self.assertFalse(pending)
+        self.assertIn('result: {"a": 1}', str(session.items[-1].content))
         jobs.close()
 
     def test_cancelled_turn_cancels_background_shell(self) -> None:

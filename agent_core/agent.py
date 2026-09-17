@@ -737,7 +737,11 @@ def _apply_job_results(
                 ensure_ascii=False,
             )
         else:
-            normalized = str(update.output)
+            normalized = (
+                update.output
+                if isinstance(update.output, str)
+                else json.dumps(update.output, ensure_ascii=False)
+            )
         blocks.append(
             "[Background job result]\n"
             f"job_id: {update.job_id}\n"
