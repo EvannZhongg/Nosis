@@ -156,27 +156,25 @@ function ContextWindowIndicator({ window }: { window: ContextWindow | null }) {
     return () => document.removeEventListener("pointerdown", closeOnOutsidePointer);
   }, [open]);
 
-  if (!window) return null;
-  const ratio = Math.min(1, window.input_tokens / window.max_input_tokens);
+  const ratio = window ? Math.min(1, window.input_tokens / window.max_input_tokens) : 0;
   const circumference = 2 * Math.PI * 7;
-  const remaining = Math.max(0, window.max_input_tokens - window.input_tokens);
+  const remaining = window ? Math.max(0, window.max_input_tokens - window.input_tokens) : 0;
   const percent = Math.round(ratio * 100);
   return <div className="context-window" ref={rootRef}>
-    <button type="button" className="context-window-trigger" aria-label={`上下文窗口已使用 ${percent}%`} aria-expanded={open} title="查看上下文窗口" onClick={() => setOpen((value) => !value)}>
+    <button type="button" className="context-window-trigger" aria-label={window ? `上下文窗口已使用 ${percent}%` : "上下文窗口数据尚未加载"} aria-expanded={open} title="查看上下文窗口" onClick={() => setOpen((value) => !value)}>
       <svg className="context-ring" viewBox="0 0 18 18" aria-hidden="true">
         <circle className="context-ring-track" cx="9" cy="9" r="7" />
         <circle className="context-ring-value" cx="9" cy="9" r="7" strokeDasharray={circumference} strokeDashoffset={circumference * (1 - ratio)} />
       </svg>
-      <span>{percent}%</span>
+      <span>{window ? `${percent}%` : "—"}</span>
     </button>
-    {open && <div className="context-popover" role="dialog" aria-label="上下文窗口详情">
+    {open && window && <div className="context-popover" role="dialog" aria-label="上下文窗口详情">
       <div className="context-popover-title">Context window</div>
       <dl>
         <div><dt>当前输入</dt><dd>{formatTokens(window.input_tokens)}</dd></div>
         <div><dt>可用输入上限</dt><dd>{formatTokens(window.max_input_tokens)}</dd></div>
         <div><dt>剩余输入空间</dt><dd>{formatTokens(remaining)}</dd></div>
         <div><dt>压缩触发点</dt><dd>{formatTokens(window.compression_threshold)}</dd></div>
-        <div><dt>输出预留</dt><dd>{formatTokens(window.output_reserve_tokens)}</dd></div>
         <div><dt>模型总窗口</dt><dd>{formatTokens(window.max_context_tokens)}</dd></div>
         <div><dt>压缩次数</dt><dd>{window.compression_count}</dd></div>
       </dl>
@@ -704,8 +702,7 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
               <option value="full_access">完全访问</option>
             </select><ChevronDown size={12} />
           </label>
-          <ContextWindowIndicator window={contextWindow} />
-          <ComposerPrimitive.Send className="send-button" aria-label={running ? "发送引导" : "发送消息"}><ArrowUp size={19} /></ComposerPrimitive.Send></div></ComposerPrimitive.Root>
+          <div className="composer-actions"><ContextWindowIndicator window={contextWindow} /><ComposerPrimitive.Send className="send-button" aria-label={running ? "发送引导" : "发送消息"}><ArrowUp size={19} /></ComposerPrimitive.Send></div></div></ComposerPrimitive.Root>
         <div className="composer-footer">Nosis · 你的项目搭档</div>
       </div>
     </ThreadPrimitive.Root>

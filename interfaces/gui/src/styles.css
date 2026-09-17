@@ -132,7 +132,8 @@ pre { overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-famil
 .permission-selector select:focus-visible { outline: 2px solid #a7b5d2; }
 .permission-selector select:disabled { opacity: .55; cursor: default; }
 .permission-selector > svg:last-child { position: absolute; right: 5px; pointer-events: none; }
-.context-window { position: relative; margin-left: auto; }
+.composer-actions { display: flex; align-items: center; gap: 3px; margin-left: auto; }
+.context-window { position: relative; }
 .context-window-trigger { display: flex; align-items: center; gap: 4px; height: 28px; border: 0; border-radius: 5px; padding: 0 5px; background: transparent; color: #74829b; font-size: 11px; }
 .context-window-trigger:hover, .context-window-trigger[aria-expanded="true"] { background: #f3f5f9; }
 .context-ring { width: 18px; height: 18px; transform: rotate(-90deg); }
@@ -146,7 +147,6 @@ pre { overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-famil
 .context-popover dt, .context-popover dd { margin: 0; font-size: 11px; }
 .context-popover dt { color: #8d96a5; }
 .context-popover dd { color: #4e596b; font-variant-numeric: tabular-nums; }
-.composer-bottom .send-button { margin-left: 3px; }
 .send-button { display: grid; place-items: center; border: 0; background: #556b97; color: white; width: 30px; height: 30px; border-radius: 8px; }
 .send-button:disabled { background: #e9edf3; color: #a9b2c2; opacity: 1; }
 .composer-footer { height: 37px; display: grid; place-items: center; font-size: 9px; letter-spacing: .3px; color: #b4bbc5; }
