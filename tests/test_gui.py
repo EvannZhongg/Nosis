@@ -152,6 +152,80 @@ class BridgeProcessSpawnTest(unittest.IsolatedAsyncioTestCase):
 
 
 @unittest.skipIf(TestClient is None, "Install the gui extra to test the GUI")
+class ActiveRuntimeTest(unittest.IsolatedAsyncioTestCase):
+    async def test_turn_completion_keeps_the_bridge_alive_for_another_turn(self) -> None:
+        bridge = FakeBridge()
+        runtime = server.ActiveRuntime("s1", "first", "/tmp", [], bridge)
+        self.addAsyncCleanup(runtime.close)
+
+        bridge.emit({"type": "turn_completed", "turn_id": "t1", "usage": None})
+        await _wait_for_async(lambda: runtime.event_sequence == 1)
+
+        self.assertFalse(runtime.running)
+        self.assertFalse(runtime.done)
+        self.assertFalse(bridge.closed)
+
+        runtime.send({"type": "user_turn", "turn_id": "t2", "text": "again"})
+        bridge.emit({"type": "turn_completed", "turn_id": "t2", "usage": None})
+        await _wait_for_async(lambda: runtime.event_sequence == 2)
+
+        self.assertEqual(bridge.sent[-1]["turn_id"], "t2")
+        self.assertFalse(runtime.done)
+        self.assertFalse(bridge.closed)
+
+    async def test_event_replay_window_is_bounded_and_sequences_are_monotonic(self) -> None:
+        bridge = FakeBridge()
+        runtime = server.ActiveRuntime("s1", "first", "/tmp", [], bridge)
+        self.addAsyncCleanup(runtime.close)
+
+        bridge.emit(*(
+            {
+                "type": "assistant_delta",
+                "turn_id": "t1",
+                "text": str(index),
+                "model_call_index": 0,
+            }
+            for index in range(server.EVENT_REPLAY_LIMIT + 8)
+        ))
+        await _wait_for_async(
+            lambda: runtime.event_sequence == server.EVENT_REPLAY_LIMIT + 8
+        )
+
+        self.assertEqual(len(runtime._events), server.EVENT_REPLAY_LIMIT)
+        self.assertEqual(runtime._events[0]["event_sequence"], 9)
+        self.assertEqual(
+            runtime._events[-1]["event_sequence"],
+            server.EVENT_REPLAY_LIMIT + 8,
+        )
+
+    async def test_pending_fatal_is_not_covered_by_the_journal_cursor(self) -> None:
+        bridge = FakeBridge()
+        runtime = server.ActiveRuntime("s1", "first", "/tmp", [], bridge)
+        self.addAsyncCleanup(runtime.close)
+
+        bridge.emit(
+            {"type": "ready", "session_id": "s1"},
+            {
+                "type": "fatal",
+                "error": {"type": "RuntimeError", "message": "broken"},
+            },
+        )
+        await _wait_for_async(lambda: runtime.done)
+
+        self.assertEqual(runtime.event_sequence, 2)
+        self.assertEqual(runtime.delivered_event_sequence, 1)
+        attachment = await runtime.attach(
+            runtime.delivered_event_sequence,
+            "page-1",
+            takeover=True,
+        )
+        assert attachment is not None
+        _, events, state = attachment
+        self.assertEqual(state["event_sequence"], 1)
+        self.assertEqual([event["type"] for event in events], ["fatal"])
+
+
+@unittest.skipIf(TestClient is None, "Install the gui extra to test the GUI")
 class GuiTest(unittest.TestCase):
     def setUp(self) -> None:
         directory = tempfile.TemporaryDirectory()
@@ -300,6 +374,286 @@ class GuiTest(unittest.TestCase):
         self.assertTrue(bridge.sent[-1]["approved"])
         self.assertTrue(bridge.closed)
 
+    def test_runs_multiple_turns_on_the_same_bridge(self) -> None:
+        bridge = FakeBridge(
+            replies={
+                "start": [{"type": "ready", "session_id": "s1"}],
+                "user_turn": [
+                    {"type": "turn_completed", "turn_id": "done", "usage": None}
+                ],
+            }
+        )
+        with self.client(bridge) as client:
+            with client.websocket_connect("/api/session") as socket:
+                socket.send_json(
+                    {"type": "start", "session_id": "s1", "attachment_id": "page-1"}
+                )
+                self.assertEqual(socket.receive_json()["type"], "ready")
+                socket.send_json(
+                    {"type": "user_turn", "turn_id": "t1", "text": "one"}
+                )
+                self.assertEqual(socket.receive_json()["type"], "turn_completed")
+                socket.send_json(
+                    {"type": "user_turn", "turn_id": "t2", "text": "two"}
+                )
+                self.assertEqual(socket.receive_json()["type"], "turn_completed")
+
+            self.assertEqual(
+                [message["type"] for message in bridge.sent],
+                ["start", "user_turn", "user_turn"],
+            )
+            self.assertFalse(bridge.closed)
+
+    def test_idle_runtime_session_is_loaded_from_the_journal(self) -> None:
+        bridge = FakeBridge(
+            replies={
+                "start": [{"type": "ready", "session_id": "s1"}],
+                "user_turn": [
+                    {"type": "turn_completed", "turn_id": "t1", "usage": None}
+                ],
+            }
+        )
+        with self.client(bridge) as client:
+            with client.websocket_connect("/api/session") as socket:
+                socket.send_json(
+                    {"type": "start", "session_id": "s1", "attachment_id": "page-1"}
+                )
+                self.assertEqual(socket.receive_json()["type"], "ready")
+                socket.send_json(
+                    {"type": "user_turn", "turn_id": "t1", "text": "hello"}
+                )
+                self.assertEqual(socket.receive_json()["type"], "turn_completed")
+
+            stored = Session("s1")
+            stored.begin_turn("t1")
+            stored.add_item("user", "hello")
+            stored.add_item("assistant", "world")
+            stored.finish_turn("completed", "t1")
+            self.store.append_events("s1", stored.journal, workspace=self.root)
+
+            data = client.get("/api/sessions/s1").json()
+
+        self.assertEqual(
+            [item["content"] for item in data["items"]],
+            ["hello", "world"],
+        )
+
+    def test_a_page_reading_a_running_session_is_sent_every_event(self) -> None:
+        bridge = FakeBridge(
+            replies={
+                "start": [{"type": "ready", "session_id": "s1"}],
+                "user_turn": [
+                    {
+                        "type": "assistant_delta",
+                        "turn_id": "t1",
+                        "text": "one",
+                        "model_call_index": 0,
+                    }
+                ],
+            }
+        )
+        with self.client(bridge) as client:
+            with client.websocket_connect("/api/session") as first:
+                first.send_json(
+                    {"type": "start", "session_id": "s1", "attachment_id": "page-1"}
+                )
+                self.assertEqual(first.receive_json()["type"], "ready")
+                first.send_json(
+                    {"type": "user_turn", "turn_id": "t1", "text": "hello"}
+                )
+                # Reading the delta proves the Runtime holds it for a page.
+                self.assertEqual(first.receive_json()["type"], "assistant_delta")
+
+                session = client.get("/api/sessions/s1").json()
+                runtimes = client.get("/api/runtimes").json()
+
+                self.assertEqual(session["event_sequence"], 0)
+                self.assertEqual(runtimes[0]["event_sequence"], 0)
+
+                with client.websocket_connect("/api/session") as second:
+                    second.send_json(
+                        {
+                            "type": "start",
+                            "session_id": "s1",
+                            "attachment_id": "page-2",
+                            "attach_only": True,
+                            "takeover": True,
+                            "after_event": session["event_sequence"],
+                        }
+                    )
+                    self.assertEqual(second.receive_json()["type"], "ready")
+                    self.assertEqual(
+                        second.receive_json()["type"], "assistant_delta"
+                    )
+                    state = second.receive_json()
+
+                    # The page now holds both events, so its cursor is the
+                    # newest one and a reconnect asks for nothing.
+                    self.assertEqual(state["event_sequence"], 2)
+
+                    with client.websocket_connect("/api/session") as third:
+                        third.send_json(
+                            {
+                                "type": "start",
+                                "session_id": "s1",
+                                "attachment_id": "page-3",
+                                "attach_only": True,
+                                "takeover": True,
+                                "after_event": state["event_sequence"],
+                            }
+                        )
+                        self.assertEqual(
+                            third.receive_json()["type"], "runtime_state"
+                        )
+
+    def test_an_idle_runtime_does_not_resend_the_events_its_journal_holds(self) -> None:
+        bridge = FakeBridge(
+            replies={
+                "start": [{"type": "ready", "session_id": "s1"}],
+                "user_turn": [
+                    {"type": "turn_completed", "turn_id": "t1", "usage": None}
+                ],
+            }
+        )
+        with self.client(bridge) as client:
+            with client.websocket_connect("/api/session") as socket:
+                socket.send_json(
+                    {"type": "start", "session_id": "s1", "attachment_id": "page-1"}
+                )
+                self.assertEqual(socket.receive_json()["type"], "ready")
+                socket.send_json(
+                    {"type": "user_turn", "turn_id": "t1", "text": "hello"}
+                )
+                self.assertEqual(socket.receive_json()["type"], "turn_completed")
+
+            stored = Session("s1")
+            stored.begin_turn("t1")
+            stored.add_item("user", "hello")
+            stored.add_item("assistant", "world")
+            stored.finish_turn("completed", "t1")
+            self.store.append_events("s1", stored.journal, workspace=self.root)
+
+            session = client.get("/api/sessions/s1").json()
+            runtimes = client.get("/api/runtimes").json()
+
+            # 'ready' and the completion the journal already holds.
+            self.assertEqual(session["event_sequence"], 2)
+            self.assertEqual(runtimes[0]["event_sequence"], 2)
+
+            with client.websocket_connect("/api/session") as second:
+                second.send_json(
+                    {
+                        "type": "start",
+                        "session_id": "s1",
+                        "attachment_id": "page-2",
+                        "attach_only": True,
+                        "takeover": True,
+                        "after_event": session["event_sequence"],
+                    }
+                )
+                state = second.receive_json()
+
+        self.assertEqual(state["type"], "runtime_state")
+        self.assertEqual(state["event_sequence"], 2)
+
+    def test_deleting_a_session_closes_its_idle_runtime_first(self) -> None:
+        stored = Session("s1")
+        stored.begin_turn("t1")
+        stored.add_item("user", "hello")
+        stored.finish_turn("completed", "t1")
+        self.store.append_events("s1", stored.journal, workspace=self.root)
+        bridge = FakeBridge(replies={"start": [{"type": "ready", "session_id": "s1"}]})
+
+        with self.client(bridge) as client:
+            with client.websocket_connect("/api/session") as socket:
+                socket.send_json(
+                    {"type": "start", "session_id": "s1", "attachment_id": "page-1"}
+                )
+                self.assertEqual(socket.receive_json()["type"], "ready")
+
+            response = client.delete("/api/sessions/s1")
+
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(bridge.closed)
+            self.assertEqual(client.get("/api/runtimes").json(), [])
+
+    def test_releasing_an_idle_runtime_closes_its_bridge(self) -> None:
+        bridge = FakeBridge(replies={"start": [{"type": "ready", "session_id": "s1"}]})
+        with self.client(bridge) as client:
+            with client.websocket_connect("/api/session") as socket:
+                socket.send_json(
+                    {"type": "start", "session_id": "s1", "attachment_id": "page-1"}
+                )
+                self.assertEqual(socket.receive_json()["type"], "ready")
+
+            response = client.delete(
+                "/api/runtimes/s1",
+                params={"attachment_id": "page-1"},
+            )
+
+            self.assertEqual(response.json(), {"released": True})
+            self.assertTrue(bridge.closed)
+            self.assertEqual(client.get("/api/runtimes").json(), [])
+
+    def test_stale_model_release_does_not_close_a_replacement_runtime(self) -> None:
+        bridge = FakeBridge(replies={"start": [{"type": "ready", "session_id": "s1"}]})
+        with self.client(bridge) as client:
+            with client.websocket_connect("/api/session") as socket:
+                socket.send_json(
+                    {
+                        "type": "start",
+                        "session_id": "s1",
+                        "attachment_id": "page-1",
+                        "provider": "second",
+                    }
+                )
+                self.assertEqual(socket.receive_json()["type"], "ready")
+
+            response = client.delete(
+                "/api/runtimes/s1",
+                params={"provider": "first", "attachment_id": "page-1"},
+            )
+
+            self.assertEqual(response.json(), {"released": False})
+            self.assertFalse(bridge.closed)
+
+    def test_stale_page_release_does_not_close_a_taken_over_runtime(self) -> None:
+        bridge = FakeBridge(replies={"start": [{"type": "ready", "session_id": "s1"}]})
+        with self.client(bridge) as client:
+            with client.websocket_connect("/api/session") as first:
+                first.send_json(
+                    {"type": "start", "session_id": "s1", "attachment_id": "page-1"}
+                )
+                self.assertEqual(first.receive_json()["type"], "ready")
+
+                with client.websocket_connect("/api/session") as second:
+                    second.send_json(
+                        {
+                            "type": "start",
+                            "session_id": "s1",
+                            "attachment_id": "page-2",
+                            "attach_only": True,
+                            "takeover": True,
+                        }
+                    )
+                    self.assertEqual(first.receive_json()["type"], "attachment_replaced")
+                    while True:
+                        state = second.receive_json()
+                        if state["type"] == "runtime_state":
+                            break
+                    self.assertFalse(state["running"])
+
+                    response = client.delete(
+                        "/api/runtimes/s1",
+                        params={
+                            "provider": "first",
+                            "attachment_id": "page-1",
+                        },
+                    )
+
+                    self.assertEqual(response.json(), {"released": False})
+                    self.assertFalse(bridge.closed)
+
     def test_relays_permission_changes_and_restores_runtime_state(self) -> None:
         bridge = FakeBridge(
             replies={
@@ -333,7 +687,11 @@ class GuiTest(unittest.TestCase):
                 )
                 self.assertEqual(
                     first.receive_json(),
-                    {"type": "permission_changed", "preset": "full_access"},
+                    {
+                        "type": "permission_changed",
+                        "preset": "full_access",
+                        "event_sequence": 2,
+                    },
                 )
 
             with client.websocket_connect("/api/session") as second:
@@ -382,7 +740,10 @@ class GuiTest(unittest.TestCase):
                 socket.send_json(
                     {"type": "user_turn", "turn_id": "t1", "text": "choose"}
                 )
-                self.assertEqual(socket.receive_json(), question)
+                self.assertEqual(
+                    socket.receive_json(),
+                    {**question, "event_sequence": 2},
+                )
                 socket.send_json(
                     {
                         "type": "user_question_response",
@@ -665,7 +1026,10 @@ class GuiTest(unittest.TestCase):
                 },
                 {"type": "turn_completed", "turn_id": "t1", "usage": None},
             )
-            _wait_for(client, lambda: bridge.closed)
+            _wait_for(
+                client,
+                lambda: not client.get("/api/runtimes").json()[0]["running"],
+            )
 
             runtimes = client.get("/api/runtimes").json()
             self.assertEqual(runtimes[0]["session_id"], "shared")
@@ -686,12 +1050,75 @@ class GuiTest(unittest.TestCase):
             self.assertFalse(state["running"])
             self.assertEqual(delta["text"], "done")
             self.assertEqual(completed["type"], "turn_completed")
-            _wait_for(client, lambda: client.get("/api/runtimes").json() == [])
+            self.assertFalse(bridge.closed)
 
         self.assertEqual(
             [message["type"] for message in bridge.sent],
             ["start", "user_turn"],
         )
+
+    def test_replays_a_detached_fatal_then_allows_a_fresh_runtime(self) -> None:
+        first = FakeBridge(replies={"start": [{"type": "ready", "session_id": "s1"}]})
+        second = FakeBridge(replies={"start": [{"type": "ready", "session_id": "s1"}]})
+        bridges = [first, second]
+
+        async def spawn(cls: object, workspace: Workspace) -> FakeBridge:
+            return bridges.pop(0)
+
+        with (
+            patch.object(
+                server.BridgeProcess,
+                "spawn",
+                classmethod(spawn),
+            ),
+            self.client() as client,
+        ):
+            with client.websocket_connect("/api/session") as socket:
+                socket.send_json(
+                    {"type": "start", "session_id": "s1", "attachment_id": "page-1"}
+                )
+                self.assertEqual(socket.receive_json()["type"], "ready")
+
+            first.emit(
+                {
+                    "type": "fatal",
+                    "error": {"type": "RuntimeError", "message": "broken"},
+                },
+                None,
+            )
+            _wait_for(client, lambda: first.closed)
+
+            runtime = client.get("/api/runtimes").json()[0]
+            self.assertEqual(runtime["event_sequence"], 1)
+
+            with client.websocket_connect("/api/session") as socket:
+                socket.send_json(
+                    {
+                        "type": "start",
+                        "session_id": "s1",
+                        "attachment_id": "page-2",
+                        "attach_only": True,
+                        "takeover": True,
+                        "after_event": runtime["event_sequence"],
+                    }
+                )
+                state = socket.receive_json()
+                fatal = socket.receive_json()
+
+            self.assertEqual(state["type"], "runtime_state")
+            self.assertEqual(state["event_sequence"], 1)
+            self.assertEqual(fatal["type"], "fatal")
+            self.assertEqual(fatal["event_sequence"], 2)
+            _wait_for(client, lambda: client.get("/api/runtimes").json() == [])
+
+            with client.websocket_connect("/api/session") as socket:
+                socket.send_json(
+                    {"type": "start", "session_id": "s1", "attachment_id": "page-3"}
+                )
+                self.assertEqual(socket.receive_json()["type"], "ready")
+
+        self.assertEqual(first.sent[0]["type"], "start")
+        self.assertEqual(second.sent[0]["type"], "start")
 
     def test_runs_different_sessions_concurrently(self) -> None:
         """Two pages on different sessions must not block each other."""
@@ -1025,6 +1452,14 @@ class GuiStartupTest(unittest.TestCase):
                     client.get("/api/models").json()["default"],
                     "openai",
                 )
+
+
+async def _wait_for_async(condition, timeout: float = 2.0) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while not condition():
+        if asyncio.get_running_loop().time() >= deadline:
+            raise AssertionError("timed out waiting for the runtime")
+        await asyncio.sleep(0.01)
 
 
 def _wait_for(client, condition, timeout: float = 2.0) -> None:

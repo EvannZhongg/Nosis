@@ -7,6 +7,7 @@ export type Session = {
   items: SessionItem[];
   workspace?: string | null;
   permission_preset: PermissionPreset;
+  event_sequence?: number;
 };
 export type WorkspaceSessions = { workspace: string; sessions: SessionSummary[] };
 export type ModelOption = { id: string; model: string };
@@ -36,6 +37,25 @@ export async function deleteSession(sessionId: string): Promise<void> {
   if (!response.ok) {
     const error = await response.json();
     throw new Error(error.detail ?? `会话删除失败 (${response.status})`);
+  }
+}
+
+export async function releaseRuntime(
+  sessionId: string,
+  provider?: string,
+  attachmentId?: string,
+): Promise<void> {
+  const query = new URLSearchParams();
+  if (provider) query.set("provider", provider);
+  if (attachmentId) query.set("attachment_id", attachmentId);
+  const suffix = query.size ? `?${query}` : "";
+  const response = await fetch(`/api/runtimes/${encodeURIComponent(sessionId)}${suffix}`, {
+    method: "DELETE",
+    keepalive: true,
+  });
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail ?? `Runtime 释放失败 (${response.status})`);
   }
 }
 

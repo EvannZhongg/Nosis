@@ -73,13 +73,14 @@ export type UserQuestion = {
   allow_free_text: boolean;
 };
 
-export type Incoming =
+export type Incoming = (
   | {
       type: 'runtime_state';
       running: boolean;
       turn_id: string | null;
       provider: string | null;
       permission_preset: PermissionPreset;
+      event_sequence: number;
       approval: {
         type: 'approval_request';
         turn_id: string | null;
@@ -166,7 +167,8 @@ export type Incoming =
   | { type: 'turn_completed'; turn_id: string; usage: Usage | null }
   | { type: 'turn_cancelled'; turn_id: string }
   | { type: 'turn_failed'; turn_id: string; error: ProtocolError }
-  | { type: 'fatal'; error: ProtocolError };
+  | { type: 'fatal'; error: ProtocolError }
+) & { event_sequence?: number };
 
 export type Outgoing =
   | {

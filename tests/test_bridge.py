@@ -202,6 +202,7 @@ class ProtocolTest(unittest.TestCase):
                 question=None,
                 provider="second",
                 permission_preset="full_access",
+                event_sequence=12,
             ),
             {
                 "type": "runtime_state",
@@ -211,6 +212,7 @@ class ProtocolTest(unittest.TestCase):
                 "question": None,
                 "provider": "second",
                 "permission_preset": "full_access",
+                "event_sequence": 12,
             },
         )
 

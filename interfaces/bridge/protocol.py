@@ -92,6 +92,7 @@ def runtime_state_message(
     question: dict[str, object] | None,
     provider: str | None,
     permission_preset: str,
+    event_sequence: int,
 ) -> dict[str, object]:
     """Describe a GUI server-owned runtime when a WebSocket attaches."""
     return {
@@ -102,6 +103,7 @@ def runtime_state_message(
         "question": question,
         "provider": provider,
         "permission_preset": permission_preset,
+        "event_sequence": event_sequence,
     }
 
 

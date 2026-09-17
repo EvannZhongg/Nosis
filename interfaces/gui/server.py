@@ -13,6 +13,7 @@ import signal
 import shutil
 import subprocess
 import sys
+from collections import deque
 from contextlib import asynccontextmanager
 from uuid import uuid4
 from pathlib import Path
@@ -47,6 +48,7 @@ STATIC_PATH = Path(__file__).resolve().parent / "static"
 HOST = "127.0.0.1"
 PORT = 8737
 SHUTDOWN_TIMEOUT_SECONDS = 2
+EVENT_REPLAY_LIMIT = 512
 # Messages the browser may forward to the bridge verbatim. 'start' is
 # excluded: the server builds it so a page cannot point the agent at an
 # arbitrary configuration file.
@@ -129,9 +131,8 @@ class BridgeProcess:
             self.send({"type": "cancel", "turn_id": self._turn_id})
 
     async def close(self) -> None:
-        # A page that goes away mid-turn would otherwise take the running
-        # turn down with the process; a routed cancel lets the bridge store
-        # what the turn already produced before it shuts down.
+        # Explicit Runtime shutdown routes cancellation first so a running
+        # turn can journal what it already produced before the process exits.
         if not self._ready and self._process.returncode is None:
             cancel_process(self._process)
         else:
@@ -170,8 +171,8 @@ class BridgeProcess:
             pass
 
 
-TERMINAL_MESSAGE_TYPES = frozenset(
-    {"turn_completed", "turn_cancelled", "turn_failed", "fatal"}
+TURN_END_MESSAGE_TYPES = frozenset(
+    {"turn_completed", "turn_cancelled", "turn_failed"}
 )
 
 
@@ -198,11 +199,12 @@ class ActiveRuntime:
         self.permission_preset = "ask_for_approval"
         self.done = False
         self._closed = False
-        self._terminal_pending = False
+        self._fatal_pending = False
         self._attachment_id: str | None = None
         self._subscriber: asyncio.Queue[dict[str, object] | None] | None = None
         self._subscriber_detached: asyncio.Event | None = None
-        self._events: list[dict[str, object]] = []
+        self._events: deque[dict[str, object]] = deque(maxlen=EVENT_REPLAY_LIMIT)
+        self._event_sequence = 0
         self._lock = asyncio.Lock()
         self._reader = asyncio.create_task(self._read_bridge())
 
@@ -232,7 +234,11 @@ class ActiveRuntime:
                     queue: asyncio.Queue[dict[str, object] | None] = asyncio.Queue()
                     self._subscriber = queue
                     self._subscriber_detached = asyncio.Event()
-                    events = list(self._events[after_event:])
+                    events = [
+                        event
+                        for event in self._events
+                        if event["event_sequence"] > after_event
+                    ]
                     state = runtime_state_message(
                         running=self.running,
                         turn_id=self.turn_id,
@@ -240,6 +246,15 @@ class ActiveRuntime:
                         question=self.question,
                         provider=self.provider,
                         permission_preset=self.permission_preset,
+                        # The page holds everything the stream emitted, so
+                        # its cursor is the newest event; a pending fatal is
+                        # left out of it so that a page attaching later
+                        # still asks for one.
+                        event_sequence=(
+                            self.delivered_event_sequence
+                            if self._fatal_pending
+                            else self._event_sequence
+                        ),
                     )
                     if self.done:
                         queue.put_nowait(None)
@@ -259,20 +274,12 @@ class ActiveRuntime:
         queue: asyncio.Queue[dict[str, object] | None],
         attachment_id: str,
     ) -> None:
-        close_idle = False
         async with self._lock:
             if self._subscriber is queue:
                 self._subscriber = None
-                close_idle = (
-                    self._attachment_id == attachment_id
-                    and not self.running
-                    and not self.done
-                )
                 if self._subscriber_detached is not None:
                     self._subscriber_detached.set()
                     self._subscriber_detached = None
-        if close_idle:
-            await self.close()
 
     def send(self, message: dict[str, object]) -> None:
         if message.get("type") == "user_turn":
@@ -302,10 +309,34 @@ class ActiveRuntime:
 
     @property
     def attachable(self) -> bool:
-        return not self.done or self._terminal_pending
+        return not self.done or self._fatal_pending
 
-    def mark_terminal_delivered(self) -> None:
-        self._terminal_pending = False
+    @property
+    def fatal_pending(self) -> bool:
+        return self._fatal_pending
+
+    @property
+    def event_sequence(self) -> int:
+        return self._event_sequence
+
+    @property
+    def delivered_event_sequence(self) -> int:
+        """The newest event the items handed out with this Runtime reflect.
+
+        A running Runtime holds only the user turns it accepted, so a page
+        that reads it must still be sent every event it emitted. An idle one
+        is read from its journal, which already holds normal turn events. A
+        fatal is not part of that transcript and remains pending until a page
+        receives it.
+        """
+        if self.running:
+            return 0
+        if self._fatal_pending:
+            return max(0, self._event_sequence - 1)
+        return self._event_sequence
+
+    def mark_fatal_delivered(self) -> None:
+        self._fatal_pending = False
 
     async def close(self) -> None:
         if not self._closed:
@@ -336,17 +367,24 @@ class ActiveRuntime:
                     preset = message.get("permission_preset", message.get("preset"))
                     if isinstance(preset, str):
                         self.permission_preset = preset
-                elif message_type in TERMINAL_MESSAGE_TYPES:
+                elif message_type in TURN_END_MESSAGE_TYPES:
                     self.running = False
                     self.turn_id = None
                     self.approval = None
                     self.question = None
-                    self._terminal_pending = True
+                elif message_type == "fatal":
+                    self.running = False
+                    self.turn_id = None
+                    self.approval = None
+                    self.question = None
+                    self._fatal_pending = True
                 async with self._lock:
-                    self._events.append(message)
+                    self._event_sequence += 1
+                    sequenced = {**message, "event_sequence": self._event_sequence}
+                    self._events.append(sequenced)
                     if self._subscriber is not None:
-                        self._subscriber.put_nowait(message)
-                if message_type in TERMINAL_MESSAGE_TYPES:
+                        self._subscriber.put_nowait(sequenced)
+                if message_type == "fatal":
                     break
         finally:
             self.running = False
@@ -399,21 +437,30 @@ def create_app(
         session_id = str(start["session_id"])
         async with runtime_lock:
             current = runtimes.get(session_id)
+            if current is not None and current.done and current.fatal_pending:
+                return current, False
+            provider = start.get("provider")
+            selected_provider = provider if isinstance(provider, str) else None
+            selected_workspace = str(current_workspace.path)
             if current is not None and not current.done:
-                return current, False
-            if current is not None and attach_only and current.attachable:
-                return current, False
+                same_configuration = (
+                    current.provider == selected_provider
+                    and current.workspace == selected_workspace
+                )
+                if attach_only or current.running or same_configuration:
+                    return current, False
+                runtimes.pop(session_id, None)
+                await current.close()
             if current is not None:
                 runtimes.pop(session_id, None)
             if attach_only:
                 return None, False
             bridge = await BridgeProcess.spawn(current_workspace)
-            provider = start.get("provider")
             stored = store.load(session_id, recover=False)
             runtime = ActiveRuntime(
                 session_id,
-                provider if isinstance(provider, str) else None,
-                str(current_workspace.path),
+                selected_provider,
+                selected_workspace,
                 jsonable_encoder(stored.items),
                 bridge,
             )
@@ -434,33 +481,42 @@ def create_app(
     @app.get("/api/runtimes")
     async def list_runtimes() -> list[dict[str, object]]:
         async with runtime_lock:
-            return [
-                {
+            result = []
+            for runtime in runtimes.values():
+                if not runtime.attachable:
+                    continue
+                items = runtime.items
+                if not runtime.running:
+                    items = jsonable_encoder(
+                        store.load(runtime.session_id, recover=True).items
+                    )
+                result.append({
                     "session_id": runtime.session_id,
                     "provider": runtime.provider,
                     "workspace": runtime.workspace,
-                    "items": runtime.items,
+                    "items": items,
                     "running": runtime.running,
                     "permission_preset": runtime.permission_preset,
-                }
-                for runtime in runtimes.values()
-                if runtime.attachable
-            ]
+                    "event_sequence": runtime.delivered_event_sequence,
+                })
+            return result
 
     @app.get("/api/sessions")
     def list_sessions() -> list[dict[str, object]]:
         return store.list_sessions()
 
     @app.get("/api/sessions/{session_id}")
-    def get_session(session_id: str) -> object:
+    async def get_session(session_id: str) -> object:
         try:
-            runtime = runtimes.get(session_id)
-            if runtime is not None and not runtime.done:
+            async with runtime_lock:
+                runtime = runtimes.get(session_id)
+            if runtime is not None and runtime.running:
                 return {
                     "session_id": runtime.session_id,
                     "items": runtime.items,
                     "workspace": runtime.workspace,
                     "permission_preset": runtime.permission_preset,
+                    "event_sequence": runtime.delivered_event_sequence,
                 }
             session = store.load(
                 session_id,
@@ -472,14 +528,57 @@ def create_app(
                     "items": session.items,
                     "workspace": session.workspace,
                     "permission_preset": session.permission_preset.value,
+                    "event_sequence": (
+                        runtime.delivered_event_sequence
+                        if runtime is not None
+                        else 0
+                    ),
                 }
             )
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
 
+    async def release_idle_runtime(
+        session_id: str,
+        *,
+        provider: str | None = None,
+        attachment_id: str | None = None,
+    ) -> bool:
+        async with runtime_lock:
+            runtime = runtimes.get(session_id)
+            if runtime is None:
+                return False
+            if provider is not None and runtime.provider != provider:
+                return False
+            if (
+                attachment_id is not None
+                and not runtime.owns_attachment(attachment_id)
+            ):
+                return False
+            if runtime.running:
+                raise HTTPException(status_code=409, detail="会话正在运行。")
+            runtimes.pop(session_id, None)
+            await runtime.close()
+            return True
+
+    @app.delete("/api/runtimes/{session_id}")
+    async def release_runtime(
+        session_id: str,
+        provider: str | None = None,
+        attachment_id: str | None = None,
+    ) -> dict[str, bool]:
+        return {
+            "released": await release_idle_runtime(
+                session_id,
+                provider=provider,
+                attachment_id=attachment_id,
+            )
+        }
+
     @app.delete("/api/sessions/{session_id}")
-    def delete_session(session_id: str) -> dict[str, bool]:
+    async def delete_session(session_id: str) -> dict[str, bool]:
         try:
+            await release_idle_runtime(session_id)
             deleted = store.delete_session(session_id)
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
@@ -504,7 +603,7 @@ def create_app(
         return workspace
 
     @app.put("/api/sessions/{session_id}/workspace")
-    def update_session_workspace(session_id: str, payload: dict[str, object]) -> dict[str, str]:
+    async def update_session_workspace(session_id: str, payload: dict[str, object]) -> dict[str, str]:
         value = payload.get("workspace")
         if not isinstance(value, str) or not value.strip():
             raise HTTPException(status_code=400, detail="workspace 必须是非空路径。")
@@ -513,6 +612,7 @@ def create_app(
         except (OSError, ValueError) as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         try:
+            await release_idle_runtime(session_id)
             if store.has_journal(session_id):
                 store.bind_workspace(session_id, selected.path)
             else:
@@ -718,6 +818,7 @@ def create_app(
                     question=None,
                     provider=None,
                     permission_preset="ask_for_approval",
+                    event_sequence=0,
                 )
             )
             await websocket.close()
@@ -734,30 +835,33 @@ def create_app(
             await websocket.close()
             return
         queue, events, state = attachment
-        terminal_delivered = False
+        fatal_delivered = False
         try:
+            replays_fatal = any(message.get("type") == "fatal" for message in events)
+            if not created and replays_fatal:
+                await websocket.send_json(state)
             for message in events:
                 await websocket.send_json(message)
-                terminal_delivered = message.get("type") in TERMINAL_MESSAGE_TYPES
-            if not created:
+                fatal_delivered = message.get("type") == "fatal"
+            if not created and not replays_fatal:
                 await websocket.send_json(state)
             try:
-                terminal_delivered = (
+                fatal_delivered = (
                     await _relay(
                         websocket,
                         runtime,
                         queue,
                         attachment_id,
                     )
-                    or terminal_delivered
+                    or fatal_delivered
                 )
             except asyncio.CancelledError:
                 # ASGI servers may cancel the handler when the browser drops
                 # the socket. Detaching must not cancel the runtime with it.
                 pass
         finally:
-            if terminal_delivered:
-                runtime.mark_terminal_delivered()
+            if fatal_delivered:
+                runtime.mark_fatal_delivered()
             await asyncio.shield(runtime.detach(queue, attachment_id))
             if not runtime.attachable:
                 async with runtime_lock:
@@ -820,17 +924,17 @@ async def _relay(
             elif message_type in RELAYED_MESSAGE_TYPES:
                 runtime.send(message)
 
-    terminal_delivered = False
+    fatal_delivered = False
 
     async def bridge_to_browser() -> None:
-        nonlocal terminal_delivered
+        nonlocal fatal_delivered
         while True:
             message = await queue.get()
             if message is None:
                 return
             await websocket.send_json(message)
-            if message.get("type") in TERMINAL_MESSAGE_TYPES:
-                terminal_delivered = True
+            if message.get("type") == "fatal":
+                fatal_delivered = True
 
     tasks = [
         asyncio.create_task(browser_to_bridge()),
@@ -856,7 +960,7 @@ async def _relay(
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
-    return terminal_delivered
+    return fatal_delivered
 
 
 def main(argv: list[str] | None = None) -> None:

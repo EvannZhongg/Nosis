@@ -37,7 +37,7 @@ export class SessionSocket {
         provider: options.provider,
         attachment_id: options.attachmentId,
         ...(options.attachOnly ? { attach_only: true } : {}),
-        ...(options.afterEvent ? { after_event: options.afterEvent } : {}),
+        ...(options.afterEvent !== undefined ? { after_event: options.afterEvent } : {}),
         ...(options.takeover ? { takeover: true } : {}),
       });
       for (const message of this.queued) this.write(message);

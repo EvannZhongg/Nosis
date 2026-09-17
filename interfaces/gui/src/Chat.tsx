@@ -7,7 +7,7 @@ import {
 import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
 import { ArrowUp, Check, ChevronDown, ChevronRight, LoaderCircle, MessageCircleQuestion, Paperclip, ShieldCheck, Square, Terminal, X } from "lucide-react";
 import remarkGfm from "remark-gfm";
-import { get, selectWorkspace, sessionUrl, updateSessionWorkspace, uploadAttachments, type ImageAttachment, type ModelOption, type Session } from "./api";
+import { get, releaseRuntime, selectWorkspace, sessionUrl, updateSessionWorkspace, uploadAttachments, type ImageAttachment, type ModelOption, type Session } from "./api";
 import { SessionSocket } from "./session";
 import { applyMessage, isTurnActivity, toMessages, type Notice, type TranscriptItem } from "./transcript";
 import type { PermissionPreset, Usage, UserQuestion } from "@nosis/protocol";
@@ -119,6 +119,7 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
   const workspacePickerRef = useRef<HTMLDivElement | null>(null);
   const socketRef = useRef<SessionSocket | null>(null);
   const socketModelRef = useRef("");
+  const selectedModelRef = useRef(model);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
   const noticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -128,7 +129,7 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
   const turnCounter = useRef(0);
   const steerCounter = useRef(0);
   const activeTurnIdRef = useRef<string | null>(null);
-  const eventCounterRef = useRef(0);
+  const eventCounterRef = useRef(session.event_sequence ?? 0);
   const [attachmentId] = useState(() => crypto.randomUUID());
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const messages = useMemo(() => toMessages(items, session.session_id), [items, session.session_id]);
@@ -175,16 +176,38 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
     };
   }, []);
 
+  useEffect(() => {
+    const releaseOnPageLeave = () => {
+      if (!runningRef.current) {
+        void releaseRuntime(
+          session.session_id,
+          socketModelRef.current || model,
+          attachmentId,
+        ).catch(() => undefined);
+      }
+    };
+    window.addEventListener("pagehide", releaseOnPageLeave);
+    return () => window.removeEventListener("pagehide", releaseOnPageLeave);
+  }, [attachmentId, model, session.session_id]);
+
   // Model selection belongs to this session. It detaches only this Chat and
   // is applied when its next turn attaches or starts a runtime.
   useEffect(() => {
-    if (!socketRef.current || socketModelRef.current === model) return;
+    const previousModel = selectedModelRef.current;
+    selectedModelRef.current = model;
+    if (previousModel === model) return;
+    if (socketRef.current && socketModelRef.current === model) return;
     const socket = socketRef.current;
     socketRef.current = null;
     socketModelRef.current = "";
     eventCounterRef.current = 0;
-    socket.close();
-  }, [model]);
+    void releaseRuntime(
+      session.session_id,
+      previousModel,
+      attachmentId,
+    ).catch(() => undefined);
+    socket?.close();
+  }, [attachmentId, model, session.session_id]);
 
   useEffect(() => {
     if (runtimeActive && model && socketRef.current === null) {
@@ -235,14 +258,13 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
   }, [session.session_id, onBusyChange, onTurnEnd, showItems]);
 
   function connect({ attachOnly = false, takeover = true }: { attachOnly?: boolean; takeover?: boolean } = {}): SessionSocket {
-    if (!attachOnly) eventCounterRef.current = 0;
     let socket: SessionSocket;
     socket = new SessionSocket({
       sessionId: session.session_id,
       provider: model,
       attachmentId,
       attachOnly,
-      afterEvent: attachOnly ? eventCounterRef.current : 0,
+      afterEvent: eventCounterRef.current,
       takeover,
       onMessage: (message) => {
         // A socket that was replaced during a model switch may still have
@@ -272,6 +294,7 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
           return;
         }
         if (message.type === "runtime_state") {
+          eventCounterRef.current = message.event_sequence;
           if (noticeTimeoutRef.current) {
             clearTimeout(noticeTimeoutRef.current);
             noticeTimeoutRef.current = null;
@@ -301,7 +324,9 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
           if (wasRunning && !message.running) void endTurn();
           return;
         }
-        eventCounterRef.current += 1;
+        if (typeof message.event_sequence === "number") {
+          eventCounterRef.current = message.event_sequence;
+        }
         if (message.type === "user_steer_applied" || message.type === "user_steer_rejected") {
           setPendingSteers((count) => Math.max(0, count - 1));
         }
@@ -329,6 +354,7 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
         }
         if (applied.permissionPreset !== undefined) setPermissionPreset(applied.permissionPreset);
         if (applied.usage !== undefined) onUsageChange(applied.usage);
+        if (message.type === "fatal") eventCounterRef.current = 0;
         if (applied.finished) void endTurn();
       },
       onClose: () => {
@@ -471,6 +497,7 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
       const socket = socketRef.current;
       socketRef.current = null;
       socketModelRef.current = "";
+      eventCounterRef.current = 0;
       socket?.close();
       showNotice({ level: "info", text: `工作区已切换为 ${savedWorkspace}` }, true);
     } catch (error) {
