@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent, type PropsWithChildren } from "react";
 import {
-  AssistantRuntimeProvider, ComposerPrimitive, MessagePrimitive,
+  AssistantRuntimeProvider, ComposerPrimitive, MessagePartPrimitive, MessagePrimitive,
   ThreadPrimitive, useAuiState, useExternalStoreRuntime,
-  type AppendMessage, type ReasoningMessagePartProps, type ToolCallMessagePartProps,
+  type AppendMessage, type PartState, type ReasoningMessagePartProps, type ToolCallMessagePartProps,
 } from "@assistant-ui/react";
 import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
 import { ArrowUp, Check, ChevronDown, ChevronRight, LoaderCircle, MessageCircleQuestion, Paperclip, ShieldCheck, Square, Terminal, X } from "lucide-react";
 import remarkGfm from "remark-gfm";
 import { get, releaseRuntime, selectWorkspace, sessionUrl, updateSessionWorkspace, uploadAttachments, type ImageAttachment, type ModelOption, type Session } from "./api";
 import { SessionSocket } from "./session";
-import { applyMessage, groupTurnParts, isTurnActivity, toMessages, TURN_PROCESS_GROUP, type Notice, type TranscriptItem } from "./transcript";
+import { applyMessage, isTurnActivity, toMessages, TURN_PROCESS_GROUP, turnProcessPartIndexes, type Notice, type TranscriptItem } from "./transcript";
 import type { PermissionPreset, Usage, UserQuestion } from "@nosis/protocol";
 
 type Approval = {
@@ -75,7 +75,7 @@ function ReasoningText({ text }: ReasoningMessagePartProps) {
   return <div className="reasoning-text">{text}</div>;
 }
 
-function TurnPartGroup({ groupKey, children }: PropsWithChildren<{ groupKey: string | undefined }>) {
+function TurnPartGroup({ children }: PropsWithChildren) {
   const active = useAuiState((state) => state.thread.isRunning && state.message.isLast);
   const [expanded, setExpanded] = useState(active);
   const wasActiveRef = useRef(active);
@@ -84,7 +84,6 @@ function TurnPartGroup({ groupKey, children }: PropsWithChildren<{ groupKey: str
     else if (wasActiveRef.current) setExpanded(false);
     wasActiveRef.current = active;
   }, [active]);
-  if (groupKey !== TURN_PROCESS_GROUP) return <>{children}</>;
   return <details className="turn-process" open={active || expanded} onToggle={(event) => {
     if (!active) setExpanded(event.currentTarget.open);
   }}>
@@ -93,10 +92,40 @@ function TurnPartGroup({ groupKey, children }: PropsWithChildren<{ groupKey: str
   </details>;
 }
 
+function AssistantParts() {
+  const active = useAuiState((state) => state.thread.isRunning && state.message.isLast);
+  const parts = useAuiState((state) => state.message.parts);
+  const processParts = useMemo(() => new Set(
+    turnProcessPartIndexes(parts, active).map((index) => parts[index]),
+  ), [active, parts]);
+  const groupBy = useCallback((part: PartState) => (
+    processParts.has(part) ? [TURN_PROCESS_GROUP] as const : []
+  ), [processParts]);
+
+  return <MessagePrimitive.GroupedParts groupBy={groupBy} indicator="never">
+    {({ part, children }) => {
+      switch (part.type) {
+        case TURN_PROCESS_GROUP:
+          return <TurnPartGroup>{children}</TurnPartGroup>;
+        case "text":
+          return <MarkdownText />;
+        case "reasoning":
+          return <ReasoningText {...part} />;
+        case "image":
+          return <MessagePartPrimitive.Image />;
+        case "tool-call":
+          return part.toolUI ?? <ToolCard {...part} />;
+        default:
+          return null;
+      }
+    }}
+  </MessagePrimitive.GroupedParts>;
+}
+
 function AssistantMessage() {
   return <MessagePrimitive.Root className="assistant-message">
     <div className="assistant-label"><span className="assistant-avatar"><img src="/nosis-avatar-128.png" alt="" /></span>Nosis</div>
-    <div className="assistant-content"><MessagePrimitive.Unstable_PartsGrouped groupingFunction={groupTurnParts} components={{ Text: MarkdownText, Reasoning: ReasoningText, tools: { Fallback: ToolCard }, Group: TurnPartGroup }} /><MessageTimestamp /></div>
+    <div className="assistant-content"><AssistantParts /><MessageTimestamp /></div>
   </MessagePrimitive.Root>;
 }
 
@@ -150,7 +179,7 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
   const eventCounterRef = useRef(session.event_sequence ?? 0);
   const [attachmentId] = useState(() => crypto.randomUUID());
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const messages = useMemo(() => toMessages(items, session.session_id, running), [items, running, session.session_id]);
+  const messages = useMemo(() => toMessages(items, session.session_id), [items, session.session_id]);
 
   // Socket callbacks fire outside React's render, so the transcript and
   // turn state they fold onto are kept in refs.

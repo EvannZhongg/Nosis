@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Incoming } from "@nosis/protocol";
-import { applyMessage, groupTurnParts, isTurnActivity, toMessages, TURN_PROCESS_GROUP, type TranscriptItem } from "../src/transcript";
+import { applyMessage, isTurnActivity, toMessages, turnProcessPartIndexes, type TranscriptItem } from "../src/transcript";
 
 const TOOL_CALL = { id: "call-1", name: "shell", arguments: { command: "ls" } };
 
@@ -303,7 +303,7 @@ describe("applyMessage", () => {
     const messages = toMessages(items);
     const parts = messages[0].content as { type: string; text?: string }[];
     expect(parts).toEqual([
-      { type: "reasoning", text: "weighing the options", parentId: TURN_PROCESS_GROUP },
+      { type: "reasoning", text: "weighing the options" },
       { type: "text", text: "Pushing now." },
     ]);
   });
@@ -425,14 +425,9 @@ describe("toMessages", () => {
       "tool-call",
       "text",
     ]);
-    expect(parts(messages[1]).map((part) => (part as any).parentId)).toEqual([
-      TURN_PROCESS_GROUP,
-      TURN_PROCESS_GROUP,
-      undefined,
-    ]);
   });
 
-  it("groups reasoning and intermediate work separately from the final answer", () => {
+  it("identifies reasoning and intermediate work before the final answer", () => {
     const messages = toMessages([
       { role: "user", content: "fix it" },
       { role: "assistant", content: "Checking.", reasoning: "First inspect it." },
@@ -440,13 +435,18 @@ describe("toMessages", () => {
       { role: "tool", tool_call_id: "call-1", content: '{"ok":true}' },
       { role: "assistant", content: "Fixed." },
     ]);
-    const assistantParts = parts(messages[1]) as ({ type: string; parentId?: string })[];
+    const assistantParts = parts(messages[1]);
 
-    expect(groupTurnParts(assistantParts)).toEqual([
-      { groupKey: TURN_PROCESS_GROUP, indices: [0, 1, 2] },
-      { groupKey: undefined, indices: [3] },
-    ]);
+    expect(turnProcessPartIndexes(assistantParts, false)).toEqual([0, 1, 2]);
     expect(assistantParts[3]).toMatchObject({ type: "text", text: "Fixed." });
+  });
+
+  it("keeps tool-produced media with the process before the final text", () => {
+    expect(turnProcessPartIndexes([
+      { type: "tool-call" },
+      { type: "image" },
+      { type: "text" },
+    ], false)).toEqual([0, 1]);
   });
 
   it("does not treat tool-calling text as a final answer", () => {
@@ -455,21 +455,16 @@ describe("toMessages", () => {
       { role: "assistant", content: "Running it now.", tool_calls: [TOOL_CALL] },
     ]);
 
-    expect(parts(messages[1]).map((part) => (part as any).parentId)).toEqual([
-      TURN_PROCESS_GROUP,
-      TURN_PROCESS_GROUP,
-    ]);
+    expect(turnProcessPartIndexes(parts(messages[1]), false)).toEqual([0, 1]);
   });
 
   it("keeps the active turn entirely inside the process group", () => {
     const messages = toMessages([
       { role: "user", content: "fix it" },
       { role: "assistant", content: "Still working." },
-    ], undefined, true);
-
-    expect(parts(messages[1])).toEqual([
-      { type: "text", text: "Still working.", parentId: TURN_PROCESS_GROUP },
     ]);
+
+    expect(turnProcessPartIndexes(parts(messages[1]), true)).toEqual([0]);
   });
 
   it("keeps earlier final answers visible while a new turn is running", () => {
@@ -478,14 +473,10 @@ describe("toMessages", () => {
       { role: "assistant", content: "First answer." },
       { role: "user", content: "continue" },
       { role: "assistant", content: "Still working." },
-    ], undefined, true);
+    ]);
 
-    expect(parts(messages[1])).toEqual([
-      { type: "text", text: "First answer." },
-    ]);
-    expect(parts(messages[3])).toEqual([
-      { type: "text", text: "Still working.", parentId: TURN_PROCESS_GROUP },
-    ]);
+    expect(turnProcessPartIndexes(parts(messages[1]), false)).toEqual([]);
+    expect(turnProcessPartIndexes(parts(messages[3]), true)).toEqual([0]);
   });
 
   it("starts a new assistant message after a user item", () => {

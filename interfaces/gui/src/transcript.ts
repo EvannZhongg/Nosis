@@ -30,7 +30,7 @@ export type Applied = {
 
 type ToolOutcome = { ok: boolean; error?: { type: string; message: string } };
 
-export const TURN_PROCESS_GROUP = "turn-process";
+export const TURN_PROCESS_GROUP = "group-turn-process";
 
 /** Messages that prove the model has started handling the persisted turn. */
 export function isTurnActivity(message: Incoming): boolean {
@@ -246,34 +246,15 @@ function itemParts(
   item: TranscriptItem,
   results: Map<string, ToolOutcome>,
   sessionId?: string,
-  finalAssistantItem = false,
 ): Part[] {
   const parts: Part[] = [];
-  // Reasoning, tool calls, and narration before the last assistant item are
-  // the turn's process. The last assistant item's content is the final answer.
-  if (item.reasoning) parts.push({ type: "reasoning", text: item.reasoning, parentId: TURN_PROCESS_GROUP });
-  if (typeof item.content === "string" && item.content) {
-    parts.push({
-      type: "text",
-      text: item.content,
-      ...(item.role === "assistant" && !finalAssistantItem ? { parentId: TURN_PROCESS_GROUP } : {}),
-    });
-  }
+  // The model reasons before it answers, so reasoning comes first.
+  if (item.reasoning) parts.push({ type: "reasoning", text: item.reasoning });
+  if (typeof item.content === "string" && item.content) parts.push({ type: "text", text: item.content });
   if (Array.isArray(item.content)) {
     for (const part of item.content) {
-      if (part.type === "text") {
-        parts.push({
-          type: "text",
-          text: part.text,
-          ...(item.role === "assistant" && !finalAssistantItem ? { parentId: TURN_PROCESS_GROUP } : {}),
-        });
-      } else {
-        parts.push({
-          type: "image",
-          image: attachmentUrl(part.path, sessionId),
-          ...(item.role === "assistant" && !finalAssistantItem ? { parentId: TURN_PROCESS_GROUP } : {}),
-        } as unknown as Part);
-      }
+      if (part.type === "text") parts.push({ type: "text", text: part.text });
+      else parts.push({ type: "image", image: attachmentUrl(part.path, sessionId) } as unknown as Part);
     }
   }
   for (const call of item.tool_calls ?? []) {
@@ -285,23 +266,22 @@ function itemParts(
       argsText: JSON.stringify(call.arguments),
       result: results.get(call.id),
       isError: results.get(call.id)?.ok === false,
-      parentId: TURN_PROCESS_GROUP,
     });
   }
   return parts;
 }
 
-export function groupTurnParts(parts: readonly { parentId?: string }[]) {
-  const groups: { groupKey: string | undefined; indices: number[] }[] = [];
-  for (let index = 0; index < parts.length; index += 1) {
-    const groupKey = parts[index]?.parentId === TURN_PROCESS_GROUP
-      ? TURN_PROCESS_GROUP
-      : undefined;
-    const last = groups[groups.length - 1];
-    if (last?.groupKey === groupKey) last.indices.push(index);
-    else groups.push({ groupKey, indices: [index] });
+/** Part indices that belong to a turn's collapsible reasoning/tool process. */
+export function turnProcessPartIndexes(parts: readonly { type: string }[], running: boolean): number[] {
+  if (running) return parts.map((_, index) => index);
+  let processEnd = -1;
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
+    if (parts[index]?.type !== "text") {
+      processEnd = index;
+      break;
+    }
   }
-  return groups;
+  return parts.slice(0, processEnd + 1).map((_, index) => index);
 }
 
 /**
@@ -312,7 +292,7 @@ export function groupTurnParts(parts: readonly { parentId?: string }[]) {
  * accumulate into one message and share one avatar. A user item starts
  * the next group.
  */
-export function toMessages(items: TranscriptItem[], sessionId?: string, running = false): ThreadMessageLike[] {
+export function toMessages(items: TranscriptItem[], sessionId?: string): ThreadMessageLike[] {
   const results = new Map(
     items
       .filter(
@@ -321,26 +301,6 @@ export function toMessages(items: TranscriptItem[], sessionId?: string, running 
       )
       .map((item) => [item.tool_call_id, JSON.parse(item.content)]),
   );
-  const finalAssistantItems = new Set<number>();
-  let finalAssistantIndex: number | null = null;
-  let latestUserIndex = -1;
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    const item = items[index];
-    if (item.role === "user" && item.origin !== "tool_media") {
-      if (latestUserIndex === -1) latestUserIndex = index;
-      if (finalAssistantIndex !== null) finalAssistantItems.add(finalAssistantIndex);
-      finalAssistantIndex = null;
-    } else if (item.role === "assistant" && finalAssistantIndex === null && !item.tool_calls?.length) {
-      finalAssistantIndex = index;
-    }
-  }
-  if (finalAssistantIndex !== null) finalAssistantItems.add(finalAssistantIndex);
-  if (running) {
-    for (const index of finalAssistantItems) {
-      if (index > latestUserIndex) finalAssistantItems.delete(index);
-    }
-  }
-
   const messages: ThreadMessageLike[] = [];
   let open: OpenMessage | null = null;
 
@@ -348,7 +308,7 @@ export function toMessages(items: TranscriptItem[], sessionId?: string, running 
     if (item.role === "tool") return;
     // The session id travels into the URL builder, so an image is
     // addressed against the session's own workspace from the start.
-    const parts = itemParts(item, results, sessionId, finalAssistantItems.has(index));
+    const parts = itemParts(item, results, sessionId);
 
     // Images a tool loaded arrive in a user-role item because that is the
     // only message kind that can carry them. They belong to the reply the
@@ -356,11 +316,7 @@ export function toMessages(items: TranscriptItem[], sessionId?: string, running 
     // that looks like the person spoke. The text beside them only tells
     // the model where they came from, so it is left out here.
     if (item.role === "user" && item.origin === "tool_media") {
-      if (open) {
-        open.content.push(...parts
-          .filter((part) => (part as any).type === "image")
-          .map((part) => ({ ...part, parentId: TURN_PROCESS_GROUP })));
-      }
+      if (open) open.content.push(...parts.filter((part) => (part as any).type === "image"));
       return;
     }
 
