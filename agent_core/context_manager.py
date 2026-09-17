@@ -1,3 +1,4 @@
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -125,10 +126,14 @@ class ContextManager:
             system_prompt = (
                 f"{system_prompt}\n\n[Archived Context Summary]\n{previous}"
             )
-        historical_items = [_historical_message(item) for item in items]
         request = LLMRequest(
             system_prompt=system_prompt,
-            messages=tuple([_timeline_message(historical_items), *historical_items]),
+            messages=(
+                Message(
+                    role="user",
+                    content=_compression_record(items),
+                ),
+            ),
             media_root=self._media_root,
         )
         request = with_generation_limit(
@@ -189,23 +194,38 @@ def _unit_messages(units: Iterable[ContextUnit]) -> list[Message]:
     return [message for unit in units for message in unit.messages]
 
 
-def _historical_message(item: Message) -> Message:
-    timestamp_utc = item.timestamp_utc
-    if item.role == "tool" or (item.role == "assistant" and item.tool_calls):
-        timestamp_utc = None
-    return Message(
-        role=item.role,
-        content=historical_content(item.content),
-        timestamp_utc=timestamp_utc,
-        tool_calls=item.tool_calls,
-        tool_call_id=item.tool_call_id,
-        # Thinking-mode providers (notably DeepSeek) require every assistant
-        # reasoning_content value to be echoed in later requests.  Dropping
-        # it while converting a turn to historical context makes the next
-        # request invalid, including when the assistant step had no tools.
-        reasoning=item.reasoning if item.role == "assistant" else None,
-        origin=item.origin,
-    )
+def _compression_record(items: list[Message]) -> str:
+    sections = ["[Conversation Record]"]
+    for item in items:
+        timestamp = (
+            f" {item.timestamp_utc.astimezone().isoformat(timespec='seconds')}"
+            if item.timestamp_utc is not None
+            else ""
+        )
+        if item.role == "tool":
+            lines = [f"TOOL RESULT{timestamp}"]
+            if item.tool_call_id is not None:
+                lines.append(f"tool_call_id: {item.tool_call_id}")
+        elif item.is_tool_media:
+            lines = [f"TOOL MEDIA{timestamp}"]
+        else:
+            lines = [f"{item.role.upper()}{timestamp}"]
+
+        content = historical_content(item.content)
+        if content:
+            lines.append(content)
+        for call in item.tool_calls:
+            lines.extend(
+                (
+                    "TOOL CALL",
+                    f"id: {call.id}",
+                    f"name: {call.name}",
+                    "arguments: "
+                    + json.dumps(call.arguments, ensure_ascii=False),
+                )
+            )
+        sections.append("\n".join(lines))
+    return "\n\n".join(sections)
 
 
 def _timeline_message(items: list[Message]) -> Message:

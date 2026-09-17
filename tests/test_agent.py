@@ -258,11 +258,8 @@ class AgentTest(unittest.TestCase):
         agent.run("new request")
 
         self.assertEqual(session.archived_item_cursor, 2)
-        self.assertEqual(
-            [message.content for message in provider.requests[0].messages
-             if message.role == "user"],
-            ["old request"],
-        )
+        compression_record = provider.requests[0].messages[0].content or ""
+        self.assertIn("old request", compression_record)
         self.assertEqual(
             [message.content for message in provider.requests[1].messages
              if message.role == "user"],
@@ -309,11 +306,8 @@ class AgentTest(unittest.TestCase):
                 "[Archived Context Summary]\nfirst summary"
             )
         )
-        self.assertEqual(
-            [message.content for message in provider.requests[1].messages
-             if message.role == "user"],
-            ["second"],
-        )
+        compression_record = provider.requests[1].messages[0].content or ""
+        self.assertIn("second", compression_record)
         request = context.build_request()
         self.assertTrue(
             request.system_prompt.endswith(
@@ -326,6 +320,44 @@ class AgentTest(unittest.TestCase):
              if message.role == "user"],
             ["third"],
         )
+
+    def test_archive_excludes_reasoning_from_compression_input(self) -> None:
+        session = Session(
+            "session-1",
+            items=[
+                Message("user", "first"),
+                Message(
+                    "assistant",
+                    "answer",
+                    reasoning="private reasoning",
+                ),
+                Message("user", "second"),
+            ],
+        )
+        provider = MockProvider(["summary"])
+        context = ContextManager(
+            provider,
+            session,
+            "You are helpful.",
+            AgentConfig(
+                max_same_tool_calls=5,
+                output_reserve_tokens=100,
+                tools=ToolConfig(enabled=()),
+                context=ContextCompressionConfig(keep_recent_units=1),
+            ),
+        )
+
+        context.archive()
+
+        archived = provider.requests[0].messages
+        self.assertEqual(len(archived), 1)
+        self.assertEqual(archived[0].role, "user")
+        self.assertIsNone(archived[0].reasoning)
+        record = archived[0].content or ""
+        self.assertIn("USER\nfirst", record)
+        self.assertIn("ASSISTANT\nanswer", record)
+        self.assertNotIn("private reasoning", record)
+        self.assertEqual(session.items[1].reasoning, "private reasoning")
 
     def test_projection_repairs_a_tool_chain_after_the_archive_cursor(self) -> None:
         call = ToolCall("call-old", "echo", {"text": "old"})
@@ -417,9 +449,27 @@ class AgentTest(unittest.TestCase):
             "session-1",
             items=[
                 Message("user", "goal"),
-                Message("assistant", None, tool_calls=calls),
-                Message("tool", "B", tool_call_id="call-b"),
-                Message("tool", "A", tool_call_id="call-a"),
+                Message(
+                    "assistant",
+                    None,
+                    timestamp_utc=TOOL_CALL_TIME,
+                    tool_calls=calls,
+                    reasoning="private tool planning",
+                ),
+                Message(
+                    "tool",
+                    "B",
+                    timestamp_utc=datetime(
+                        2026, 9, 9, 8, 0, 12, tzinfo=timezone.utc
+                    ),
+                    tool_call_id="call-b",
+                ),
+                Message(
+                    "tool",
+                    "A",
+                    timestamp_utc=TOOL_RESULT_TIME,
+                    tool_call_id="call-a",
+                ),
                 Message(
                     "user",
                     (ImagePart(path="result.png"),),
@@ -444,23 +494,38 @@ class AgentTest(unittest.TestCase):
         context.archive()
 
         self.assertEqual(session.archived_item_cursor, 5)
-        archived = [
-            message for message in provider.requests[0].messages
-            if message.role != "system"
-        ]
-        self.assertEqual(
-            [message.role for message in archived],
-            ["user", "assistant", "tool", "tool", "user"],
+        archived = provider.requests[0].messages
+        self.assertEqual(len(archived), 1)
+        self.assertEqual(archived[0].role, "user")
+        record = archived[0].content or ""
+        self.assertIn("USER\ngoal", record)
+        self.assertIn(
+            "ASSISTANT "
+            + TOOL_CALL_TIME.astimezone().isoformat(timespec="seconds"),
+            record,
         )
-        self.assertEqual(archived[1].tool_calls, calls)
-        self.assertEqual(
-            [message.tool_call_id for message in archived[2:4]],
-            ["call-a", "call-b"],
+        self.assertIn("id: call-a\nname: read", record)
+        self.assertIn("id: call-b\nname: read", record)
+        self.assertIn(
+            "TOOL RESULT "
+            + TOOL_RESULT_TIME.astimezone().isoformat(timespec="seconds")
+            + "\ntool_call_id: call-a",
+            record,
         )
-        self.assertEqual(
-            archived[4].content,
-            "[Image attachment omitted from historical context]",
+        self.assertIn(
+            "TOOL RESULT "
+            + datetime(
+                2026, 9, 9, 8, 0, 12, tzinfo=timezone.utc
+            ).astimezone().isoformat(timespec="seconds")
+            + "\ntool_call_id: call-b",
+            record,
         )
+        self.assertLess(
+            record.index("tool_call_id: call-a"),
+            record.index("tool_call_id: call-b"),
+        )
+        self.assertIn("[Image attachment omitted from historical context]", record)
+        self.assertNotIn("private tool planning", record)
         self.assertEqual(
             [message.content for message in context.build_request().messages
              if message.role != "system"],
@@ -1069,14 +1134,10 @@ class AgentTest(unittest.TestCase):
         self.assertEqual(session.archived_item_cursor, 5)
         self.assertEqual(session.archived_summary, "active turn checkpoint")
         consolidation = provider.requests[3]
-        self.assertEqual(
-            [message.content for message in consolidation.messages
-             if message.role == "tool"],
-            [
-                '{"ok": true, "output": {"text": "A"}}',
-                '{"ok": true, "output": {"text": "B"}}',
-            ],
-        )
+        self.assertEqual(len(consolidation.messages), 1)
+        consolidation_record = consolidation.messages[0].content or ""
+        self.assertIn('{"ok": true, "output": {"text": "A"}}', consolidation_record)
+        self.assertIn('{"ok": true, "output": {"text": "B"}}', consolidation_record)
         resumed = provider.requests[4]
         self.assertTrue(
             resumed.system_prompt.endswith(
