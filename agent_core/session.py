@@ -95,6 +95,7 @@ class Session:
     workspace: str | None = None
     archived_summary: str | None = None
     archived_item_cursor: int = 0
+    compression_count: int = 0
     permission_preset: PermissionPreset = PermissionPreset.ASK_FOR_APPROVAL
     journal: list[JournalEvent] = field(default_factory=list, repr=False)
     turns: dict[str, Turn] = field(default_factory=dict, repr=False)
@@ -200,6 +201,7 @@ class Session:
                 else None
             )
             self.archived_item_cursor = int(payload["item_cursor"])
+            self.compression_count += 1
         elif event.event_type == "user_interaction_recorded" and event.turn_id:
             content = payload.get("content")
             source = payload.get("source")

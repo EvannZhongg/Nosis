@@ -163,6 +163,7 @@ class SessionJournalTest(unittest.TestCase):
 
         self.assertEqual(replayed.archived_summary, "summary")
         self.assertEqual(replayed.archived_item_cursor, 2)
+        self.assertEqual(replayed.compression_count, 1)
         self.assertEqual(
             session.journal[-1].payload,
             {"summary": "summary", "item_cursor": 2},

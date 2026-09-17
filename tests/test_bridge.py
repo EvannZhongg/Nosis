@@ -13,6 +13,8 @@ from agent_core import (
     AssistantMessageDeltaEvent,
     ProviderCapabilities,
     AssistantMessageEvent,
+    ContextWindow,
+    ContextWindowEvent,
     JsonlSessionStore,
     Message,
     PermissionController,
@@ -75,6 +77,33 @@ class ProtocolTest(unittest.TestCase):
                 "turn_id": "t1",
                 "text": "thinking",
                 "model_call_index": 1,
+            },
+        )
+
+    def test_encodes_context_window(self) -> None:
+        self.assertEqual(
+            event_to_message(
+                ContextWindowEvent(
+                    ContextWindow(
+                        input_tokens=120,
+                        max_input_tokens=900,
+                        max_context_tokens=1000,
+                        output_reserve_tokens=100,
+                        compression_threshold=720,
+                        compression_count=2,
+                    )
+                ),
+                "t1",
+            ),
+            {
+                "type": "context_window",
+                "turn_id": "t1",
+                "input_tokens": 120,
+                "max_input_tokens": 900,
+                "max_context_tokens": 1000,
+                "output_reserve_tokens": 100,
+                "compression_threshold": 720,
+                "compression_count": 2,
             },
         )
 
@@ -182,6 +211,14 @@ class ProtocolTest(unittest.TestCase):
                 resumed=False,
                 message_count=0,
                 permission_preset="ask_for_approval",
+                context_window={
+                    "input_tokens": 10,
+                    "max_input_tokens": 900,
+                    "max_context_tokens": 1000,
+                    "output_reserve_tokens": 100,
+                    "compression_threshold": 720,
+                    "compression_count": 0,
+                },
                 skill_warnings=("Skipped invalid skill.",),
             )["skill_warnings"],
             ["Skipped invalid skill."],
@@ -202,6 +239,7 @@ class ProtocolTest(unittest.TestCase):
                 question=None,
                 provider="second",
                 permission_preset="full_access",
+                context_window={"input_tokens": 120},
                 event_sequence=12,
             ),
             {
@@ -212,6 +250,7 @@ class ProtocolTest(unittest.TestCase):
                 "question": None,
                 "provider": "second",
                 "permission_preset": "full_access",
+                "context_window": {"input_tokens": 120},
                 "event_sequence": 12,
             },
         )

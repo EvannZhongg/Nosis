@@ -39,6 +39,16 @@ class ContextLimits:
     keep_recent_units: int
 
 
+@dataclass(frozen=True)
+class ContextWindow:
+    input_tokens: int
+    max_input_tokens: int
+    max_context_tokens: int
+    output_reserve_tokens: int
+    compression_threshold: int
+    compression_count: int
+
+
 class ContextManager:
     """Build model context and maintain the session's archived checkpoint."""
 
@@ -90,6 +100,16 @@ class ContextManager:
     @property
     def compression_enabled(self) -> bool:
         return self.limits.compression_enabled
+
+    def window(self, input_tokens: int) -> ContextWindow:
+        return ContextWindow(
+            input_tokens=input_tokens,
+            max_input_tokens=self.hard_limit,
+            max_context_tokens=self._provider.max_context_tokens,
+            output_reserve_tokens=self._output_reserve_tokens,
+            compression_threshold=self.limits.compression_threshold,
+            compression_count=self._session.compression_count,
+        )
 
     def build_request(
         self,

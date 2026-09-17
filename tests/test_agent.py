@@ -11,6 +11,7 @@ from agent_core import (
     AssistantMessageEvent,
     ContextManager,
     ContextCompressionConfig,
+    ContextWindowEvent,
     ContextWindowExceededError,
     LLMProvider,
     LLMRequest,
@@ -301,6 +302,7 @@ class AgentTest(unittest.TestCase):
 
         self.assertEqual(session.archived_item_cursor, 4)
         self.assertEqual(session.archived_summary, "second summary")
+        self.assertEqual(session.compression_count, 2)
         self.assertTrue(
             provider.requests[1].system_prompt.endswith(
                 "[Archived Context Summary]\nfirst summary"
@@ -1064,7 +1066,10 @@ class AgentTest(unittest.TestCase):
         events = [
             event
             for event in events
-            if not isinstance(event, AssistantMessageDeltaEvent)
+            if not isinstance(
+                event,
+                (AssistantMessageDeltaEvent, ContextWindowEvent),
+            )
         ]
         self.assertEqual(
             events[0],
@@ -1226,7 +1231,7 @@ class AgentTest(unittest.TestCase):
                 "active turn checkpoint",
                 "done",
             ],
-            input_tokens=[100, 100, 100, 800, 100],
+            input_tokens=[100, 100, 100, 800, 100, 120],
         )
         session = Session(session_id="session-1")
         agent = Agent(

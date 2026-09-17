@@ -22,6 +22,14 @@ vi.mock('../src/bridge.js', () => ({
               resumed: false,
               message_count: 0,
               permission_preset: 'ask_for_approval',
+              context_window: {
+                input_tokens: 10,
+                max_input_tokens: 900,
+                max_context_tokens: 1000,
+                output_reserve_tokens: 100,
+                compression_threshold: 720,
+                compression_count: 0,
+              },
             }),
           10,
         );
@@ -545,6 +553,14 @@ describe('App', () => {
       resumed: false,
       message_count: 0,
       permission_preset: 'ask_for_approval',
+      context_window: {
+        input_tokens: 10,
+        max_input_tokens: 900,
+        max_context_tokens: 1000,
+        output_reserve_tokens: 100,
+        compression_threshold: 720,
+        compression_count: 0,
+      },
     });
     await waitForReady(lastFrame);
 

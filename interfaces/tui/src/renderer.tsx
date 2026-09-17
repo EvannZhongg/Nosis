@@ -262,7 +262,11 @@ export function StatusBar({ state, elapsed }: { state: State; elapsed: number })
     state.status === 'cancelling';
   const model = `${state.model}${
     state.usage?.total_tokens ? ` · ${state.usage.total_tokens} tokens` : ''
-  }${state.sessionId ? ` · ${state.sessionId.slice(0, 8)}` : ''}`;
+  }${state.sessionId ? ` · ${state.sessionId.slice(0, 8)}` : ''}${
+    state.contextWindow
+      ? ` · Context window: ${state.contextWindow.input_tokens}/${state.contextWindow.max_input_tokens}`
+      : ''
+  }`;
 
   return (
     <Box flexShrink={0} paddingX={1}>

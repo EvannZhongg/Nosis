@@ -55,6 +55,14 @@ describe("applyMessage", () => {
       resumed: false,
       message_count: 0,
       permission_preset: "ask_for_approval",
+      context_window: {
+        input_tokens: 10,
+        max_input_tokens: 900,
+        max_context_tokens: 1000,
+        output_reserve_tokens: 100,
+        compression_threshold: 720,
+        compression_count: 0,
+      },
     });
     expect(ready.permissionPreset).toBe("ask_for_approval");
 
@@ -91,6 +99,14 @@ describe("applyMessage", () => {
       resumed: false,
       message_count: 0,
       permission_preset: "ask_for_approval",
+      context_window: {
+        input_tokens: 10,
+        max_input_tokens: 900,
+        max_context_tokens: 1000,
+        output_reserve_tokens: 100,
+        compression_threshold: 720,
+        compression_count: 0,
+      },
       skill_warnings: ["Skipping invalid skill."],
     });
 
@@ -111,14 +127,19 @@ describe("applyMessage", () => {
     ]);
   });
 
-  it("reports context compression separately from persistent notices", () => {
+  it("reports context window state separately from persistent notices", () => {
     const applied = applyMessage([], {
-      type: "context_archived",
+      type: "context_window",
       turn_id: "t1",
-      checkpoint_number: 2,
+      input_tokens: 120,
+      max_input_tokens: 900,
+      max_context_tokens: 1000,
+      output_reserve_tokens: 100,
+      compression_threshold: 720,
+      compression_count: 2,
     });
 
-    expect(applied.archivedCheckpoint).toBe(2);
+    expect(applied.contextWindow?.compression_count).toBe(2);
     expect(applied.notice).toBeUndefined();
   });
 
@@ -308,29 +329,6 @@ describe("applyMessage", () => {
     ]);
   });
 
-  it("reports the finished turn's token usage", () => {
-    const applied = applyMessage([], {
-      type: "turn_completed",
-      turn_id: "t1",
-      usage: { input_tokens: 900, output_tokens: 100, total_tokens: 1000 },
-    });
-
-    expect(applied.usage).toEqual({
-      input_tokens: 900,
-      output_tokens: 100,
-      total_tokens: 1000,
-    });
-    // Anything else leaves the status area as it was.
-    expect(
-      applyMessage([], {
-        type: "assistant_delta",
-        turn_id: "t1",
-        text: "hi",
-        model_call_index: 1,
-      }).usage,
-    ).toBeUndefined();
-  });
-
   it("settles open text and reports a cancelled turn", () => {
     const { items, notice, finished } = fold([
       { type: "assistant_delta", turn_id: "t1", text: "partial", model_call_index: 1 },
@@ -371,6 +369,14 @@ describe("applyMessage", () => {
         resumed: false,
         message_count: 0,
         permission_preset: "ask_for_approval" as const,
+        context_window: {
+          input_tokens: 10,
+          max_input_tokens: 900,
+          max_context_tokens: 1000,
+          output_reserve_tokens: 100,
+          compression_threshold: 720,
+          compression_count: 0,
+        },
       },
       {
         type: "tool_call" as const,

@@ -12,7 +12,8 @@ from agent_core import (
     AssistantMessageDeltaEvent,
     ReasoningDeltaEvent,
     AssistantMessageEvent,
-    ContextArchivedEvent,
+    ContextWindow,
+    ContextWindowEvent,
     ToolBatchStartedEvent,
     ToolCall,
     ToolCallEvent,
@@ -62,6 +63,17 @@ def usage_to_dict(usage: TokenUsage | None) -> dict[str, object] | None:
     }
 
 
+def context_window_to_dict(window: ContextWindow) -> dict[str, int]:
+    return {
+        "input_tokens": window.input_tokens,
+        "max_input_tokens": window.max_input_tokens,
+        "max_context_tokens": window.max_context_tokens,
+        "output_reserve_tokens": window.output_reserve_tokens,
+        "compression_threshold": window.compression_threshold,
+        "compression_count": window.compression_count,
+    }
+
+
 def ready_message(
     *,
     session_id: str,
@@ -70,6 +82,7 @@ def ready_message(
     resumed: bool,
     message_count: int,
     permission_preset: str,
+    context_window: dict[str, int],
     skill_warnings: tuple[str, ...] = (),
 ) -> dict[str, object]:
     return {
@@ -80,6 +93,7 @@ def ready_message(
         "resumed": resumed,
         "message_count": message_count,
         "permission_preset": permission_preset,
+        "context_window": context_window,
         "skill_warnings": list(skill_warnings),
     }
 
@@ -92,6 +106,7 @@ def runtime_state_message(
     question: dict[str, object] | None,
     provider: str | None,
     permission_preset: str,
+    context_window: dict[str, int] | None,
     event_sequence: int,
 ) -> dict[str, object]:
     """Describe a GUI server-owned runtime when a WebSocket attaches."""
@@ -103,6 +118,7 @@ def runtime_state_message(
         "question": question,
         "provider": provider,
         "permission_preset": permission_preset,
+        "context_window": context_window,
         "event_sequence": event_sequence,
     }
 
@@ -149,11 +165,11 @@ def event_to_message(
     if isinstance(event, ReasoningDeltaEvent):
         return {"type": "reasoning_delta", "turn_id": turn_id, "text": event.text, "model_call_index": event.model_call_index}
 
-    if isinstance(event, ContextArchivedEvent):
+    if isinstance(event, ContextWindowEvent):
         return {
-            "type": "context_archived",
+            "type": "context_window",
             "turn_id": turn_id,
-            "checkpoint_number": event.checkpoint_number,
+            **context_window_to_dict(event.window),
         }
 
     if isinstance(event, AssistantMessageEvent):

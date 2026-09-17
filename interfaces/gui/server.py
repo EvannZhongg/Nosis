@@ -197,6 +197,7 @@ class ActiveRuntime:
         self.approval: dict[str, object] | None = None
         self.question: dict[str, object] | None = None
         self.permission_preset = "ask_for_approval"
+        self.context_window: dict[str, object] | None = None
         self.done = False
         self._closed = False
         self._fatal_pending = False
@@ -246,6 +247,7 @@ class ActiveRuntime:
                         question=self.question,
                         provider=self.provider,
                         permission_preset=self.permission_preset,
+                        context_window=self.context_window,
                         # The page holds everything the stream emitted, so
                         # its cursor is the newest event; a pending fatal is
                         # left out of it so that a page attaching later
@@ -367,6 +369,22 @@ class ActiveRuntime:
                     preset = message.get("permission_preset", message.get("preset"))
                     if isinstance(preset, str):
                         self.permission_preset = preset
+                    if message_type == "ready" and isinstance(
+                        message.get("context_window"), dict
+                    ):
+                        self.context_window = message["context_window"]
+                elif message_type == "context_window":
+                    self.context_window = {
+                        key: message[key]
+                        for key in (
+                            "input_tokens",
+                            "max_input_tokens",
+                            "max_context_tokens",
+                            "output_reserve_tokens",
+                            "compression_threshold",
+                            "compression_count",
+                        )
+                    }
                 elif message_type in TURN_END_MESSAGE_TYPES:
                     self.running = False
                     self.turn_id = None
@@ -497,6 +515,7 @@ def create_app(
                     "items": items,
                     "running": runtime.running,
                     "permission_preset": runtime.permission_preset,
+                    "context_window": runtime.context_window,
                     "event_sequence": runtime.delivered_event_sequence,
                 })
             return result
@@ -516,6 +535,7 @@ def create_app(
                     "items": runtime.items,
                     "workspace": runtime.workspace,
                     "permission_preset": runtime.permission_preset,
+                    "context_window": runtime.context_window,
                     "event_sequence": runtime.delivered_event_sequence,
                 }
             session = store.load(
@@ -528,6 +548,11 @@ def create_app(
                     "items": session.items,
                     "workspace": session.workspace,
                     "permission_preset": session.permission_preset.value,
+                    "context_window": (
+                        runtime.context_window
+                        if runtime is not None
+                        else None
+                    ),
                     "event_sequence": (
                         runtime.delivered_event_sequence
                         if runtime is not None
@@ -818,6 +843,7 @@ def create_app(
                     question=None,
                     provider=None,
                     permission_preset="ask_for_approval",
+                    context_window=None,
                     event_sequence=0,
                 )
             )

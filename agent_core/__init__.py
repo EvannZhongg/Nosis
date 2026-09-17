@@ -6,7 +6,7 @@ from .agent import (
     AssistantMessageDeltaEvent,
     ReasoningDeltaEvent,
     AssistantMessageEvent,
-    ContextArchivedEvent,
+    ContextWindowEvent,
     ToolBatchStartedEvent,
     ToolCallEvent,
     ToolCallLimitExceededError,
@@ -20,7 +20,7 @@ from .config import (
     SubagentRoleConfig,
     load_agent_config,
 )
-from .context_manager import ContextManager, ContextWindowExceededError
+from .context_manager import ContextManager, ContextWindow, ContextWindowExceededError
 from .execution import (
     CommandExecutionResult,
     CommandOutputSpool,
@@ -118,7 +118,8 @@ __all__ = [
     "CompositeToolPolicy",
     "Content",
     "ContentPart",
-    "ContextArchivedEvent",
+    "ContextWindow",
+    "ContextWindowEvent",
     "ContextCompressionConfig",
     "ContextManager",
     "ContextWindowExceededError",

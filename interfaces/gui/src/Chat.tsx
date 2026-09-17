@@ -10,7 +10,7 @@ import remarkGfm from "remark-gfm";
 import { get, releaseRuntime, selectWorkspace, sessionUrl, updateSessionWorkspace, uploadAttachments, type ImageAttachment, type ModelOption, type Session } from "./api";
 import { SessionSocket } from "./session";
 import { applyMessage, isTurnActivity, toMessages, TURN_PROCESS_GROUP, turnProcessPartIndexes, type Notice, type TranscriptItem } from "./transcript";
-import type { PermissionPreset, Usage, UserQuestion } from "@nosis/protocol";
+import type { ContextWindow, PermissionPreset, UserQuestion } from "@nosis/protocol";
 
 type Approval = {
   requestId: string;
@@ -139,9 +139,55 @@ function PendingAttachment({ file, onRemove }: { file: File; onRemove: () => voi
   return <span className="attachment-chip"><img src={url} alt={file.name} /><span>{file.name}</span><button type="button" aria-label={`移除 ${file.name}`} onClick={onRemove}><X size={12} /></button></span>;
 }
 
-export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeActive = false, models, model, onModelChange, onBusyChange, onUsageChange, onSessionAvailable, onTurnEnd, onWorkspaceChange }: {
+function formatTokens(value: number): string {
+  return new Intl.NumberFormat("en-US").format(value);
+}
+
+function ContextWindowIndicator({ window }: { window: ContextWindow | null }) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    return () => document.removeEventListener("pointerdown", closeOnOutsidePointer);
+  }, [open]);
+
+  if (!window) return null;
+  const ratio = Math.min(1, window.input_tokens / window.max_input_tokens);
+  const circumference = 2 * Math.PI * 7;
+  const remaining = Math.max(0, window.max_input_tokens - window.input_tokens);
+  const percent = Math.round(ratio * 100);
+  return <div className="context-window" ref={rootRef}>
+    <button type="button" className="context-window-trigger" aria-label={`上下文窗口已使用 ${percent}%`} aria-expanded={open} title="查看上下文窗口" onClick={() => setOpen((value) => !value)}>
+      <svg className="context-ring" viewBox="0 0 18 18" aria-hidden="true">
+        <circle className="context-ring-track" cx="9" cy="9" r="7" />
+        <circle className="context-ring-value" cx="9" cy="9" r="7" strokeDasharray={circumference} strokeDashoffset={circumference * (1 - ratio)} />
+      </svg>
+      <span>{percent}%</span>
+    </button>
+    {open && <div className="context-popover" role="dialog" aria-label="上下文窗口详情">
+      <div className="context-popover-title">Context window</div>
+      <dl>
+        <div><dt>当前输入</dt><dd>{formatTokens(window.input_tokens)}</dd></div>
+        <div><dt>可用输入上限</dt><dd>{formatTokens(window.max_input_tokens)}</dd></div>
+        <div><dt>剩余输入空间</dt><dd>{formatTokens(remaining)}</dd></div>
+        <div><dt>压缩触发点</dt><dd>{formatTokens(window.compression_threshold)}</dd></div>
+        <div><dt>输出预留</dt><dd>{formatTokens(window.output_reserve_tokens)}</dd></div>
+        <div><dt>模型总窗口</dt><dd>{formatTokens(window.max_context_tokens)}</dd></div>
+        <div><dt>压缩次数</dt><dd>{window.compression_count}</dd></div>
+      </dl>
+    </div>}
+  </div>;
+}
+
+export function Chat({ session, contextWindow, workspaceOptions = [], inputDisabled, runtimeActive = false, models, model, onModelChange, onBusyChange, onContextWindowChange, onSessionAvailable, onTurnEnd, onWorkspaceChange }: {
   session: Session; inputDisabled: boolean; onBusyChange: (busy: boolean) => void; onTurnEnd: () => void;
-  onUsageChange: (usage: Usage | null) => void;
+  contextWindow: ContextWindow | null;
+  onContextWindowChange: (window: ContextWindow) => void;
   onSessionAvailable: () => void;
   models: ModelOption[]; model: string; onModelChange: (model: string) => void;
   runtimeActive?: boolean;
@@ -154,7 +200,6 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
   const [attaching, setAttaching] = useState(false);
   const [attachmentReplaced, setAttachmentReplaced] = useState(false);
   const [notice, setNotice] = useState<Notice | null>(null);
-  const [compressionNotice, setCompressionNotice] = useState("");
   const [approval, setApproval] = useState<Approval | null>(null);
   const [question, setQuestion] = useState<UserQuestion | null>(null);
   const [permissionPreset, setPermissionPreset] = useState<PermissionPreset>(session.permission_preset);
@@ -170,7 +215,6 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
   const noticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const compressionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const compositionEndTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const composingRef = useRef(false);
   const turnCounter = useRef(0);
@@ -218,7 +262,6 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
       socketRef.current?.close();
       socketRef.current = null;
       if (noticeTimeoutRef.current) clearTimeout(noticeTimeoutRef.current);
-      if (compressionTimeoutRef.current) clearTimeout(compressionTimeoutRef.current);
       if (compositionEndTimeoutRef.current) clearTimeout(compositionEndTimeoutRef.current);
     };
   }, []);
@@ -272,15 +315,6 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
         setNotice(null);
       }, 4000);
     }
-  }, []);
-
-  const showCompressionNotice = useCallback((checkpoint: number) => {
-    if (compressionTimeoutRef.current) clearTimeout(compressionTimeoutRef.current);
-    setCompressionNotice(`上下文已压缩（checkpoint ${checkpoint}）。`);
-    compressionTimeoutRef.current = setTimeout(() => {
-      compressionTimeoutRef.current = null;
-      setCompressionNotice("");
-    }, 30_000);
   }, []);
 
   const endTurn = useCallback(async () => {
@@ -368,6 +402,7 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
           } : null);
           setQuestion(message.question);
           setPermissionPreset(message.permission_preset);
+          if (message.context_window) onContextWindowChange(message.context_window);
           if (wasRunning && !message.running) void endTurn();
           return;
         }
@@ -393,14 +428,13 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
         const applied = applyMessage(itemsRef.current, message);
         showItems(applied.items);
         if (applied.notice) showNotice(applied.notice, message.type === "mcp_server_status");
-        if (applied.archivedCheckpoint !== undefined) showCompressionNotice(applied.archivedCheckpoint);
+        if (applied.contextWindow !== undefined) onContextWindowChange(applied.contextWindow);
         if (applied.approval !== undefined) setApproval(applied.approval);
         if (applied.question !== undefined) {
           setQuestion(applied.question);
           setQuestionDraft("");
         }
         if (applied.permissionPreset !== undefined) setPermissionPreset(applied.permissionPreset);
-        if (applied.usage !== undefined) onUsageChange(applied.usage);
         if (message.type === "fatal") eventCounterRef.current = 0;
         if (applied.finished) void endTurn();
       },
@@ -494,9 +528,6 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
     onBusyChange(true);
     if (noticeTimeoutRef.current) clearTimeout(noticeTimeoutRef.current);
     setNotice(null);
-    // Tokens belong to the turn that is running, not to the previous one.
-    onUsageChange(null);
-
     turnCounter.current += 1;
     activeTurnIdRef.current = `turn-${turnCounter.current}`;
     const socket = socketRef.current ?? connect();
@@ -658,7 +689,6 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
           {!approval && !question && <button className="stop-button" aria-label="停止执行" onClick={() => { const turnId = activeTurnIdRef.current; if (turnId) socketRef.current?.send({ type: "cancel", turn_id: turnId }); }}><Square size={11} /> 停止</button>}
         </div>}
         {pendingFiles.length > 0 && <div className="attachment-list" aria-label="待发送图片">{pendingFiles.map((file, index) => <PendingAttachment key={`${file.name}-${file.lastModified}-${index}`} file={file} onRemove={() => setPendingFiles((files) => files.filter((_, itemIndex) => itemIndex !== index))} />)}</div>}
-        {compressionNotice && <div className="compression-notice" role="status">{compressionNotice}</div>}
         <ComposerPrimitive.Root className="composer" onSubmit={onComposerSubmit}><div ref={workspacePickerRef} className="workspace-picker-wrap"><button type="button" className="workspace-picker" onClick={() => setWorkspaceEditing((value) => { if (value && !workspaceDraft.trim()) setWorkspaceDraft(session.workspace ?? ""); return !value; })} disabled={controlsDisabled || running} aria-expanded={workspaceEditing}><span className="workspace-picker-icon">⌂</span><span className="workspace-picker-value">{workspaceDraft || "选择项目"}</span><ChevronDown size={14} /></button>{workspaceEditing && <div className="workspace-menu" role="menu"><div className="workspace-menu-heading">选择工作区</div>{availableWorkspaces.map((path) => <button type="button" role="menuitem" className={`workspace-option ${path === workspaceDraft ? "selected" : ""}`} key={path} onClick={() => { void saveWorkspace(path); setWorkspaceEditing(false); }} disabled={controlsDisabled || running || workspaceSaving} title={path}><span className="workspace-option-path">{path}</span></button>)}<div className="workspace-menu-divider" /><button type="button" role="menuitem" className="workspace-new-option" onClick={() => { void chooseNewWorkspace(); }} disabled={controlsDisabled || running || workspaceSaving}>＋ 新建工作区</button></div>}</div><ComposerPrimitive.Input placeholder="Ask Nosis…" aria-label="消息" rows={2} autoFocus submitMode="none" onKeyDown={onComposerKeyDown} onCompositionStart={onCompositionStart} onCompositionEnd={onCompositionEnd} onPaste={onPaste} /><div className="composer-bottom">
           <button type="button" className="attachment-button" aria-label="添加图片" title="添加图片" disabled={controlsDisabled || running} onClick={() => fileInputRef.current?.click()}><Paperclip size={15} /></button>
           <input ref={fileInputRef} className="attachment-input" type="file" accept="image/*" multiple onChange={(event) => { setPendingFiles((files) => [...files, ...Array.from(event.target.files ?? [])]); event.currentTarget.value = ""; }} />
@@ -674,7 +704,8 @@ export function Chat({ session, workspaceOptions = [], inputDisabled, runtimeAct
               <option value="full_access">完全访问</option>
             </select><ChevronDown size={12} />
           </label>
-          <span className="composer-hint">{running ? "Enter 引导当前任务" : "Enter 发送"} · Shift + Enter 换行</span><ComposerPrimitive.Send className="send-button" aria-label={running ? "发送引导" : "发送消息"}><ArrowUp size={19} /></ComposerPrimitive.Send></div></ComposerPrimitive.Root>
+          <ContextWindowIndicator window={contextWindow} />
+          <ComposerPrimitive.Send className="send-button" aria-label={running ? "发送引导" : "发送消息"}><ArrowUp size={19} /></ComposerPrimitive.Send></div></ComposerPrimitive.Root>
         <div className="composer-footer">Nosis · 你的项目搭档</div>
       </div>
     </ThreadPrimitive.Root>

@@ -1,5 +1,5 @@
 import type { ThreadMessageLike } from "@assistant-ui/react";
-import type { Incoming, PermissionPreset, Usage, UserQuestion } from "@nosis/protocol";
+import type { ContextWindow, Incoming, PermissionPreset, UserQuestion } from "@nosis/protocol";
 import { attachmentUrl, type SessionItem } from "./api";
 
 /** A transcript item, plus the streaming state the live turn needs. */
@@ -11,8 +11,7 @@ export type Notice = { level: "info" | "error"; text: string };
 export type Applied = {
   items: TranscriptItem[];
   notice?: Notice;
-  /** Checkpoint number emitted when the runtime archives old context. */
-  archivedCheckpoint?: number;
+  contextWindow?: ContextWindow;
   approval?: {
     requestId: string;
     command: string;
@@ -22,8 +21,6 @@ export type Applied = {
   } | null;
   question?: UserQuestion | null;
   permissionPreset?: PermissionPreset;
-  /** Tokens the finished turn used, or null when the model reported none. */
-  usage?: Usage | null;
   /** Set once the turn ended, so the caller can reload the session. */
   finished?: boolean;
 };
@@ -55,6 +52,7 @@ export function applyMessage(
       return {
         items,
         permissionPreset: message.permission_preset,
+        contextWindow: message.context_window,
         notice: message.skill_warnings?.length
           ? {
               level: "info",
@@ -80,8 +78,8 @@ export function applyMessage(
     case "assistant_message":
       return { items: settleAssistant(items, message.content, message.timestamp_utc) };
 
-    case "context_archived":
-      return { items, archivedCheckpoint: message.checkpoint_number };
+    case "context_window":
+      return { items, contextWindow: message };
 
     case "tool_batch_started":
       return {
@@ -159,7 +157,7 @@ export function applyMessage(
       return { items, question: message };
 
     case "turn_completed":
-      return { items, approval: null, question: null, finished: true, usage: message.usage };
+      return { items, approval: null, question: null, finished: true };
 
     case "turn_cancelled":
       return {

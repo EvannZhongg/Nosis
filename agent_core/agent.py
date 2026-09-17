@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Callable, TypeAlias
 
 from .config import AgentConfig
-from .context_manager import ContextManager, ContextWindowExceededError
+from .context_manager import ContextManager, ContextWindow, ContextWindowExceededError
 from .llm import (
     LLMProvider,
     LLMRequest,
@@ -89,8 +89,8 @@ class ToolMediaEvent:
 
 
 @dataclass(frozen=True)
-class ContextArchivedEvent:
-    checkpoint_number: int
+class ContextWindowEvent:
+    window: ContextWindow
 
 
 @dataclass(frozen=True)
@@ -108,7 +108,7 @@ AgentEvent: TypeAlias = (
     | ToolCallEvent
     | ToolResultEvent
     | ToolMediaEvent
-    | ContextArchivedEvent
+    | ContextWindowEvent
     | UserSteerAppliedEvent
 )
 
@@ -166,6 +166,10 @@ class Agent:
             config=config,
             media_root=context.workspace.path,
         )
+
+    def context_window(self) -> ContextWindow:
+        request = self._context.build_request(self._tools.definitions)
+        return self._context.window(self._provider.count_input_tokens(request))
 
     def run(
         self,
@@ -228,10 +232,10 @@ class Agent:
             _raise_if_cancelled(turn_control)
             request = self._context.build_request(self._tools.definitions)
             input_tokens = self._provider.count_input_tokens(request)
+            if on_event is not None:
+                on_event(ContextWindowEvent(self._context.window(input_tokens)))
             if self._context.should_archive(input_tokens):
-                checkpoint_number = self._context.archive()
-                if on_event is not None:
-                    on_event(ContextArchivedEvent(checkpoint_number))
+                self._context.archive()
                 _apply_steering(
                     self._session,
                     turn_control,
@@ -579,6 +583,7 @@ class Agent:
                         model_call_index=model_call_index,
                     )
                 )
+                on_event(ContextWindowEvent(self.context_window()))
             if turn_control is not None:
                 steers = turn_control.finish()
                 if steers:

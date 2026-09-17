@@ -28,6 +28,15 @@ export type Usage = {
   total_tokens: number | null;
 };
 
+export type ContextWindow = {
+  input_tokens: number;
+  max_input_tokens: number;
+  max_context_tokens: number;
+  output_reserve_tokens: number;
+  compression_threshold: number;
+  compression_count: number;
+};
+
 export type PermissionPreset = 'ask_for_approval' | 'full_access';
 
 export type SessionSummary = {
@@ -80,6 +89,7 @@ export type Incoming = (
       turn_id: string | null;
       provider: string | null;
       permission_preset: PermissionPreset;
+      context_window: ContextWindow | null;
       event_sequence: number;
       approval: {
         type: 'approval_request';
@@ -101,11 +111,12 @@ export type Incoming = (
       resumed: boolean;
       message_count: number;
       permission_preset: PermissionPreset;
+      context_window: ContextWindow;
       skill_warnings?: string[];
     }
   | { type: 'assistant_delta'; turn_id: string; text: string; model_call_index: number }
   | { type: 'reasoning_delta'; turn_id: string; text: string; model_call_index: number }
-  | { type: 'context_archived'; turn_id: string; checkpoint_number: number }
+  | ({ type: 'context_window'; turn_id: string | null } & ContextWindow)
   | {
       type: 'assistant_message';
       turn_id: string;

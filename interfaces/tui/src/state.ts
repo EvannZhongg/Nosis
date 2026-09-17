@@ -1,5 +1,6 @@
 import type {
   Incoming,
+  ContextWindow,
   PermissionPreset,
   ProtocolError,
   SessionItem,
@@ -66,6 +67,7 @@ export type State = {
   sessions: { list: SessionSummary[]; selectedIndex: number } | null;
   turnId: string | null;
   usage: Usage | null;
+  contextWindow: ContextWindow | null;
   pendingSteers: number;
 };
 
@@ -98,6 +100,7 @@ export const initialState: State = {
   sessions: null,
   turnId: null,
   usage: null,
+  contextWindow: null,
   pendingSteers: 0,
 };
 
@@ -407,6 +410,7 @@ function applyMessage(state: State, message: Incoming): State {
         workspace: message.workspace,
         model: message.model,
         permissionPreset: message.permission_preset,
+        contextWindow: message.context_window,
         mcpStatus: null,
         entries: message.resumed
           ? [
@@ -458,11 +462,8 @@ function applyMessage(state: State, message: Incoming): State {
         ],
       };
 
-    case 'context_archived':
-      return {
-        ...state,
-        entries: [...state.entries, { kind: 'notice', id: nextId('notice'), level: 'info', text: `Context compressed (checkpoint ${message.checkpoint_number}).` }],
-      };
+    case 'context_window':
+      return { ...state, contextWindow: message };
 
     case 'tool_result':
       return {

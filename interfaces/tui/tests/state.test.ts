@@ -10,6 +10,14 @@ const READY = {
   resumed: false,
   message_count: 0,
   permission_preset: 'ask_for_approval' as const,
+  context_window: {
+    input_tokens: 10,
+    max_input_tokens: 900,
+    max_context_tokens: 1000,
+    output_reserve_tokens: 100,
+    compression_threshold: 720,
+    compression_count: 0,
+  },
 };
 
 function ready(): State {
@@ -70,6 +78,7 @@ describe('reducer', () => {
     const state = ready();
     expect(state.status).toBe('idle');
     expect(state.model).toBe('deepseek/deepseek-chat');
+    expect(state.contextWindow?.input_tokens).toBe(10);
   });
 
   it('keeps MCP startup status out of the persistent transcript', () => {
@@ -303,6 +312,24 @@ describe('reducer', () => {
     });
     expect(state.status).toBe('idle');
     expect(state.usage?.total_tokens).toBe(12);
+  });
+
+  it('records the current context window', () => {
+    const state = reducer(ready(), {
+      type: 'message',
+      message: {
+        type: 'context_window',
+        turn_id: null,
+        input_tokens: 120,
+        max_input_tokens: 900,
+        max_context_tokens: 1000,
+        output_reserve_tokens: 100,
+        compression_threshold: 720,
+        compression_count: 2,
+      },
+    });
+    expect(state.contextWindow?.input_tokens).toBe(120);
+    expect(state.contextWindow?.compression_count).toBe(2);
   });
 
   it('shows steering only after the runtime applies it', () => {

@@ -55,6 +55,7 @@ from .protocol import (
     decode,
     encode,
     event_to_message,
+    context_window_to_dict,
     ready_message,
     session_items_message,
     sessions_listed_message,
@@ -482,6 +483,9 @@ class Bridge:
             resumed=resumed,
             message_count=len(self._session.items),
             permission_preset=self._permissions.preset.value,
+            context_window=context_window_to_dict(
+                self._agent.context_window()
+            ),
             skill_warnings=skills.warnings,
         ))
 
