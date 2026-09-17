@@ -156,19 +156,20 @@ function ContextWindowIndicator({ window }: { window: ContextWindow | null }) {
     return () => document.removeEventListener("pointerdown", closeOnOutsidePointer);
   }, [open]);
 
-  const ratio = window ? Math.min(1, window.input_tokens / window.max_input_tokens) : 0;
+  if (!window) return null;
+  const ratio = Math.min(1, window.input_tokens / window.max_input_tokens);
   const circumference = 2 * Math.PI * 7;
-  const remaining = window ? Math.max(0, window.max_input_tokens - window.input_tokens) : 0;
+  const remaining = Math.max(0, window.max_input_tokens - window.input_tokens);
   const percent = Math.round(ratio * 100);
   return <div className="context-window" ref={rootRef}>
-    <button type="button" className="context-window-trigger" aria-label={window ? `上下文窗口已使用 ${percent}%` : "上下文窗口数据尚未加载"} aria-expanded={open} title="查看上下文窗口" onClick={() => setOpen((value) => !value)}>
+    <button type="button" className="context-window-trigger" aria-label={`上下文窗口已使用 ${percent}%`} aria-expanded={open} title="查看上下文窗口" onClick={() => setOpen((value) => !value)}>
       <svg className="context-ring" viewBox="0 0 18 18" aria-hidden="true">
         <circle className="context-ring-track" cx="9" cy="9" r="7" />
         <circle className="context-ring-value" cx="9" cy="9" r="7" strokeDasharray={circumference} strokeDashoffset={circumference * (1 - ratio)} />
       </svg>
-      <span>{window ? `${percent}%` : "—"}</span>
+      <span>{percent}%</span>
     </button>
-    {open && window && <div className="context-popover" role="dialog" aria-label="上下文窗口详情">
+    {open && <div className="context-popover" role="dialog" aria-label="上下文窗口详情">
       <div className="context-popover-title">Context window</div>
       <dl>
         <div><dt>当前输入</dt><dd>{formatTokens(window.input_tokens)}</dd></div>
