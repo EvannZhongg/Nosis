@@ -1489,7 +1489,11 @@ class ShellToolTest(unittest.TestCase):
 
         self.assertEqual(timeout_schema["maximum"], 900)
         self.assertIn("60 seconds by default", definition.description)
-        self.assertIn("foreground maximum of 900", timeout_schema["description"])
+        self.assertIn("maximum of 900", timeout_schema["description"])
+        self.assertIn("up to 900 seconds", definition.description)
+        self.assertNotIn("background", definition.description)
+        self.assertNotIn("86400", definition.description)
+        self.assertNotIn("background", definition.parameters["properties"])
         self.assertIn(
             "Git Bash" if os.name == "nt" else "/bin/sh",
             definition.description,
@@ -1516,7 +1520,10 @@ class ShellToolTest(unittest.TestCase):
         ]["timeout_seconds"]
 
         self.assertEqual(timeout_schema["maximum"], 86400)
-        self.assertIn("background", ShellTool().definition(context).parameters["properties"])
+        definition = ShellTool().definition(context)
+        self.assertIn("background", definition.parameters["properties"])
+        self.assertIn("background=true", definition.description)
+        self.assertIn("86400", definition.description)
         jobs.close()
 
     def test_validates_arguments(self) -> None:
@@ -1532,6 +1539,14 @@ class ShellToolTest(unittest.TestCase):
             tool.execute({})
         with self.assertRaisesRegex(ValueError, "accepts only"):
             tool.execute({"command": "pwd", "extra": True})
+        with self.assertRaisesRegex(ValueError, "'background'.*boolean"):
+            tool.execute(
+                {
+                    "command": "pwd",
+                    "background": "true",
+                    "timeout_seconds": 86401,
+                }
+            )
         for timeout_seconds in (0, 901, True, "10"):
             with self.subTest(timeout_seconds=timeout_seconds):
                 with self.assertRaisesRegex(ValueError, "between 1 and 900"):
