@@ -1,10 +1,8 @@
 # TUI
 
-Nosis 的终端界面使用 TypeScript、Ink 和 React 编写。它只负责渲染协议消息、收集输入，Agent 执行由共用的 Runtime 完成。
+Nosis 的终端界面使用 TypeScript、Ink 和 React。它只负责渲染 Bridge 消息和采集输入。
 
 ## 使用
-
-构建后从任意 Workspace 启动：
 
 ```bash
 nosis
@@ -13,37 +11,33 @@ nosis --config path/to/provider_config.json \
       --agent-config path/to/agent_config.json
 ```
 
-| 按键 | 作用 |
+未传 `--workspace` 时，当前目录即 Workspace。
+
+常用操作：
+
+| 操作 | 作用 |
 | --- | --- |
-| `Enter` | 提交输入；执行中输入会排队 |
-| `Ctrl+J` | 在输入框内换行（所有终端可用） |
-| `Shift+Enter` | 在输入框内换行（需终端支持 kitty keyboard protocol） |
-| `←` / `→` | 移动光标；在 shell 授权中切换 Allow / Deny |
-| `↑` / `↓` | 移动光标行；在提问中切换选项（含「其他答案」）；在命令列表与会话列表中切换 |
-| `Enter` | 确认授权选项或提问选项；执行命令列表中选中的命令；切换到选中的会话 |
-| `Esc` | 拒绝授权；关闭会话列表；执行中取消当前轮次 |
+| `Enter` | 提交输入或确认当前选项 |
+| `Ctrl+J` | 输入换行 |
+| `Shift+Enter` | 在支持 kitty keyboard protocol 的终端中换行 |
+| `↑` / `↓` | 移动光标或选择列表项 |
+| `Esc` | 关闭列表、拒绝授权或取消当前轮次 |
 | `Ctrl+C` | 取消当前轮次；空输入时退出 |
 | `Ctrl+D` | 退出 |
 
-在输入框开头输入 `/`，输入框上方会列出可用命令，用 `↑` / `↓` 选择、`Enter` 执行；命令名后输入空格即视为带参数，列表随之关闭。
+输入 `/` 可打开命令列表。主要命令：
 
-输入 `/permissions` 可在 `Ask for approval` 与 `Full Access` 之间切换当前 Session 的权限模式。`Full Access` 只跳过人工确认，仍直接在当前 Host 环境执行，不提供新的 Tool。
+- `/permissions`：切换当前 Session 的授权模式
+- `/sessions`：列出并切换当前 Workspace 的历史会话
 
-输入 `/sessions` 会列出当前 Workspace 中已有的对话（按最近写入排序，标题取自首条用户消息），选中后 TUI 换用该 Session 的 Runtime，并回放它的历史对话。切换会结束当前轮次，且只列出当前 Workspace 的 Session；启动 TUI 本身就是开启一个新对话。
-
-传统终端把 `Shift+Enter` 和 `Enter` 发送为同一个字节，程序无法区分，因此只有支持 kitty
-keyboard protocol 的终端才能用 `Shift+Enter` 换行。目前按环境变量识别 kitty、Ghostty、WezTerm
-（Windows 与 Linux 同样适用）；其他终端（Apple Terminal、旧版 iTerm2 等）请用 `Ctrl+J`。
-
-未传 `--workspace` 时，启动命令的当前目录就是 Workspace。
+执行中提交的新输入会作为 steering 发送给当前轮次。
 
 ## 开发
 
 ```bash
-npm install
-npm run build
-npm run typecheck
-npm test
+npm run build --workspace interfaces/tui
+npm run typecheck --workspace interfaces/tui
+npm test --workspace interfaces/tui
 ```
 
-入口在 `src/app.tsx`，构建产物为 `dist/app.js`。协议类型来自 [`../protocol`](../protocol/README.md)，Runtime 通过 [`../bridge`](../bridge/README.md) 作为子进程运行。
+入口为 `src/app.tsx`，构建产物为 `dist/app.js`。协议来自 [`../protocol`](../protocol/README.md)，Runtime 通过 [`../bridge`](../bridge/README.md) 启动。

@@ -1,6 +1,12 @@
 # Nosis
 
-个人 AI Agent：Python Agent Runtime，配套 TUI（Ink + React）和 GUI（React + assistant-ui）。TUI 与 GUI 共用同一套 Runtime、Tool、授权和 Session 行为。
+个人 AI Agent，提供 TUI（Ink + React）和 GUI（React + FastAPI）。两个前端通过 Bridge 共用同一套 Agent Runtime、Tool、授权和 Session 行为。
+
+```text
+TUI ──────────┐
+              ├── Bridge ── Agent Core
+GUI ─ FastAPI ┘
+```
 
 ## 快速开始
 
@@ -9,17 +15,12 @@
 ```bash
 git clone https://github.com/EvannZhongg/Nosis.git
 cd Nosis
-
 npm install
 npm run build
 uv tool install --editable ".[gui]"
 ```
 
-`npm install` 在仓库根执行一次，workspaces 会把 TUI 与 GUI 的依赖装在根 `node_modules`；`npm run build` 构建两者（只想构建其中一个时用 `npm run build --workspace interfaces/tui`）。`package-lock.json` 只在仓库根存在一份。该命令会安装 `nosis` 和 `nosis-gui`；仓库新增依赖后重新执行即可更新安装环境。
-
-## 初始化后的最小模型配置
-
-首次启动会在 `~/.nosis/` 生成配置文件。要使用 OpenAI 兼容模型，可将
+首次启动会在 `~/.nosis/` 生成配置。要使用 OpenAI 兼容模型，可将
 `~/.nosis/provider_config.json` 精简为下面的最小配置（保留其他 Provider 也可以）：
 
 ```json
@@ -35,16 +36,13 @@ uv tool install --editable ".[gui]"
 }
 ```
 
-再在 `~/.nosis/.env` 写入 API Key：
+在 `~/.nosis/.env` 中填写密钥即可：
 
 ```dotenv
 OPENAI_KEY=your-api-key
 ```
 
-`model` 使用 LiteLLM 的模型名称；也可以把 `key` 直接填写在 JSON 中。其他 Provider
-（包括 Ollama）以及完整的配置字段说明见 [Agent Core 配置文档](agent_core/README.md#配置文件)。
-
-在任意 Workspace 中启动 TUI：
+启动 TUI：
 
 ```bash
 cd ~/projects/my-project
@@ -54,50 +52,32 @@ nosis
 启动 GUI：
 
 ```bash
-npm install
-npm run build --workspace interfaces/gui
 nosis-gui --workspace ~/projects/my-project
 ```
 
-GUI 默认监听 <http://127.0.0.1:8737>。Windows 用户需要安装 [Git for Windows](https://git-scm.com/download/win)，`shell` Tool 使用其中的 Git Bash。
-
-## 文档导航
-
-| 文档 | 内容 |
-| --- | --- |
-| [Agent Core](agent_core/README.md) | Runtime、Provider、配置、Tool、MCP 和 Session |
-| [TUI](interfaces/tui/README.md) | 终端界面、命令行参数、快捷键和前端开发 |
-| [GUI](interfaces/gui/README.md) | Web 界面、附件、开发服务器和前端测试 |
-| [Bridge](interfaces/bridge/README.md) | Runtime 子进程、授权和取消流程 |
-| [Protocol](interfaces/protocol/README.md) | TUI/GUI 共用的消息协议类型 |
+GUI 默认监听 <http://127.0.0.1:8737>。Provider、Tool、MCP 和子 Agent 配置见 [Agent Core](agent_core/README.md)。
 
 ## 项目结构
 
-```text
-Nosis/
-├── agent_core/       Agent Runtime
-├── interfaces/
-│   ├── bridge/       Runtime 与前端之间的适配层
-│   ├── protocol/     共用协议类型
-│   ├── tui/          Ink + React 终端界面
-│   └── gui/          FastAPI + React 可视化界面
-└── tests/             Python Runtime 与接口测试
-```
+| 目录 | 职责 |
+| --- | --- |
+| [`agent_core`](agent_core/README.md) | Agent Runtime、Tool、Provider、Session |
+| [`interfaces/bridge`](interfaces/bridge/README.md) | Runtime 装配与前端协议适配 |
+| [`interfaces/protocol`](interfaces/protocol/README.md) | TUI/GUI 共用的 TypeScript 协议类型 |
+| [`interfaces/tui`](interfaces/tui/README.md) | 终端界面 |
+| [`interfaces/gui`](interfaces/gui/README.md) | Web 界面与 FastAPI 服务 |
+| `tests` | Python Runtime 与接口测试 |
 
-## 测试
-
-Python 测试使用 Mock Provider，不需要真实 API Key：
+## 开发与测试
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate          # Windows PowerShell: .\.venv\Scripts\Activate.ps1
+source .venv/bin/activate
 python -m pip install -e ".[gui]"
 python -m unittest discover -s tests -v
-```
 
-前端测试和类型检查：
-
-```bash
-npm test
 npm run typecheck
+npm test
 ```
+
+Windows 用户需要安装 [Git for Windows](https://git-scm.com/download/win)，`shell` Tool 使用其中的 Git Bash。

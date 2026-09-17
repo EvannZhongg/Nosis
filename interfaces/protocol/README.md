@@ -1,5 +1,5 @@
 # Protocol
 
-`protocol.ts` 定义 TUI、GUI 与 Python Bridge 共用的消息结构和编解码类型。修改消息字段时，需要同时检查 `interfaces/bridge/protocol.py` 及两套界面的消息处理代码。
+该目录提供 TUI 和 GUI 共用的 TypeScript 协议类型，不包含 Agent 执行逻辑。
 
-该目录是供前端通过 `file:` 依赖引用的 TypeScript 包，不包含 Agent 执行逻辑。
+消息结构定义在 [`src/protocol.ts`](src/protocol.ts)，并与 Python 端的 [`../bridge/protocol.py`](../bridge/protocol.py) 保持同步。修改协议时还需更新两个前端的消息处理与相关测试。

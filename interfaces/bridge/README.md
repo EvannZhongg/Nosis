@@ -1,12 +1,6 @@
 # Bridge
 
-Bridge 是 Runtime 与 TUI/GUI 之间的适配层。它通过 stdin/stdout 使用 newline-delimited JSON（每行一个 JSON 对象），把 `AgentEvent` 翻译为协议消息，并转发用户输入、Tool 授权和取消请求。
-
-stdin 只由一个 Reader Thread 消费，再按消息类型路由：普通 turn 进入主队列，审批与用户问题响应进入对应 waiter，运行中的 `user_steer` 进入当前 `TurnControl`。steer 只会在模型调用结束、完整 Tool batch 已写回后，或最终回答 return 前的边界写入 Session。
-
-`shell` 和 `subagent` 的后台调用由 Core 的 `JobManager` 管理。Bridge 只负责装配 JobManager、转发 `job_status` 事件，并在 Runtime 关闭时取消和收束后台任务；Job 完成结果何时进入模型上下文由 Agent 的安全点决定。
-
-## 进程关系
+Bridge 是前端与 Agent Runtime 之间的唯一执行通道。它以独立进程运行，通过 stdin/stdout 交换 newline-delimited JSON：
 
 ```text
 nosis / nosis-gui
@@ -14,16 +8,16 @@ nosis / nosis-gui
        └─ agent_core
 ```
 
-前端不直接调用 `agent_core`，Bridge 也不包含 Agent 决策逻辑。协议消息类型定义在 [`../protocol/src/protocol.ts`](../protocol/src/protocol.ts)。
+Bridge 负责：
 
-## 行为约定
+- 读取配置并选择 Provider
+- 组装 Tool、权限策略、MCP 和子 Agent Runtime
+- 绑定 Workspace 与 Session
+- 在 `AgentEvent` 和协议消息之间转换
+- 转发用户输入、授权、提问、取消和运行状态
 
-- 首条消息必须是 `start`，否则返回 `fatal`。
-- `permission_set` 更新 Runtime 的 Session 级权限 preset，并以 `permission_changed` 回传；`ask_for_approval` 下 shell 和配置为需确认的 MCP Tool 在执行前发送 `approval_request`，前端回复 `approval_response`，`full_access` 仅跳过该确认。
-- `list_sessions` 以 `sessions_listed` 回传当前 Workspace 的 Session 摘要（`session_id` 与标题），供前端列出可切换的对话；`load_session` 以 `session_items` 回传本次 `start` 载入的对话内容，供前端回放历史。两条都由前端按需请求：GUI 从 HTTP 读取会话内容，因此不会触发。
-- main Agent 的 `ask_user` Tool 发送 `user_question`，前端回复 `user_question_response`；Bridge 等待回答并将其作为 Tool Result 返回。
-- `Esc`、`Ctrl+C`、GUI 的「停止」都会向当前 `turn_id` 发送 `cancel`；Bridge 负责唤醒交互 waiter 并中断正在执行的工作。取消前真实发生的 Turn、Message 与 Tool 状态都已由 Runtime 写入 Journal。未取得结果的 Tool Call 不会被删除，只会被 Provider projection 排除。
-- TUI 直接拥有 Bridge 进程；GUI 服务按 Session 拥有活动 Bridge，浏览器 WebSocket 只做 attach/detach。浏览器断开不会取消正在执行的轮次，GUI 服务会暂存断线期间的事件和审批状态供重连恢复。
-- Runtime 关闭或 TUI 发送 `shutdown` 时，不会执行尚未获批的命令。
+Agent Loop、Tool 执行和上下文管理仍属于 `agent_core`，前端与 Bridge 都不复制这些语义。
 
-Bridge 的 Python 实现位于 `bridge.py`，进程入口为 `__main__.py`；测试可直接使用内存输入输出驱动 `Bridge`，无需启动界面进程。
+首条输入必须是 `start`。协议类型分别定义在 [`protocol.py`](protocol.py) 和 [`../protocol/src/protocol.ts`](../protocol/src/protocol.ts)，修改消息时必须同步更新两端。
+
+进程入口为 `__main__.py`，主要装配位于 `bridge.py`。Bridge 可使用内存输入输出进行测试，无需启动 TUI 或 GUI。
