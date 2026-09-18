@@ -114,6 +114,7 @@ describe("applyMessage", () => {
         compression_count: 0,
       },
       skill_warnings: ["Skipping invalid skill."],
+      plan: null,
     });
 
     expect(feedback).toEqual({

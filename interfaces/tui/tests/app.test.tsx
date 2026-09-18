@@ -128,6 +128,32 @@ describe('App', () => {
     autoReady = true;
   });
 
+  it('renders plan progress from structured protocol state', async () => {
+    const { lastFrame } = renderApp();
+    await waitForReady(lastFrame);
+    emit({
+      type: 'plan_updated',
+      plan: {
+        plan_id: 'plan-1',
+        goal: 'Ship plans',
+        revision: 1,
+        steps: [
+          { id: 'inspect', title: 'Inspect architecture', status: 'completed', outcome: 'Architecture mapped.' },
+          { id: 'frontend', title: 'Connect frontends', status: 'in_progress' },
+          { id: 'verify', title: 'Verify recovery', status: 'pending' },
+        ],
+      },
+    });
+
+    await waitFor(() => {
+      expect(lastFrame()).toContain('Plan');
+      expect(lastFrame()).toContain('✓ Inspect architecture');
+      expect(lastFrame()).toContain('Architecture mapped.');
+      expect(lastFrame()).toContain('◉ Connect frontends');
+      expect(lastFrame()).toContain('○ Verify recovery');
+    });
+  });
+
   it('opens the session with the workspace and config paths', async () => {
     renderApp();
     await waitFor(() =>

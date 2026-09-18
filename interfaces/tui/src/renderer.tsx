@@ -3,7 +3,7 @@ import { Box, Static, Text, useBoxMetrics } from 'ink';
 import type { DOMElement } from 'ink';
 import Spinner from 'ink-spinner';
 import { formatArguments } from '@nosis/protocol';
-import type { PermissionPreset, SessionSummary } from '@nosis/protocol';
+import type { PermissionPreset, PlanSnapshot, SessionSummary } from '@nosis/protocol';
 import type { ApprovalChoice, Entry, State, UserQuestionState } from './state.js';
 
 function EntryView({ entry }: { entry: Entry }): React.ReactElement {
@@ -237,6 +237,38 @@ export function Transcript({ state }: { state: State }): React.ReactElement {
         </Box>
       </Box>
     </>
+  );
+}
+
+export function PlanView({ plan }: { plan: PlanSnapshot }): React.ReactElement {
+  return (
+    <Box flexShrink={0} flexDirection="column" marginTop={1} marginBottom={1}>
+      <Text bold>Plan</Text>
+      {plan.steps.map((step) => {
+        const marker = step.status === 'completed'
+          ? '✓'
+          : step.status === 'in_progress'
+            ? '◉'
+            : step.status === 'blocked'
+              ? '×'
+              : '○';
+        const color = step.status === 'completed'
+          ? 'green'
+          : step.status === 'in_progress'
+            ? 'cyan'
+            : step.status === 'blocked'
+              ? 'red'
+              : undefined;
+        return (
+          <Box key={step.id} flexDirection="column">
+            <Text color={color} dimColor={step.status === 'pending'}>
+              {marker} {step.title}
+            </Text>
+            {step.outcome ? <Text dimColor>  {step.outcome}</Text> : null}
+          </Box>
+        );
+      })}
+    </Box>
   );
 }
 

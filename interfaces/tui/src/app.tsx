@@ -7,6 +7,7 @@ import { Prompt } from './input.js';
 import {
   ApprovalPrompt,
   PermissionPrompt,
+  PlanView,
   SessionPicker,
   StatusBar,
   Transcript,
@@ -324,6 +325,8 @@ export function App(props: AppProps): React.ReactElement {
         ) : null}
 
         <Transcript state={state} />
+
+        {state.plan ? <PlanView plan={state.plan} /> : null}
 
         {state.approval ? (
           <Box flexShrink={0}>

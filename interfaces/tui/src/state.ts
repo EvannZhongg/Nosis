@@ -2,6 +2,7 @@ import type {
   Incoming,
   ContextWindow,
   PermissionPreset,
+  PlanSnapshot,
   ProtocolError,
   SessionItem,
   SessionSummary,
@@ -70,6 +71,7 @@ export type State = {
   turnId: string | null;
   usage: Usage | null;
   contextWindow: ContextWindow | null;
+  plan: PlanSnapshot | null;
   pendingSteers: number;
 };
 
@@ -103,6 +105,7 @@ export const initialState: State = {
   turnId: null,
   usage: null,
   contextWindow: null,
+  plan: null,
   pendingSteers: 0,
 };
 
@@ -276,6 +279,7 @@ function historyEntries(items: SessionItem[]): Entry[] {
 
     const calls = item.tool_calls ?? [];
     calls.forEach((call, index) => {
+      if (call.name === 'update_plan') return;
       const outcome = outcomes.get(call.id);
       entries.push({
         kind: 'tool',
@@ -411,6 +415,7 @@ function applyMessage(state: State, message: Incoming): State {
         turnId: message.turn_id,
         permissionPreset: message.permission_preset,
         contextWindow: message.context_window ?? state.contextWindow,
+        plan: message.plan,
         mcpStatus: message.phase === 'starting' ? state.mcpStatus : null,
         entries: [...state.entries, ...startupNotices],
       };
@@ -467,6 +472,7 @@ function applyMessage(state: State, message: Incoming): State {
       return { ...state, status: state.status === 'cancelling' ? state.status : 'running' };
 
     case 'tool_call':
+      if (message.tool_call.name === 'update_plan') return state;
       return {
         ...state,
         status: state.status === 'cancelling' ? state.status : 'running',
@@ -529,6 +535,9 @@ function applyMessage(state: State, message: Incoming): State {
           },
         ],
       };
+
+    case 'plan_updated':
+      return { ...state, plan: message.plan };
 
     case 'user_steer_received':
       return state;

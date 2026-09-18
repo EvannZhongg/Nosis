@@ -30,7 +30,41 @@ const RUNTIME_READY = {
     compression_threshold: 720,
     compression_count: 0,
   },
+  plan: null,
 };
+
+describe('plan', () => {
+  it('restores and updates the current plan outside the transcript', () => {
+    let state = reducer(initialState, {
+      type: 'message',
+      message: {
+        ...RUNTIME_READY,
+        plan: {
+          plan_id: 'plan-1',
+          goal: 'Ship plans',
+          revision: 1,
+          steps: [{ id: 'runtime', title: 'Build runtime', status: 'in_progress' }],
+        },
+      },
+    });
+    expect(state.plan?.revision).toBe(1);
+
+    state = reducer(state, {
+      type: 'message',
+      message: {
+        type: 'plan_updated',
+        plan: {
+          plan_id: 'plan-1',
+          goal: 'Ship plans',
+          revision: 2,
+          steps: [{ id: 'runtime', title: 'Build runtime', status: 'completed' }],
+        },
+      },
+    });
+    expect(state.plan?.steps[0]?.status).toBe('completed');
+    expect(state.entries).toEqual([]);
+  });
+});
 
 function ready(): State {
   return reducer(

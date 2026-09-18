@@ -37,6 +37,22 @@ export type ContextWindow = {
   compression_count: number;
 };
 
+export type PlanStepStatus = 'pending' | 'in_progress' | 'completed' | 'blocked';
+
+export type PlanStep = {
+  id: string;
+  title: string;
+  status: PlanStepStatus;
+  outcome?: string;
+};
+
+export type PlanSnapshot = {
+  plan_id: string;
+  goal: string;
+  revision: number;
+  steps: PlanStep[];
+};
+
 export type PermissionPreset = 'ask_for_approval' | 'full_access';
 export type RuntimePhase =
   | 'inactive'
@@ -122,6 +138,7 @@ export type Incoming = (
       } | null;
       question: UserQuestion | null;
       skill_warnings?: string[];
+      plan: PlanSnapshot | null;
     }
   | { type: 'attachment_replaced'; phase: RuntimePhase }
   | {
@@ -202,6 +219,7 @@ export type Incoming = (
   | { type: 'workspace_changed'; workspace: string }
   | { type: 'sessions_listed'; sessions: SessionSummary[] }
   | { type: 'session_items'; items: SessionItem[] }
+  | { type: 'plan_updated'; plan: PlanSnapshot }
   | UserQuestion
   | { type: 'mcp_server_status'; server: string; status: string; tool_count?: number; error?: string }
   | { type: 'turn_completed'; turn_id: string; usage: Usage | null }
