@@ -58,6 +58,10 @@ svg { flex-shrink: 0; }
 .user-turn { width: 100%; margin: 0 0 28px; }
 .user-message { background: #f2f4f8; border: 1px solid #eceff4; border-radius: 12px 12px 3px 12px; padding: 8px 15px; width: fit-content; max-width: 86%; margin-left: auto; line-height: 1.6; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .user-message p { margin: 0; }
+.user-message:has(img) { width: min(100%, 450px); max-width: min(100%, 450px); }
+.user-message img { display: block; width: auto; height: auto; max-width: min(100%, 420px); max-height: 320px; border-radius: 8px; object-fit: contain; }
+.user-message:has(img) img { max-width: 100%; }
+.user-message img + p, .user-message p + img { margin-top: 8px; }
 .assistant-message { margin: 0 0 30px; }
 .assistant-label { display: flex; align-items: center; gap: 9px; font-size: 12px; font-weight: 600; margin-bottom: 13px; }
 .assistant-avatar { width: 24px; height: 24px; border-radius: 7px; display: grid; place-items: center; background: #eef1f7; color: #6e7d9c; }
