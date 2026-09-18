@@ -552,8 +552,7 @@ class Bridge:
             agent_config.workspace_instruction_files,
         )
         if self._agent is not None:
-            if self._workspace_instructions is None:
-                return
+            assert self._workspace_instructions is not None
             if (
                 self._workspace_instructions.fingerprint
                 == instructions.fingerprint
@@ -632,7 +631,7 @@ class Bridge:
                 plan=self._plan,
                 ask_user=self.request_user_choice,
             )
-            self._agent = Agent(
+            agent = Agent(
                 provider=main_provider,
                 session=self._session,
                 system_prompt=render_system_prompt(
@@ -662,9 +661,9 @@ class Bridge:
                 ),
                 context=context,
             )
-            self._context_window = context_window_to_dict(
-                self._agent.context_window()
-            )
+            context_window = context_window_to_dict(agent.context_window())
+            self._agent = agent
+            self._context_window = context_window
             self._skill_warnings = skills.warnings
             self._workspace_instructions = instructions
         except BaseException:

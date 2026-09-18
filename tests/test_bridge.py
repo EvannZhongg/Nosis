@@ -949,9 +949,12 @@ class InterruptedTurnTest(unittest.TestCase):
         self.session = session
 
     def start_turn(self, agent: object, text: str = "do the work") -> None:
-        patcher = patch.object(self.bridge, "_agent", agent)
-        patcher.start()
-        self.addCleanup(patcher.stop)
+        agent_patcher = patch.object(self.bridge, "_agent", agent)
+        runtime_patcher = patch.object(self.bridge, "_ensure_runtime")
+        agent_patcher.start()
+        runtime_patcher.start()
+        self.addCleanup(agent_patcher.stop)
+        self.addCleanup(runtime_patcher.stop)
         self.bridge.run_turn({"turn_id": "t1", "text": text})
 
     def stored_items(self) -> list[Message]:
