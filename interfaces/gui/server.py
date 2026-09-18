@@ -111,6 +111,7 @@ class BridgeProcess:
         while True:
             line = await stdout.readline()
             if not line:
+                await self._process.wait()
                 return None
             stripped = line.strip()
             if stripped:
@@ -126,6 +127,10 @@ class BridgeProcess:
                     self._turn_running = False
                     self._turn_id = None
                 return message
+
+    @property
+    def returncode(self) -> int | None:
+        return self._process.returncode
 
     def cancel_turn(self) -> None:
         """Route cancellation to the active turn."""
@@ -472,13 +477,16 @@ class ActiveSession:
                 if message_type == "fatal":
                     break
         finally:
-            if self.phase != "failed":
+            unexpected_exit = not self._closed
+            if unexpected_exit and (
+                self.running or getattr(self.bridge, "returncode", None) != 0
+            ):
                 self.phase = "failed"
             self.approval = None
             self.question = None
             self.jobs.clear()
             self.done = True
-            if not self._closed:
+            if unexpected_exit:
                 self._closed = True
                 await self.bridge.close()
             async with self._lock:

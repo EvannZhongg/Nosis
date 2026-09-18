@@ -206,6 +206,36 @@ class ActiveSessionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(list(runtime.jobs), ["j1"])
         self.assertEqual(runtime.context_window, {"input_tokens": 1})
 
+    async def test_owner_close_does_not_relabel_the_runtime_as_failed(self) -> None:
+        bridge = FakeBridge()
+        runtime = server.ActiveSession("s1", "first", "/tmp", [], bridge)
+        runtime.phase = "idle"
+
+        await runtime.close()
+
+        self.assertEqual(runtime.phase, "idle")
+
+    async def test_clean_bridge_exit_does_not_relabel_the_runtime_as_failed(self) -> None:
+        bridge = FakeBridge()
+        bridge.returncode = 0
+        runtime = server.ActiveSession("s1", "first", "/tmp", [], bridge)
+        runtime.phase = "idle"
+
+        bridge.emit(None)
+        await _wait_for_async(lambda: runtime.done)
+
+        self.assertEqual(runtime.phase, "idle")
+
+    async def test_bridge_exit_during_a_turn_marks_the_runtime_failed(self) -> None:
+        bridge = FakeBridge()
+        bridge.returncode = 0
+        runtime = server.ActiveSession("s1", "first", "/tmp", [], bridge)
+        runtime.phase = "running"
+
+        bridge.emit(None)
+        await _wait_for_async(lambda: runtime.done)
+
+        self.assertEqual(runtime.phase, "failed")
 
 @unittest.skipIf(TestClient is None, "Install the gui extra to test the GUI")
 class GuiTest(unittest.TestCase):
