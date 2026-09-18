@@ -21,6 +21,8 @@ from agent_core import (
     ToolConfig,
     ToolExecutionContext,
     Workspace,
+    WorkspaceInstruction,
+    WorkspaceInstructions,
     builtin_catalog,
 )
 from agent_core.llm import LLMRequest
@@ -31,6 +33,7 @@ SUBAGENT_CONFIG = AgentConfig(
     max_same_tool_calls=5,
     output_reserve_tokens=100,
     tools=ToolConfig(enabled=()),
+    workspace_instruction_files=(),
 )
 SUBAGENT_PROMPT = (
     "Role {{role}}: {{role_description}}\nWorkspace: {{workspace}}"
@@ -120,13 +123,20 @@ CODER = role(
 )
 
 
-def runtime(catalog, roles) -> SubagentRuntime:
+def runtime(
+    catalog,
+    roles,
+    instructions: WorkspaceInstructions | None = None,
+) -> SubagentRuntime:
     return SubagentRuntime(
         config=SUBAGENT_CONFIG,
         catalog=catalog,
         roles=SubagentRoleRegistry(roles),
         subagent_prompt_template=SUBAGENT_PROMPT,
         consolidator_prompt=CONSOLIDATOR_PROMPT,
+        workspace_instructions=(
+            instructions or WorkspaceInstructions((), "empty")
+        ),
     )
 
 
@@ -250,6 +260,45 @@ class SubagentToolTest(unittest.TestCase):
 
 
 class SubagentRuntimeTest(unittest.TestCase):
+    def test_inherits_workspace_instructions_in_system_prompt(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            provider = StaticProvider()
+            configured_role = role(
+                "researcher",
+                "Reads.",
+                provider=provider,
+            )
+            instructions = WorkspaceInstructions(
+                (
+                    WorkspaceInstruction(
+                        "<workspace>/AGENTS.md",
+                        "subagents must follow this rule",
+                    ),
+                ),
+                "instructions",
+            )
+            tool_context = ToolExecutionContext(
+                workspace=Workspace(root),
+                session=Session(),
+                sessions_directory=root / "sessions",
+                subagents=runtime(
+                    builtin_catalog(),
+                    (configured_role,),
+                    instructions,
+                ),
+            )
+
+            SubagentTool().execute(
+                {"role": "researcher", "task": "inspect"},
+                tool_context,
+            )
+
+        self.assertIn(
+            "subagents must follow this rule",
+            provider.requests[0].system_prompt,
+        )
+
     def test_keeps_child_transcript_out_of_the_session_list(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

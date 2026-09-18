@@ -861,6 +861,7 @@ def open_session_message(
             else {
                 "max_same_tool_calls": 5,
                 "output_reserve_tokens": 100,
+                "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
                 "main_agent": {"tools": {name: False for name in TOOL_NAMES}},
             }
         ),
@@ -1325,6 +1326,104 @@ class BridgeSessionOpenTest(unittest.TestCase):
 
         self.assertEqual(prompt, f"Custom prompt for {root.resolve()}")
 
+    def test_injects_global_and_workspace_instructions_without_persisting_them(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            (root / "AGENTS.md").write_text("global rule", encoding="utf-8")
+            (workspace / "CLAUDE.md").write_text("claude rule", encoding="utf-8")
+            (workspace / "AGENTS.md").write_text("workspace rule", encoding="utf-8")
+            bridge, _ = make_bridge([], root)
+
+            bridge.open_session(open_session_message(root, workspace=str(workspace)))
+            bridge._ensure_runtime()
+
+            prompt = bridge._agent._context._system_prompt
+            session = bridge._session
+            assert session is not None
+
+        self.assertLess(prompt.index("global rule"), prompt.index("claude rule"))
+        self.assertLess(prompt.index("claude rule"), prompt.index("workspace rule"))
+        self.assertEqual(session.items, [])
+        self.assertFalse(
+            any(
+                "global rule" in json.dumps(event, ensure_ascii=False)
+                for event in session.journal
+            )
+        )
+
+    def test_uses_configured_workspace_instruction_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            (workspace / "PROJECT.md").write_text("project rule", encoding="utf-8")
+            (workspace / "AGENTS.md").write_text("not configured", encoding="utf-8")
+            bridge, _ = make_bridge([], root)
+            message = open_session_message(
+                root,
+                workspace=str(workspace),
+                agent_config={
+                    "max_same_tool_calls": 5,
+                    "output_reserve_tokens": 100,
+                    "workspace_instruction_files": ["PROJECT.md"],
+                    "main_agent": {"tools": {name: False for name in TOOL_NAMES}},
+                },
+            )
+
+            bridge.open_session(message)
+            bridge._ensure_runtime()
+            prompt = bridge._agent._context._system_prompt
+
+        self.assertIn("project rule", prompt)
+        self.assertIn("<workspace>/PROJECT.md", prompt)
+        self.assertNotIn("not configured", prompt)
+        self.assertNotIn("<workspace>/AGENTS.md", prompt)
+
+    def test_reuses_runtime_until_instructions_change_between_turns(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            instructions_path = root / "AGENTS.md"
+            instructions_path.write_text("first rule", encoding="utf-8")
+            bridge, _ = make_bridge([], root)
+            bridge.open_session(open_session_message(root))
+            bridge._ensure_runtime()
+            first_agent = bridge._agent
+
+            bridge._ensure_runtime()
+            self.assertIs(bridge._agent, first_agent)
+
+            instructions_path.write_text("second rule", encoding="utf-8")
+            bridge._ensure_runtime()
+
+            self.assertIsNot(bridge._agent, first_agent)
+            self.assertIn("second rule", bridge._agent._context._system_prompt)
+            self.assertNotIn("first rule", bridge._agent._context._system_prompt)
+
+    def test_rebuilds_runtime_when_the_configured_instruction_list_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "PROJECT.md").write_text("project rule", encoding="utf-8")
+            bridge, _ = make_bridge([], root)
+            bridge.open_session(open_session_message(root))
+            bridge._ensure_runtime()
+            first_agent = bridge._agent
+            config = json.loads(
+                (root / "agent_config.json").read_text(encoding="utf-8")
+            )
+            config["workspace_instruction_files"] = ["PROJECT.md"]
+            (root / "agent_config.json").write_text(
+                json.dumps(config),
+                encoding="utf-8",
+            )
+
+            bridge._ensure_runtime()
+
+            self.assertIsNot(bridge._agent, first_agent)
+            self.assertIn("project rule", bridge._agent._context._system_prompt)
+            self.assertIn("<workspace>/PROJECT.md", bridge._agent._context._system_prompt)
+
     def test_invalid_skill_does_not_prevent_bridge_startup(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1367,6 +1466,7 @@ class SubagentRoleStartTest(unittest.TestCase):
                     agent_config={
                         "max_same_tool_calls": 5,
                         "output_reserve_tokens": 100,
+                        "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
                         "main_agent": {"tools": {"subagent": True}},
                         "subagent_roles": roles,
                     },
@@ -1418,6 +1518,7 @@ class SubagentRoleStartTest(unittest.TestCase):
                     agent_config={
                         "max_same_tool_calls": 5,
                         "output_reserve_tokens": 100,
+                        "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
                         "main_agent": {"tools": {"subagent": True}},
                         "subagent_roles": {
                             "researcher": {
@@ -1445,6 +1546,7 @@ class SubagentRoleStartTest(unittest.TestCase):
                     agent_config={
                         "max_same_tool_calls": 5,
                         "output_reserve_tokens": 100,
+                        "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
                         "main_agent": {"tools": {"subagent": True}},
                         "subagent_roles": {
                             "researcher": {
@@ -1544,6 +1646,7 @@ class AnalyzeImageDerivationTest(unittest.TestCase):
                         agent_config={
                             "max_same_tool_calls": 5,
                             "output_reserve_tokens": 100,
+                            "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
                             "main_agent": {"tools": {"subagent": True}},
                             "subagent_roles": {
                                 "researcher": {
@@ -1661,6 +1764,7 @@ class CrossFileRoleValidationTest(unittest.TestCase):
                     agent_config={
                         "max_same_tool_calls": 5,
                         "output_reserve_tokens": 100,
+                        "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
                         "main_agent": {"tools": {"subagent": True}},
                         "subagent_roles": agent_roles,
                     },

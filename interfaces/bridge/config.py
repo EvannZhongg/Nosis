@@ -52,6 +52,11 @@ def initialize_config_directory(directory: Path) -> tuple[Path, ...]:
         )
         created.append(path)
 
+    instructions_path = directory / "AGENTS.md"
+    if not instructions_path.exists():
+        instructions_path.touch()
+        created.append(instructions_path)
+
     prompts_directory = directory / "prompts"
     prompts_directory.mkdir(exist_ok=True)
     packaged_prompts = defaults.joinpath("prompts_template")

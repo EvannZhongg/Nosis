@@ -62,6 +62,7 @@ def agent_config() -> AgentConfig:
         max_same_tool_calls=5,
         output_reserve_tokens=100,
         tools=ToolConfig(enabled=()),
+        workspace_instruction_files=(),
         context=ContextCompressionConfig(enabled=False),
     )
 

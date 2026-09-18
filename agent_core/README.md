@@ -10,6 +10,7 @@ Runtime 由 [`interfaces/bridge`](../interfaces/bridge/README.md) 统一装配�
 
 - `provider_config.json`：Provider、模型和角色对应关系
 - `agent_config.json`：Tool、上下文压缩、子 Agent 和 MCP
+- `AGENTS.md`：空的用户级全局 Workspace Instruction（已存在时不覆盖）
 - `prompts/`：主 Agent、子 Agent 与上下文压缩使用的 Prompt 模板
 
 密钥可自行写入同目录的 `.env`，供配置中的 `${ENV_NAME}` 引用。
@@ -50,6 +51,10 @@ Runtime 由 [`interfaces/bridge`](../interfaces/bridge/README.md) 统一装配�
 MCP 在 `agent_config.json` 的 `mcp.servers` 中配置，支持 `stdio` 和 `streamable_http`。远程 Tool 可分别限制是否暴露以及是否需要人工确认。
 
 Skills 位于 `~/.nosis/skills/<name>/SKILL.md`。首次启动会安装内置 Skill；Runtime 只在需要时读取完整 Skill 内容。
+
+### Workspace Instructions
+
+Bridge 在每个 user turn 边界先读取固定的 `~/.nosis/AGENTS.md`，再读取 `agent_config.json` 的 `workspace_instruction_files` 所列文件。默认 Workspace 文件列表为 `CLAUDE.md`、`AGENTS.md`。所有来源均按从高优先级到低优先级排列，因此全局 `~/.nosis/AGENTS.md` 始终拥有最高优先级。Workspace 文件只从根目录读取，不递归扫描子目录，也不向父目录查找。加载结果会进入主 Agent 和子 Agent 的 system context，但不进入 Session transcript 或上下文压缩；文件或列表变化后，下一 turn 会重建 Runtime execution plane。
 
 ### 子 Agent
 

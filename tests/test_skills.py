@@ -148,7 +148,7 @@ class SkillRegistryTest(unittest.TestCase):
             prompt = render_system_prompt(
                 "System for {{workspace}}",
                 Workspace(root),
-                SkillRegistry.discover(skills),
+                skills=SkillRegistry.discover(skills),
             )
 
         self.assertIn("## Available Skills", prompt)

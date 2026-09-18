@@ -22,6 +22,7 @@ from .tools.base import ToolPolicy
 from .tools.builtin import AnalyzeImageTool, ReadImageTool, ReadSkillTool
 from .jobs import CancellationToken
 from .turn_control import TurnControl
+from .workspace_instructions import WorkspaceInstructions
 
 
 def vision_aware_tool_names(
@@ -117,6 +118,7 @@ class SubagentRuntime:
         roles: SubagentRoleRegistry,
         subagent_prompt_template: str,
         consolidator_prompt: str,
+        workspace_instructions: WorkspaceInstructions,
         *,
         tool_policy: ToolPolicy | None = None,
     ) -> None:
@@ -125,6 +127,7 @@ class SubagentRuntime:
         self._roles = roles
         self._subagent_prompt_template = subagent_prompt_template
         self._consolidator_prompt = consolidator_prompt
+        self._workspace_instructions = workspace_instructions
         self._tool_policy = tool_policy
 
     @property
@@ -170,6 +173,7 @@ class SubagentRuntime:
                 parent.workspace,
                 role,
                 parent.skills,
+                instructions=self._workspace_instructions,
             ),
             consolidator_prompt=self._consolidator_prompt,
             config=self._config,

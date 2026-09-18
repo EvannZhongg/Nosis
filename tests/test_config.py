@@ -102,6 +102,7 @@ class ConfigTest(unittest.TestCase):
                 (
                     config_directory / "provider_config.json",
                     config_directory / "agent_config.json",
+                    config_directory / "AGENTS.md",
                     config_directory / "prompts" / "Soul.md",
                     config_directory / "prompts" / "SubAgent.md",
                     config_directory / "prompts" / "Consolidator.md",
@@ -125,6 +126,14 @@ class ConfigTest(unittest.TestCase):
                 },
             )
             self.assertEqual(agent_config["max_same_tool_calls"], 5)
+            self.assertEqual(
+                agent_config["workspace_instruction_files"],
+                ["CLAUDE.md", "AGENTS.md"],
+            )
+            self.assertEqual(
+                (config_directory / "AGENTS.md").read_text(encoding="utf-8"),
+                "",
+            )
             self.assertEqual(
                 agent_config["context"]["compression"]["keep_recent_units"],
                 6,
@@ -163,6 +172,8 @@ class ConfigTest(unittest.TestCase):
             prompts_directory.mkdir()
             soul_path = prompts_directory / "Soul.md"
             soul_path.write_text("custom prompt", encoding="utf-8")
+            instructions_path = config_directory / "AGENTS.md"
+            instructions_path.write_text("custom instructions", encoding="utf-8")
 
             created = initialize_config_directory(config_directory)
 
@@ -181,6 +192,10 @@ class ConfigTest(unittest.TestCase):
             self.assertTrue((config_directory / "skills").is_dir())
             self.assertEqual(skill_path.read_text(encoding="utf-8"), "custom skill")
             self.assertEqual(soul_path.read_text(encoding="utf-8"), "custom prompt")
+            self.assertEqual(
+                instructions_path.read_text(encoding="utf-8"),
+                "custom instructions",
+            )
             self.assertFalse((existing_skill / "scripts").exists())
 
     def test_initializes_only_first_level_skill_directories(self) -> None:

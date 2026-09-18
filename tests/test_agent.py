@@ -44,6 +44,7 @@ AGENT_CONFIG = AgentConfig(
     max_same_tool_calls=5,
     output_reserve_tokens=100,
     tools=ToolConfig(enabled=()),
+    workspace_instruction_files=(),
 )
 CONSOLIDATOR_PROMPT = "Consolidate the conversation."
 TEST_WORKSPACE = Workspace(Path(__file__).parent)
@@ -253,6 +254,7 @@ class AgentTest(unittest.TestCase):
                 max_same_tool_calls=5,
                 output_reserve_tokens=100,
                 tools=ToolConfig(enabled=()),
+                workspace_instruction_files=(),
                 context=ContextCompressionConfig(keep_recent_units=1),
             ),
             tool_set(EchoTool(), session=session),
@@ -295,6 +297,7 @@ class AgentTest(unittest.TestCase):
                 max_same_tool_calls=5,
                 output_reserve_tokens=100,
                 tools=ToolConfig(enabled=()),
+                workspace_instruction_files=(),
                 context=ContextCompressionConfig(keep_recent_units=1),
             ),
         )
@@ -355,6 +358,7 @@ class AgentTest(unittest.TestCase):
                 max_same_tool_calls=5,
                 output_reserve_tokens=100,
                 tools=ToolConfig(enabled=()),
+                workspace_instruction_files=(),
                 context=ContextCompressionConfig(keep_recent_units=1),
             ),
         )
@@ -485,6 +489,7 @@ class AgentTest(unittest.TestCase):
                 max_same_tool_calls=5,
                 output_reserve_tokens=100,
                 tools=ToolConfig(enabled=()),
+                workspace_instruction_files=(),
                 context=ContextCompressionConfig(keep_recent_units=1),
             ),
         )
@@ -563,6 +568,7 @@ class AgentTest(unittest.TestCase):
                 max_same_tool_calls=5,
                 output_reserve_tokens=100,
                 tools=ToolConfig(enabled=()),
+                workspace_instruction_files=(),
                 context=ContextCompressionConfig(keep_recent_units=1),
             ),
         )
@@ -633,6 +639,7 @@ class AgentTest(unittest.TestCase):
                 max_same_tool_calls=5,
                 output_reserve_tokens=100,
                 tools=ToolConfig(enabled=()),
+                workspace_instruction_files=(),
                 context=ContextCompressionConfig(keep_recent_units=1),
             ),
         )
@@ -836,6 +843,7 @@ class AgentTest(unittest.TestCase):
                 output_reserve_tokens=100,
                 max_generation_tokens=300,
                 tools=ToolConfig(enabled=()),
+                workspace_instruction_files=(),
             ),
             tools=tool_set(session=session),
             context=ToolExecutionContext(
@@ -864,6 +872,7 @@ class AgentTest(unittest.TestCase):
             output_reserve_tokens=100,
             max_generation_tokens=50,
             tools=ToolConfig(enabled=()),
+            workspace_instruction_files=(),
         )
         agent = Agent(
             provider=provider,
@@ -1271,6 +1280,7 @@ class AgentTest(unittest.TestCase):
                 max_same_tool_calls=5,
                 output_reserve_tokens=100,
                 tools=ToolConfig(enabled=()),
+                workspace_instruction_files=(),
                 context=ContextCompressionConfig(keep_recent_units=1),
             ),
             tools=tool_set(EchoTool(), session=session),

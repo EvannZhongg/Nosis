@@ -10,7 +10,7 @@ nosis / nosis-gui
 
 Bridge 负责：
 
-- 初始化并读取配置、Prompt 模板和内置 Skill，选择 Provider
+- 初始化并读取配置、Prompt 模板、Workspace Instructions 和内置 Skill，选择 Provider
 - 组装 Tool、权限策略、MCP 和子 Agent Runtime
 - 绑定 Workspace 与 Session
 - 在 `AgentEvent` 和协议消息之间转换

@@ -42,6 +42,7 @@ def _config() -> AgentConfig:
         output_reserve_tokens=100,
         max_generation_tokens=None,
         tools=ToolConfig(()),
+        workspace_instruction_files=(),
         context=ContextCompressionConfig(
             enabled=False,
             trigger_ratio=None,

@@ -25,6 +25,7 @@ class AgentConfigTest(unittest.TestCase):
                     {
                         "max_same_tool_calls": 5,
                         "output_reserve_tokens": 100,
+                        "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
                         **fields,
                     }
                 ),
@@ -40,6 +41,7 @@ class AgentConfigTest(unittest.TestCase):
                     {
                         "max_same_tool_calls": 5,
                         "output_reserve_tokens": 100,
+                        "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
                         "main_agent": {
                             "tools": {
                                 **ENABLED_TOOLS,
@@ -64,7 +66,67 @@ class AgentConfigTest(unittest.TestCase):
                             "list_directory",
                         )
                     ),
+                    workspace_instruction_files=("CLAUDE.md", "AGENTS.md"),
                 ),
+            )
+
+    def test_loads_workspace_instruction_files_in_priority_order(self) -> None:
+        config = self.load(
+            {
+                "workspace_instruction_files": [
+                    "PROJECT.md",
+                    "TEAM.md",
+                ],
+                "main_agent": {"tools": ENABLED_TOOLS},
+            }
+        )
+
+        self.assertEqual(
+            config.workspace_instruction_files,
+            ("PROJECT.md", "TEAM.md"),
+        )
+
+    def test_requires_workspace_instruction_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "agent_config.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "max_same_tool_calls": 5,
+                        "output_reserve_tokens": 100,
+                        "main_agent": {"tools": ENABLED_TOOLS},
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "workspace_instruction_files.*array",
+            ):
+                load_agent_config(path)
+
+    def test_rejects_non_root_workspace_instruction_paths(self) -> None:
+        for value in ("../AGENTS.md", "docs/RULES.md", "/RULES.md"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "workspace root filenames",
+                ):
+                    self.load(
+                        {
+                            "workspace_instruction_files": [value],
+                            "main_agent": {"tools": ENABLED_TOOLS},
+                        }
+                    )
+
+    def test_rejects_duplicate_workspace_instruction_files(self) -> None:
+        with self.assertRaisesRegex(ValueError, "duplicate filenames"):
+            self.load(
+                {
+                    "workspace_instruction_files": ["RULES.md", "RULES.md"],
+                    "main_agent": {"tools": ENABLED_TOOLS},
+                }
             )
 
     def test_rejects_non_positive_limit(self) -> None:
@@ -75,6 +137,7 @@ class AgentConfigTest(unittest.TestCase):
                     {
                         "max_same_tool_calls": 0,
                         "output_reserve_tokens": 100,
+                        "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
                         "main_agent": {"tools": ENABLED_TOOLS},
                     }
                 ),
@@ -92,6 +155,7 @@ class AgentConfigTest(unittest.TestCase):
                     {
                         "max_same_tool_calls": True,
                         "output_reserve_tokens": 100,
+                        "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
                         "main_agent": {"tools": ENABLED_TOOLS},
                     }
                 ),
@@ -109,6 +173,7 @@ class AgentConfigTest(unittest.TestCase):
                     {
                         "max_same_tool_calls": 5,
                         "output_reserve_tokens": 0,
+                        "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
                         "main_agent": {"tools": ENABLED_TOOLS},
                     }
                 ),
@@ -205,6 +270,7 @@ class AgentConfigTest(unittest.TestCase):
                     {
                         "max_same_tool_calls": 5,
                         "output_reserve_tokens": 100,
+                        "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
                     }
                 ),
                 encoding="utf-8",
@@ -221,6 +287,7 @@ class AgentConfigTest(unittest.TestCase):
                     {
                         "max_same_tool_calls": 5,
                         "output_reserve_tokens": 100,
+                        "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
                         "main_agent": {"tools": {"read_file": True}},
                     }
                 ),
@@ -245,6 +312,7 @@ class AgentConfigTest(unittest.TestCase):
                     {
                         "max_same_tool_calls": 5,
                         "output_reserve_tokens": 100,
+                        "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
                         "main_agent": {
                             "tools": {
                                 "shell": True,
@@ -270,6 +338,7 @@ class AgentConfigTest(unittest.TestCase):
                     {
                         "max_same_tool_calls": 5,
                         "output_reserve_tokens": 100,
+                        "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
                         "main_agent": {
                             "tools": {
                                 **ENABLED_TOOLS,
@@ -295,6 +364,7 @@ class AgentConfigTest(unittest.TestCase):
                     {
                         "max_same_tool_calls": 5,
                         "output_reserve_tokens": 100,
+                        "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
                         "main_agent": {
                             "tools": {
                                 **ENABLED_TOOLS,
@@ -330,6 +400,7 @@ class SubagentRoleConfigTest(unittest.TestCase):
                     {
                         "max_same_tool_calls": 5,
                         "output_reserve_tokens": 100,
+                        "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
                         "main_agent": {"tools": ENABLED_TOOLS},
                         "subagent_roles": roles,
                     }

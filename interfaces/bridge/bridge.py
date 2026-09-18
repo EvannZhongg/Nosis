@@ -37,6 +37,7 @@ from agent_core import (
     ToolExecutionContext,
     TurnControl,
     Workspace,
+    WorkspaceInstructions,
     ImagePart,
     builtin_catalog,
     load_agent_config,
@@ -57,6 +58,7 @@ from .config import (
     load_prompt_templates,
     load_vision_config,
 )
+from .instructions import load_workspace_instructions
 from .protocol import (
     decode,
     encode,
@@ -108,6 +110,7 @@ class Bridge:
         self._provider_name: str | None = None
         self._context_window: dict[str, int] | None = None
         self._skill_warnings: tuple[str, ...] = ()
+        self._workspace_instructions: WorkspaceInstructions | None = None
         self._approval: dict[str, object] | None = None
         self._question: dict[str, object] | None = None
 
@@ -533,8 +536,6 @@ class Bridge:
         self._emit_runtime_state("inactive")
 
     def _ensure_runtime(self) -> None:
-        if self._agent is not None:
-            return
         if (
             self._session is None
             or self._store is None
@@ -544,12 +545,27 @@ class Bridge:
         ):
             raise RuntimeError("received 'user_turn' before 'open_session'")
 
+        agent_config = load_agent_config(self._agent_config_path)
+        instructions = load_workspace_instructions(
+            self._config_directory,
+            self._workspace,
+            agent_config.workspace_instruction_files,
+        )
+        if self._agent is not None:
+            if self._workspace_instructions is None:
+                return
+            if (
+                self._workspace_instructions.fingerprint
+                == instructions.fingerprint
+            ):
+                return
+            self._close_execution_plane()
+
         self._emit_runtime_state("starting")
         config_path = self._config_path
         workspace = self._workspace
         _, config = load_config_with_name(config_path, self._provider_name)
         try:
-            agent_config = load_agent_config(self._agent_config_path)
             skills = SkillRegistry.discover(self._config_directory / "skills")
             prompts = load_prompt_templates(self._config_directory / "prompts")
 
@@ -597,6 +613,7 @@ class Bridge:
                 self._permissions,
                 prompts.subagent,
                 prompts.consolidator,
+                instructions,
             )
             context = ToolExecutionContext(
                 workspace=workspace,
@@ -619,7 +636,10 @@ class Bridge:
                 provider=main_provider,
                 session=self._session,
                 system_prompt=render_system_prompt(
-                    prompts.system, workspace, skills
+                    prompts.system,
+                    workspace,
+                    skills,
+                    instructions=instructions,
                 ),
                 consolidator_prompt=prompts.consolidator,
                 config=agent_config,
@@ -646,12 +666,14 @@ class Bridge:
                 self._agent.context_window()
             )
             self._skill_warnings = skills.warnings
+            self._workspace_instructions = instructions
         except BaseException:
             self._close_execution_plane()
             raise
 
     def _close_execution_plane(self) -> None:
         self._agent = None
+        self._workspace_instructions = None
         self._approval = None
         self._question = None
         if self._jobs is not None:
@@ -740,6 +762,7 @@ class Bridge:
         permission_controller: PermissionController,
         subagent_prompt_template: str,
         consolidator_prompt: str,
+        workspace_instructions: WorkspaceInstructions,
     ) -> SubagentRuntime | None:
         """Build the sub-agent runtime, or None when no role is configured."""
         if not agent_config.tools.is_enabled("subagent"):
@@ -779,6 +802,7 @@ class Bridge:
             roles=roles,
             subagent_prompt_template=subagent_prompt_template,
             consolidator_prompt=consolidator_prompt,
+            workspace_instructions=workspace_instructions,
             tool_policy=permission_controller,
         )
 

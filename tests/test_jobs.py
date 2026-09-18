@@ -26,6 +26,7 @@ CONFIG = AgentConfig(
     max_same_tool_calls=5,
     output_reserve_tokens=100,
     tools=ToolConfig(enabled=()),
+    workspace_instruction_files=(),
 )
 CONSOLIDATOR_PROMPT = "Consolidate the conversation."
 

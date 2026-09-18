@@ -112,6 +112,7 @@ from .mcp import (
     load_mcp_config,
 )
 from .workspace import Workspace
+from .workspace_instructions import WorkspaceInstruction, WorkspaceInstructions
 from .turn_control import TurnControl, UserSteer, UserSteeringMailbox
 
 __all__ = [
@@ -214,6 +215,8 @@ __all__ = [
     "WebSearchTool",
     "WriteFileTool",
     "Workspace",
+    "WorkspaceInstruction",
+    "WorkspaceInstructions",
     "builtin_catalog",
     "estimate_image_tokens",
     "image_extension",

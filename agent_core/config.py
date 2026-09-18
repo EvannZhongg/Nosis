@@ -29,6 +29,7 @@ class AgentConfig:
     max_same_tool_calls: int
     output_reserve_tokens: int
     tools: ToolConfig
+    workspace_instruction_files: tuple[str, ...]
     max_generation_tokens: int | None = None
     context: ContextCompressionConfig = field(
         default_factory=ContextCompressionConfig
@@ -55,6 +56,9 @@ def load_agent_config(path: Path) -> AgentConfig:
         data,
         "max_generation_tokens",
     )
+    workspace_instruction_files = _workspace_instruction_files(
+        data.get("workspace_instruction_files")
+    )
     tools = _main_agent_tools(data.get("main_agent"))
     subagent_roles = _subagent_roles(data.get("subagent_roles"))
     context = _context_config(data.get("context"))
@@ -64,11 +68,39 @@ def load_agent_config(path: Path) -> AgentConfig:
         max_same_tool_calls=max_same_tool_calls,
         output_reserve_tokens=output_reserve_tokens,
         tools=tools,
+        workspace_instruction_files=workspace_instruction_files,
         max_generation_tokens=max_generation_tokens,
         subagent_roles=subagent_roles,
         context=context,
         mcp=mcp,
     )
+
+
+def _workspace_instruction_files(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise ValueError(
+            "config field 'workspace_instruction_files' must be an array"
+        )
+    files = []
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            raise ValueError(
+                "config field 'workspace_instruction_files' must contain "
+                "non-empty strings"
+            )
+        filename = item.strip()
+        if "/" in filename or "\\" in filename or filename in {".", ".."}:
+            raise ValueError(
+                "config field 'workspace_instruction_files' must contain "
+                "workspace root filenames"
+            )
+        if filename in files:
+            raise ValueError(
+                "config field 'workspace_instruction_files' must not "
+                "contain duplicate filenames"
+            )
+        files.append(filename)
+    return tuple(files)
 
 
 def _main_agent_tools(value: object) -> ToolConfig:
