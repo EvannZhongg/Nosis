@@ -226,17 +226,11 @@ class ContextManager:
             )
         )
         result: list[Message] = []
-        for index, item in enumerate(visible):
-            # A turn begins where the person spoke. A synthesized media
-            # message sits inside a turn, so it must not open a second
-            # timeline block in the middle of one.
+        for item in visible:
             if item.is_user_authored:
-                end = next(
-                    (offset for offset in range(index + 1, len(visible))
-                     if visible[offset].is_user_authored),
-                    len(visible),
-                )
-                result.append(_timeline_message(visible[index:end]))
+                turn_context = _turn_context_message(item)
+                if turn_context is not None:
+                    result.append(turn_context)
             result.append(item)
         return result
 
@@ -316,32 +310,17 @@ def _compression_record(items: list[Message]) -> str:
     return "\n\n".join(sections)
 
 
-def _timeline_message(items: list[Message]) -> Message:
-    lines = []
-    for item in items:
-        if item.timestamp_utc is None:
-            continue
-        timestamp = item.timestamp_utc.astimezone().isoformat(timespec="seconds")
-        detail = item.role
-        if item.role == "assistant" and item.tool_calls:
-            detail = "assistant step (" + ", ".join(call.name for call in item.tool_calls) + ")"
-        elif item.role == "tool":
-            detail = f"tool result ({item.tool_call_id or 'unknown'})"
-        elif item.is_tool_media:
-            # This message only exists because it is the one place an
-            # image can travel. Labelling it "user" would read as the
-            # person speaking again in the middle of their own turn.
-            detail = "tool images"
-        elif item.origin == "job_result":
-            detail = "background job result"
-        lines.append(f"- {timestamp} — {detail}")
+def _turn_context_message(user_message: Message) -> Message | None:
+    if user_message.timestamp_utc is None:
+        return None
+    timestamp = user_message.timestamp_utc.astimezone().isoformat(
+        timespec="seconds"
+    )
     return Message(
         role="system",
         content=(
-            "[Conversation Timeline]\n"
-            "Use these timestamps only to understand chronology and elapsed "
-            "time. Do not reproduce them in responses.\n"
-            + "\n".join(lines)
+            "[Turn Context]\n"
+            f"User message received at {timestamp}."
         ),
     )
 

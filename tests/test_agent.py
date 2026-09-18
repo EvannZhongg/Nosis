@@ -755,10 +755,15 @@ class AgentTest(unittest.TestCase):
         self.assertEqual(result.response_timestamp_utc, RESPONSE_TIME)
         self.assertEqual(result.request, provider.requests[0])
         request_messages = provider.requests[0].messages
-        self.assertNotIn("[Conversation Timeline]", provider.requests[0].system_prompt)
+        self.assertNotIn("[Turn Context]", provider.requests[0].system_prompt)
         self.assertIsNone(provider.requests[0].max_generation_tokens)
         self.assertEqual(request_messages[0].role, "system")
-        self.assertIn("[Conversation Timeline]", request_messages[0].content)
+        self.assertEqual(
+            request_messages[0].content,
+            "[Turn Context]\n"
+            "User message received at "
+            f"{REQUEST_TIME.astimezone().isoformat(timespec='seconds')}.",
+        )
         self.assertEqual(request_messages[1].role, "user")
         self.assertEqual(request_messages[1].content, "hello")
         self.assertEqual(
@@ -940,7 +945,7 @@ class AgentTest(unittest.TestCase):
 
         self.assertEqual(result.response.content, "second answer")
         self.assertEqual(result.request, provider.requests[1])
-        self.assertNotIn("[Conversation Timeline]", provider.requests[1].system_prompt)
+        self.assertNotIn("[Turn Context]", provider.requests[1].system_prompt)
         history = provider.requests[1].messages
         self.assertEqual(
             [message.role for message in history],
@@ -956,8 +961,18 @@ class AgentTest(unittest.TestCase):
                 "second question",
             ],
         )
-        self.assertIn("[Conversation Timeline]", history[0].content)
-        self.assertIn("[Conversation Timeline]", history[3].content)
+        self.assertEqual(
+            history[0].content,
+            "[Turn Context]\n"
+            "User message received at "
+            f"{datetime(2026, 9, 9, 8, 0, tzinfo=timezone.utc).astimezone().isoformat(timespec='seconds')}.",
+        )
+        self.assertEqual(
+            history[3].content,
+            "[Turn Context]\n"
+            "User message received at "
+            f"{datetime(2026, 9, 9, 9, 0, tzinfo=timezone.utc).astimezone().isoformat(timespec='seconds')}.",
+        )
         self.assertEqual(
             session.items,
             [
@@ -1045,6 +1060,10 @@ class AgentTest(unittest.TestCase):
         )
         second_request_messages = provider.requests[1].messages
         self.assertEqual(
+            second_request_messages[:len(provider.requests[0].messages)],
+            provider.requests[0].messages,
+        )
+        self.assertEqual(
             [message.role for message in second_request_messages],
             ["system", "user", "assistant", "tool"],
         )
@@ -1063,8 +1082,12 @@ class AgentTest(unittest.TestCase):
             second_request_messages[2].reasoning,
             "I need to inspect the requested input first.",
         )
-        self.assertIn("assistant step (echo)", second_request_messages[0].content)
-        self.assertIn("tool result (call-1)", second_request_messages[0].content)
+        self.assertEqual(
+            second_request_messages[0].content,
+            "[Turn Context]\n"
+            "User message received at "
+            f"{REQUEST_TIME.astimezone().isoformat(timespec='seconds')}.",
+        )
         self.assertEqual(
             json.loads(second_request_messages[3].content),
             {
@@ -1171,7 +1194,7 @@ class AgentTest(unittest.TestCase):
             ),
         )
 
-    def test_keeps_recent_tool_chain_with_original_timestamps(
+    def test_keeps_recent_tool_chain_with_fixed_turn_context(
         self,
     ) -> None:
         tool_call = ToolCall(
@@ -1237,17 +1260,21 @@ class AgentTest(unittest.TestCase):
             [message.reasoning for message in history[1:5]],
             [None, "I need to inspect the requested input first.", None, None],
         )
-        historical_timeline = history[0].content or ""
-        self.assertIn("user", historical_timeline)
-        self.assertIn("assistant", historical_timeline)
-        self.assertIn("assistant step", historical_timeline)
-        self.assertIn("tool result", historical_timeline)
+        self.assertEqual(
+            history[0].content,
+            "[Turn Context]\n"
+            "User message received at "
+            f"{REQUEST_TIME.astimezone().isoformat(timespec='seconds')}.",
+        )
+        self.assertNotIn("assistant", history[0].content or "")
+        self.assertNotIn("tool", history[0].content or "")
 
     def test_recent_image_is_carried_into_next_request(self) -> None:
         session = Session(session_id="images")
         session.add_item(
             "user",
             "look at this",
+            REQUEST_TIME,
             attachments=(ImagePart(path=".nosis/attachments/a1.png"),),
         )
         provider = MockProvider(["ok"])

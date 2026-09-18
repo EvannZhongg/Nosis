@@ -306,19 +306,19 @@ class ToolMediaInjectionTest(unittest.TestCase):
         self.assertIn("Tool output", text)
         self.assertIn("a.png", text)
 
-    def test_the_timeline_does_not_report_it_as_a_user_turn(self) -> None:
-        """The model reads the timeline as who spoke when."""
+    def test_tool_media_does_not_create_a_turn_context(self) -> None:
         (self.root / "a.png").write_bytes(png_bytes(8, 8))
 
         _, provider = self.run_turn([self.call("c1", ["a.png"])])
 
-        timeline = "\n".join(
-            str(message.content)
+        turn_contexts = [
+            message
             for message in provider.requests[-1].messages
             if message.role == "system"
-        )
-        self.assertEqual(timeline.count("— user"), 1)
-        self.assertIn("— tool images", timeline)
+            and str(message.content).startswith("[Turn Context]")
+        ]
+        self.assertEqual(len(turn_contexts), 1)
+        self.assertNotIn("tool images", turn_contexts[0].content or "")
 
     def test_the_second_model_call_receives_the_image(self) -> None:
         (self.root / "a.png").write_bytes(png_bytes(8, 8))
