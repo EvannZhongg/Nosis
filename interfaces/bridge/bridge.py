@@ -45,7 +45,7 @@ from agent_core import (
     vision_aware_tool_names,
     skill_aware_tool_names,
 )
-from agent_core.prompts import load_system_prompt
+from agent_core.prompting import render_system_prompt
 from agent_core.providers import LiteLLMProvider
 from agent_core.mcp.manager import McpClientManager, McpServerStatus
 
@@ -54,6 +54,7 @@ from .config import (
     default_config_directory,
     load_config_with_name,
     load_model_options,
+    load_prompt_templates,
     load_vision_config,
 )
 from .protocol import (
@@ -550,6 +551,7 @@ class Bridge:
         try:
             agent_config = load_agent_config(self._agent_config_path)
             skills = SkillRegistry.discover(self._config_directory / "skills")
+            prompts = load_prompt_templates(self._config_directory / "prompts")
 
             main_provider = LiteLLMProvider(
                 model=config.model,
@@ -593,6 +595,8 @@ class Bridge:
                 config_path,
                 workspace,
                 self._permissions,
+                prompts.subagent,
+                prompts.consolidator,
             )
             context = ToolExecutionContext(
                 workspace=workspace,
@@ -614,7 +618,10 @@ class Bridge:
             self._agent = Agent(
                 provider=main_provider,
                 session=self._session,
-                system_prompt=load_system_prompt(workspace, skills),
+                system_prompt=render_system_prompt(
+                    prompts.system, workspace, skills
+                ),
+                consolidator_prompt=prompts.consolidator,
                 config=agent_config,
                 tools=catalog.select(
                     (
@@ -731,6 +738,8 @@ class Bridge:
         config_path: Path,
         workspace: Workspace,
         permission_controller: PermissionController,
+        subagent_prompt_template: str,
+        consolidator_prompt: str,
     ) -> SubagentRuntime | None:
         """Build the sub-agent runtime, or None when no role is configured."""
         if not agent_config.tools.is_enabled("subagent"):
@@ -768,6 +777,8 @@ class Bridge:
             config=agent_config,
             catalog=catalog,
             roles=roles,
+            subagent_prompt_template=subagent_prompt_template,
+            consolidator_prompt=consolidator_prompt,
             tool_policy=permission_controller,
         )
 

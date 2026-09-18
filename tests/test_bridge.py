@@ -821,6 +821,18 @@ def open_session_message(
     provider_config: dict | None = None,
     **extra: object,
 ) -> dict:
+    prompts = directory / "prompts"
+    prompts.mkdir(exist_ok=True)
+    for filename, content in {
+        "Soul.md": "Bridge system prompt for {{workspace}}",
+        "SubAgent.md": (
+            "Role {{role}}: {{role_description}} in {{workspace}}"
+        ),
+        "Consolidator.md": "Consolidate the conversation.",
+    }.items():
+        path = prompts / filename
+        if not path.exists():
+            path.write_text(content, encoding="utf-8")
     (directory / "provider_config.json").write_text(
         json.dumps(
             provider_config
@@ -1295,6 +1307,23 @@ class BridgeSessionOpenTest(unittest.TestCase):
         self.assertIn("read_skill", names)
         self.assertIn("demo-skill: Does demo work.", prompt)
         self.assertNotIn("# Detailed instructions", prompt)
+
+    def test_uses_prompt_templates_from_the_config_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            message = open_session_message(root)
+            (root / "prompts" / "Soul.md").write_text(
+                "Custom prompt for {{workspace}}",
+                encoding="utf-8",
+            )
+            bridge, _ = make_bridge([], root)
+
+            bridge.open_session(message)
+            bridge._ensure_runtime()
+
+            prompt = bridge._agent._context._system_prompt
+
+        self.assertEqual(prompt, f"Custom prompt for {root.resolve()}")
 
     def test_invalid_skill_does_not_prevent_bridge_startup(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

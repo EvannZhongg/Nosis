@@ -29,10 +29,10 @@ include = ["agent_core*", "interfaces*"]
 namespaces = false
 
 [tool.setuptools.package-data]
-agent_core = ["prompts/*.md"]
 "interfaces" = ["tui/dist/app.js"]
 "interfaces.bridge" = [
     "defaults/*.json",
+    "defaults/prompts_template/*.md",
     "defaults/skills/**/*",
 ]
 "interfaces.gui" = ["static/*", "static/assets/*"]

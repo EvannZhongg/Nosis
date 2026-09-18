@@ -7,7 +7,6 @@ from .config import AgentConfig
 from .content import historical_content
 from .llm import LLMProvider, LLMRequest, with_generation_limit
 from .plan import plan_snapshot_to_dict
-from .prompts import load_consolidator_prompt
 from .projection import ContextUnit, project_context_units
 from .session import Message, Session, UserAnchor
 from .tools import ToolDefinition
@@ -58,12 +57,14 @@ class ContextManager:
         provider: LLMProvider,
         session: Session,
         system_prompt: str,
+        consolidator_prompt: str,
         config: AgentConfig,
         media_root: Path | None = None,
     ) -> None:
         self._provider = provider
         self._session = session
         self._system_prompt = system_prompt
+        self._consolidator_prompt = consolidator_prompt
         self._output_reserve_tokens = config.output_reserve_tokens
         self._max_generation_tokens = config.max_generation_tokens
         self._media_root = media_root
@@ -147,7 +148,7 @@ class ContextManager:
             content = f"{anchors}\n\n{content}"
         request = LLMRequest(
             system_prompt=self._system_prompt_with_summary(
-                load_consolidator_prompt()
+                self._consolidator_prompt
             ),
             messages=(
                 Message(

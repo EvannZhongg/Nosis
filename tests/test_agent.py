@@ -45,6 +45,7 @@ AGENT_CONFIG = AgentConfig(
     output_reserve_tokens=100,
     tools=ToolConfig(enabled=()),
 )
+CONSOLIDATOR_PROMPT = "Consolidate the conversation."
 TEST_WORKSPACE = Workspace(Path(__file__).parent)
 
 
@@ -163,6 +164,7 @@ class AgentTest(unittest.TestCase):
             provider,
             session,
             "You are helpful.",
+            CONSOLIDATOR_PROMPT,
             AGENT_CONFIG,
             tool_set(EchoTool(), session=session),
             ToolExecutionContext(workspace=TEST_WORKSPACE, session=session),
@@ -201,6 +203,7 @@ class AgentTest(unittest.TestCase):
             provider,
             session,
             "You are helpful.",
+            CONSOLIDATOR_PROMPT,
             AGENT_CONFIG,
             tool_set(session=session),
             ToolExecutionContext(workspace=TEST_WORKSPACE, session=session),
@@ -245,6 +248,7 @@ class AgentTest(unittest.TestCase):
             provider,
             session,
             "You are helpful.",
+            CONSOLIDATOR_PROMPT,
             AgentConfig(
                 max_same_tool_calls=5,
                 output_reserve_tokens=100,
@@ -286,6 +290,7 @@ class AgentTest(unittest.TestCase):
             provider,
             session,
             "You are helpful.",
+            CONSOLIDATOR_PROMPT,
             AgentConfig(
                 max_same_tool_calls=5,
                 output_reserve_tokens=100,
@@ -296,6 +301,10 @@ class AgentTest(unittest.TestCase):
 
         session.add_item("user", "second")
         context.archive()
+        self.assertEqual(
+            provider.requests[0].system_prompt,
+            CONSOLIDATOR_PROMPT,
+        )
         session.add_item("assistant", "two")
         session.add_item("user", "third")
         context.archive()
@@ -341,6 +350,7 @@ class AgentTest(unittest.TestCase):
             provider,
             session,
             "You are helpful.",
+            CONSOLIDATOR_PROMPT,
             AgentConfig(
                 max_same_tool_calls=5,
                 output_reserve_tokens=100,
@@ -380,6 +390,7 @@ class AgentTest(unittest.TestCase):
             MockProvider([]),
             session,
             "You are helpful.",
+            CONSOLIDATOR_PROMPT,
             AGENT_CONFIG,
         )
 
@@ -412,6 +423,7 @@ class AgentTest(unittest.TestCase):
             MockProvider([]),
             session,
             "You are helpful.",
+            CONSOLIDATOR_PROMPT,
             AGENT_CONFIG,
         )
 
@@ -443,6 +455,7 @@ class AgentTest(unittest.TestCase):
             MockProvider([]),
             session,
             "You are helpful.",
+            CONSOLIDATOR_PROMPT,
             AGENT_CONFIG,
         )
 
@@ -467,6 +480,7 @@ class AgentTest(unittest.TestCase):
             provider,
             session,
             "You are helpful.",
+            CONSOLIDATOR_PROMPT,
             AgentConfig(
                 max_same_tool_calls=5,
                 output_reserve_tokens=100,
@@ -506,6 +520,7 @@ class AgentTest(unittest.TestCase):
             MockProvider([]),
             session,
             "You are helpful.",
+            CONSOLIDATOR_PROMPT,
             AGENT_CONFIG,
         )
         request = context.build_request()
@@ -543,6 +558,7 @@ class AgentTest(unittest.TestCase):
             provider,
             session,
             "You are helpful.",
+            CONSOLIDATOR_PROMPT,
             AgentConfig(
                 max_same_tool_calls=5,
                 output_reserve_tokens=100,
@@ -612,6 +628,7 @@ class AgentTest(unittest.TestCase):
             provider,
             session,
             "You are helpful.",
+            CONSOLIDATOR_PROMPT,
             AgentConfig(
                 max_same_tool_calls=5,
                 output_reserve_tokens=100,
@@ -672,6 +689,7 @@ class AgentTest(unittest.TestCase):
             provider,
             session,
             "You are helpful.",
+            CONSOLIDATOR_PROMPT,
             AGENT_CONFIG,
             tool_set(EchoTool(), session=session),
             ToolExecutionContext(workspace=TEST_WORKSPACE, session=session),
@@ -694,6 +712,7 @@ class AgentTest(unittest.TestCase):
             provider=provider,
             session=session,
             system_prompt="You are helpful.",
+            consolidator_prompt=CONSOLIDATOR_PROMPT,
             config=AGENT_CONFIG,
             tools=tool_set(session=session),
             context=ToolExecutionContext(
@@ -738,6 +757,7 @@ class AgentTest(unittest.TestCase):
             provider=provider,
             session=session,
             system_prompt="You are helpful.",
+            consolidator_prompt=CONSOLIDATOR_PROMPT,
             config=AGENT_CONFIG,
             tools=tool_set(session=session),
             context=ToolExecutionContext(
@@ -765,6 +785,7 @@ class AgentTest(unittest.TestCase):
                 provider=provider,
                 session=session,
                 system_prompt="You are helpful.",
+                consolidator_prompt=CONSOLIDATOR_PROMPT,
                 config=AGENT_CONFIG,
                 tools=tool_set(session=session),
                 context=ToolExecutionContext(
@@ -784,6 +805,7 @@ class AgentTest(unittest.TestCase):
             provider=provider,
             session=session,
             system_prompt="You are helpful.",
+            consolidator_prompt=CONSOLIDATOR_PROMPT,
             config=AGENT_CONFIG,
             tools=tool_set(session=session),
             context=ToolExecutionContext(
@@ -808,6 +830,7 @@ class AgentTest(unittest.TestCase):
             provider=provider,
             session=session,
             system_prompt="You are helpful.",
+            consolidator_prompt=CONSOLIDATOR_PROMPT,
             config=AgentConfig(
                 max_same_tool_calls=5,
                 output_reserve_tokens=100,
@@ -846,6 +869,7 @@ class AgentTest(unittest.TestCase):
             provider=provider,
             session=session,
             system_prompt="You are helpful.",
+            consolidator_prompt=CONSOLIDATOR_PROMPT,
             config=config,
             tools=tool_set(session=session),
             context=ToolExecutionContext(
@@ -868,6 +892,7 @@ class AgentTest(unittest.TestCase):
             provider=provider,
             session=session,
             system_prompt="You are helpful.",
+            consolidator_prompt=CONSOLIDATOR_PROMPT,
             config=AGENT_CONFIG,
             tools=tool_set(session=session),
             context=ToolExecutionContext(
@@ -959,6 +984,7 @@ class AgentTest(unittest.TestCase):
             provider=provider,
             session=session,
             system_prompt="You are helpful.",
+            consolidator_prompt=CONSOLIDATOR_PROMPT,
             config=AGENT_CONFIG,
             now=clock(
                 REQUEST_TIME,
@@ -1140,6 +1166,7 @@ class AgentTest(unittest.TestCase):
             provider=provider,
             session=session,
             system_prompt="You are helpful.",
+            consolidator_prompt=CONSOLIDATOR_PROMPT,
             config=AGENT_CONFIG,
             tools=tool_set(EchoTool(), session=session),
             context=ToolExecutionContext(
@@ -1199,6 +1226,7 @@ class AgentTest(unittest.TestCase):
             provider=provider,
             session=session,
             system_prompt="Be helpful.",
+            consolidator_prompt=CONSOLIDATOR_PROMPT,
             config=AGENT_CONFIG,
             tools=tool_set(session=session),
             context=ToolExecutionContext(
@@ -1238,6 +1266,7 @@ class AgentTest(unittest.TestCase):
             provider=provider,
             session=session,
             system_prompt="You are helpful.",
+            consolidator_prompt=CONSOLIDATOR_PROMPT,
             config=AgentConfig(
                 max_same_tool_calls=5,
                 output_reserve_tokens=100,
@@ -1317,6 +1346,7 @@ class AgentTest(unittest.TestCase):
             provider=provider,
             session=session,
             system_prompt="You are helpful.",
+            consolidator_prompt=CONSOLIDATOR_PROMPT,
             config=AGENT_CONFIG,
             tools=tool_set(EchoTool(), session=session),
             context=ToolExecutionContext(
@@ -1385,6 +1415,7 @@ class AgentTest(unittest.TestCase):
             provider=provider,
             session=session,
             system_prompt="You are helpful.",
+            consolidator_prompt=CONSOLIDATOR_PROMPT,
             config=AGENT_CONFIG,
             tools=tool_set(EchoTool(), session=session),
             context=ToolExecutionContext(
@@ -1431,6 +1462,7 @@ class AgentTest(unittest.TestCase):
             provider=provider,
             session=session,
             system_prompt="You are helpful.",
+            consolidator_prompt=CONSOLIDATOR_PROMPT,
             config=AGENT_CONFIG,
             tools=tool_set(EchoTool(), session=session),
             context=ToolExecutionContext(
@@ -1468,6 +1500,7 @@ class ConcurrentToolBatchTest(unittest.TestCase):
             provider=provider,
             session=session,
             system_prompt="You are helpful.",
+            consolidator_prompt=CONSOLIDATOR_PROMPT,
             config=AGENT_CONFIG,
             tools=tool_set(tool, session=session),
             context=ToolExecutionContext(
@@ -1567,6 +1600,7 @@ class ConcurrentToolBatchTest(unittest.TestCase):
             provider=provider,
             session=session,
             system_prompt="You are helpful.",
+            consolidator_prompt=CONSOLIDATOR_PROMPT,
             config=AGENT_CONFIG,
             tools=tool_set(blocking, EchoTool(), session=session),
             context=ToolExecutionContext(
@@ -1601,6 +1635,7 @@ class ConcurrentToolBatchTest(unittest.TestCase):
             MockProvider([LLMResponse(None, tool_calls=calls)]),
             session,
             "You are helpful.",
+            CONSOLIDATOR_PROMPT,
             AGENT_CONFIG,
             tool_set(CancellingTool(), session=session),
             ToolExecutionContext(workspace=TEST_WORKSPACE, session=session),

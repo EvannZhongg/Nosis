@@ -3,7 +3,14 @@ import unittest
 from pathlib import Path
 
 from agent_core import LLMProvider, LLMResponse, SubagentRole, Workspace
-from agent_core.prompts import load_subagent_prompt, load_system_prompt
+from agent_core.prompting import render_subagent_prompt, render_system_prompt
+
+
+SYSTEM_TEMPLATE = "I am Nosis.\n\nCurrent workspace: {{workspace}}"
+SUBAGENT_TEMPLATE = (
+    "Role {{role}}: {{role_description}}\n\n"
+    "Current workspace: {{workspace}}"
+)
 
 
 class _TextOnlyProvider(LLMProvider):
@@ -24,7 +31,7 @@ class PromptsTest(unittest.TestCase):
     def test_loads_system_prompt(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Workspace(Path(directory))
-            prompt = load_system_prompt(workspace)
+            prompt = render_system_prompt(SYSTEM_TEMPLATE, workspace)
 
         self.assertTrue(prompt)
         self.assertIn("I am Nosis", prompt)
@@ -41,7 +48,9 @@ class PromptsTest(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as directory:
             workspace = Workspace(Path(directory))
-            prompt = load_subagent_prompt(workspace, role)
+            prompt = render_subagent_prompt(
+                SUBAGENT_TEMPLATE, workspace, role
+            )
 
         self.assertTrue(prompt)
         self.assertIn(f"Current workspace: {workspace.path}", prompt)

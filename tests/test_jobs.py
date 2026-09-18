@@ -27,6 +27,7 @@ CONFIG = AgentConfig(
     output_reserve_tokens=100,
     tools=ToolConfig(enabled=()),
 )
+CONSOLIDATOR_PROMPT = "Consolidate the conversation."
 
 
 class SequencedProvider(LLMProvider):
@@ -106,7 +107,7 @@ class BackgroundJobTest(unittest.TestCase):
             jobs=jobs,
         )
         tools = ToolCatalog((ShellTool(),)).select(("shell",), context)
-        agent = Agent(provider, session, "system", CONFIG, tools, context)
+        agent = Agent(provider, session, "system", CONSOLIDATOR_PROMPT, CONFIG, tools, context)
         errors = []
 
         def run() -> None:
@@ -257,6 +258,7 @@ class BackgroundJobTest(unittest.TestCase):
             provider,
             session,
             "system",
+            CONSOLIDATOR_PROMPT,
             CONFIG,
             ToolCatalog((ShellTool(),)).select(("shell",), context),
             context,

@@ -32,6 +32,10 @@ SUBAGENT_CONFIG = AgentConfig(
     output_reserve_tokens=100,
     tools=ToolConfig(enabled=()),
 )
+SUBAGENT_PROMPT = (
+    "Role {{role}}: {{role_description}}\nWorkspace: {{workspace}}"
+)
+CONSOLIDATOR_PROMPT = "Consolidate the conversation."
 
 
 class StaticProvider(LLMProvider):
@@ -121,6 +125,8 @@ def runtime(catalog, roles) -> SubagentRuntime:
         config=SUBAGENT_CONFIG,
         catalog=catalog,
         roles=SubagentRoleRegistry(roles),
+        subagent_prompt_template=SUBAGENT_PROMPT,
+        consolidator_prompt=CONSOLIDATOR_PROMPT,
     )
 
 
@@ -426,6 +432,13 @@ class SubagentRuntimeTest(unittest.TestCase):
             )
 
         self.assertEqual((cheap, strong), ("cheap", "strong"))
+        for configured_role in roles:
+            request = configured_role.provider.requests[0]
+            self.assertIn(f"Role {configured_role.name}", request.system_prompt)
+            self.assertIn(
+                configured_role.description,
+                request.system_prompt,
+            )
 
     def test_parallel_calls_get_separate_transcripts(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

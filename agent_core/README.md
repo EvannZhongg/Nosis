@@ -10,6 +10,7 @@ Runtime 由 [`interfaces/bridge`](../interfaces/bridge/README.md) 统一装配�
 
 - `provider_config.json`：Provider、模型和角色对应关系
 - `agent_config.json`：Tool、上下文压缩、子 Agent 和 MCP
+- `prompts/`：主 Agent、子 Agent 与上下文压缩使用的 Prompt 模板
 
 密钥可自行写入同目录的 `.env`，供配置中的 `${ENV_NAME}` 引用。
 
@@ -17,6 +18,7 @@ Runtime 由 [`interfaces/bridge`](../interfaces/bridge/README.md) 统一装配�
 
 - [`provider_config.json`](../interfaces/bridge/defaults/provider_config.json)
 - [`agent_config.json`](../interfaces/bridge/defaults/agent_config.json)
+- [`prompts_template/`](../interfaces/bridge/defaults/prompts_template)
 
 最小 Provider 配置示例：
 

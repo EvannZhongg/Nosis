@@ -11,7 +11,7 @@ from agent_core import (
     Workspace,
     builtin_catalog,
 )
-from agent_core.prompts import load_system_prompt
+from agent_core.prompting import render_system_prompt
 
 
 def write_skill(
@@ -145,8 +145,10 @@ class SkillRegistryTest(unittest.TestCase):
             skills = root / "skills"
             write_skill(skills, "demo")
 
-            prompt = load_system_prompt(
-                Workspace(root), SkillRegistry.discover(skills)
+            prompt = render_system_prompt(
+                "System for {{workspace}}",
+                Workspace(root),
+                SkillRegistry.discover(skills),
             )
 
         self.assertIn("## Available Skills", prompt)

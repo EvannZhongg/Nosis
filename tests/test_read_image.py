@@ -27,6 +27,9 @@ from agent_core.tools import ToolConfig
 from tests.test_media import jpeg_bytes, png_bytes
 
 
+CONSOLIDATOR_PROMPT = "Consolidate the conversation."
+
+
 class StubProvider(LLMProvider):
     """Replays a scripted sequence of responses, recording each request."""
 
@@ -213,6 +216,7 @@ class ToolMediaInjectionTest(unittest.TestCase):
             provider=provider,
             session=session,
             system_prompt="S",
+            consolidator_prompt=CONSOLIDATOR_PROMPT,
             config=agent_config(),
             tools=ToolCatalog((ReadImageTool(),)).select(
                 ("read_image",), context

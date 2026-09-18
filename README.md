@@ -20,7 +20,7 @@ npm run build
 uv tool install --editable ".[gui]"
 ```
 
-首次启动会在 `~/.nosis/` 生成配置和内置 Skill。要使用 OpenAI 兼容模型，可将
+首次启动会在 `~/.nosis/` 生成配置、Prompt 模板和内置 Skill。要使用 OpenAI 兼容模型，可将
 `~/.nosis/provider_config.json` 精简为下面的最小配置（保留其他 Provider 也可以）：
 
 ```json

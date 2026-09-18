@@ -10,7 +10,7 @@ from typing import Iterable
 from .config import AgentConfig
 from .content import ImagePart
 from .llm import LLMProvider
-from .prompts import load_subagent_prompt
+from .prompting import render_subagent_prompt
 from .session import Session
 from .session_paths import session_directory
 from .session_store import JsonlSessionStore
@@ -115,12 +115,16 @@ class SubagentRuntime:
         config: AgentConfig,
         catalog: ToolCatalog,
         roles: SubagentRoleRegistry,
+        subagent_prompt_template: str,
+        consolidator_prompt: str,
         *,
         tool_policy: ToolPolicy | None = None,
     ) -> None:
         self._config = config
         self._catalog = catalog
         self._roles = roles
+        self._subagent_prompt_template = subagent_prompt_template
+        self._consolidator_prompt = consolidator_prompt
         self._tool_policy = tool_policy
 
     @property
@@ -161,9 +165,13 @@ class SubagentRuntime:
         child = Agent(
             provider=role.provider,
             session=session,
-            system_prompt=load_subagent_prompt(
-                parent.workspace, role, parent.skills
+            system_prompt=render_subagent_prompt(
+                self._subagent_prompt_template,
+                parent.workspace,
+                role,
+                parent.skills,
             ),
+            consolidator_prompt=self._consolidator_prompt,
             config=self._config,
             tools=self._catalog.select(
                 skill_aware_tool_names(

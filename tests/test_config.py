@@ -13,6 +13,7 @@ from interfaces.bridge.config import (
     initialize_config_directory,
     load_config,
     load_model_options,
+    load_prompt_templates,
     load_vision_config,
 )
 
@@ -101,6 +102,9 @@ class ConfigTest(unittest.TestCase):
                 (
                     config_directory / "provider_config.json",
                     config_directory / "agent_config.json",
+                    config_directory / "prompts" / "Soul.md",
+                    config_directory / "prompts" / "SubAgent.md",
+                    config_directory / "prompts" / "Consolidator.md",
                     config_directory / "skills" / "skill-creator",
                 ),
             )
@@ -126,6 +130,10 @@ class ConfigTest(unittest.TestCase):
                 6,
             )
             self.assertTrue((config_directory / "skills").is_dir())
+            prompts = load_prompt_templates(config_directory / "prompts")
+            self.assertIn("I am Nosis", prompts.system)
+            self.assertIn("{{role}}", prompts.subagent)
+            self.assertIn("compact replacement checkpoint", prompts.consolidator)
             skill_directory = config_directory / "skills" / "skill-creator"
             self.assertTrue((skill_directory / "SKILL.md").is_file())
             self.assertTrue((skill_directory / "license.txt").is_file())
@@ -151,12 +159,20 @@ class ConfigTest(unittest.TestCase):
             existing_skill.mkdir(parents=True)
             skill_path = existing_skill / "SKILL.md"
             skill_path.write_text("custom skill", encoding="utf-8")
+            prompts_directory = config_directory / "prompts"
+            prompts_directory.mkdir()
+            soul_path = prompts_directory / "Soul.md"
+            soul_path.write_text("custom prompt", encoding="utf-8")
 
             created = initialize_config_directory(config_directory)
 
             self.assertEqual(
                 created,
-                (config_directory / "agent_config.json",),
+                (
+                    config_directory / "agent_config.json",
+                    config_directory / "prompts" / "SubAgent.md",
+                    config_directory / "prompts" / "Consolidator.md",
+                ),
             )
             self.assertEqual(
                 provider_path.read_text(encoding="utf-8"),
@@ -164,6 +180,7 @@ class ConfigTest(unittest.TestCase):
             )
             self.assertTrue((config_directory / "skills").is_dir())
             self.assertEqual(skill_path.read_text(encoding="utf-8"), "custom skill")
+            self.assertEqual(soul_path.read_text(encoding="utf-8"), "custom prompt")
             self.assertFalse((existing_skill / "scripts").exists())
 
     def test_initializes_only_first_level_skill_directories(self) -> None:
@@ -173,6 +190,10 @@ class ConfigTest(unittest.TestCase):
             defaults.mkdir()
             for filename in ("provider_config.json", "agent_config.json"):
                 (defaults / filename).write_text("{}", encoding="utf-8")
+            prompts = defaults / "prompts_template"
+            prompts.mkdir()
+            for filename in ("Soul.md", "SubAgent.md", "Consolidator.md"):
+                (prompts / filename).write_text(filename, encoding="utf-8")
 
             direct = defaults / "skills" / "direct"
             direct.mkdir(parents=True)

@@ -148,6 +148,7 @@ class Agent:
         provider: LLMProvider,
         session: Session,
         system_prompt: str,
+        consolidator_prompt: str,
         config: AgentConfig,
         tools: ToolSet,
         context: ToolExecutionContext,
@@ -174,6 +175,7 @@ class Agent:
             provider=provider,
             session=session,
             system_prompt=system_prompt,
+            consolidator_prompt=consolidator_prompt,
             config=config,
             media_root=context.workspace.path,
         )

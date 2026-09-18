@@ -232,7 +232,7 @@ class PlanPersistenceTest(unittest.TestCase):
             "Persistent plan",
             (PlanStep("verify", "Verify recovery", "in_progress"),),
         )
-        manager = ContextManager(_Provider(), session, "System", _config())
+        manager = ContextManager(_Provider(), session, "System", "Consolidate.", _config())
 
         prompt = manager.build_request().system_prompt
 
@@ -246,7 +246,7 @@ class PlanPersistenceTest(unittest.TestCase):
             "Finished plan",
             (PlanStep("verify", "Verify recovery", "completed", "Passed."),),
         )
-        manager = ContextManager(_Provider(), session, "System", _config())
+        manager = ContextManager(_Provider(), session, "System", "Consolidate.", _config())
 
         prompt = manager.build_request().system_prompt
 

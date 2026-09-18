@@ -12,6 +12,11 @@ DEFAULT_CONFIG_FILENAMES = (
     "provider_config.json",
     "agent_config.json",
 )
+PROMPT_FILENAMES = (
+    "Soul.md",
+    "SubAgent.md",
+    "Consolidator.md",
+)
 
 
 @dataclass(frozen=True)
@@ -20,6 +25,13 @@ class ModelConfig:
     url: str | None
     key: str | None
     max_context_tokens: int | None = None
+
+
+@dataclass(frozen=True)
+class PromptTemplates:
+    system: str
+    subagent: str
+    consolidator: str
 
 
 def default_config_directory() -> Path:
@@ -38,6 +50,16 @@ def initialize_config_directory(directory: Path) -> tuple[Path, ...]:
             defaults.joinpath(filename).read_text(encoding="utf-8"),
             encoding="utf-8",
         )
+        created.append(path)
+
+    prompts_directory = directory / "prompts"
+    prompts_directory.mkdir(exist_ok=True)
+    packaged_prompts = defaults.joinpath("prompts_template")
+    for filename in PROMPT_FILENAMES:
+        path = prompts_directory / filename
+        if path.exists():
+            continue
+        _copy_resource_file(packaged_prompts.joinpath(filename), path)
         created.append(path)
 
     skills_directory = directory / "skills"
@@ -61,8 +83,22 @@ def _copy_resource_directory(source, destination: Path) -> None:
         if child.is_dir():
             _copy_resource_directory(child, target)
             continue
-        with child.open("rb") as source_file, target.open("xb") as target_file:
-            shutil.copyfileobj(source_file, target_file)
+        _copy_resource_file(child, target)
+
+
+def _copy_resource_file(source, destination: Path) -> None:
+    with source.open("rb") as source_file, destination.open("xb") as target_file:
+        shutil.copyfileobj(source_file, target_file)
+
+
+def load_prompt_templates(directory: Path) -> PromptTemplates:
+    return PromptTemplates(
+        system=(directory / "Soul.md").read_text(encoding="utf-8").strip(),
+        subagent=(directory / "SubAgent.md").read_text(encoding="utf-8").strip(),
+        consolidator=(
+            (directory / "Consolidator.md").read_text(encoding="utf-8").strip()
+        ),
+    )
 
 
 def _read_config(
