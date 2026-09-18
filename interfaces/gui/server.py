@@ -35,6 +35,7 @@ from agent_core import (
     plan_snapshot_to_dict,
     probe_image,
 )
+from agent_core.path_utils import path_for_comparison
 
 from ..bridge.config import (
     default_config_directory,
@@ -793,7 +794,9 @@ def create_app(
         attachment_root = (session_workspace(session_id).path / ".nosis" / "attachments").resolve()
         path = (attachment_root / filename).resolve()
         try:
-            path.relative_to(attachment_root)
+            path_for_comparison(path).relative_to(
+                path_for_comparison(attachment_root)
+            )
         except ValueError as error:
             raise HTTPException(status_code=404, detail="附件不存在。") from error
         if not path.is_file():

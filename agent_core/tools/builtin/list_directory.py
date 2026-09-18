@@ -1,5 +1,6 @@
 from ..base import JSONValue, Tool, ToolDefinition
 from ..context import ToolExecutionContext
+from ...path_utils import path_for_comparison
 
 
 class ListDirectoryTool(Tool):
@@ -64,6 +65,8 @@ class ListDirectoryTool(Tool):
             )
 
         return {
-            "path": directory_path.relative_to(workspace.path).as_posix(),
+            "path": path_for_comparison(directory_path).relative_to(
+                path_for_comparison(workspace.path)
+            ).as_posix(),
             "entries": entries,
         }

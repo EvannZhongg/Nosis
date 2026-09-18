@@ -4,6 +4,7 @@ import tempfile
 
 from ..base import JSONValue, Tool, ToolDefinition
 from ..context import ToolExecutionContext
+from ...path_utils import path_for_comparison
 
 
 class WriteFileTool(Tool):
@@ -94,7 +95,9 @@ class WriteFileTool(Tool):
                     pass
 
         return {
-            "path": file_path.relative_to(workspace.path).as_posix(),
+            "path": path_for_comparison(file_path).relative_to(
+                path_for_comparison(workspace.path)
+            ).as_posix(),
             "bytes_written": len(data),
             "overwritten": overwrite,
         }

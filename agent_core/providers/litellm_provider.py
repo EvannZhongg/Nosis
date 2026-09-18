@@ -21,6 +21,7 @@ from agent_core.media import (
     encode_data_url,
     probe_image,
 )
+from agent_core.path_utils import path_for_comparison
 from agent_core.session import Message
 from agent_core.tools import AnalyzeImageTool, ToolCall, ToolDefinition
 
@@ -512,7 +513,9 @@ def _resolve_media_path(path: str, media_root: Path | None) -> Path:
         # legitimate path would be rejected as an escape.
         root = media_root.expanduser().resolve()
         try:
-            resolved.relative_to(root)
+            path_for_comparison(resolved).relative_to(
+                path_for_comparison(root)
+            )
         except ValueError as error:
             raise ValueError("image path must stay within media_root") from error
     if not resolved.is_file():

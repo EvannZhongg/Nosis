@@ -1,5 +1,6 @@
 from ..base import JSONValue, Tool, ToolDefinition
 from ..context import ToolExecutionContext
+from ...path_utils import path_for_comparison
 
 
 class EditFileTool(Tool):
@@ -69,6 +70,8 @@ class EditFileTool(Tool):
             content.replace(old_text, new_text, 1).encode("utf-8")
         )
         return {
-            "path": file_path.relative_to(workspace.path).as_posix(),
+            "path": path_for_comparison(file_path).relative_to(
+                path_for_comparison(workspace.path)
+            ).as_posix(),
             "replacements": 1,
         }

@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 from urllib.parse import quote
 
+from .path_utils import path_for_comparison
 from .session_paths import default_sessions_directory, session_directory
 from .tools import ToolResult
 from .workspace import Workspace
@@ -42,8 +43,10 @@ class ToolResultNormalizer:
             artifact_directory or default_artifact_directory
         ).expanduser().resolve()
         try:
-            artifact_relative = self._artifact_directory.relative_to(
-                self._sessions_directory
+            artifact_relative = path_for_comparison(
+                self._artifact_directory
+            ).relative_to(
+                path_for_comparison(self._sessions_directory)
             )
         except ValueError as error:
             raise ValueError(
@@ -103,7 +106,9 @@ class ToolResultNormalizer:
             self._artifact_directory / artifact_path.name
         ).resolve()
         try:
-            absolute_path.relative_to(self._sessions_directory)
+            path_for_comparison(absolute_path).relative_to(
+                path_for_comparison(self._sessions_directory)
+            )
         except ValueError as error:
             raise ValueError(
                 "session artifact path must stay within sessions"

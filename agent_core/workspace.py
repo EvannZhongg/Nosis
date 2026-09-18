@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from pathlib import Path
 
+from .path_utils import path_for_comparison
+
 
 @dataclass(frozen=True)
 class Workspace:
@@ -21,7 +23,9 @@ class Workspace:
 
         resolved_path = (self.path / path).resolve()
         try:
-            resolved_path.relative_to(self.path)
+            path_for_comparison(resolved_path).relative_to(
+                path_for_comparison(self.path)
+            )
         except ValueError as error:
             raise ValueError(
                 "workspace path must stay within the workspace"

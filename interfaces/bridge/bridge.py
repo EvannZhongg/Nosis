@@ -47,6 +47,7 @@ from agent_core import (
     skill_aware_tool_names,
 )
 from agent_core.prompting import render_system_prompt
+from agent_core.path_utils import path_for_comparison
 from agent_core.providers import LiteLLMProvider
 from agent_core.mcp.manager import McpClientManager, McpServerStatus
 
@@ -975,7 +976,9 @@ def _parse_attachments(value: object, workspace: Workspace) -> tuple[ImagePart, 
         info = probe_image(resolved)
         result.append(
             ImagePart(
-                path=resolved.relative_to(workspace.path).as_posix(),
+                path=path_for_comparison(resolved).relative_to(
+                    path_for_comparison(workspace.path)
+                ).as_posix(),
                 mime_type=info.mime_type,
             )
         )

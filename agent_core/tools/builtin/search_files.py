@@ -4,6 +4,7 @@ from pathlib import Path
 
 from ..base import JSONValue, Tool, ToolDefinition
 from ..context import ToolExecutionContext
+from ...path_utils import path_for_comparison
 
 
 DEFAULT_SEARCH_LIMIT = 200
@@ -151,8 +152,8 @@ class SearchFilesTool(Tool):
                     break
 
                 match = {
-                    "path": file_path.relative_to(
-                        workspace.path
+                    "path": path_for_comparison(file_path).relative_to(
+                        path_for_comparison(workspace.path)
                     ).as_posix(),
                     "line_number": line_number,
                     "line": line,
@@ -341,7 +342,9 @@ def _escapes_search_root(entry: Path, search_root: Path) -> bool:
     Directory junctions on Windows are reparse points that are not
     symlinks, so the entry has to be resolved to catch them.
     """
-    return not entry.resolve().is_relative_to(search_root)
+    return not path_for_comparison(entry.resolve()).is_relative_to(
+        path_for_comparison(search_root)
+    )
 
 
 def _matches_glob(path: Path, pattern: str) -> bool:

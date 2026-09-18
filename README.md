@@ -2,7 +2,7 @@
 
 Nosis 是一个轻量级、开源、可自托管的个人 Agent 框架。它在终端与浏览器中运行，把工具调用、会话持久化、MCP 集成、模型路由与多代理委托整合在一起。
 
-核心是一个不依赖 Agent 框架的 Python Runtime，两个前端只是它的接入点：TUI 与 Web GUI 共用同一套 Runtime、Tool、授权与 Session。
+核心是一个不依赖 Agent 框架的 Python Runtime：TUI 与 Web GUI 共用同一套 Runtime、Tool、授权与 Session。
 
 ```text
 TUI ──────────┐

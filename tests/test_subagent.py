@@ -8,6 +8,7 @@ from pathlib import Path
 
 from agent_core import (
     AgentConfig,
+    CancellationToken,
     JobManager,
     JsonlSessionStore,
     LLMProvider,
@@ -500,11 +501,16 @@ class SubagentRuntimeTest(unittest.TestCase):
             subagents = tool_context.subagents
             assert subagents is not None
             original_run = subagents.run
-            barrier = threading.Barrier(8)
+            barrier = threading.Barrier(8, timeout=5)
 
-            def synchronized_run(role_name, task, parent_context):
+            def synchronized_run(
+                role_name: str,
+                task: str,
+                parent: ToolExecutionContext,
+                cancellation: CancellationToken | None = None,
+            ) -> str:
                 barrier.wait()
-                return original_run(role_name, task, parent_context)
+                return original_run(role_name, task, parent, cancellation)
 
             subagents.run = synchronized_run
 
@@ -531,13 +537,20 @@ class SubagentRuntimeTest(unittest.TestCase):
                 / "subagents"
             )
             transcripts = list(transcript_directory.rglob("*.jsonl"))
-            tasks = [
-                JsonlSessionStore(
-                    transcript.parent.parent,
-                    group_by_workspace=False,
-                ).load(transcript.parent.name).items[0].content
-                for transcript in transcripts
-            ]
+            tasks: list[str] = []
+            for transcript in transcripts:
+                content = (
+                    JsonlSessionStore(
+                        transcript.parent.parent,
+                        group_by_workspace=False,
+                    )
+                    .load(transcript.parent.name)
+                    .items[0]
+                    .content
+                )
+                if not isinstance(content, str):
+                    self.fail("child task transcript is not text")
+                tasks.append(content)
 
         self.assertEqual(results, ["child answer"] * 8)
         self.assertEqual(len(transcripts), 8)
