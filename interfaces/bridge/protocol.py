@@ -123,7 +123,11 @@ def runtime_state_message(
     skill_warnings: tuple[str, ...] = (),
     plan: PlanSnapshot | dict[str, object] | None = None,
 ) -> dict[str, object]:
-    """Describe the execution plane independently from Session readiness."""
+    """Describe the execution plane independently from Session readiness.
+
+    The first runtime_state after opening is also the frontend synchronization
+    barrier: commands must not be dispatched until that snapshot is applied.
+    """
     message: dict[str, object] = {
         "type": "runtime_state",
         "phase": phase,

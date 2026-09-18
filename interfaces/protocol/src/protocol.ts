@@ -115,6 +115,11 @@ export type UserQuestion = {
 
 export type Incoming = (
   | {
+      /**
+       * Authoritative execution snapshot. The first snapshot after
+       * open_session is the synchronization barrier before commands may be
+       * dispatched; session_ready only describes the Session control plane.
+       */
       type: 'runtime_state';
       phase: RuntimePhase;
       turn_id: string | null;

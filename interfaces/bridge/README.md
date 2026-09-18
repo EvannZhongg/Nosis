@@ -18,6 +18,6 @@ Bridge 负责：
 
 Agent Loop、Tool 执行和上下文管理仍属于 `agent_core`，前端与 Bridge 都不复制这些语义。
 
-首条输入必须是 `open_session`。Bridge 先完成轻量 Session 初始化并发送 `session_ready`；Provider、MCP、Tool 与 Agent 只在首个 `user_turn` 到达时初始化。协议类型分别定义在 [`protocol.py`](protocol.py) 和 [`../protocol/src/protocol.ts`](../protocol/src/protocol.ts)，修改消息时必须同步更新两端。
+首条输入必须是 `open_session`。Bridge 先完成轻量 Session 初始化，依次发送 `session_ready` 与初始 `runtime_state`；后者是前端可以开始发送命令的同步屏障。Provider、MCP、Tool 与 Agent 只在首个 `user_turn` 到达时初始化。协议类型分别定义在 [`protocol.py`](protocol.py) 和 [`../protocol/src/protocol.ts`](../protocol/src/protocol.ts)，修改消息时必须同步更新两端。
 
 进程入口为 `__main__.py`，主要装配位于 `bridge.py`。Bridge 可使用内存输入输出进行测试，无需启动 TUI 或 GUI。
