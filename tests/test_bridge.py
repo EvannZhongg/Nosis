@@ -330,6 +330,10 @@ class PermissionProtocolTest(unittest.TestCase):
                 JsonlSessionStore(root / "sessions").permission_preset_for("s"),
                 PermissionPreset.FULL_ACCESS,
             )
+            self.assertEqual(
+                bridge._session.journal[-1].event_type,
+                "permission_preset_changed",
+            )
             self.assertEqual(JsonlSessionStore(root / "sessions").list_sessions(), [])
             self.assertEqual(
                 emitted(stdout)[-1],

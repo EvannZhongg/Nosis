@@ -187,17 +187,9 @@ class Bridge:
 
     def _set_permission_preset(self, message: dict[str, object]) -> None:
         preset = PermissionPreset(str(message.get("preset")))
-        if self._session is None or self._store is None or self._workspace is None:
+        if self._permissions is None:
             raise RuntimeError("received 'permission_set' before 'open_session'")
-        if self._agent is not None and self._permissions is not None:
-            self._permissions.set_preset(preset)
-        else:
-            self._session.permission_preset = preset
-            self._store.set_permission_preset(
-                self._session.session_id,
-                preset,
-                self._workspace.path,
-            )
+        self._permissions.set_preset(preset)
         self.emit("permission_changed", preset=preset.value)
 
     def _set_provider(self, message: dict[str, object]) -> None:
