@@ -47,6 +47,13 @@ export type RuntimePhase =
   | 'waiting_user'
   | 'failed';
 
+export function runtimeIsActive(phase: RuntimePhase): boolean {
+  return phase === 'starting'
+    || phase === 'running'
+    || phase === 'waiting_approval'
+    || phase === 'waiting_user';
+}
+
 export type SessionSummary = {
   session_id: string;
   title: string;

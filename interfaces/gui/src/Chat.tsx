@@ -10,7 +10,7 @@ import remarkGfm from "remark-gfm";
 import { get, releaseActiveSession, selectWorkspace, sessionUrl, uploadAttachments, type ImageAttachment, type ModelOption, type Session } from "./api";
 import { SessionSocket } from "./session";
 import { applyMessage, isTurnActivity, toMessages, TURN_PROCESS_GROUP, turnProcessPartIndexes, type Feedback, type TranscriptItem } from "./transcript";
-import type { ContextWindow, Incoming, PermissionPreset, RuntimePhase, UserQuestion } from "@nosis/protocol";
+import { runtimeIsActive, type ContextWindow, type Incoming, type PermissionPreset, type RuntimePhase, type UserQuestion } from "@nosis/protocol";
 
 type Approval = {
   requestId: string;
@@ -54,13 +54,6 @@ export function shouldBlockRunningAttachmentSubmit(
   pendingFileCount: number,
 ): boolean {
   return running && pendingFileCount > 0;
-}
-
-function runtimeIsActive(phase: RuntimePhase): boolean {
-  return phase === "starting"
-    || phase === "running"
-    || phase === "waiting_approval"
-    || phase === "waiting_user";
 }
 
 function ToolCard({ toolName, args, result }: ToolCallMessagePartProps) {

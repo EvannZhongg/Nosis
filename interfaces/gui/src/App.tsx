@@ -2,17 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, MessageSquare, Plus, Trash2 } from "lucide-react";
 import { Chat } from "./Chat";
 import { Workspace } from "./Workspace";
-import type { ContextWindow } from "@nosis/protocol";
+import { runtimeIsActive, type ContextWindow, type RuntimePhase } from "@nosis/protocol";
 import { deleteSession, get, sessionUrl, type ModelOption, type ModelOptions, type Session, type WorkspaceSessions } from "./api";
 
-type ActiveSession = Session & { provider: string | null; phase: string };
-
-function runtimeIsBusy(phase: string): boolean {
-  return phase === "starting"
-    || phase === "running"
-    || phase === "waiting_approval"
-    || phase === "waiting_user";
-}
+type ActiveSession = Session & { provider: string | null; phase: RuntimePhase };
 
 function newSession(workspace?: string | null): Session {
   return {
@@ -63,12 +56,12 @@ export function App() {
     get<ActiveSession[]>("/api/active-sessions").then(async (activeSessions) => {
       setActiveTurnIds(new Set(
         activeSessions
-          .filter((session) => runtimeIsBusy(session.phase))
+          .filter((session) => runtimeIsActive(session.phase))
           .map((session) => session.session_id),
       ));
       setBusyBySession((all) => ({
         ...all,
-        ...Object.fromEntries(activeSessions.map((session) => [session.session_id, runtimeIsBusy(session.phase)])),
+        ...Object.fromEntries(activeSessions.map((session) => [session.session_id, runtimeIsActive(session.phase)])),
       }));
       setModelBySession((all) => ({
         ...all,
