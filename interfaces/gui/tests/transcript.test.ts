@@ -45,6 +45,8 @@ function fold(messages: Incoming[], initial: TranscriptItem[] = []) {
         feedback: applied.feedback ?? state.feedback,
         approval:
           applied.approval !== undefined ? applied.approval : state.approval,
+        question:
+          applied.question !== undefined ? applied.question : state.question,
         finished: applied.finished ?? state.finished,
       };
     },
@@ -52,6 +54,7 @@ function fold(messages: Incoming[], initial: TranscriptItem[] = []) {
       items: initial,
       feedback: undefined,
       approval: null,
+      question: null,
       finished: false,
     } as ReturnType<typeof applyMessage> & { approval: unknown },
   );
@@ -339,6 +342,7 @@ describe("applyMessage", () => {
       requestId: "t1:1",
       command: "rm -rf build",
     });
+    expect(requested.question).toBeNull();
 
     const completed = applyMessage(requested.items, {
       type: "turn_completed",
@@ -360,6 +364,7 @@ describe("applyMessage", () => {
     };
     const requested = applyMessage([], question);
     expect(requested.question).toEqual(question);
+    expect(requested.approval).toBeNull();
 
     const completed = applyMessage([], {
       type: "turn_completed",

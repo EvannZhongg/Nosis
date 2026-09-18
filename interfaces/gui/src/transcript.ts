@@ -157,6 +157,7 @@ export function applyMessage(
     case "approval_request":
       return {
         items,
+        question: null,
         approval: {
           requestId: message.request_id,
           command: message.command,
@@ -198,7 +199,7 @@ export function applyMessage(
       };
 
     case "user_question":
-      return { items, question: message };
+      return { items, approval: null, question: message };
 
     case "turn_completed":
       return { items, approval: null, question: null, finished: true };
