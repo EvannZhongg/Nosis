@@ -538,6 +538,72 @@ class LiteLLMProviderTest(unittest.TestCase):
             ],
         )
 
+    @patch("agent_core.providers.litellm_provider.completion")
+    def test_parses_cumulative_and_repeated_streamed_tool_arguments(
+        self,
+        completion_mock,
+    ) -> None:
+        complete_arguments = '{"path": "README.md"}'
+        completion_mock.return_value = iter(
+            [
+                chunk(
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "id": "call-1",
+                            "function": {
+                                "name": "read_file",
+                                "arguments": '{"path"',
+                            },
+                        }
+                    ]
+                ),
+                chunk(
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "function": {
+                                "arguments": complete_arguments
+                            },
+                        }
+                    ]
+                ),
+                chunk(
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "function": {
+                                "arguments": complete_arguments
+                            },
+                        }
+                    ]
+                ),
+            ]
+        )
+        provider = LiteLLMProvider(
+            model="openai/test-model",
+            max_context_tokens=1000,
+        )
+
+        response = provider.stream(
+            LLMRequest(
+                system_prompt="You are helpful.",
+                messages=(Message(role="user", content="read README.md"),),
+            ),
+            lambda _text: None,
+        )
+
+        self.assertEqual(
+            response.tool_calls,
+            (
+                ToolCall(
+                    id="call-1",
+                    name="read_file",
+                    arguments={"path": "README.md"},
+                ),
+            ),
+        )
+
     @patch(
         "agent_core.providers.litellm_provider.token_counter",
         return_value=42,

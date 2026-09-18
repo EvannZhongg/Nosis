@@ -543,6 +543,19 @@ class _ToolCallFragment:
     name: str | None = None
     arguments: str = ""
 
+    def add_arguments(self, value: str) -> None:
+        """Accept both incremental and cumulative streamed arguments.
+
+        OpenAI-compatible streams normally send only the next substring, but
+        some providers repeat the complete argument text accumulated so far.
+        Appending those snapshots produces two adjacent JSON objects and a
+        misleading ``JSONDecodeError: Extra data`` at the end of the call.
+        """
+        if value.startswith(self.arguments):
+            self.arguments = value
+        else:
+            self.arguments += value
+
     def to_tool_call(self) -> ToolCall:
         if not isinstance(self.id, str) or not self.id:
             raise ValueError("tool call id must be a non-empty string")
@@ -579,7 +592,7 @@ def _accumulate_tool_call(
 
     arguments = _get_field(function, "arguments")
     if isinstance(arguments, str):
-        fragment.arguments += arguments
+        fragment.add_arguments(arguments)
 
 
 def _get_field(value: object, name: str) -> object:
