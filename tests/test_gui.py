@@ -206,6 +206,28 @@ class ActiveSessionTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(list(runtime.jobs), ["j1"])
         self.assertEqual(runtime.context_window, {"input_tokens": 1})
 
+    async def test_plan_updates_replace_the_cached_snapshot(self) -> None:
+        bridge = FakeBridge()
+        runtime = server.ActiveSession("s1", "first", "/tmp", [], bridge)
+        self.addAsyncCleanup(runtime.close)
+        first = {"plan_id": "plan-1", "goal": "Ship", "revision": 1, "steps": []}
+        second = {"plan_id": "plan-1", "goal": "Ship", "revision": 2, "steps": []}
+        bridge.emit(server.runtime_state_message(
+            phase="running",
+            turn_id="t1",
+            approval=None,
+            question=None,
+            provider="first",
+            permission_preset="ask_for_approval",
+            context_window=None,
+            jobs=[],
+            plan=first,
+        ))
+        bridge.emit({"type": "plan_updated", "plan": second})
+        await _wait_for_async(lambda: runtime.event_sequence == 2)
+
+        self.assertEqual(runtime.plan, second)
+
     async def test_owner_close_does_not_relabel_the_runtime_as_failed(self) -> None:
         bridge = FakeBridge()
         runtime = server.ActiveSession("s1", "first", "/tmp", [], bridge)

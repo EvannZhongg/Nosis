@@ -58,6 +58,48 @@ function fold(messages: Incoming[], initial: TranscriptItem[] = []) {
 }
 
 describe("applyMessage", () => {
+  it("keeps update_plan out of the ordinary tool transcript", () => {
+    const messages = toMessages([
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [{ id: "plan-call", name: "update_plan", arguments: { goal: "Ship", steps: [] } }],
+      },
+      {
+        role: "tool",
+        tool_call_id: "plan-call",
+        content: JSON.stringify({ ok: true, output: { revision: 1 } }),
+      },
+    ]);
+
+    expect(messages[0]?.content).toEqual([]);
+  });
+
+  it("filters live update_plan calls and results from the transcript", () => {
+    const { items } = fold([
+      {
+        type: "tool_batch_started",
+        turn_id: "t1",
+        model_call_index: 1,
+        tool_calls: [
+          { id: "plan-call", name: "update_plan", arguments: { goal: "Ship", steps: [] } },
+        ],
+      },
+      {
+        type: "tool_result",
+        turn_id: "t1",
+        tool_call_id: "plan-call",
+        name: "update_plan",
+        ok: true,
+        error: null,
+        tool_index: 1,
+        tool_count: 1,
+      },
+    ]);
+
+    expect(items).toEqual([]);
+  });
+
   it("reports permission state from session readiness and later changes", () => {
     const ready = applyMessage([], {
       type: "session_ready",

@@ -1,4 +1,4 @@
-import type { ContextWindow, PermissionPreset, SessionItem, SessionSummary } from "@nosis/protocol";
+import type { ContextWindow, PermissionPreset, PlanSnapshot, SessionItem, SessionSummary } from "@nosis/protocol";
 
 export type { SessionItem, SessionSummary };
 
@@ -10,6 +10,7 @@ export type Session = {
   provider?: string | null;
   context_window?: ContextWindow | null;
   event_sequence?: number;
+  plan?: PlanSnapshot | null;
 };
 export type WorkspaceSessions = { workspace: string; sessions: SessionSummary[] };
 export type ModelOption = { id: string; model: string };

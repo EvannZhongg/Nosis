@@ -10,7 +10,7 @@ import remarkGfm from "remark-gfm";
 import { get, releaseActiveSession, selectWorkspace, sessionUrl, uploadAttachments, type ImageAttachment, type ModelOption, type Session } from "./api";
 import { SessionSocket } from "./session";
 import { applyMessage, isTurnActivity, toMessages, TURN_PROCESS_GROUP, turnProcessPartIndexes, type Feedback, type TranscriptItem } from "./transcript";
-import { runtimeIsActive, type ContextWindow, type Incoming, type PermissionPreset, type RuntimePhase, type UserQuestion } from "@nosis/protocol";
+import { runtimeIsActive, type ContextWindow, type Incoming, type PermissionPreset, type PlanSnapshot, type RuntimePhase, type UserQuestion } from "@nosis/protocol";
 
 type Approval = {
   requestId: string;
@@ -111,6 +111,16 @@ function BackgroundJobs({ jobs }: { jobs: BackgroundJob[] }) {
       </div>)}
     </div>
   </details>;
+}
+
+function PlanCard({ plan }: { plan: PlanSnapshot }) {
+  return <section className="plan-card" aria-label="Plan">
+    <div className="plan-title">Plan</div>
+    <div className="plan-steps">{plan.steps.map((step) => {
+      const marker = step.status === "completed" ? "✓" : step.status === "in_progress" ? "◉" : step.status === "blocked" ? "×" : "○";
+      return <div className={`plan-step ${step.status}`} key={step.id}><span>{marker}</span><span><span className="plan-step-title">{step.title}</span>{step.outcome && <small>{step.outcome}</small>}</span></div>;
+    })}</div>
+  </section>;
 }
 
 function UserMessage() {
@@ -262,6 +272,7 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
   const [reconnecting, setReconnecting] = useState(false);
   const [approval, setApproval] = useState<Approval | null>(null);
   const [question, setQuestion] = useState<UserQuestion | null>(null);
+  const [plan, setPlan] = useState<PlanSnapshot | null>(session.plan ?? null);
   const [permissionPreset, setPermissionPreset] = useState<PermissionPreset>(session.permission_preset);
   const [permissionSaving, setPermissionSaving] = useState(false);
   const [providerSaving, setProviderSaving] = useState(false);
@@ -387,6 +398,7 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
       const stored = await get<Session>(sessionUrl(session.session_id));
       // A session without stored items would erase the live transcript.
       if (stored.items.length) showItems(stored.items);
+      setPlan(stored.plan ?? null);
     } catch {
       // A turn without stored transcript items keeps the live transcript.
     }
@@ -463,6 +475,7 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
           setQuestion(message.question);
           setJobs(Object.fromEntries(message.jobs.map((job) => [job.job_id, job])));
           setPermissionPreset(message.permission_preset);
+          setPlan(message.plan ?? null);
           onContextWindowChange(message.context_window);
           if (message.skill_warnings?.length) {
             showAlert({
@@ -509,6 +522,7 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
           });
         }
         if (message.type === "permission_changed") setPermissionSaving(false);
+        if (message.type === "plan_updated") setPlan(message.plan);
         if (message.type === "provider_changed") {
           setProviderSaving(false);
           socketModelRef.current = message.provider;
@@ -772,6 +786,7 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
         <div className="messages"><ThreadPrimitive.Messages components={{ UserMessage, AssistantMessage }} /></div>
       </ThreadPrimitive.Viewport>
       <div className="composer-area">
+        {plan && <PlanCard plan={plan} />}
         {attachmentReplaced && <div className="attachment-replaced" role="status"><span>{running ? "此会话已在另一个页面接管。任务仍在后台运行，本页已暂停实时更新。" : "此会话已在另一个页面接管，本页已暂停实时更新。"}</span><button type="button" onClick={takeOverAttachment} disabled={attaching}>{attaching ? "正在接管…" : "在此页面接管"}</button></div>}
         {!attachmentReplaced && approval && <div className="approval-card" role="region" aria-label="工具执行确认"><div className="approval-title"><ShieldCheck size={17} /> 允许执行此工具调用？</div><pre>{approval.command}</pre><div className="approval-actions"><button onClick={() => respond(false)}>拒绝</button><button className="approve-button" onClick={() => respond(true)}>允许执行</button></div></div>}
         {!attachmentReplaced && question && <div className="question-card" role="region" aria-label="需要你的选择">

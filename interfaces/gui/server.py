@@ -32,6 +32,7 @@ from agent_core import (
     UnsupportedImageError,
     Workspace,
     image_extension,
+    plan_snapshot_to_dict,
     probe_image,
 )
 
@@ -205,6 +206,7 @@ class ActiveSession:
         self.question: dict[str, object] | None = None
         self.permission_preset = "ask_for_approval"
         self.context_window: dict[str, object] | None = None
+        self.plan: dict[str, object] | None = None
         self.skill_warnings: tuple[str, ...] = ()
         self.jobs: dict[str, dict[str, object]] = {}
         self.done = False
@@ -259,6 +261,7 @@ class ActiveSession:
                         context_window=self.context_window,
                         jobs=list(self.jobs.values()),
                         skill_warnings=self.skill_warnings,
+                        plan=self.plan,
                         # The page holds everything the stream emitted, so
                         # its cursor is the newest event; a pending fatal is
                         # left out of it so that a page attaching later
@@ -433,6 +436,11 @@ class ActiveSession:
                             warning for warning in warnings
                             if isinstance(warning, str)
                         )
+                    plan = message.get("plan")
+                    self.plan = plan if isinstance(plan, dict) else None
+                elif message_type == "plan_updated":
+                    plan = message.get("plan")
+                    self.plan = plan if isinstance(plan, dict) else None
                 elif message_type == "context_window":
                     self.context_window = {
                         key: message[key]
@@ -558,6 +566,11 @@ def create_app(
                 jsonable_encoder(stored.items),
                 bridge,
             )
+            runtime.plan = (
+                plan_snapshot_to_dict(stored.plan)
+                if stored.plan is not None
+                else None
+            )
             active_sessions[session_id] = runtime
             bridge.send(opening_message)
             return runtime, True
@@ -593,6 +606,7 @@ def create_app(
                     "permission_preset": runtime.permission_preset,
                     "context_window": runtime.context_window,
                     "event_sequence": runtime.delivered_event_sequence,
+                    "plan": runtime.plan,
                 })
             return result
 
@@ -614,6 +628,7 @@ def create_app(
                     "permission_preset": runtime.permission_preset,
                     "context_window": runtime.context_window,
                     "event_sequence": runtime.delivered_event_sequence,
+                    "plan": runtime.plan,
                 }
             session = store.load(
                 session_id,
@@ -635,6 +650,11 @@ def create_app(
                         runtime.delivered_event_sequence
                         if runtime is not None
                         else 0
+                    ),
+                    "plan": (
+                        plan_snapshot_to_dict(session.plan)
+                        if session.plan is not None
+                        else None
                     ),
                 }
             )
