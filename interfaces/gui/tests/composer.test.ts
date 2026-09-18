@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { shouldBlockRunningAttachmentSubmit, shouldShowPlan, shouldSubmitComposerEnter, updateBackgroundJobs, updateRuntimeIndicatorOrder } from "../src/Chat";
+import { composerConnectionGate, shouldBlockRunningAttachmentSubmit, shouldShowPlan, shouldSubmitComposerEnter, updateBackgroundJobs, updateRuntimeIndicatorOrder } from "../src/Chat";
 
 const enter = {
   key: "Enter",
@@ -85,6 +85,26 @@ describe("running attachment submission", () => {
 
   it("allows steering without attachments", () => {
     expect(shouldBlockRunningAttachmentSubmit(true, 0)).toBe(false);
+  });
+});
+
+describe("composer connection state", () => {
+  it("keeps the draft editable while the opening snapshot is pending", () => {
+    expect(composerConnectionGate({
+      attaching: true,
+      attachmentReplaced: false,
+      interactionActive: false,
+      backgroundDisconnected: false,
+    })).toEqual({ inputDisabled: false, sendDisabled: true });
+  });
+
+  it("disables input when another interaction owns it", () => {
+    expect(composerConnectionGate({
+      attaching: false,
+      attachmentReplaced: false,
+      interactionActive: true,
+      backgroundDisconnected: false,
+    })).toEqual({ inputDisabled: true, sendDisabled: true });
   });
 });
 

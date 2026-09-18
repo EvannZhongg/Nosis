@@ -2,7 +2,7 @@ import type { Incoming, Outgoing } from "@nosis/protocol";
 
 export type SessionSocketOptions = {
   sessionId: string | null;
-  provider: string;
+  provider?: string;
   workspace?: string | null;
   attachmentId: string;
   attachOnly?: boolean;
@@ -26,6 +26,7 @@ type Sendable =
 export class SessionSocket {
   private socket: WebSocket;
   private queued: Sendable[] = [];
+  private synchronized = false;
 
   constructor(options: SessionSocketOptions) {
     const scheme = location.protocol === "https:" ? "wss" : "ws";
@@ -42,25 +43,38 @@ export class SessionSocket {
         ...(options.afterEvent !== undefined ? { after_event: options.afterEvent } : {}),
         ...(options.takeover ? { takeover: true } : {}),
       });
-      for (const message of this.queued) this.write(message);
-      this.queued = [];
     };
-    this.socket.onmessage = ({ data }) =>
-      options.onMessage(JSON.parse(data as string) as Incoming);
+    this.socket.onmessage = ({ data }) => {
+      const message = JSON.parse(data as string) as Incoming;
+      options.onMessage(message);
+      // runtime_state is the protocol synchronization barrier. The opening
+      // snapshot must be applied before any browser command can race with it
+      // and make an optimistic local turn look idle again.
+      if (message.type === "runtime_state" && !this.synchronized) {
+        this.synchronized = true;
+        for (const queued of this.queued) this.write(queued);
+        this.queued = [];
+      }
+    };
     this.socket.onclose = () => options.onClose();
     this.socket.onerror = () => options.onError();
   }
 
-  /** Sends now, or once the connection opens. */
+  /** Sends now, or after the opening runtime snapshot has been applied. */
   send(message: Sendable): void {
-    if (this.socket.readyState === WebSocket.OPEN) this.write(message);
-    else if (this.socket.readyState === WebSocket.CONNECTING) {
+    if (this.socket.readyState === WebSocket.OPEN && this.synchronized) {
+      this.write(message);
+    } else if (
+      this.socket.readyState === WebSocket.CONNECTING
+      || (this.socket.readyState === WebSocket.OPEN && !this.synchronized)
+    ) {
       this.queued.push(message);
     }
   }
 
   close(): void {
     this.queued = [];
+    this.synchronized = false;
     this.socket.close();
   }
 

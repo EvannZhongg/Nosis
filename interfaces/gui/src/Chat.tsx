@@ -56,6 +56,23 @@ export function shouldBlockRunningAttachmentSubmit(
   return running && pendingFileCount > 0;
 }
 
+export function composerConnectionGate({
+  attaching,
+  attachmentReplaced,
+  interactionActive,
+  backgroundDisconnected,
+}: {
+  attaching: boolean;
+  attachmentReplaced: boolean;
+  interactionActive: boolean;
+  backgroundDisconnected: boolean;
+}): { inputDisabled: boolean; sendDisabled: boolean } {
+  return {
+    inputDisabled: attachmentReplaced || interactionActive,
+    sendDisabled: attaching || attachmentReplaced || interactionActive || backgroundDisconnected,
+  };
+}
+
 export function shouldShowPlan(plan: PlanSnapshot | null): plan is PlanSnapshot {
   return plan !== null && plan.steps.some((step) => step.status !== "completed");
 }
@@ -310,8 +327,8 @@ function ContextWindowIndicator({ window }: { window: ContextWindow | null }) {
   </div>;
 }
 
-export function Chat({ session, selected, contextWindow, workspaceOptions = [], inputDisabled, backgroundActive = false, models, model, onModelChange, onBusyChange, onContextWindowChange, onSessionAvailable, onTurnEnd, onWorkspaceChange }: {
-  session: Session; inputDisabled: boolean; onBusyChange: (busy: boolean) => void; onTurnEnd: () => void;
+export function Chat({ session, selected, contextWindow, workspaceOptions = [], backgroundActive = false, models, model, onModelChange, onBusyChange, onContextWindowChange, onSessionAvailable, onTurnEnd, onWorkspaceChange }: {
+  session: Session; onBusyChange: (busy: boolean) => void; onTurnEnd: () => void;
   selected: boolean;
   contextWindow: ContextWindow | null;
   onContextWindowChange: (window: ContextWindow | null) => void;
@@ -418,7 +435,7 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
   }, [attachmentId, model, session.session_id]);
 
   useEffect(() => {
-    if ((selected || backgroundActive) && model && socketRef.current === null) {
+    if ((selected || backgroundActive) && socketRef.current === null) {
       setAttaching(true);
       connect({ attachOnly: !selected, takeover: true });
     }
@@ -570,7 +587,6 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
           }
         }
         if (message.type === "session_ready") {
-          setAttaching(false);
           attachmentReplacedRef.current = false;
           setAttachmentReplaced(false);
           setReconnecting(false);
@@ -822,13 +838,20 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
   }
 
   const interactionActive = approval !== null || question !== null;
-  const controlsDisabled = inputDisabled || attaching || attachmentReplaced || (backgroundActive && socketRef.current === null);
-  const composerDisabled = controlsDisabled || interactionActive;
+  const backgroundDisconnected = backgroundActive && socketRef.current === null;
+  const composerGate = composerConnectionGate({
+    attaching,
+    attachmentReplaced,
+    interactionActive,
+    backgroundDisconnected,
+  });
+  const controlsDisabled = attaching || attachmentReplaced || backgroundDisconnected;
   const runtime = useExternalStoreRuntime({
     messages,
     convertMessage: (message) => message,
     isRunning: running,
-    isDisabled: composerDisabled,
+    isDisabled: composerGate.inputDisabled,
+    isSendDisabled: composerGate.sendDisabled,
     onNew,
     queue: {
       items: [],
@@ -903,7 +926,7 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
           </div>
         </div>}
         {pendingFiles.length > 0 && <div className="attachment-list" aria-label="待发送图片">{pendingFiles.map((file, index) => <PendingAttachment key={`${file.name}-${file.lastModified}-${index}`} file={file} onRemove={() => setPendingFiles((files) => files.filter((_, itemIndex) => itemIndex !== index))} />)}</div>}
-        <ComposerPrimitive.Root className="composer" onSubmit={onComposerSubmit}><div ref={workspacePickerRef} className="workspace-picker-wrap"><button type="button" className="workspace-picker" onClick={() => setWorkspaceEditing((value) => { if (value && !workspaceDraft.trim()) setWorkspaceDraft(session.workspace ?? ""); return !value; })} disabled={controlsDisabled || running} aria-expanded={workspaceEditing}><span className="workspace-picker-icon">⌂</span><span className="workspace-picker-value">{workspaceDraft || "选择项目"}</span><ChevronDown size={14} /></button>{workspaceEditing && <div className="workspace-menu" role="menu"><div className="workspace-menu-heading">选择工作区</div>{availableWorkspaces.map((path) => <button type="button" role="menuitem" className={`workspace-option ${path === workspaceDraft ? "selected" : ""}`} key={path} onClick={() => { void saveWorkspace(path); setWorkspaceEditing(false); }} disabled={controlsDisabled || running || workspaceSaving} title={path}><span className="workspace-option-path">{path}</span></button>)}<div className="workspace-menu-divider" /><button type="button" role="menuitem" className="workspace-new-option" onClick={() => { void chooseNewWorkspace(); }} disabled={controlsDisabled || running || workspaceSaving}>＋ 新建工作区</button></div>}</div><ComposerPrimitive.Input placeholder={question ? "请先回答上方问题…" : approval ? "请先处理上方确认…" : "Ask Nosis…"} aria-label="消息" rows={2} autoFocus submitMode="none" disabled={composerDisabled} onKeyDown={onComposerKeyDown} onCompositionStart={onCompositionStart} onCompositionEnd={onCompositionEnd} onPaste={onPaste} /><div className="composer-bottom">
+        <ComposerPrimitive.Root className="composer" onSubmit={onComposerSubmit}><div ref={workspacePickerRef} className="workspace-picker-wrap"><button type="button" className="workspace-picker" onClick={() => setWorkspaceEditing((value) => { if (value && !workspaceDraft.trim()) setWorkspaceDraft(session.workspace ?? ""); return !value; })} disabled={controlsDisabled || running} aria-expanded={workspaceEditing}><span className="workspace-picker-icon">⌂</span><span className="workspace-picker-value">{workspaceDraft || "选择项目"}</span><ChevronDown size={14} /></button>{workspaceEditing && <div className="workspace-menu" role="menu"><div className="workspace-menu-heading">选择工作区</div>{availableWorkspaces.map((path) => <button type="button" role="menuitem" className={`workspace-option ${path === workspaceDraft ? "selected" : ""}`} key={path} onClick={() => { void saveWorkspace(path); setWorkspaceEditing(false); }} disabled={controlsDisabled || running || workspaceSaving} title={path}><span className="workspace-option-path">{path}</span></button>)}<div className="workspace-menu-divider" /><button type="button" role="menuitem" className="workspace-new-option" onClick={() => { void chooseNewWorkspace(); }} disabled={controlsDisabled || running || workspaceSaving}>＋ 新建工作区</button></div>}</div><ComposerPrimitive.Input placeholder={question ? "请先回答上方问题…" : approval ? "请先处理上方确认…" : "Ask Nosis…"} aria-label="消息" rows={2} autoFocus submitMode="none" disabled={composerGate.inputDisabled} onKeyDown={onComposerKeyDown} onCompositionStart={onCompositionStart} onCompositionEnd={onCompositionEnd} onPaste={onPaste} /><div className="composer-bottom">
           <button type="button" className="attachment-button" aria-label="添加图片" title="添加图片" disabled={controlsDisabled || running} onClick={() => fileInputRef.current?.click()}><Paperclip size={15} /></button>
           <input ref={fileInputRef} className="attachment-input" type="file" accept="image/*" multiple onChange={(event) => { setPendingFiles((files) => [...files, ...Array.from(event.target.files ?? [])]); event.currentTarget.value = ""; }} />
           <label className="model-selector" title={models.find((option) => option.id === model)?.model}>
@@ -913,7 +936,7 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
           </label>
           <label className="permission-selector" title="权限模式">
             <ShieldCheck size={13} />
-            <select aria-label="权限模式" value={permissionPreset} disabled={inputDisabled || attachmentReplaced || permissionSaving} onChange={(event) => changePermissionPreset(event.target.value as PermissionPreset)}>
+            <select aria-label="权限模式" value={permissionPreset} disabled={controlsDisabled || permissionSaving} onChange={(event) => changePermissionPreset(event.target.value as PermissionPreset)}>
               <option value="ask_for_approval">请求批准</option>
               <option value="full_access">完全访问</option>
             </select>{permissionSaving ? <LoaderCircle size={12} className="spin" aria-label="正在保存权限" /> : <ChevronDown size={12} />}
