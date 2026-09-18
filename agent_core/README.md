@@ -55,7 +55,7 @@ Skills 位于配置目录下的 `skills/<name>/SKILL.md`，默认即 `~/.nosis/s
 
 ### Session
 
-Session 是 append-only JSONL Journal，保存对话与执行事件，可由 TUI 和 GUI 共同读取和恢复。默认位置：
+Session 是 append-only JSONL Journal，保存对话、执行事件和当前计划，可由 TUI 和 GUI 共同读取和恢复。计划跨 Turn 延续，并由最新的 `plan_updated` 事件恢复。活动计划会进入模型上下文；所有步骤完成后仍保留并展示，但不再进入后续模型请求。Step 可保存不超过 500 字符的简短最终结果或阻塞原因。默认位置：
 
 ```text
 ~/.nosis/sessions/<workspace-key>/<session-id>/

@@ -344,7 +344,7 @@ def _has_session_activity(path: Path) -> bool:
         with path.open(encoding="utf-8") as file:
             return any(
                 _event_from_dict(json.loads(line)).event_type
-                != "permission_preset_changed"
+                not in {"permission_preset_changed", "plan_updated"}
                 for line in file
                 if line.strip()
             )

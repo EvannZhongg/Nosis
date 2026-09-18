@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from .content import Content, ImagePart, TextPart, content_parts
 from .permissions import PermissionPreset
+from .plan import PlanSnapshot, plan_snapshot_from_dict, plan_snapshot_to_dict
 from .tools import ToolCall
 
 MessageRole = Literal["system", "user", "assistant", "tool"]
@@ -116,6 +117,7 @@ class Session:
     archived_item_cursor: int = 0
     compression_count: int = 0
     permission_preset: PermissionPreset = PermissionPreset.ASK_FOR_APPROVAL
+    plan: PlanSnapshot | None = None
     journal: list[JournalEvent] = field(default_factory=list, repr=False)
     turns: dict[str, Turn] = field(default_factory=dict, repr=False)
     tool_executions: dict[str, ToolExecution] = field(default_factory=dict, repr=False)
@@ -296,6 +298,10 @@ class Session:
                 )
         elif event.event_type == "permission_preset_changed":
             self.permission_preset = PermissionPreset(str(payload["preset"]))
+        elif event.event_type == "plan_updated" and isinstance(
+            payload.get("plan"), dict
+        ):
+            self.plan = plan_snapshot_from_dict(payload["plan"])
 
     def recover(self) -> tuple[JournalEvent, ...]:
         recovered: list[JournalEvent] = []
@@ -505,6 +511,13 @@ class Session:
             "permission_preset_changed",
             self._current_turn_id,
             {"preset": preset.value},
+        )
+
+    def set_plan(self, snapshot: PlanSnapshot) -> None:
+        self._event(
+            "plan_updated",
+            None,
+            {"plan": plan_snapshot_to_dict(snapshot)},
         )
 
     def add_item(

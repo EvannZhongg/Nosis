@@ -48,6 +48,14 @@ from .session import (
     message_to_dict,
 )
 from .permissions import PermissionController, PermissionPreset
+from .plan import (
+    MAX_PLAN_STEP_OUTCOME_CHARS,
+    PlanManager,
+    PlanSnapshot,
+    PlanStep,
+    PlanStepStatus,
+    plan_snapshot_to_dict,
+)
 from .session_store import JsonlSessionStore
 from .skills import Skill, SkillRegistry
 from .subagent import (
@@ -145,6 +153,7 @@ __all__ = [
     "LLMResponse",
     "ListDirectoryTool",
     "MAX_IMAGE_BYTES",
+    "MAX_PLAN_STEP_OUTCOME_CHARS",
     "McpApprovalPolicy",
     "McpConfig",
     "McpServerConfig",
@@ -154,6 +163,10 @@ __all__ = [
     "MessageOrigin",
     "PermissionController",
     "PermissionPreset",
+    "PlanManager",
+    "PlanSnapshot",
+    "PlanStep",
+    "PlanStepStatus",
     "ProviderCapabilities",
     "ReadFileTool",
     "ReadImageTool",
@@ -207,6 +220,7 @@ __all__ = [
     "load_tool_config",
     "message_to_dict",
     "probe_image",
+    "plan_snapshot_to_dict",
     "resolve_image",
     "resolve_readable_path",
     "skill_aware_tool_names",
