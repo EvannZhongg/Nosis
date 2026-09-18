@@ -77,6 +77,16 @@ def context_window_to_dict(window: ContextWindow) -> dict[str, int]:
     }
 
 
+def _plan_payload(
+    plan: PlanSnapshot | dict[str, object] | None,
+) -> dict[str, object] | None:
+    if plan is None:
+        return None
+    if isinstance(plan, PlanSnapshot):
+        return plan_snapshot_to_dict(plan)
+    return plan
+
+
 def session_ready_message(
     *,
     session_id: str,
@@ -125,13 +135,7 @@ def runtime_state_message(
         "context_window": context_window,
         "jobs": jobs,
         "skill_warnings": list(skill_warnings),
-        "plan": (
-            None
-            if plan is None
-            else plan
-            if isinstance(plan, dict)
-            else plan_snapshot_to_dict(plan)
-        ),
+        "plan": _plan_payload(plan),
     }
     if event_sequence is not None:
         message["event_sequence"] = event_sequence
