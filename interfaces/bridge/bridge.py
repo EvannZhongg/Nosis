@@ -27,6 +27,7 @@ from agent_core import (
     McpApprovalPolicy,
     PermissionController,
     PermissionPreset,
+    PlanManager,
     ShellApprovalPolicy,
     SkillRegistry,
     SubagentRole,
@@ -60,6 +61,7 @@ from .protocol import (
     event_to_message,
     context_window_to_dict,
     runtime_state_message,
+    plan_updated_message,
     session_ready_message,
     session_items_message,
     sessions_listed_message,
@@ -97,6 +99,7 @@ class Bridge:
         self._workspace: Workspace | None = None
         self._permissions: PermissionController | None = None
         self._jobs: JobManager | None = None
+        self._plan: PlanManager | None = None
         self._config_path: Path | None = None
         self._agent_config_path: Path | None = None
         self._provider_name: str | None = None
@@ -492,6 +495,10 @@ class Bridge:
             )
         )
         self._session.recover()
+        self._plan = PlanManager(
+            self._session,
+            lambda snapshot: self.emit(**plan_updated_message(snapshot)),
+        )
 
         self._config_path = config_path
         self._agent_config_path = agent_config_path
@@ -604,6 +611,7 @@ class Bridge:
                 subagents=subagents,
                 jobs=self._jobs,
                 skills=skills,
+                plan=self._plan,
                 ask_user=self.request_user_choice,
             )
             self._agent = Agent(
@@ -622,6 +630,7 @@ class Bridge:
                             skills,
                         ),
                         "ask_user",
+                        "update_plan",
                         *self._mcp.tool_names,
                     ),
                     context,
@@ -680,6 +689,7 @@ class Bridge:
             context_window=self._context_window,
             jobs=jobs,
             skill_warnings=skill_warnings,
+            plan=self._plan.snapshot if self._plan is not None else None,
         ))
 
     def _emit_sessions(self) -> None:

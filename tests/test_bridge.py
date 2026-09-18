@@ -20,6 +20,9 @@ from agent_core import (
     JobStatusEvent,
     Message,
     PermissionPreset,
+    PlanManager,
+    PlanSnapshot,
+    PlanStep,
     ReasoningDeltaEvent,
     Session,
     ToolBatchStartedEvent,
@@ -260,6 +263,12 @@ class ProtocolTest(unittest.TestCase):
                 context_window={"input_tokens": 120},
                 event_sequence=12,
                 jobs=[{"job_id": "j1", "kind": "shell", "status": "running"}],
+                plan=PlanSnapshot(
+                    "plan-1",
+                    "Ship plan support",
+                    2,
+                    (PlanStep("verify", "Verify", "in_progress"),),
+                ),
             ),
             {
                 "type": "runtime_state",
@@ -273,6 +282,18 @@ class ProtocolTest(unittest.TestCase):
                 "event_sequence": 12,
                 "jobs": [{"job_id": "j1", "kind": "shell", "status": "running"}],
                 "skill_warnings": [],
+                "plan": {
+                    "plan_id": "plan-1",
+                    "goal": "Ship plan support",
+                    "revision": 2,
+                    "steps": [
+                        {
+                            "id": "verify",
+                            "title": "Verify",
+                            "status": "in_progress",
+                        }
+                    ],
+                },
             },
         )
 
@@ -1211,6 +1232,30 @@ class BridgeSessionOpenTest(unittest.TestCase):
                 any(message["type"] == "approval_request" for message in emitted(stdout))
             )
 
+    def test_restores_the_session_plan_in_runtime_state(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = JsonlSessionStore(root / "sessions")
+            session = Session("saved")
+            store.bind_workspace(session.session_id, root)
+            session.attach_journal_sink(
+                lambda events: store.append_events(
+                    session.session_id, events, workspace=root
+                )
+            )
+            PlanManager(session).update(
+                "Ship plans",
+                (PlanStep("verify", "Verify recovery", "in_progress"),),
+            )
+            bridge, stdout = make_bridge([])
+
+            bridge.open_session(open_session_message(root, session_id="saved"))
+
+            state = emitted(stdout)[-1]
+            self.assertEqual(state["type"], "runtime_state")
+            self.assertEqual(state["plan"]["goal"], "Ship plans")
+            self.assertEqual(state["plan"]["revision"], 1)
+
     def test_rejects_an_unconfigured_provider(self) -> None:
         with self.assertRaisesRegex(ValueError, "not configured"):
             self.started_model(provider="unknown")
@@ -1348,10 +1393,10 @@ class SubagentRoleStartTest(unittest.TestCase):
 
             self.assertEqual(
                 [definition.name for definition in bridge._agent._tools.definitions],
-                ["ask_user"],
+                ["ask_user", "update_plan"],
             )
 
-    def test_ask_user_is_registered_only_for_the_main_agent(self) -> None:
+    def test_runtime_tools_are_registered_only_for_the_main_agent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             bridge, _ = make_bridge([])
             bridge.open_session(
@@ -1387,7 +1432,9 @@ class SubagentRoleStartTest(unittest.TestCase):
             }
 
             self.assertIn("ask_user", main_names)
+            self.assertIn("update_plan", main_names)
             self.assertNotIn("ask_user", role_names)
+            self.assertNotIn("update_plan", role_names)
 
 
 VISION_MODEL = "vision/model"

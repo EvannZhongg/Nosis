@@ -21,6 +21,8 @@ from agent_core import (
     ToolResultEvent,
     UserSteerAppliedEvent,
     JobStatusEvent,
+    PlanSnapshot,
+    plan_snapshot_to_dict,
 )
 from agent_core.llm import TokenUsage
 
@@ -109,6 +111,7 @@ def runtime_state_message(
     jobs: list[dict[str, object]],
     event_sequence: int | None = None,
     skill_warnings: tuple[str, ...] = (),
+    plan: PlanSnapshot | dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Describe the execution plane independently from Session readiness."""
     message: dict[str, object] = {
@@ -122,10 +125,24 @@ def runtime_state_message(
         "context_window": context_window,
         "jobs": jobs,
         "skill_warnings": list(skill_warnings),
+        "plan": (
+            None
+            if plan is None
+            else plan
+            if isinstance(plan, dict)
+            else plan_snapshot_to_dict(plan)
+        ),
     }
     if event_sequence is not None:
         message["event_sequence"] = event_sequence
     return message
+
+
+def plan_updated_message(plan: PlanSnapshot) -> dict[str, object]:
+    return {
+        "type": "plan_updated",
+        "plan": plan_snapshot_to_dict(plan),
+    }
 
 
 def attachment_replaced_message(*, phase: str) -> dict[str, object]:
