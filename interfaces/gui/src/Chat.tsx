@@ -80,8 +80,27 @@ function jobKindLabel(kind: string): string {
 }
 
 function BackgroundJobs({ jobs }: { jobs: BackgroundJob[] }) {
+  const [open, setOpen] = useState(false);
+  const detailsRef = useRef<HTMLDetailsElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!detailsRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
   if (jobs.length === 0) return null;
-  return <details className="background-jobs">
+  return <details ref={detailsRef} className="background-jobs" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
     <summary>{jobs.length} 个后台任务</summary>
     <div className="background-job-list">
       {jobs.map((job) => <div className="background-job" key={job.job_id}>
