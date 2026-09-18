@@ -41,8 +41,8 @@ export function App(props: AppProps): React.ReactElement {
   const startedAt = useRef<number | null>(null);
 
   /**
-   * One bridge per Session: the runtime binds its workspace, tools and store
-   * when it starts, so switching conversations replaces the process.
+   * One bridge per Session: opening binds lightweight Session state, while
+   * Provider, MCP, Tools and Agent initialize on the first ordinary turn.
    *
    * Messages from a replaced process are dropped, so a turn it is still
    * unwinding cannot leak into the new transcript.
@@ -72,13 +72,13 @@ export function App(props: AppProps): React.ReactElement {
     });
     bridgeRef.current = client;
     client.send({
-      type: 'start',
+      type: 'open_session',
       workspace: protocolPath(props.workspace),
       session_id: sessionId,
       provider_config_path: protocolPath(props.providerConfigPath),
       agent_config_path: protocolPath(props.agentConfigPath),
     });
-    // The stored conversation is not part of `ready`: it is sent only when
+    // The stored conversation is not part of `session_ready`: it is sent only when
     // asked, so a frontend that reads it elsewhere never pays for it.
     client.send({ type: 'load_session' });
     return () => {
@@ -88,9 +88,11 @@ export function App(props: AppProps): React.ReactElement {
   }, [sessionId]);
 
   const busy =
+    state.status === 'starting' ||
     state.status === 'streaming' ||
     state.status === 'running' ||
     state.status === 'cancelling';
+  const inputBusy = state.status !== 'idle' && state.status !== 'runtime_failed';
 
   useEffect(() => {
     if (!busy) {
@@ -291,7 +293,7 @@ export function App(props: AppProps): React.ReactElement {
       }
       return;
     }
-    if (state.status !== 'idle' && state.turnId !== null) {
+    if (busy && state.turnId !== null) {
       steerCounter.current += 1;
       dispatch({ type: 'steer_submitted' });
       bridgeRef.current?.send({
@@ -315,7 +317,7 @@ export function App(props: AppProps): React.ReactElement {
   return (
     <Box height={Math.max(1, rows - 1)} flexDirection="column">
       <Box flexGrow={1} flexShrink={1} flexDirection="column" overflowY="hidden">
-        {state.status !== 'starting' && state.entries.length === 0 ? (
+        {state.status !== 'opening' && state.entries.length === 0 ? (
           <Box flexShrink={0}>
             <Text dimColor>Nosis · {state.workspace}</Text>
           </Box>
@@ -371,10 +373,10 @@ export function App(props: AppProps): React.ReactElement {
           onChange={setDraft}
           onSubmit={submit}
           focus={state.approval === null && permissionChoice === null && state.sessions === null}
-          busy={state.status !== 'idle'}
+          busy={inputBusy}
           docked
           commands={COMMANDS}
-          placeholder={state.status === 'idle' ? undefined : 'steer the current turn…'}
+          placeholder={inputBusy ? 'steer the current turn…' : undefined}
         />
       )}
 

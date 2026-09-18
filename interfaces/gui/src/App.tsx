@@ -5,7 +5,14 @@ import { Workspace } from "./Workspace";
 import type { ContextWindow } from "@nosis/protocol";
 import { deleteSession, get, sessionUrl, type ModelOption, type ModelOptions, type Session, type WorkspaceSessions } from "./api";
 
-type ActiveRuntime = Session & { provider: string | null; running: boolean };
+type ActiveSession = Session & { provider: string | null; phase: string };
+
+function runtimeIsBusy(phase: string): boolean {
+  return phase === "starting"
+    || phase === "running"
+    || phase === "waiting_approval"
+    || phase === "waiting_user";
+}
 
 function newSession(workspace?: string | null): Session {
   return {
@@ -29,7 +36,7 @@ export function App() {
   const [models, setModels] = useState<ModelOption[]>([]);
   const [defaultModel, setDefaultModel] = useState("");
   const [modelBySession, setModelBySession] = useState<Record<string, string>>({});
-  const [activeRuntimeIds, setActiveRuntimeIds] = useState<Set<string>>(new Set());
+  const [activeTurnIds, setActiveTurnIds] = useState<Set<string>>(new Set());
   const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<Set<string>>(new Set());
 
   const refreshSessions = useCallback(async () => {
@@ -53,23 +60,27 @@ export function App() {
     }).catch((error) => setError(String(error)));
   }, []);
   useEffect(() => {
-    get<ActiveRuntime[]>("/api/runtimes").then(async (runtimes) => {
-      setActiveRuntimeIds(new Set(runtimes.map((runtime) => runtime.session_id)));
+    get<ActiveSession[]>("/api/active-sessions").then(async (activeSessions) => {
+      setActiveTurnIds(new Set(
+        activeSessions
+          .filter((session) => runtimeIsBusy(session.phase))
+          .map((session) => session.session_id),
+      ));
       setBusyBySession((all) => ({
         ...all,
-        ...Object.fromEntries(runtimes.map((runtime) => [runtime.session_id, runtime.running])),
+        ...Object.fromEntries(activeSessions.map((session) => [session.session_id, runtimeIsBusy(session.phase)])),
       }));
       setModelBySession((all) => ({
         ...all,
-        ...Object.fromEntries(runtimes.flatMap((runtime) => runtime.provider ? [[runtime.session_id, runtime.provider]] : [])),
+        ...Object.fromEntries(activeSessions.flatMap((session) => session.provider ? [[session.session_id, session.provider]] : [])),
       }));
       setContextBySession((all) => ({
         ...all,
-        ...Object.fromEntries(runtimes.map((runtime) => [runtime.session_id, runtime.context_window ?? null])),
+        ...Object.fromEntries(activeSessions.map((session) => [session.session_id, session.context_window ?? null])),
       }));
       setChatSessions((all) => [
         ...all,
-        ...runtimes.filter((active) => !all.some((item) => item.session_id === active.session_id)),
+        ...activeSessions.filter((active) => !all.some((item) => item.session_id === active.session_id)),
       ]);
     }).catch(() => undefined);
   }, []);
@@ -90,6 +101,9 @@ export function App() {
     try {
       const loaded = await get<Session>(sessionUrl(id));
       setChatSessions((all) => all.some((item) => item.session_id === id) ? all : [...all, loaded]);
+      if (loaded.provider) {
+        setModelBySession((all) => ({ ...all, [id]: loaded.provider! }));
+      }
       if (loaded.context_window) {
         setContextBySession((all) => ({ ...all, [id]: loaded.context_window ?? null }));
       }
@@ -167,10 +181,10 @@ export function App() {
         {error && <div className="error-banner" role="alert">{error}</div>}
         {chatSessions.map((current) => {
           const model = modelBySession[current.session_id] ?? defaultModel;
-          return <div key={current.session_id} style={{ display: current.session_id === selectedSessionId ? "contents" : "none" }}><Chat session={current} contextWindow={current.session_id === selectedSessionId ? contextWindow : contextBySession[current.session_id] ?? current.context_window ?? null} workspaceOptions={sessionGroups.map((group) => group.workspace)} inputDisabled={!model} runtimeActive={activeRuntimeIds.has(current.session_id)}
+          return <div key={current.session_id} style={{ display: current.session_id === selectedSessionId ? "contents" : "none" }}><Chat session={current} selected={current.session_id === selectedSessionId} contextWindow={current.session_id === selectedSessionId ? contextWindow : contextBySession[current.session_id] ?? current.context_window ?? null} workspaceOptions={sessionGroups.map((group) => group.workspace)} inputDisabled={!model} backgroundActive={activeTurnIds.has(current.session_id)}
             models={models} model={model} onModelChange={(value) => setModelBySession((all) => ({ ...all, [current.session_id]: value }))} onBusyChange={(value) => {
               setBusyBySession((all) => ({ ...all, [current.session_id]: value }));
-              setActiveRuntimeIds((all) => { const next = new Set(all); if (value) next.add(current.session_id); else next.delete(current.session_id); return next; });
+              setActiveTurnIds((all) => { const next = new Set(all); if (value) next.add(current.session_id); else next.delete(current.session_id); return next; });
             }} onContextWindowChange={(value) => setContextBySession((all) => ({ ...all, [current.session_id]: value }))} onTurnEnd={() => {
             void refreshSessions();
             setWorkspaceVersion((value) => value + 1);

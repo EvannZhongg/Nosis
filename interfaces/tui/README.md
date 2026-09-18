@@ -32,6 +32,8 @@ nosis --config path/to/provider_config.json \
 
 执行中提交的新输入会作为 steering 发送给当前轮次。
 
+TUI 启动或切换会话时只打开 Session；Provider、MCP、Tool 和 Agent 在首次发送普通消息时才初始化。`/permissions` 因此可以在第一次对话前直接修改授权模式。
+
 ## 开发
 
 ```bash

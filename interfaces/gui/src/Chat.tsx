@@ -7,10 +7,10 @@ import {
 import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
 import { AlertTriangle, ArrowUp, Check, ChevronDown, ChevronRight, LoaderCircle, MessageCircleQuestion, Paperclip, ShieldCheck, Square, Terminal, X } from "lucide-react";
 import remarkGfm from "remark-gfm";
-import { get, releaseRuntime, selectWorkspace, sessionUrl, updateSessionWorkspace, uploadAttachments, type ImageAttachment, type ModelOption, type Session } from "./api";
+import { get, releaseActiveSession, selectWorkspace, sessionUrl, uploadAttachments, type ImageAttachment, type ModelOption, type Session } from "./api";
 import { SessionSocket } from "./session";
 import { applyMessage, isTurnActivity, toMessages, TURN_PROCESS_GROUP, turnProcessPartIndexes, type Feedback, type TranscriptItem } from "./transcript";
-import type { ContextWindow, Incoming, PermissionPreset, UserQuestion } from "@nosis/protocol";
+import type { ContextWindow, Incoming, PermissionPreset, RuntimePhase, UserQuestion } from "@nosis/protocol";
 
 type Approval = {
   requestId: string;
@@ -54,6 +54,13 @@ export function shouldBlockRunningAttachmentSubmit(
   pendingFileCount: number,
 ): boolean {
   return running && pendingFileCount > 0;
+}
+
+function runtimeIsActive(phase: RuntimePhase): boolean {
+  return phase === "starting"
+    || phase === "running"
+    || phase === "waiting_approval"
+    || phase === "waiting_user";
 }
 
 function ToolCard({ toolName, args, result }: ToolCallMessagePartProps) {
@@ -221,18 +228,20 @@ function ContextWindowIndicator({ window }: { window: ContextWindow | null }) {
   </div>;
 }
 
-export function Chat({ session, contextWindow, workspaceOptions = [], inputDisabled, runtimeActive = false, models, model, onModelChange, onBusyChange, onContextWindowChange, onSessionAvailable, onTurnEnd, onWorkspaceChange }: {
+export function Chat({ session, selected, contextWindow, workspaceOptions = [], inputDisabled, backgroundActive = false, models, model, onModelChange, onBusyChange, onContextWindowChange, onSessionAvailable, onTurnEnd, onWorkspaceChange }: {
   session: Session; inputDisabled: boolean; onBusyChange: (busy: boolean) => void; onTurnEnd: () => void;
+  selected: boolean;
   contextWindow: ContextWindow | null;
-  onContextWindowChange: (window: ContextWindow) => void;
+  onContextWindowChange: (window: ContextWindow | null) => void;
   onSessionAvailable: () => void;
   models: ModelOption[]; model: string; onModelChange: (model: string) => void;
-  runtimeActive?: boolean;
+  backgroundActive?: boolean;
   workspaceOptions?: string[];
   onWorkspaceChange?: (workspace: string) => void;
 }) {
   const [items, setItems] = useState<TranscriptItem[]>(session.items);
   const [running, setRunning] = useState(false);
+  const [runtimePhase, setRuntimePhase] = useState<RuntimePhase>("inactive");
   const [pendingSteers, setPendingSteers] = useState(0);
   const [jobs, setJobs] = useState<Record<string, BackgroundJob>>({});
   const [attaching, setAttaching] = useState(false);
@@ -243,6 +252,8 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
   const [approval, setApproval] = useState<Approval | null>(null);
   const [question, setQuestion] = useState<UserQuestion | null>(null);
   const [permissionPreset, setPermissionPreset] = useState<PermissionPreset>(session.permission_preset);
+  const [permissionSaving, setPermissionSaving] = useState(false);
+  const [providerSaving, setProviderSaving] = useState(false);
   const [questionDraft, setQuestionDraft] = useState("");
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [workspaceDraft, setWorkspaceDraft] = useState(session.workspace ?? "");
@@ -251,7 +262,6 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
   const workspacePickerRef = useRef<HTMLDivElement | null>(null);
   const socketRef = useRef<SessionSocket | null>(null);
   const socketModelRef = useRef("");
-  const selectedModelRef = useRef(model);
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -292,8 +302,8 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
     setItems(next);
   }, []);
 
-  // A Chat owns its attachment independently of whether it is visible. Only
-  // unmounting detaches it; opening a historical session does not connect.
+  // A selected Chat owns a lightweight Session connection. Hidden Chats keep
+  // one only while their turn remains active.
   useEffect(() => {
     mountedRef.current = true;
     return () => {
@@ -309,7 +319,7 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
   useEffect(() => {
     const releaseOnPageLeave = () => {
       if (!runningRef.current) {
-        void releaseRuntime(
+        void releaseActiveSession(
           session.session_id,
           socketModelRef.current || model,
           attachmentId,
@@ -320,31 +330,21 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
     return () => window.removeEventListener("pagehide", releaseOnPageLeave);
   }, [attachmentId, model, session.session_id]);
 
-  // Model selection belongs to this session. It detaches only this Chat and
-  // is applied when its next turn attaches or starts a runtime.
   useEffect(() => {
-    const previousModel = selectedModelRef.current;
-    selectedModelRef.current = model;
-    if (previousModel === model) return;
-    if (socketRef.current && socketModelRef.current === model) return;
+    if ((selected || backgroundActive) && model && socketRef.current === null) {
+      setAttaching(true);
+      connect({ attachOnly: !selected, takeover: true });
+    }
+  }, [backgroundActive, model, selected, session.session_id, session.workspace]);
+
+  useEffect(() => {
+    if (selected || running || socketRef.current === null) return;
     const socket = socketRef.current;
     socketRef.current = null;
     socketModelRef.current = "";
-    eventCounterRef.current = 0;
-    void releaseRuntime(
-      session.session_id,
-      previousModel,
-      attachmentId,
-    ).catch(() => undefined);
-    socket?.close();
-  }, [attachmentId, model, session.session_id]);
-
-  useEffect(() => {
-    if (runtimeActive && model && socketRef.current === null) {
-      setAttaching(true);
-      connect({ attachOnly: true, takeover: true });
-    }
-  }, [runtimeActive, model]);
+    socket.close();
+    void releaseActiveSession(session.session_id, model, attachmentId).catch(() => undefined);
+  }, [attachmentId, model, running, selected, session.session_id]);
 
   const showToast = useCallback((next: Extract<Feedback, { kind: "toast" }>) => {
     if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
@@ -387,6 +387,7 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
     socket = new SessionSocket({
       sessionId: session.session_id,
       provider: model,
+      workspace: workspaceDraft || session.workspace,
       attachmentId,
       attachOnly,
       afterEvent: eventCounterRef.current,
@@ -412,16 +413,16 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
           setAttaching(false);
           setApproval(null);
           setQuestion(null);
-          const wasRunning = runningRef.current;
-          runningRef.current = message.running;
-          setRunning(message.running);
-          onBusyChange(message.running);
+          const active = runtimeIsActive(message.phase);
+          setRuntimePhase(message.phase);
+          runningRef.current = active;
+          setRunning(active);
+          onBusyChange(active);
           socket.close();
-          if (wasRunning && !message.running) void endTurn();
           return;
         }
         if (message.type === "runtime_state") {
-          eventCounterRef.current = message.event_sequence;
+          if (message.event_sequence !== undefined) eventCounterRef.current = message.event_sequence;
           if (toastTimeoutRef.current) {
             clearTimeout(toastTimeoutRef.current);
             toastTimeoutRef.current = null;
@@ -435,11 +436,12 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
             socketModelRef.current = message.provider;
             if (message.provider !== model) onModelChange(message.provider);
           }
-          const wasRunning = runningRef.current;
-          runningRef.current = message.running;
+          const active = runtimeIsActive(message.phase);
+          setRuntimePhase(message.phase);
+          runningRef.current = active;
           activeTurnIdRef.current = message.turn_id;
-          setRunning(message.running);
-          onBusyChange(message.running);
+          setRunning(active);
+          onBusyChange(active);
           setApproval(message.approval ? {
             requestId: message.approval.request_id,
             command: message.approval.command,
@@ -450,8 +452,15 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
           setQuestion(message.question);
           setJobs(Object.fromEntries(message.jobs.map((job) => [job.job_id, job])));
           setPermissionPreset(message.permission_preset);
-          if (message.context_window) onContextWindowChange(message.context_window);
-          if (wasRunning && !message.running) void endTurn();
+          onContextWindowChange(message.context_window);
+          if (message.skill_warnings?.length) {
+            showAlert({
+              kind: "alert",
+              id: "skill-warnings",
+              level: "warning",
+              text: message.skill_warnings.join("\n"),
+            });
+          }
           return;
         }
         if (typeof message.event_sequence === "number") {
@@ -471,7 +480,8 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
             });
           }
         }
-        if (message.type === "ready") {
+        if (message.type === "session_ready") {
+          setAttaching(false);
           attachmentReplacedRef.current = false;
           setAttachmentReplaced(false);
           setReconnecting(false);
@@ -486,6 +496,18 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
             delete next.connection;
             return next;
           });
+        }
+        if (message.type === "permission_changed") setPermissionSaving(false);
+        if (message.type === "provider_changed") {
+          setProviderSaving(false);
+          socketModelRef.current = message.provider;
+          if (message.provider !== model) onModelChange(message.provider);
+          onContextWindowChange(null);
+        }
+        if (message.type === "workspace_changed") {
+          setWorkspaceDraft(message.workspace);
+          onWorkspaceChange?.(message.workspace);
+          setWorkspaceSaving(false);
         }
         if (awaitingSessionActivityRef.current && isTurnActivity(message)) {
           awaitingSessionActivityRef.current = false;
@@ -529,6 +551,7 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
         // leave the idle UI quiet. The close callback clears the socket so
         // the next message can establish a fresh connection.
         if (socketRef.current !== socket) return;
+        setPermissionSaving(false);
         if (!runningRef.current) {
           showAlert({ kind: "alert", id: "connection", level: "error", text: "无法连接 Nosis。" });
         }
@@ -588,6 +611,7 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
       },
     ]);
     runningRef.current = true;
+    setRuntimePhase("starting");
     setRunning(true);
     onBusyChange(true);
     if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
@@ -614,8 +638,15 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
   }
 
   function changePermissionPreset(preset: PermissionPreset) {
+    setPermissionSaving(true);
     const socket = socketRef.current ?? connect();
     socket.send({ type: "permission_set", preset });
+  }
+
+  function changeProvider(provider: string) {
+    setProviderSaving(true);
+    const socket = socketRef.current ?? connect();
+    socket.send({ type: "provider_set", provider });
   }
 
   function answerQuestion(answer: { option_id: string } | { text: string }) {
@@ -634,20 +665,10 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
     if (!nextWorkspace || nextWorkspace === session.workspace) return;
     setWorkspaceSaving(true);
     try {
-      const savedWorkspace = await updateSessionWorkspace(session.session_id, nextWorkspace);
-      setWorkspaceDraft(savedWorkspace);
-      onWorkspaceChange?.(savedWorkspace);
-      // Detach this session. The next turn starts/attaches its runtime with
-      // the newly selected workspace; no other Chat is affected.
-      const socket = socketRef.current;
-      socketRef.current = null;
-      socketModelRef.current = "";
-      eventCounterRef.current = 0;
-      socket?.close();
-      showToast({ kind: "toast", level: "info", text: `工作区已切换为 ${savedWorkspace}` });
+      const socket = socketRef.current ?? connect();
+      socket.send({ type: "workspace_set", workspace: nextWorkspace });
     } catch (error) {
       showAlert({ kind: "alert", id: "workspace-update", level: "error", text: String(error) });
-    } finally {
       setWorkspaceSaving(false);
     }
   }
@@ -710,7 +731,7 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
     }, 0);
   }
 
-  const controlsDisabled = inputDisabled || attaching || attachmentReplaced || (runtimeActive && socketRef.current === null);
+  const controlsDisabled = inputDisabled || attaching || attachmentReplaced || (backgroundActive && socketRef.current === null);
   const runtime = useExternalStoreRuntime({
     messages,
     convertMessage: (message) => message,
@@ -755,7 +776,7 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
         </div>}
         {visibleAlerts.length > 0 && <div className="feedback-alerts">{visibleAlerts.map((item) => <div className={`feedback-alert ${item.level}`} role="alert" key={item.id}><AlertTriangle size={15} /><span>{item.text}</span><button type="button" aria-label="关闭提示" onClick={() => setAlerts((current) => { const next = { ...current }; delete next[item.id]; return next; })}><X size={13} /></button></div>)}</div>}
         {toast && <div className={`feedback-toast ${toast.level}`} role="status">{toast.text}</div>}
-        {running && !attachmentReplaced && <div className="activity" role="status"><LoaderCircle size={13} className="spin" /><span>{reconnecting ? "连接中断，任务仍在后台运行，正在重新连接…" : approval ? "等待你的确认" : question ? "等待你的选择" : pendingSteers ? `Nosis 正在处理… ${pendingSteers} 条引导待应用` : "Nosis 正在处理…"}</span>
+        {running && !attachmentReplaced && <div className="activity" role="status"><LoaderCircle size={13} className="spin" /><span>{reconnecting ? "连接中断，任务仍在后台运行，正在重新连接…" : runtimePhase === "starting" ? "正在启动 Agent…" : approval ? "等待你的确认" : question ? "等待你的选择" : pendingSteers ? `Nosis 正在处理… ${pendingSteers} 条引导待应用` : "Nosis 正在处理…"}</span>
           {!reconnecting && !approval && !question && <BackgroundJobs jobs={activeJobs} />}
           {!approval && !question && <button className="stop-button" aria-label="停止执行" onClick={() => { const turnId = activeTurnIdRef.current; if (turnId) socketRef.current?.send({ type: "cancel", turn_id: turnId }); }}><Square size={11} /> 停止</button>}
         </div>}
@@ -764,16 +785,16 @@ export function Chat({ session, contextWindow, workspaceOptions = [], inputDisab
           <button type="button" className="attachment-button" aria-label="添加图片" title="添加图片" disabled={controlsDisabled || running} onClick={() => fileInputRef.current?.click()}><Paperclip size={15} /></button>
           <input ref={fileInputRef} className="attachment-input" type="file" accept="image/*" multiple onChange={(event) => { setPendingFiles((files) => [...files, ...Array.from(event.target.files ?? [])]); event.currentTarget.value = ""; }} />
           <label className="model-selector" title={models.find((option) => option.id === model)?.model}>
-            <select aria-label="选择模型" value={model} disabled={controlsDisabled || running} onChange={(event) => onModelChange(event.target.value)}>
+            <select aria-label="选择模型" value={model} disabled={controlsDisabled || running || providerSaving} onChange={(event) => changeProvider(event.target.value)}>
               {models.map((option) => <option key={option.id} value={option.id}>{option.model}</option>)}
             </select><ChevronDown size={12} />
           </label>
           <label className="permission-selector" title="权限模式">
             <ShieldCheck size={13} />
-            <select aria-label="权限模式" value={permissionPreset} disabled={controlsDisabled} onChange={(event) => changePermissionPreset(event.target.value as PermissionPreset)}>
+            <select aria-label="权限模式" value={permissionPreset} disabled={inputDisabled || attachmentReplaced || permissionSaving} onChange={(event) => changePermissionPreset(event.target.value as PermissionPreset)}>
               <option value="ask_for_approval">请求批准</option>
               <option value="full_access">完全访问</option>
-            </select><ChevronDown size={12} />
+            </select>{permissionSaving ? <LoaderCircle size={12} className="spin" aria-label="正在保存权限" /> : <ChevronDown size={12} />}
           </label>
           <div className="composer-actions"><ContextWindowIndicator window={contextWindow} /><ComposerPrimitive.Send className="send-button" aria-label={running ? "发送引导" : "发送消息"}><ArrowUp size={19} /></ComposerPrimitive.Send></div></div></ComposerPrimitive.Root>
         <div className="composer-footer">Nosis · 你的项目搭档</div>

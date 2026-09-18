@@ -152,10 +152,10 @@ class BridgeProcessSpawnTest(unittest.IsolatedAsyncioTestCase):
 
 
 @unittest.skipIf(TestClient is None, "Install the gui extra to test the GUI")
-class ActiveRuntimeTest(unittest.IsolatedAsyncioTestCase):
+class ActiveSessionTest(unittest.IsolatedAsyncioTestCase):
     async def test_event_replay_window_is_bounded_and_sequences_are_monotonic(self) -> None:
         bridge = FakeBridge()
-        runtime = server.ActiveRuntime("s1", "first", "/tmp", [], bridge)
+        runtime = server.ActiveSession("s1", "first", "/tmp", [], bridge)
         self.addAsyncCleanup(runtime.close)
 
         bridge.emit(*(
@@ -217,17 +217,17 @@ class GuiTest(unittest.TestCase):
             self.addCleanup(patcher.stop)
         return client
 
-    def test_server_builds_start_so_pages_cannot_choose_a_config(self) -> None:
+    def test_server_builds_open_session_so_pages_cannot_choose_a_config(self) -> None:
         bridge = FakeBridge(replies={"user_turn": [{"type": "bye"}, None]})
         with self.client(bridge) as client:
             with client.websocket_connect("/api/session") as socket:
                 socket.send_json(
                     {
-                        "type": "start",
+                        "type": "open_session",
                         "session_id": "resumed",
                         "attachment_id": "page-1",
                         "provider": "second",
-                        # Ignored: the server supplies its own paths.
+                        # Config paths are ignored; Workspace is a Session choice.
                         "provider_config_path": "/etc/passwd",
                         "workspace": "/",
                     }
@@ -240,8 +240,8 @@ class GuiTest(unittest.TestCase):
         self.assertEqual(
             bridge.sent[0],
             {
-                "type": "start",
-                "workspace": str(self.root.resolve()),
+                "type": "open_session",
+                "workspace": "/",
                 "session_id": "resumed",
                 "provider_config_path": str(self.provider_config_path),
                 "agent_config_path": str(self.agent_config_path),
@@ -254,13 +254,13 @@ class GuiTest(unittest.TestCase):
         bridge = FakeBridge()
         with self.client(bridge) as client:
             with client.websocket_connect("/api/session") as socket:
-                socket.send_json({"type": "start", "provider": "unknown", "attachment_id": "page-1"})
+                socket.send_json({"type": "open_session", "provider": "unknown", "attachment_id": "page-1"})
                 message = socket.receive_json()
 
         self.assertEqual(message["type"], "fatal")
         self.assertEqual(bridge.sent, [])
 
-    def test_rejects_an_opening_message_that_is_not_start(self) -> None:
+    def test_rejects_an_opening_message_that_is_not_open_session(self) -> None:
         bridge = FakeBridge()
         with self.client(bridge) as client:
             with client.websocket_connect("/api/session") as socket:
@@ -276,7 +276,7 @@ class GuiTest(unittest.TestCase):
         bridge = FakeBridge()
         with self.client(bridge) as client:
             with client.websocket_connect("/api/session") as socket:
-                socket.send_json({"type": "start", "session_id": "s1"})
+                socket.send_json({"type": "open_session", "session_id": "s1"})
                 message = socket.receive_json()
 
         self.assertEqual(message["error"]["type"], "ProtocolError")
@@ -286,7 +286,7 @@ class GuiTest(unittest.TestCase):
     def test_runs_multiple_turns_on_the_same_bridge(self) -> None:
         bridge = FakeBridge(
             replies={
-                "start": [{"type": "ready", "session_id": "s1"}],
+                "open_session": [{"type": "session_ready", "session_id": "s1"}],
                 "user_turn": [
                     {"type": "turn_completed", "turn_id": "done", "usage": None}
                 ],
@@ -295,9 +295,9 @@ class GuiTest(unittest.TestCase):
         with self.client(bridge) as client:
             with client.websocket_connect("/api/session") as socket:
                 socket.send_json(
-                    {"type": "start", "session_id": "s1", "attachment_id": "page-1"}
+                    {"type": "open_session", "session_id": "s1", "attachment_id": "page-1"}
                 )
-                self.assertEqual(socket.receive_json()["type"], "ready")
+                self.assertEqual(socket.receive_json()["type"], "session_ready")
                 socket.send_json(
                     {"type": "user_turn", "turn_id": "t1", "text": "one"}
                 )
@@ -309,14 +309,14 @@ class GuiTest(unittest.TestCase):
 
             self.assertEqual(
                 [message["type"] for message in bridge.sent],
-                ["start", "user_turn", "user_turn"],
+                ["open_session", "user_turn", "user_turn"],
             )
             self.assertFalse(bridge.closed)
 
     def test_a_page_reading_a_running_session_is_sent_every_event(self) -> None:
         bridge = FakeBridge(
             replies={
-                "start": [{"type": "ready", "session_id": "s1"}],
+                "open_session": [{"type": "session_ready", "session_id": "s1"}],
                 "user_turn": [
                     {
                         "type": "assistant_delta",
@@ -330,9 +330,9 @@ class GuiTest(unittest.TestCase):
         with self.client(bridge) as client:
             with client.websocket_connect("/api/session") as first:
                 first.send_json(
-                    {"type": "start", "session_id": "s1", "attachment_id": "page-1"}
+                    {"type": "open_session", "session_id": "s1", "attachment_id": "page-1"}
                 )
-                self.assertEqual(first.receive_json()["type"], "ready")
+                self.assertEqual(first.receive_json()["type"], "session_ready")
                 first.send_json(
                     {"type": "user_turn", "turn_id": "t1", "text": "hello"}
                 )
@@ -340,15 +340,15 @@ class GuiTest(unittest.TestCase):
                 self.assertEqual(first.receive_json()["type"], "assistant_delta")
 
                 session = client.get("/api/sessions/s1").json()
-                runtimes = client.get("/api/runtimes").json()
+                active_sessions = client.get("/api/active-sessions").json()
 
                 self.assertEqual(session["event_sequence"], 0)
-                self.assertEqual(runtimes[0]["event_sequence"], 0)
+                self.assertEqual(active_sessions[0]["event_sequence"], 0)
 
                 with client.websocket_connect("/api/session") as second:
                     second.send_json(
                         {
-                            "type": "start",
+                            "type": "open_session",
                             "session_id": "s1",
                             "attachment_id": "page-2",
                             "attach_only": True,
@@ -356,7 +356,7 @@ class GuiTest(unittest.TestCase):
                             "after_event": session["event_sequence"],
                         }
                     )
-                    self.assertEqual(second.receive_json()["type"], "ready")
+                    self.assertEqual(second.receive_json()["type"], "session_ready")
                     self.assertEqual(
                         second.receive_json()["type"], "assistant_delta"
                     )
@@ -369,7 +369,7 @@ class GuiTest(unittest.TestCase):
                     with client.websocket_connect("/api/session") as third:
                         third.send_json(
                             {
-                                "type": "start",
+                                "type": "open_session",
                                 "session_id": "s1",
                                 "attachment_id": "page-3",
                                 "attach_only": True,
@@ -384,7 +384,7 @@ class GuiTest(unittest.TestCase):
     def test_an_idle_runtime_does_not_resend_the_events_its_journal_holds(self) -> None:
         bridge = FakeBridge(
             replies={
-                "start": [{"type": "ready", "session_id": "s1"}],
+                "open_session": [{"type": "session_ready", "session_id": "s1"}],
                 "user_turn": [
                     {"type": "turn_completed", "turn_id": "t1", "usage": None}
                 ],
@@ -393,9 +393,9 @@ class GuiTest(unittest.TestCase):
         with self.client(bridge) as client:
             with client.websocket_connect("/api/session") as socket:
                 socket.send_json(
-                    {"type": "start", "session_id": "s1", "attachment_id": "page-1"}
+                    {"type": "open_session", "session_id": "s1", "attachment_id": "page-1"}
                 )
-                self.assertEqual(socket.receive_json()["type"], "ready")
+                self.assertEqual(socket.receive_json()["type"], "session_ready")
                 socket.send_json(
                     {"type": "user_turn", "turn_id": "t1", "text": "hello"}
                 )
@@ -409,7 +409,7 @@ class GuiTest(unittest.TestCase):
             self.store.append_events("s1", stored.journal, workspace=self.root)
 
             session = client.get("/api/sessions/s1").json()
-            runtimes = client.get("/api/runtimes").json()
+            active_sessions = client.get("/api/active-sessions").json()
 
             # 'ready' and the completion the journal already holds.
             self.assertEqual(
@@ -417,12 +417,12 @@ class GuiTest(unittest.TestCase):
                 ["hello", "world"],
             )
             self.assertEqual(session["event_sequence"], 2)
-            self.assertEqual(runtimes[0]["event_sequence"], 2)
+            self.assertEqual(active_sessions[0]["event_sequence"], 2)
 
             with client.websocket_connect("/api/session") as second:
                 second.send_json(
                     {
-                        "type": "start",
+                        "type": "open_session",
                         "session_id": "s1",
                         "attachment_id": "page-2",
                         "attach_only": True,
@@ -441,55 +441,55 @@ class GuiTest(unittest.TestCase):
         stored.add_item("user", "hello")
         stored.finish_turn("completed", "t1")
         self.store.append_events("s1", stored.journal, workspace=self.root)
-        bridge = FakeBridge(replies={"start": [{"type": "ready", "session_id": "s1"}]})
+        bridge = FakeBridge(replies={"open_session": [{"type": "session_ready", "session_id": "s1"}]})
 
         with self.client(bridge) as client:
             with client.websocket_connect("/api/session") as socket:
                 socket.send_json(
-                    {"type": "start", "session_id": "s1", "attachment_id": "page-1"}
+                    {"type": "open_session", "session_id": "s1", "attachment_id": "page-1"}
                 )
-                self.assertEqual(socket.receive_json()["type"], "ready")
+                self.assertEqual(socket.receive_json()["type"], "session_ready")
 
             response = client.delete("/api/sessions/s1")
 
             self.assertEqual(response.status_code, 200)
             self.assertTrue(bridge.closed)
-            self.assertEqual(client.get("/api/runtimes").json(), [])
+            self.assertEqual(client.get("/api/active-sessions").json(), [])
 
     def test_releasing_an_idle_runtime_closes_its_bridge(self) -> None:
-        bridge = FakeBridge(replies={"start": [{"type": "ready", "session_id": "s1"}]})
+        bridge = FakeBridge(replies={"open_session": [{"type": "session_ready", "session_id": "s1"}]})
         with self.client(bridge) as client:
             with client.websocket_connect("/api/session") as socket:
                 socket.send_json(
-                    {"type": "start", "session_id": "s1", "attachment_id": "page-1"}
+                    {"type": "open_session", "session_id": "s1", "attachment_id": "page-1"}
                 )
-                self.assertEqual(socket.receive_json()["type"], "ready")
+                self.assertEqual(socket.receive_json()["type"], "session_ready")
 
             response = client.delete(
-                "/api/runtimes/s1",
+                "/api/active-sessions/s1",
                 params={"attachment_id": "page-1"},
             )
 
             self.assertEqual(response.json(), {"released": True})
             self.assertTrue(bridge.closed)
-            self.assertEqual(client.get("/api/runtimes").json(), [])
+            self.assertEqual(client.get("/api/active-sessions").json(), [])
 
     def test_stale_model_release_does_not_close_a_replacement_runtime(self) -> None:
-        bridge = FakeBridge(replies={"start": [{"type": "ready", "session_id": "s1"}]})
+        bridge = FakeBridge(replies={"open_session": [{"type": "session_ready", "session_id": "s1"}]})
         with self.client(bridge) as client:
             with client.websocket_connect("/api/session") as socket:
                 socket.send_json(
                     {
-                        "type": "start",
+                        "type": "open_session",
                         "session_id": "s1",
                         "attachment_id": "page-1",
                         "provider": "second",
                     }
                 )
-                self.assertEqual(socket.receive_json()["type"], "ready")
+                self.assertEqual(socket.receive_json()["type"], "session_ready")
 
             response = client.delete(
-                "/api/runtimes/s1",
+                "/api/active-sessions/s1",
                 params={"provider": "first", "attachment_id": "page-1"},
             )
 
@@ -497,18 +497,18 @@ class GuiTest(unittest.TestCase):
             self.assertFalse(bridge.closed)
 
     def test_stale_page_release_does_not_close_a_taken_over_runtime(self) -> None:
-        bridge = FakeBridge(replies={"start": [{"type": "ready", "session_id": "s1"}]})
+        bridge = FakeBridge(replies={"open_session": [{"type": "session_ready", "session_id": "s1"}]})
         with self.client(bridge) as client:
             with client.websocket_connect("/api/session") as first:
                 first.send_json(
-                    {"type": "start", "session_id": "s1", "attachment_id": "page-1"}
+                    {"type": "open_session", "session_id": "s1", "attachment_id": "page-1"}
                 )
-                self.assertEqual(first.receive_json()["type"], "ready")
+                self.assertEqual(first.receive_json()["type"], "session_ready")
 
                 with client.websocket_connect("/api/session") as second:
                     second.send_json(
                         {
-                            "type": "start",
+                            "type": "open_session",
                             "session_id": "s1",
                             "attachment_id": "page-2",
                             "attach_only": True,
@@ -520,10 +520,10 @@ class GuiTest(unittest.TestCase):
                         state = second.receive_json()
                         if state["type"] == "runtime_state":
                             break
-                    self.assertFalse(state["running"])
+                    self.assertEqual(state["phase"], "inactive")
 
                     response = client.delete(
-                        "/api/runtimes/s1",
+                        "/api/active-sessions/s1",
                         params={
                             "provider": "first",
                             "attachment_id": "page-1",
@@ -536,9 +536,9 @@ class GuiTest(unittest.TestCase):
     def test_relays_permission_changes_and_restores_runtime_state(self) -> None:
         bridge = FakeBridge(
             replies={
-                "start": [
+                "open_session": [
                     {
-                        "type": "ready",
+                        "type": "session_ready",
                         "session_id": "s1",
                         "permission_preset": "ask_for_approval",
                     }
@@ -552,12 +552,12 @@ class GuiTest(unittest.TestCase):
             with client.websocket_connect("/api/session") as first:
                 first.send_json(
                     {
-                        "type": "start",
+                        "type": "open_session",
                         "session_id": "s1",
                         "attachment_id": "page-1",
                     }
                 )
-                self.assertEqual(first.receive_json()["type"], "ready")
+                self.assertEqual(first.receive_json()["type"], "session_ready")
                 first.send_json(
                     {"type": "user_turn", "turn_id": "t1", "text": "work"}
                 )
@@ -576,7 +576,7 @@ class GuiTest(unittest.TestCase):
             with client.websocket_connect("/api/session") as second:
                 second.send_json(
                     {
-                        "type": "start",
+                        "type": "open_session",
                         "session_id": "s1",
                         "attachment_id": "page-1",
                         "attach_only": True,
@@ -591,6 +591,106 @@ class GuiTest(unittest.TestCase):
 
         self.assertEqual(bridge.sent[-1]["type"], "permission_set")
 
+    def test_changes_permission_before_any_turn_without_starting_execution(self) -> None:
+        bridge = FakeBridge(
+            replies={
+                "open_session": [
+                    {
+                        "type": "session_ready",
+                        "session_id": "empty",
+                        "permission_preset": "ask_for_approval",
+                    },
+                    {
+                        "type": "runtime_state",
+                        "phase": "inactive",
+                        "turn_id": None,
+                        "approval": None,
+                        "question": None,
+                        "provider": "first",
+                        "permission_preset": "ask_for_approval",
+                        "context_window": None,
+                        "jobs": [],
+                    },
+                ],
+                "permission_set": [
+                    {"type": "permission_changed", "preset": "full_access"}
+                ],
+            }
+        )
+        with self.client(bridge) as client:
+            with client.websocket_connect("/api/session") as socket:
+                socket.send_json(
+                    {
+                        "type": "open_session",
+                        "session_id": "empty",
+                        "attachment_id": "page-1",
+                    }
+                )
+                self.assertEqual(socket.receive_json()["type"], "session_ready")
+                self.assertEqual(socket.receive_json()["phase"], "inactive")
+
+                socket.send_json(
+                    {"type": "permission_set", "preset": "full_access"}
+                )
+                self.assertEqual(
+                    socket.receive_json()["type"],
+                    "permission_changed",
+                )
+
+        self.assertEqual(
+            [message["type"] for message in bridge.sent],
+            ["open_session", "permission_set"],
+        )
+
+    def test_relays_session_configuration_without_a_user_turn(self) -> None:
+        bridge = FakeBridge(
+            replies={
+                "open_session": [
+                    {"type": "session_ready", "session_id": "empty"},
+                ],
+                "provider_set": [
+                    {
+                        "type": "provider_changed",
+                        "provider": "second",
+                        "model": "openai/second",
+                    }
+                ],
+                "workspace_set": [
+                    {
+                        "type": "workspace_changed",
+                        "workspace": str(self.root.resolve()),
+                    }
+                ],
+            }
+        )
+        with self.client(bridge) as client:
+            with client.websocket_connect("/api/session") as socket:
+                socket.send_json(
+                    {
+                        "type": "open_session",
+                        "session_id": "empty",
+                        "attachment_id": "page-1",
+                    }
+                )
+                self.assertEqual(socket.receive_json()["type"], "session_ready")
+                socket.send_json({"type": "provider_set", "provider": "second"})
+                self.assertEqual(
+                    socket.receive_json()["type"],
+                    "provider_changed",
+                )
+                socket.send_json(
+                    {"type": "workspace_set", "workspace": str(self.root)}
+                )
+                self.assertEqual(
+                    socket.receive_json()["type"],
+                    "workspace_changed",
+                )
+
+        self.assertEqual(
+            [message["type"] for message in bridge.sent],
+            ["open_session", "provider_set", "workspace_set"],
+        )
+
     def test_reconnect_restores_a_user_question(self) -> None:
         question = {
             "type": "user_question",
@@ -602,7 +702,7 @@ class GuiTest(unittest.TestCase):
         }
         bridge = FakeBridge(
             replies={
-                "start": [{"type": "ready", "session_id": "shared"}],
+                "open_session": [{"type": "session_ready", "session_id": "shared"}],
                 "user_turn": [question],
                 "user_question_response": [
                     {"type": "turn_completed", "turn_id": "t1", "usage": None},
@@ -613,9 +713,9 @@ class GuiTest(unittest.TestCase):
         with self.client(bridge) as client:
             with client.websocket_connect("/api/session") as first:
                 first.send_json(
-                    {"type": "start", "session_id": "shared", "attachment_id": "page-1"}
+                    {"type": "open_session", "session_id": "shared", "attachment_id": "page-1"}
                 )
-                self.assertEqual(first.receive_json()["type"], "ready")
+                self.assertEqual(first.receive_json()["type"], "session_ready")
                 first.send_json(
                     {"type": "user_turn", "turn_id": "t1", "text": "choose"}
                 )
@@ -624,7 +724,7 @@ class GuiTest(unittest.TestCase):
             with client.websocket_connect("/api/session") as second:
                 second.send_json(
                     {
-                        "type": "start",
+                        "type": "open_session",
                         "session_id": "shared",
                         "attachment_id": "page-1",
                         "attach_only": True,
@@ -647,17 +747,17 @@ class GuiTest(unittest.TestCase):
     def test_does_not_forward_unknown_or_lifecycle_messages(self) -> None:
         bridge = FakeBridge(
             replies={
-                "start": [{"type": "ready"}],
+                "open_session": [{"type": "session_ready"}],
                 "user_turn": [{"type": "bye"}, None],
             }
         )
         with self.client(bridge) as client:
             with client.websocket_connect("/api/session") as socket:
-                socket.send_json({"type": "start", "session_id": "s1", "attachment_id": "page-1"})
-                self.assertEqual(socket.receive_json()["type"], "ready")
+                socket.send_json({"type": "open_session", "session_id": "s1", "attachment_id": "page-1"})
+                self.assertEqual(socket.receive_json()["type"], "session_ready")
                 # A page must not shut the bridge down or restart it.
                 socket.send_json({"type": "shutdown"})
-                socket.send_json({"type": "start", "session_id": "other", "attachment_id": "page-1"})
+                socket.send_json({"type": "open_session", "session_id": "other", "attachment_id": "page-1"})
                 socket.send_json(
                     {"type": "user_turn", "turn_id": "t1", "text": "hi"}
                 )
@@ -665,17 +765,17 @@ class GuiTest(unittest.TestCase):
 
         self.assertEqual(
             [message["type"] for message in bridge.sent],
-            ["start", "user_turn"],
+            ["open_session", "user_turn"],
         )
 
     def test_cancel_interrupts_the_bridge_without_being_forwarded(
         self,
     ) -> None:
-        bridge = FakeBridge(replies={"start": [{"type": "ready"}]})
+        bridge = FakeBridge(replies={"open_session": [{"type": "session_ready"}]})
         with self.client(bridge) as client:
             with client.websocket_connect("/api/session") as socket:
-                socket.send_json({"type": "start", "session_id": "s1", "attachment_id": "page-1"})
-                self.assertEqual(socket.receive_json()["type"], "ready")
+                socket.send_json({"type": "open_session", "session_id": "s1", "attachment_id": "page-1"})
+                self.assertEqual(socket.receive_json()["type"], "session_ready")
                 socket.send_json(
                     {"type": "user_turn", "turn_id": "t1", "text": "hi"}
                 )
@@ -687,13 +787,13 @@ class GuiTest(unittest.TestCase):
         self.assertEqual(bridge.cancelled, 1)
         self.assertEqual(
             [m["type"] for m in bridge.sent],
-            ["start", "user_turn"],
+            ["open_session", "user_turn"],
         )
 
     def test_reconnects_to_the_same_runtime_and_restores_approval(self) -> None:
         bridge = FakeBridge(
             replies={
-                "start": [{"type": "ready", "session_id": "shared"}],
+                "open_session": [{"type": "session_ready", "session_id": "shared"}],
                 "user_turn": [
                     {
                         "type": "approval_request",
@@ -710,8 +810,8 @@ class GuiTest(unittest.TestCase):
         )
         with self.client(bridge) as client:
             with client.websocket_connect("/api/session") as first:
-                first.send_json({"type": "start", "session_id": "shared", "attachment_id": "page-1"})
-                self.assertEqual(first.receive_json()["type"], "ready")
+                first.send_json({"type": "open_session", "session_id": "shared", "attachment_id": "page-1"})
+                self.assertEqual(first.receive_json()["type"], "session_ready")
                 first.send_json(
                     {"type": "user_turn", "turn_id": "t1", "text": "list"}
                 )
@@ -723,7 +823,7 @@ class GuiTest(unittest.TestCase):
             with client.websocket_connect("/api/session") as second:
                 second.send_json(
                     {
-                        "type": "start",
+                        "type": "open_session",
                         "session_id": "shared",
                         "attachment_id": "page-1",
                         "attach_only": True,
@@ -731,7 +831,7 @@ class GuiTest(unittest.TestCase):
                     }
                 )
                 state = second.receive_json()
-                self.assertTrue(state["running"])
+                self.assertEqual(state["phase"], "starting")
                 self.assertEqual(state["approval"]["request_id"], "t1:1")
                 second.send_json(
                     {
@@ -746,24 +846,24 @@ class GuiTest(unittest.TestCase):
 
         self.assertEqual(
             [message["type"] for message in bridge.sent],
-            ["start", "user_turn", "approval_response"],
+            ["open_session", "user_turn", "approval_response"],
         )
         self.assertTrue(bridge.sent[-1]["approved"])
 
     def test_background_reconnect_does_not_replace_another_page(self) -> None:
         bridge = FakeBridge(
-            replies={"start": [{"type": "ready", "session_id": "shared"}]}
+            replies={"open_session": [{"type": "session_ready", "session_id": "shared"}]}
         )
         with self.client(bridge) as client:
             with client.websocket_connect("/api/session") as first:
                 first.send_json(
                     {
-                        "type": "start",
+                        "type": "open_session",
                         "session_id": "shared",
                         "attachment_id": "page-1",
                     }
                 )
-                self.assertEqual(first.receive_json()["type"], "ready")
+                self.assertEqual(first.receive_json()["type"], "session_ready")
                 first.send_json(
                     {"type": "user_turn", "turn_id": "t1", "text": "hi"}
                 )
@@ -771,7 +871,7 @@ class GuiTest(unittest.TestCase):
                 with client.websocket_connect("/api/session") as second:
                     second.send_json(
                         {
-                            "type": "start",
+                            "type": "open_session",
                             "session_id": "shared",
                             "attachment_id": "page-2",
                             "attach_only": True,
@@ -781,7 +881,7 @@ class GuiTest(unittest.TestCase):
 
                 self.assertEqual(
                     replaced,
-                    {"type": "attachment_replaced", "running": True},
+                    {"type": "attachment_replaced", "phase": "starting"},
                 )
                 bridge.emit(
                     {
@@ -797,18 +897,18 @@ class GuiTest(unittest.TestCase):
 
     def test_explicit_takeover_replaces_the_previous_page(self) -> None:
         bridge = FakeBridge(
-            replies={"start": [{"type": "ready", "session_id": "shared"}]}
+            replies={"open_session": [{"type": "session_ready", "session_id": "shared"}]}
         )
         with self.client(bridge) as client:
             with client.websocket_connect("/api/session") as first:
                 first.send_json(
                     {
-                        "type": "start",
+                        "type": "open_session",
                         "session_id": "shared",
                         "attachment_id": "page-1",
                     }
                 )
-                self.assertEqual(first.receive_json()["type"], "ready")
+                self.assertEqual(first.receive_json()["type"], "session_ready")
                 first.send_json(
                     {"type": "user_turn", "turn_id": "t1", "text": "hi"}
                 )
@@ -816,7 +916,7 @@ class GuiTest(unittest.TestCase):
                 with client.websocket_connect("/api/session") as second:
                     second.send_json(
                         {
-                            "type": "start",
+                            "type": "open_session",
                             "session_id": "shared",
                             "attachment_id": "page-2",
                             "attach_only": True,
@@ -826,10 +926,10 @@ class GuiTest(unittest.TestCase):
                     )
                     self.assertEqual(
                         first.receive_json(),
-                        {"type": "attachment_replaced", "running": True},
+                        {"type": "attachment_replaced", "phase": "starting"},
                     )
                     state = second.receive_json()
-                    self.assertTrue(state["running"])
+                    self.assertEqual(state["phase"], "starting")
 
                     bridge.emit(
                         {
@@ -845,12 +945,12 @@ class GuiTest(unittest.TestCase):
 
     def test_replays_events_and_completion_emitted_while_detached(self) -> None:
         bridge = FakeBridge(
-            replies={"start": [{"type": "ready", "session_id": "shared"}]}
+            replies={"open_session": [{"type": "session_ready", "session_id": "shared"}]}
         )
         with self.client(bridge) as client:
             with client.websocket_connect("/api/session") as first:
-                first.send_json({"type": "start", "session_id": "shared", "attachment_id": "page-1"})
-                self.assertEqual(first.receive_json()["type"], "ready")
+                first.send_json({"type": "open_session", "session_id": "shared", "attachment_id": "page-1"})
+                self.assertEqual(first.receive_json()["type"], "session_ready")
                 first.send_json(
                     {"type": "user_turn", "turn_id": "t1", "text": "hi"}
                 )
@@ -867,15 +967,15 @@ class GuiTest(unittest.TestCase):
             )
             _wait_for(
                 client,
-                lambda: not client.get("/api/runtimes").json()[0]["running"],
+                lambda: client.get("/api/active-sessions").json()[0]["phase"] == "idle",
             )
 
-            runtimes = client.get("/api/runtimes").json()
-            self.assertEqual(runtimes[0]["session_id"], "shared")
+            active_sessions = client.get("/api/active-sessions").json()
+            self.assertEqual(active_sessions[0]["session_id"], "shared")
             with client.websocket_connect("/api/session") as second:
                 second.send_json(
                     {
-                        "type": "start",
+                        "type": "open_session",
                         "session_id": "shared",
                         "attachment_id": "page-1",
                         "attach_only": True,
@@ -886,19 +986,19 @@ class GuiTest(unittest.TestCase):
                 completed = second.receive_json()
                 state = second.receive_json()
 
-            self.assertFalse(state["running"])
+            self.assertEqual(state["phase"], "idle")
             self.assertEqual(delta["text"], "done")
             self.assertEqual(completed["type"], "turn_completed")
             self.assertFalse(bridge.closed)
 
         self.assertEqual(
             [message["type"] for message in bridge.sent],
-            ["start", "user_turn"],
+            ["open_session", "user_turn"],
         )
 
     def test_replays_a_detached_fatal_then_allows_a_fresh_runtime(self) -> None:
-        first = FakeBridge(replies={"start": [{"type": "ready", "session_id": "s1"}]})
-        second = FakeBridge(replies={"start": [{"type": "ready", "session_id": "s1"}]})
+        first = FakeBridge(replies={"open_session": [{"type": "session_ready", "session_id": "s1"}]})
+        second = FakeBridge(replies={"open_session": [{"type": "session_ready", "session_id": "s1"}]})
         bridges = [first, second]
 
         async def spawn(cls: object, workspace: Workspace) -> FakeBridge:
@@ -914,9 +1014,9 @@ class GuiTest(unittest.TestCase):
         ):
             with client.websocket_connect("/api/session") as socket:
                 socket.send_json(
-                    {"type": "start", "session_id": "s1", "attachment_id": "page-1"}
+                    {"type": "open_session", "session_id": "s1", "attachment_id": "page-1"}
                 )
-                self.assertEqual(socket.receive_json()["type"], "ready")
+                self.assertEqual(socket.receive_json()["type"], "session_ready")
 
             first.emit(
                 {
@@ -927,13 +1027,13 @@ class GuiTest(unittest.TestCase):
             )
             _wait_for(client, lambda: first.closed)
 
-            runtime = client.get("/api/runtimes").json()[0]
+            runtime = client.get("/api/active-sessions").json()[0]
             self.assertEqual(runtime["event_sequence"], 1)
 
             with client.websocket_connect("/api/session") as socket:
                 socket.send_json(
                     {
-                        "type": "start",
+                        "type": "open_session",
                         "session_id": "s1",
                         "attachment_id": "page-2",
                         "attach_only": True,
@@ -948,16 +1048,16 @@ class GuiTest(unittest.TestCase):
             self.assertEqual(state["event_sequence"], 1)
             self.assertEqual(fatal["type"], "fatal")
             self.assertEqual(fatal["event_sequence"], 2)
-            _wait_for(client, lambda: client.get("/api/runtimes").json() == [])
+            _wait_for(client, lambda: client.get("/api/active-sessions").json() == [])
 
             with client.websocket_connect("/api/session") as socket:
                 socket.send_json(
-                    {"type": "start", "session_id": "s1", "attachment_id": "page-3"}
+                    {"type": "open_session", "session_id": "s1", "attachment_id": "page-3"}
                 )
-                self.assertEqual(socket.receive_json()["type"], "ready")
+                self.assertEqual(socket.receive_json()["type"], "session_ready")
 
-        self.assertEqual(first.sent[0]["type"], "start")
-        self.assertEqual(second.sent[0]["type"], "start")
+        self.assertEqual(first.sent[0]["type"], "open_session")
+        self.assertEqual(second.sent[0]["type"], "open_session")
 
     def test_runs_different_sessions_concurrently(self) -> None:
         """Two pages on different sessions must not block each other."""
@@ -966,7 +1066,7 @@ class GuiTest(unittest.TestCase):
         async def spawn(cls: object, workspace: Workspace) -> FakeBridge:
             # Every connection drives its own agent process, so hand
             # each one a separate fake rather than a shared queue.
-            bridge = FakeBridge(replies={"start": [{"type": "ready"}]})
+            bridge = FakeBridge(replies={"open_session": [{"type": "session_ready"}]})
             bridges.append(bridge)
             return bridge
 
@@ -979,16 +1079,16 @@ class GuiTest(unittest.TestCase):
             self.client() as client,
         ):
             with client.websocket_connect("/api/session") as first:
-                first.send_json({"type": "start", "session_id": "one", "attachment_id": "page-1"})
-                self.assertEqual(first.receive_json()["type"], "ready")
+                first.send_json({"type": "open_session", "session_id": "one", "attachment_id": "page-1"})
+                self.assertEqual(first.receive_json()["type"], "session_ready")
 
                 # The second session stays free even though the first
                 # page is still connected and holding its own lock.
                 with client.websocket_connect("/api/session") as second:
-                    second.send_json({"type": "start", "session_id": "two", "attachment_id": "page-2"})
+                    second.send_json({"type": "open_session", "session_id": "two", "attachment_id": "page-2"})
                     self.assertEqual(
                         second.receive_json()["type"],
-                        "ready",
+                        "session_ready",
                     )
                     second.send_json(
                         {"type": "user_turn", "turn_id": "t2", "text": "two"}
@@ -1013,7 +1113,7 @@ class GuiTest(unittest.TestCase):
             with client.websocket_connect("/api/session") as socket:
                 socket.send_json(
                     {
-                        "type": "start",
+                        "type": "open_session",
                         "session_id": "missing",
                         "attachment_id": "page-1",
                         "provider": "second",
@@ -1022,7 +1122,7 @@ class GuiTest(unittest.TestCase):
                 )
                 state = socket.receive_json()
 
-        self.assertFalse(state["running"])
+        self.assertEqual(state["phase"], "inactive")
         self.assertEqual(bridge.sent, [])
 
     def test_lists_models_without_requiring_keys(self) -> None:

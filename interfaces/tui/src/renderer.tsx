@@ -241,6 +241,13 @@ export function Transcript({ state }: { state: State }): React.ReactElement {
 }
 
 export function StatusBar({ state, elapsed }: { state: State; elapsed: number }) {
+  if (state.status === 'opening') {
+    return (
+      <Box flexShrink={0} paddingX={1}>
+        <Text dimColor wrap="truncate-end"> opening session…</Text>
+      </Box>
+    );
+  }
   if (state.status === 'starting') {
     return (
       <Box flexShrink={0} paddingX={1}>
@@ -251,6 +258,16 @@ export function StatusBar({ state, elapsed }: { state: State; elapsed: number })
         </Box>
         <Text dimColor wrap="truncate-end">
           {state.mcpStatus ? ` ${state.mcpStatus}` : ' starting agent…'}
+        </Text>
+      </Box>
+    );
+  }
+
+  if (state.status === 'runtime_failed') {
+    return (
+      <Box flexShrink={0} paddingX={1}>
+        <Text color="red" wrap="truncate-end">
+          runtime unavailable · change configuration or restart the session
         </Text>
       </Box>
     );

@@ -3,13 +3,25 @@ import { MessageDecoder, formatArguments } from '@nosis/protocol';
 import { initialState, reducer, type State } from '../src/state.js';
 
 const READY = {
-  type: 'ready' as const,
+  type: 'session_ready' as const,
   session_id: 'abc12345-0000',
   workspace: '/tmp/work',
+  provider: 'deepseek',
   model: 'deepseek/deepseek-chat',
   resumed: false,
   message_count: 0,
   permission_preset: 'ask_for_approval' as const,
+};
+
+const RUNTIME_READY = {
+  type: 'runtime_state' as const,
+  phase: 'idle' as const,
+  turn_id: null,
+  provider: 'deepseek',
+  permission_preset: 'ask_for_approval' as const,
+  approval: null,
+  question: null,
+  jobs: [],
   context_window: {
     input_tokens: 10,
     max_input_tokens: 900,
@@ -21,7 +33,10 @@ const READY = {
 };
 
 function ready(): State {
-  return reducer(initialState, { type: 'message', message: READY });
+  return reducer(
+    reducer(initialState, { type: 'message', message: READY }),
+    { type: 'message', message: RUNTIME_READY },
+  );
 }
 
 describe('MessageDecoder', () => {
@@ -49,7 +64,7 @@ describe('MessageDecoder', () => {
 });
 
 describe('permissions', () => {
-  it('restores the preset from ready and records later changes', () => {
+  it('restores the preset from session readiness and records later changes', () => {
     let state = ready();
     expect(state.permissionPreset).toBe('ask_for_approval');
 
@@ -91,7 +106,7 @@ describe('reducer', () => {
     });
   });
 
-  it('becomes idle when the runtime is ready', () => {
+  it('becomes idle when the execution plane is ready', () => {
     const state = ready();
     expect(state.status).toBe('idle');
     expect(state.model).toBe('deepseek/deepseek-chat');
@@ -105,7 +120,7 @@ describe('reducer', () => {
     });
     expect(state.mcpStatus).toBe('MCP mineru: ready (2 tools)');
     expect(state.entries).toEqual([]);
-    expect(reducer(state, { type: 'message', message: READY }).mcpStatus).toBeNull();
+    expect(reducer(state, { type: 'message', message: RUNTIME_READY }).mcpStatus).toBeNull();
   });
 
   it('notes resumed sessions', () => {
@@ -119,7 +134,7 @@ describe('reducer', () => {
   it('shows skill discovery warnings without blocking startup', () => {
     const state = reducer(initialState, {
       type: 'message',
-      message: { ...READY, skill_warnings: ['Skipping invalid skill.'] },
+      message: { ...RUNTIME_READY, skill_warnings: ['Skipping invalid skill.'] },
     });
     expect(state.status).toBe('idle');
     expect(state.entries[0]).toMatchObject({

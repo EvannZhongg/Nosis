@@ -7,6 +7,7 @@ export type Session = {
   items: SessionItem[];
   workspace?: string | null;
   permission_preset: PermissionPreset;
+  provider?: string | null;
   context_window?: ContextWindow | null;
   event_sequence?: number;
 };
@@ -41,7 +42,7 @@ export async function deleteSession(sessionId: string): Promise<void> {
   }
 }
 
-export async function releaseRuntime(
+export async function releaseActiveSession(
   sessionId: string,
   provider?: string,
   attachmentId?: string,
@@ -50,13 +51,13 @@ export async function releaseRuntime(
   if (provider) query.set("provider", provider);
   if (attachmentId) query.set("attachment_id", attachmentId);
   const suffix = query.size ? `?${query}` : "";
-  const response = await fetch(`/api/runtimes/${encodeURIComponent(sessionId)}${suffix}`, {
+  const response = await fetch(`/api/active-sessions/${encodeURIComponent(sessionId)}${suffix}`, {
     method: "DELETE",
     keepalive: true,
   });
   if (!response.ok) {
     const error = await response.json();
-    throw new Error(error.detail ?? `Runtime 释放失败 (${response.status})`);
+    throw new Error(error.detail ?? `会话连接释放失败 (${response.status})`);
   }
 }
 
@@ -67,19 +68,6 @@ export async function selectWorkspace(): Promise<string | null> {
     throw new Error(error.detail ?? `选择工作区失败 (${response.status})`);
   }
   return (await response.json() as { workspace: string | null }).workspace;
-}
-
-export async function updateSessionWorkspace(sessionId: string, workspace: string): Promise<string> {
-  const response = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}/workspace`, {
-    method: "PUT",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ workspace }),
-  });
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.detail ?? `工作区更新失败 (${response.status})`);
-  }
-  return (await response.json() as { workspace: string }).workspace;
 }
 
 export async function uploadAttachments(files: File[], sessionId?: string): Promise<ImageAttachment[]> {

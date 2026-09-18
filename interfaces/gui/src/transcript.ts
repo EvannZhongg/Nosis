@@ -51,11 +51,17 @@ export function applyMessage(
   message: Incoming,
 ): Applied {
   switch (message.type) {
-    case "ready":
+    case "session_ready":
       return {
         items,
         permissionPreset: message.permission_preset,
-        contextWindow: message.context_window,
+      };
+
+    case "runtime_state":
+      return {
+        items,
+        permissionPreset: message.permission_preset,
+        contextWindow: message.context_window ?? undefined,
         feedback: message.skill_warnings?.length
           ? {
               kind: "alert",
@@ -164,6 +170,26 @@ export function applyMessage(
           kind: "toast",
           level: "info",
           text: `权限模式已切换为${message.preset === "full_access" ? "完全访问" : "请求批准"}。`,
+        },
+      };
+
+    case "provider_changed":
+      return {
+        items,
+        feedback: {
+          kind: "toast",
+          level: "info",
+          text: `模型已切换为 ${message.model}。`,
+        },
+      };
+
+    case "workspace_changed":
+      return {
+        items,
+        feedback: {
+          kind: "toast",
+          level: "info",
+          text: `工作区已切换为 ${message.workspace}`,
         },
       };
 

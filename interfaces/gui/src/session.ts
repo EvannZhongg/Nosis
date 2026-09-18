@@ -3,6 +3,7 @@ import type { Incoming, Outgoing } from "@nosis/protocol";
 export type SessionSocketOptions = {
   sessionId: string | null;
   provider: string;
+  workspace?: string | null;
   attachmentId: string;
   attachOnly?: boolean;
   afterEvent?: number;
@@ -14,12 +15,12 @@ export type SessionSocketOptions = {
 
 /** What the browser may send: relayed bridge messages plus 'cancel'. */
 type Sendable =
-  Extract<Outgoing, { type: "user_turn" | "user_steer" | "approval_response" | "permission_set" | "user_question_response" | "cancel" }>;
+  Extract<Outgoing, { type: "user_turn" | "user_steer" | "approval_response" | "permission_set" | "provider_set" | "workspace_set" | "user_question_response" | "cancel" }>;
 
 /**
  * Owns one WebSocket to the agent bridge for the lifetime of a session.
  *
- * The server builds the bridge's 'start' message, so the opening frame
+ * The server builds the bridge's `open_session` message, so the opening frame
  * only carries the session and provider choice.
  */
 export class SessionSocket {
@@ -32,9 +33,10 @@ export class SessionSocket {
 
     this.socket.onopen = () => {
       this.write({
-        type: "start",
+        type: "open_session",
         session_id: options.sessionId,
         provider: options.provider,
+        workspace: options.workspace ?? undefined,
         attachment_id: options.attachmentId,
         ...(options.attachOnly ? { attach_only: true } : {}),
         ...(options.afterEvent !== undefined ? { after_event: options.afterEvent } : {}),

@@ -58,23 +58,16 @@ function fold(messages: Incoming[], initial: TranscriptItem[] = []) {
 }
 
 describe("applyMessage", () => {
-  it("reports permission state from ready and permission changes", () => {
+  it("reports permission state from session readiness and later changes", () => {
     const ready = applyMessage([], {
-      type: "ready",
+      type: "session_ready",
       session_id: "s1",
       workspace: "/tmp/work",
+      provider: "test",
       model: "test/model",
       resumed: false,
       message_count: 0,
       permission_preset: "ask_for_approval",
-      context_window: {
-        input_tokens: 10,
-        max_input_tokens: 900,
-        max_context_tokens: 1000,
-        output_reserve_tokens: 100,
-        compression_threshold: 720,
-        compression_count: 0,
-      },
     });
     expect(ready.permissionPreset).toBe("ask_for_approval");
 
@@ -102,15 +95,16 @@ describe("applyMessage", () => {
       },
     ]);
   });
-  it("shows skill discovery warnings from ready", () => {
+  it("shows skill discovery warnings from runtime initialization", () => {
     const { feedback } = applyMessage([], {
-      type: "ready",
-      session_id: "s1",
-      workspace: "/tmp/work",
-      model: "test/model",
-      resumed: false,
-      message_count: 0,
+      type: "runtime_state",
+      phase: "running",
+      turn_id: "t1",
+      provider: "test",
       permission_preset: "ask_for_approval",
+      approval: null,
+      question: null,
+      jobs: [],
       context_window: {
         input_tokens: 10,
         max_input_tokens: 900,
@@ -399,21 +393,14 @@ describe("applyMessage", () => {
     const items: TranscriptItem[] = [{ role: "user", content: "hi" }];
     for (const message of [
       {
-        type: "ready" as const,
+        type: "session_ready" as const,
         session_id: "s1",
         workspace: "/tmp",
+        provider: "test",
         model: "m",
         resumed: false,
         message_count: 0,
         permission_preset: "ask_for_approval" as const,
-        context_window: {
-          input_tokens: 10,
-          max_input_tokens: 900,
-          max_context_tokens: 1000,
-          output_reserve_tokens: 100,
-          compression_threshold: 720,
-          compression_count: 0,
-        },
       },
       {
         type: "tool_call" as const,

@@ -13,9 +13,9 @@ nosis-gui --config path/to/provider_config.json \
 
 默认地址为 <http://127.0.0.1:8737>。
 
-权限选择器修改当前 Session 的授权模式；「停止」会取消当前轮次，但不会撤销已经完成的 Tool 操作。不同 Session 可以并行运行，切换页面或临时断线不会主动取消任务。
+进入会话后会先建立轻量 Session 连接，权限选择器可以在发送消息前修改并持久化授权模式；「停止」会取消当前轮次，但不会撤销已经完成的 Tool 操作。不同 Session 可以并行运行，切换页面或临时断线不会主动取消任务。
 
-历史会话直接从持久化数据读取，首次发送消息时才启动对应 Runtime。上传的图片保存在当前 Workspace 的 `.nosis/attachments/`。
+历史会话直接从持久化数据读取。Provider、MCP、Tool 和 Agent 在首次发送消息时才初始化。上传的图片保存在当前 Workspace 的 `.nosis/attachments/`。
 
 ## 前端开发
 

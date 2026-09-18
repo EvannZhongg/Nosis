@@ -15,21 +15,14 @@ vi.mock('../src/bridge.js', () => ({
         setTimeout(
           () =>
             options.onMessage({
-              type: 'ready',
+              type: 'session_ready',
               session_id: 'sess-1234',
               workspace: '/w',
+              provider: 'test',
               model: 'test/model',
               resumed: false,
               message_count: 0,
               permission_preset: 'ask_for_approval',
-              context_window: {
-                input_tokens: 10,
-                max_input_tokens: 900,
-                max_context_tokens: 1000,
-                output_reserve_tokens: 100,
-                compression_threshold: 720,
-                compression_count: 0,
-              },
             }),
           10,
         );
@@ -88,7 +81,7 @@ function renderApp() {
   );
 }
 
-/** The status bar only shows the model once the runtime reported ready. */
+/** The status bar shows the model once the Session control plane is ready. */
 const waitForReady = (lastFrame: Frame) =>
   waitFor(() => expect(lastFrame()).toContain('test/model'));
 
@@ -135,11 +128,11 @@ describe('App', () => {
     autoReady = true;
   });
 
-  it('starts the runtime with the workspace and config paths', async () => {
+  it('opens the session with the workspace and config paths', async () => {
     renderApp();
     await waitFor(() =>
       expect(sent[0]).toMatchObject({
-        type: 'start',
+        type: 'open_session',
         workspace: '/w',
         session_id: null,
         provider_config_path: '/p',
@@ -219,8 +212,8 @@ describe('App', () => {
 
     // The runtime is replaced rather than re-pointed, so a second bridge
     // starts on the chosen session and the picker closes.
-    await waitFor(() => expect(sent.filter((m) => m.type === 'start')).toHaveLength(2));
-    expect(sent.filter((m) => m.type === 'start')[1]).toMatchObject({
+    await waitFor(() => expect(sent.filter((m) => m.type === 'open_session')).toHaveLength(2));
+    expect(sent.filter((m) => m.type === 'open_session')[1]).toMatchObject({
       session_id: 'older',
     });
     expect(lastFrame()).not.toContain('❯ about the tests');
@@ -254,7 +247,7 @@ describe('App', () => {
     });
     await waitFor(() => expect(lastFrame()).toContain('a long conversation'));
     stdin.write('\r');
-    await waitFor(() => expect(sent.filter((m) => m.type === 'start')).toHaveLength(2));
+    await waitFor(() => expect(sent.filter((m) => m.type === 'open_session')).toHaveLength(2));
 
     // The whole conversation arrives in one message, so the transcript has
     // to commit it in one step: committing item by item from a single
@@ -281,7 +274,7 @@ describe('App', () => {
 
     stdin.write('\u001b');
     await waitFor(() => expect(lastFrame()).not.toContain('Loading…'));
-    expect(sent.filter((m) => m.type === 'start')).toHaveLength(1);
+    expect(sent.filter((m) => m.type === 'open_session')).toHaveLength(1);
   });
 
   it('sends steering while the agent is busy', async () => {
@@ -538,29 +531,22 @@ describe('App', () => {
   it('uses one status line before and after startup', async () => {
     autoReady = false;
     const { lastFrame } = renderApp();
-    await waitFor(() => expect(lastFrame()).toContain('starting agent…'));
+    await waitFor(() => expect(lastFrame()).toContain('opening session…'));
 
     expect(
-      lineContaining(lastFrame(), 'starting agent…') -
+      lineContaining(lastFrame(), 'opening session…') -
         lineContaining(lastFrame(), 'steer the current turn…'),
     ).toBe(2);
 
     emit({
-      type: 'ready',
+      type: 'session_ready',
       session_id: 'sess-1234',
       workspace: '/w',
+      provider: 'test',
       model: 'test/model',
       resumed: false,
       message_count: 0,
       permission_preset: 'ask_for_approval',
-      context_window: {
-        input_tokens: 10,
-        max_input_tokens: 900,
-        max_context_tokens: 1000,
-        output_reserve_tokens: 100,
-        compression_threshold: 720,
-        compression_count: 0,
-      },
     });
     await waitForReady(lastFrame);
 

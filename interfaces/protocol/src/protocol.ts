@@ -38,6 +38,14 @@ export type ContextWindow = {
 };
 
 export type PermissionPreset = 'ask_for_approval' | 'full_access';
+export type RuntimePhase =
+  | 'inactive'
+  | 'starting'
+  | 'idle'
+  | 'running'
+  | 'waiting_approval'
+  | 'waiting_user'
+  | 'failed';
 
 export type SessionSummary = {
   session_id: string;
@@ -85,12 +93,12 @@ export type UserQuestion = {
 export type Incoming = (
   | {
       type: 'runtime_state';
-      running: boolean;
+      phase: RuntimePhase;
       turn_id: string | null;
       provider: string | null;
       permission_preset: PermissionPreset;
       context_window: ContextWindow | null;
-      event_sequence: number;
+      event_sequence?: number;
       jobs: {
         job_id: string;
         kind: string;
@@ -106,18 +114,18 @@ export type Incoming = (
         tool_name?: string;
       } | null;
       question: UserQuestion | null;
+      skill_warnings?: string[];
     }
-  | { type: 'attachment_replaced'; running: boolean }
+  | { type: 'attachment_replaced'; phase: RuntimePhase }
   | {
-      type: 'ready';
+      type: 'session_ready';
       session_id: string;
       workspace: string;
+      provider: string;
       model: string;
       resumed: boolean;
       message_count: number;
       permission_preset: PermissionPreset;
-      context_window: ContextWindow;
-      skill_warnings?: string[];
     }
   | { type: 'assistant_delta'; turn_id: string; text: string; model_call_index: number }
   | { type: 'reasoning_delta'; turn_id: string; text: string; model_call_index: number }
@@ -183,6 +191,8 @@ export type Incoming = (
       tool_name?: string;
     }
   | { type: 'permission_changed'; preset: PermissionPreset }
+  | { type: 'provider_changed'; provider: string; model: string }
+  | { type: 'workspace_changed'; workspace: string }
   | { type: 'sessions_listed'; sessions: SessionSummary[] }
   | { type: 'session_items'; items: SessionItem[] }
   | UserQuestion
@@ -195,7 +205,7 @@ export type Incoming = (
 
 export type Outgoing =
   | {
-      type: 'start';
+      type: 'open_session';
       workspace: string;
       session_id: string | null;
       provider_config_path: string;
@@ -211,6 +221,8 @@ export type Outgoing =
   | { type: 'user_steer'; turn_id: string; steer_id: string; text: string }
   | { type: 'approval_response'; request_id: string; approved: boolean }
   | { type: 'permission_set'; preset: PermissionPreset }
+  | { type: 'provider_set'; provider: string }
+  | { type: 'workspace_set'; workspace: string }
   | { type: 'cancel'; turn_id: string }
   | { type: 'user_question_response'; request_id: string; option_id?: string; text?: string }
   // Ask for the Workspace's stored Sessions, and for the one just started.

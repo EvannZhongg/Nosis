@@ -75,62 +75,64 @@ def context_window_to_dict(window: ContextWindow) -> dict[str, int]:
     }
 
 
-def ready_message(
+def session_ready_message(
     *,
     session_id: str,
     workspace: str,
+    provider: str,
     model: str,
     resumed: bool,
     message_count: int,
     permission_preset: str,
-    context_window: dict[str, int],
-    skill_warnings: tuple[str, ...] = (),
 ) -> dict[str, object]:
     return {
-        "type": "ready",
+        "type": "session_ready",
         "session_id": session_id,
         "workspace": workspace,
+        "provider": provider,
         "model": model,
         "resumed": resumed,
         "message_count": message_count,
         "permission_preset": permission_preset,
-        "context_window": context_window,
-        "skill_warnings": list(skill_warnings),
     }
 
 
 def runtime_state_message(
     *,
-    running: bool,
+    phase: str,
     turn_id: str | None = None,
     approval: dict[str, object] | None,
     question: dict[str, object] | None,
     provider: str | None,
     permission_preset: str,
     context_window: dict[str, int] | None,
-    event_sequence: int,
+    event_sequence: int | None = None,
     jobs: list[dict[str, object]] | None = None,
+    skill_warnings: tuple[str, ...] = (),
 ) -> dict[str, object]:
-    """Describe a GUI server-owned runtime when a WebSocket attaches."""
-    return {
+    """Describe the execution plane independently from Session readiness."""
+    message: dict[str, object] = {
         "type": "runtime_state",
-        "running": running,
+        "phase": phase,
         "turn_id": turn_id,
         "approval": approval,
         "question": question,
         "provider": provider,
         "permission_preset": permission_preset,
         "context_window": context_window,
-        "event_sequence": event_sequence,
         "jobs": jobs or [],
+        "skill_warnings": list(skill_warnings),
     }
+    if event_sequence is not None:
+        message["event_sequence"] = event_sequence
+    return message
 
 
-def attachment_replaced_message(*, running: bool) -> dict[str, object]:
+def attachment_replaced_message(*, phase: str) -> dict[str, object]:
     """Tell a GUI page that another attachment owns the session."""
     return {
         "type": "attachment_replaced",
-        "running": running,
+        "phase": phase,
     }
 
 

@@ -58,6 +58,8 @@ RELAYED_MESSAGE_TYPES = frozenset(
         "user_steer",
         "approval_response",
         "permission_set",
+        "provider_set",
+        "workspace_set",
         "user_question_response",
     }
 )
@@ -68,7 +70,7 @@ class BridgeProcess:
 
     def __init__(self, process: asyncio.subprocess.Process) -> None:
         self._process = process
-        self._ready = False
+        self._opened = False
         self._turn_running = False
         self._turn_id: str | None = None
 
@@ -114,8 +116,8 @@ class BridgeProcess:
             if stripped:
                 message = json.loads(stripped)
                 message_type = message.get("type")
-                if message_type == "ready":
-                    self._ready = True
+                if message_type == "session_ready":
+                    self._opened = True
                 if message_type in {
                     "turn_completed",
                     "turn_cancelled",
@@ -133,7 +135,7 @@ class BridgeProcess:
     async def close(self) -> None:
         # Explicit Runtime shutdown routes cancellation first so a running
         # turn can journal what it already produced before the process exits.
-        if not self._ready and self._process.returncode is None:
+        if not self._opened and self._process.returncode is None:
             cancel_process(self._process)
         else:
             self.cancel_turn()
@@ -176,7 +178,7 @@ TURN_END_MESSAGE_TYPES = frozenset(
 )
 
 
-class ActiveRuntime:
+class ActiveSession:
     """One bridge process whose lifetime is independent of a WebSocket."""
 
     def __init__(
@@ -192,12 +194,13 @@ class ActiveRuntime:
         self.workspace = workspace
         self.items = items
         self.bridge = bridge
-        self.running = False
+        self.phase = "inactive"
         self.turn_id: str | None = None
         self.approval: dict[str, object] | None = None
         self.question: dict[str, object] | None = None
         self.permission_preset = "ask_for_approval"
         self.context_window: dict[str, object] | None = None
+        self.skill_warnings: tuple[str, ...] = ()
         self.jobs: dict[str, dict[str, object]] = {}
         self.done = False
         self._closed = False
@@ -242,7 +245,7 @@ class ActiveRuntime:
                         if event["event_sequence"] > after_event
                     ]
                     state = runtime_state_message(
-                        running=self.running,
+                        phase=self.phase,
                         turn_id=self.turn_id,
                         approval=self.approval,
                         question=self.question,
@@ -250,6 +253,7 @@ class ActiveRuntime:
                         permission_preset=self.permission_preset,
                         context_window=self.context_window,
                         jobs=list(self.jobs.values()),
+                        skill_warnings=self.skill_warnings,
                         # The page holds everything the stream emitted, so
                         # its cursor is the newest event; a pending fatal is
                         # left out of it so that a page attaching later
@@ -267,7 +271,7 @@ class ActiveRuntime:
                 detached = self._subscriber_detached
                 if replacing:
                     previous.put_nowait(
-                        attachment_replaced_message(running=self.running)
+                        attachment_replaced_message(phase=self.phase)
                     )
                 previous.put_nowait(None)
             if detached is not None:
@@ -287,7 +291,7 @@ class ActiveRuntime:
 
     def send(self, message: dict[str, object]) -> None:
         if message.get("type") == "user_turn":
-            self.running = True
+            self.phase = "starting"
             self.turn_id = str(message.get("turn_id"))
             self.approval = None
             self.question = None
@@ -314,6 +318,15 @@ class ActiveRuntime:
     @property
     def attachable(self) -> bool:
         return not self.done or self._fatal_pending
+
+    @property
+    def running(self) -> bool:
+        return self.phase in {
+            "starting",
+            "running",
+            "waiting_approval",
+            "waiting_user",
+        }
 
     @property
     def fatal_pending(self) -> bool:
@@ -367,14 +380,39 @@ class ActiveRuntime:
                 elif message_type == "user_question":
                     self.approval = None
                     self.question = message
-                elif message_type in {"ready", "permission_changed"}:
+                elif message_type in {"session_ready", "permission_changed"}:
                     preset = message.get("permission_preset", message.get("preset"))
                     if isinstance(preset, str):
                         self.permission_preset = preset
-                    if message_type == "ready" and isinstance(
-                        message.get("context_window"), dict
-                    ):
+                    if message_type == "session_ready":
+                        provider = message.get("provider")
+                        if isinstance(provider, str):
+                            self.provider = provider
+                elif message_type == "provider_changed":
+                    provider = message.get("provider")
+                    if isinstance(provider, str):
+                        self.provider = provider
+                elif message_type == "workspace_changed":
+                    workspace = message.get("workspace")
+                    if isinstance(workspace, str):
+                        self.workspace = workspace
+                elif message_type == "runtime_state":
+                    phase = message.get("phase")
+                    if isinstance(phase, str):
+                        self.phase = phase
+                    provider = message.get("provider")
+                    if isinstance(provider, str):
+                        self.provider = provider
+                    turn_id = message.get("turn_id")
+                    self.turn_id = turn_id if isinstance(turn_id, str) else None
+                    if isinstance(message.get("context_window"), dict):
                         self.context_window = message["context_window"]
+                    warnings = message.get("skill_warnings")
+                    if isinstance(warnings, list) and warnings:
+                        self.skill_warnings = tuple(
+                            warning for warning in warnings
+                            if isinstance(warning, str)
+                        )
                 elif message_type == "context_window":
                     self.context_window = {
                         key: message[key]
@@ -397,13 +435,14 @@ class ActiveRuntime:
                         else:
                             self.jobs[job_id] = message
                 elif message_type in TURN_END_MESSAGE_TYPES:
-                    self.running = False
+                    self.phase = "idle"
                     self.turn_id = None
                     self.approval = None
                     self.question = None
                     self.jobs.clear()
+                    self.skill_warnings = ()
                 elif message_type == "fatal":
-                    self.running = False
+                    self.phase = "failed"
                     self.turn_id = None
                     self.approval = None
                     self.question = None
@@ -418,7 +457,8 @@ class ActiveRuntime:
                 if message_type == "fatal":
                     break
         finally:
-            self.running = False
+            if self.phase != "failed":
+                self.phase = "failed"
             self.approval = None
             self.question = None
             self.jobs.clear()
@@ -440,15 +480,14 @@ def create_app(
     models: dict[str, str],
     default_model: str,
 ) -> FastAPI:
-    runtimes: dict[str, ActiveRuntime] = {}
-    runtime_lock = asyncio.Lock()
-    pending_workspaces: dict[str, Path] = {}
+    active_sessions: dict[str, ActiveSession] = {}
+    active_session_lock = asyncio.Lock()
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         yield
         await asyncio.gather(
-            *(runtime.close() for runtime in tuple(runtimes.values())),
+            *(runtime.close() for runtime in tuple(active_sessions.values())),
             return_exceptions=True,
         )
 
@@ -460,18 +499,18 @@ def create_app(
     )
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=[HOST, "localhost"])
 
-    async def runtime_for(
-        start: dict[str, object],
+    async def active_session_for(
+        opening_message: dict[str, object],
         current_workspace: Workspace,
         *,
         attach_only: bool,
-    ) -> tuple[ActiveRuntime | None, bool]:
-        session_id = str(start["session_id"])
-        async with runtime_lock:
-            current = runtimes.get(session_id)
+    ) -> tuple[ActiveSession | None, bool]:
+        session_id = str(opening_message["session_id"])
+        async with active_session_lock:
+            current = active_sessions.get(session_id)
             if current is not None and current.done and current.fatal_pending:
                 return current, False
-            provider = start.get("provider")
+            provider = opening_message.get("provider")
             selected_provider = provider if isinstance(provider, str) else None
             selected_workspace = str(current_workspace.path)
             if current is not None and not current.done:
@@ -481,23 +520,23 @@ def create_app(
                 )
                 if attach_only or current.running or same_configuration:
                     return current, False
-                runtimes.pop(session_id, None)
+                active_sessions.pop(session_id, None)
                 await current.close()
             if current is not None:
-                runtimes.pop(session_id, None)
+                active_sessions.pop(session_id, None)
             if attach_only:
                 return None, False
             bridge = await BridgeProcess.spawn(current_workspace)
             stored = store.load(session_id, recover=False)
-            runtime = ActiveRuntime(
+            runtime = ActiveSession(
                 session_id,
                 selected_provider,
                 selected_workspace,
                 jsonable_encoder(stored.items),
                 bridge,
             )
-            runtimes[session_id] = runtime
-            bridge.send(start)
+            active_sessions[session_id] = runtime
+            bridge.send(opening_message)
             return runtime, True
 
     @app.get("/api/models")
@@ -510,11 +549,11 @@ def create_app(
             ],
         }
 
-    @app.get("/api/runtimes")
-    async def list_runtimes() -> list[dict[str, object]]:
-        async with runtime_lock:
+    @app.get("/api/active-sessions")
+    async def list_active_sessions() -> list[dict[str, object]]:
+        async with active_session_lock:
             result = []
-            for runtime in runtimes.values():
+            for runtime in active_sessions.values():
                 if not runtime.attachable:
                     continue
                 items = runtime.items
@@ -527,7 +566,7 @@ def create_app(
                     "provider": runtime.provider,
                     "workspace": runtime.workspace,
                     "items": items,
-                    "running": runtime.running,
+                    "phase": runtime.phase,
                     "permission_preset": runtime.permission_preset,
                     "context_window": runtime.context_window,
                     "event_sequence": runtime.delivered_event_sequence,
@@ -541,13 +580,14 @@ def create_app(
     @app.get("/api/sessions/{session_id}")
     async def get_session(session_id: str) -> object:
         try:
-            async with runtime_lock:
-                runtime = runtimes.get(session_id)
+            async with active_session_lock:
+                runtime = active_sessions.get(session_id)
             if runtime is not None and runtime.running:
                 return {
                     "session_id": runtime.session_id,
                     "items": runtime.items,
                     "workspace": runtime.workspace,
+                    "provider": runtime.provider,
                     "permission_preset": runtime.permission_preset,
                     "context_window": runtime.context_window,
                     "event_sequence": runtime.delivered_event_sequence,
@@ -561,6 +601,7 @@ def create_app(
                     "session_id": session.session_id,
                     "items": session.items,
                     "workspace": session.workspace,
+                    "provider": store.provider_for(session.session_id),
                     "permission_preset": session.permission_preset.value,
                     "context_window": (
                         runtime.context_window
@@ -577,14 +618,14 @@ def create_app(
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
 
-    async def release_idle_runtime(
+    async def release_idle_session(
         session_id: str,
         *,
         provider: str | None = None,
         attachment_id: str | None = None,
     ) -> bool:
-        async with runtime_lock:
-            runtime = runtimes.get(session_id)
+        async with active_session_lock:
+            runtime = active_sessions.get(session_id)
             if runtime is None:
                 return False
             if provider is not None and runtime.provider != provider:
@@ -596,18 +637,18 @@ def create_app(
                 return False
             if runtime.running:
                 raise HTTPException(status_code=409, detail="会话正在运行。")
-            runtimes.pop(session_id, None)
+            active_sessions.pop(session_id, None)
             await runtime.close()
             return True
 
-    @app.delete("/api/runtimes/{session_id}")
-    async def release_runtime(
+    @app.delete("/api/active-sessions/{session_id}")
+    async def release_active_session(
         session_id: str,
         provider: str | None = None,
         attachment_id: str | None = None,
     ) -> dict[str, bool]:
         return {
-            "released": await release_idle_runtime(
+            "released": await release_idle_session(
                 session_id,
                 provider=provider,
                 attachment_id=attachment_id,
@@ -617,48 +658,24 @@ def create_app(
     @app.delete("/api/sessions/{session_id}")
     async def delete_session(session_id: str) -> dict[str, bool]:
         try:
-            await release_idle_runtime(session_id)
+            await release_idle_session(session_id)
             deleted = store.delete_session(session_id)
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         if not deleted:
             raise HTTPException(status_code=404, detail="会话不存在。")
-        pending_workspaces.pop(session_id, None)
         return {"deleted": True}
 
     def session_workspace(session_id: str | None) -> Workspace:
-        """Resolve the workspace bound to a session, falling back for new sessions."""
+        """Resolve a stored Session workspace, falling back for new Sessions."""
         if session_id:
             bound = store.workspace_for(session_id)
             if bound:
-                pending_workspaces.pop(session_id, None)
                 try:
                     return Workspace(Path(bound))
                 except (OSError, ValueError) as error:
                     raise HTTPException(status_code=400, detail=str(error)) from error
-            pending = pending_workspaces.get(session_id)
-            if pending is not None:
-                return Workspace(pending)
         return workspace
-
-    @app.put("/api/sessions/{session_id}/workspace")
-    async def update_session_workspace(session_id: str, payload: dict[str, object]) -> dict[str, str]:
-        value = payload.get("workspace")
-        if not isinstance(value, str) or not value.strip():
-            raise HTTPException(status_code=400, detail="workspace 必须是非空路径。")
-        try:
-            selected = Workspace(Path(value.strip()))
-        except (OSError, ValueError) as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
-        try:
-            await release_idle_runtime(session_id)
-            if store.has_journal(session_id):
-                store.bind_workspace(session_id, selected.path)
-            else:
-                pending_workspaces[session_id] = selected.path
-        except ValueError as error:
-            raise HTTPException(status_code=400, detail=str(error)) from error
-        return {"workspace": str(selected.path)}
 
     @app.get("/api/select-workspace")
     def select_workspace() -> dict[str, str | None]:
@@ -792,8 +809,20 @@ def create_app(
             opening_session_id = opening.get("session_id") if isinstance(opening, dict) else None
             if opening_session_id is not None and not isinstance(opening_session_id, str):
                 opening_session_id = None
-            current_workspace = session_workspace(opening_session_id)
-            start = _start_message(
+            requested_workspace = opening.get("workspace") if isinstance(opening, dict) else None
+            bound_workspace = (
+                store.workspace_for(opening_session_id)
+                if opening_session_id
+                else None
+            )
+            current_workspace = (
+                Workspace(Path(requested_workspace))
+                if bound_workspace is None
+                and isinstance(requested_workspace, str)
+                and requested_workspace
+                else session_workspace(opening_session_id)
+            )
+            opening_message = _open_session_message(
                 opening,
                 current_workspace,
                 provider_config_path,
@@ -843,15 +872,15 @@ def create_app(
             )
             await websocket.close()
             return
-        runtime, created = await runtime_for(
-            start,
+        runtime, created = await active_session_for(
+            opening_message,
             current_workspace,
             attach_only=attach_only,
         )
         if runtime is None:
             await websocket.send_json(
                 runtime_state_message(
-                    running=False,
+                    phase="inactive",
                     turn_id=None,
                     approval=None,
                     question=None,
@@ -871,7 +900,7 @@ def create_app(
         )
         if attachment is None:
             await websocket.send_json(
-                attachment_replaced_message(running=runtime.running)
+                attachment_replaced_message(phase=runtime.phase)
             )
             await websocket.close()
             return
@@ -905,25 +934,25 @@ def create_app(
                 runtime.mark_fatal_delivered()
             await asyncio.shield(runtime.detach(queue, attachment_id))
             if not runtime.attachable:
-                async with runtime_lock:
-                    if runtimes.get(runtime.session_id) is runtime:
-                        runtimes.pop(runtime.session_id, None)
+                async with active_session_lock:
+                    if active_sessions.get(runtime.session_id) is runtime:
+                        active_sessions.pop(runtime.session_id, None)
 
     if STATIC_PATH.is_dir():
         app.mount("/", StaticFiles(directory=STATIC_PATH, html=True), name="gui")
     return app
 
 
-def _start_message(
+def _open_session_message(
     opening: object,
     workspace: Workspace,
     provider_config_path: Path,
     agent_config_path: Path,
     models: dict[str, str],
 ) -> dict[str, object]:
-    """Build the bridge's 'start' from the browser's session choice."""
-    if not isinstance(opening, dict) or opening.get("type") != "start":
-        raise ValueError("first message must be 'start'")
+    """Build the bridge's session-open command from the browser's choice."""
+    if not isinstance(opening, dict) or opening.get("type") != "open_session":
+        raise ValueError("first message must be 'open_session'")
 
     session_id = opening.get("session_id")
     if not isinstance(session_id, str) or not session_id:
@@ -934,7 +963,7 @@ def _start_message(
         raise ValueError("请选择已配置的模型。")
 
     return {
-        "type": "start",
+        "type": "open_session",
         "workspace": str(workspace.path),
         "session_id": session_id,
         "provider_config_path": str(provider_config_path),
@@ -945,7 +974,7 @@ def _start_message(
 
 async def _relay(
     websocket: WebSocket,
-    runtime: ActiveRuntime,
+    runtime: ActiveSession,
     queue: asyncio.Queue[dict[str, object] | None],
     attachment_id: str,
 ) -> bool:

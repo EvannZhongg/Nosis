@@ -51,6 +51,7 @@ from agent_core.mcp.manager import McpClientManager, McpServerStatus
 from .config import (
     configured_role_names,
     load_config_with_name,
+    load_model_options,
     load_vision_config,
 )
 from .protocol import (
@@ -58,7 +59,8 @@ from .protocol import (
     encode,
     event_to_message,
     context_window_to_dict,
-    ready_message,
+    runtime_state_message,
+    session_ready_message,
     session_items_message,
     sessions_listed_message,
     usage_to_dict,
@@ -80,6 +82,7 @@ class Bridge:
         self._pending_cancels: set[str] = set()
         self._input_closed = False
         self._shutdown_requested = False
+        self._session_opened = False
         self._interaction_ids = count(1)
         # The interface presents one approval/question at a time even when
         # parallel tools request several interactions concurrently.
@@ -89,10 +92,16 @@ class Bridge:
         self._agent: Agent | None = None
         self._session: Session | None = None
         self._store: JsonlSessionStore | None = None
+        self._sessions_directory: Path | None = None
         self._mcp: McpClientManager | None = None
         self._workspace: Workspace | None = None
         self._permissions: PermissionController | None = None
         self._jobs: JobManager | None = None
+        self._config_path: Path | None = None
+        self._agent_config_path: Path | None = None
+        self._provider_name: str | None = None
+        self._context_window: dict[str, int] | None = None
+        self._skill_warnings: tuple[str, ...] = ()
 
     def emit(self, type: str, **fields: object) -> None:
         with self._stdout_lock:
@@ -130,7 +139,7 @@ class Bridge:
                     message = decode(stripped)
                     if first_message:
                         first_message = False
-                        if message["type"] == "start":
+                        if message["type"] == "open_session":
                             self._messages.put(message)
                         else:
                             self._route_message(message)
@@ -154,11 +163,11 @@ class Bridge:
                 if waiter is not None:
                     waiter.put(message)
             return
+        if message_type == "permission_set" and not self._session_opened:
+            self._messages.put(message)
+            return
         if message_type == "permission_set":
-            if self._permissions is None:
-                self._messages.put(message)
-            else:
-                self._set_permission_preset(message)
+            self._set_permission_preset(message)
             return
         if message_type == "user_steer":
             self._route_steer(message)
@@ -178,11 +187,83 @@ class Bridge:
 
     def _set_permission_preset(self, message: dict[str, object]) -> None:
         preset = PermissionPreset(str(message.get("preset")))
-        controller = self._permissions
-        if controller is None:
-            raise RuntimeError("received 'permission_set' before 'start'")
-        controller.set_preset(preset)
+        if self._session is None or self._store is None or self._workspace is None:
+            raise RuntimeError("received 'permission_set' before 'open_session'")
+        if self._agent is not None and self._permissions is not None:
+            self._permissions.set_preset(preset)
+        else:
+            self._session.permission_preset = preset
+            self._store.set_permission_preset(
+                self._session.session_id,
+                preset,
+                self._workspace.path,
+            )
         self.emit("permission_changed", preset=preset.value)
+
+    def _set_provider(self, message: dict[str, object]) -> None:
+        if self._session is None or self._store is None or self._workspace is None:
+            raise RuntimeError("received 'provider_set' before 'open_session'")
+        if self._turn_id is not None:
+            raise RuntimeError("cannot change provider during a turn")
+        provider = message.get("provider")
+        if not isinstance(provider, str) or not provider:
+            raise ValueError("provider must be a non-empty string")
+        if self._config_path is None:
+            raise RuntimeError("provider configuration is not initialized")
+        _, models = load_model_options(self._config_path)
+        if provider not in models:
+            raise ValueError(f"provider '{provider}' is not configured")
+        if provider == self._provider_name:
+            self.emit("provider_changed", provider=provider, model=models[provider])
+            return
+        self._close_execution_plane()
+        self._context_window = None
+        self._skill_warnings = ()
+        self._provider_name = provider
+        self._store.set_provider(
+            self._session.session_id,
+            provider,
+            self._workspace.path,
+        )
+        self.emit("provider_changed", provider=provider, model=models[provider])
+        self._emit_runtime_state("inactive")
+
+    def _persist_permission_preset(self, preset: PermissionPreset) -> None:
+        if self._store is None or self._session is None or self._workspace is None:
+            raise RuntimeError("session is not initialized")
+        self._store.set_permission_preset(
+            self._session.session_id,
+            preset,
+            self._workspace.path,
+        )
+
+    def _set_workspace(self, message: dict[str, object]) -> None:
+        if self._session is None or self._store is None:
+            raise RuntimeError("received 'workspace_set' before 'open_session'")
+        if self._turn_id is not None:
+            raise RuntimeError("cannot change workspace during a turn")
+        value = message.get("workspace")
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("workspace must be a non-empty path")
+        workspace = Workspace(Path(value.strip()))
+        if self._workspace is not None and workspace.path == self._workspace.path:
+            self.emit("workspace_changed", workspace=str(workspace.path))
+            return
+        self._close_execution_plane()
+        self._context_window = None
+        self._skill_warnings = ()
+        self._store.bind_workspace(self._session.session_id, workspace.path)
+        self._workspace = workspace
+        self._session.workspace = str(workspace.path)
+        self._session.attach_journal_sink(
+            lambda events: self._store.append_events(
+                self._session.session_id,
+                events,
+                workspace=workspace.path,
+            )
+        )
+        self.emit("workspace_changed", workspace=str(workspace.path))
+        self._emit_runtime_state("inactive")
 
     def _route_steer(self, message: dict[str, object]) -> None:
         steer_id = message.get("steer_id")
@@ -289,6 +370,8 @@ class Bridge:
         with self._interaction_lock:
             request_id = f"{self._turn_id}:{next(self._interaction_ids)}"
             waiter = self._register_interaction(request_id)
+            if self._session is not None:
+                self._emit_runtime_state("waiting_approval")
             self.emit(
                 "approval_request",
                 turn_id=self._turn_id,
@@ -303,6 +386,8 @@ class Bridge:
                 return bool(message.get("approved"))
             finally:
                 self._unregister_interaction(request_id)
+                if self._session is not None:
+                    self._emit_runtime_state("running")
 
     def request_user_choice(
         self,
@@ -313,6 +398,8 @@ class Bridge:
         with self._interaction_lock:
             request_id = f"{self._turn_id}:{next(self._interaction_ids)}"
             waiter = self._register_interaction(request_id)
+            if self._session is not None:
+                self._emit_runtime_state("waiting_user")
             self.emit(
                 "user_question",
                 turn_id=self._turn_id,
@@ -340,6 +427,8 @@ class Bridge:
                         return {"type": "text", "text": text.strip()}
             finally:
                 self._unregister_interaction(request_id)
+                if self._session is not None:
+                    self._emit_runtime_state("running")
 
     def request_mcp_permission(self, call) -> bool:
         identity = (
@@ -357,23 +446,31 @@ class Bridge:
             tool_name=tool_name,
         )
 
-    def start(self, message: dict[str, object]) -> None:
+    def open_session(self, message: dict[str, object]) -> None:
         config_path = Path(str(message["provider_config_path"])).expanduser().resolve()
         agent_config_path = Path(str(message["agent_config_path"])).expanduser().resolve()
         load_dotenv(config_path.parent / ".env")
 
         workspace = Workspace(Path(str(message["workspace"])))
         provider = message.get("provider")
-        main_provider_name, config = load_config_with_name(
-            config_path,
-            provider if isinstance(provider, str) and provider else None,
-        )
-        agent_config = load_agent_config(agent_config_path)
-        skills = SkillRegistry.discover(config_path.parent / "skills")
-
+        default_provider, models = load_model_options(config_path)
         session_id = message.get("session_id")
         sessions_directory = config_path.parent / "sessions"
+        self._sessions_directory = sessions_directory
         self._store = JsonlSessionStore(sessions_directory)
+        stored_provider = (
+            self._store.provider_for(str(session_id))
+            if isinstance(session_id, str) and session_id
+            else None
+        )
+        main_provider_name = (
+            provider
+            if isinstance(provider, str) and provider
+            else stored_provider or default_provider
+        )
+        if main_provider_name not in models:
+            raise ValueError(f"provider '{main_provider_name}' is not configured")
+
         resumed = isinstance(session_id, str) and bool(session_id)
         if resumed:
             bound_workspace = self._store.workspace_for(str(session_id))
@@ -396,120 +493,187 @@ class Bridge:
         )
         self._session.recover()
 
-        main_provider = LiteLLMProvider(
-            model=config.model,
-            base_url=config.url,
-            api_key=config.key,
-            max_context_tokens=config.max_context_tokens,
-            media_root=workspace.path,
-        )
-        vision_provider = self._provider_for(
-            load_vision_config(config_path), workspace
-        )
-
-        # One catalog of stateless Tool instances is shared by the main
-        # Agent and by every sub-agent role.
-        catalog = builtin_catalog()
-        self._mcp = McpClientManager(
-            agent_config.mcp,
-            workspace.path,
-            on_status=self._emit_mcp_status,
-        )
-        catalog = catalog.extend(self._mcp.start())
-
+        self._config_path = config_path
+        self._agent_config_path = agent_config_path
+        self._provider_name = main_provider_name
         approval_policy = CompositeToolPolicy(
             ShellApprovalPolicy(self.request_permission),
             McpApprovalPolicy(
                 self.request_mcp_permission,
-                self._mcp.requires_approval,
+                lambda name: (
+                    self._mcp.requires_approval(name)
+                    if self._mcp is not None
+                    else False
+                ),
             ),
         )
         self._permissions = PermissionController(
             self._session,
             approval_policy,
-            lambda preset: self._store.set_permission_preset(
-                self._session.session_id,
-                preset,
-                workspace.path,
-            ),
+            self._persist_permission_preset,
         )
-        self._jobs = JobManager(self._session)
-        self._jobs.set_update_callback(
-            lambda update: self.emit(
-                **event_to_message(
-                    JobStatusEvent(
-                        job_id=update.job_id,
-                        kind=update.kind,
-                        status=update.status,
-                    ),
-                    update.turn_id,
-                )
-            )
-        )
-        subagents = self._subagent_runtime(
-            agent_config,
-            catalog,
-            config_path,
-            workspace,
-            self._permissions,
-        )
-        context = ToolExecutionContext(
-            workspace=workspace,
-            session=self._session,
-            sessions_directory=sessions_directory,
-            command_executor=SubprocessCommandExecutor(workspace.path),
-            max_generation_tokens=agent_config.max_generation_tokens,
-            vision_input=(
-                "image" in main_provider.capabilities.input_modalities
-            ),
-            vision_provider=vision_provider,
-            mcp=self._mcp,
-            subagents=subagents,
-            jobs=self._jobs,
-            skills=skills,
-            ask_user=self.request_user_choice,
-        )
-        self._agent = Agent(
-            provider=main_provider,
-            session=self._session,
-            system_prompt=load_system_prompt(workspace, skills),
-            config=agent_config,
-            tools=catalog.select(
-                (
-                    *skill_aware_tool_names(
-                        vision_aware_tool_names(
-                            agent_config.tools.enabled,
-                            main_provider,
-                            vision_provider,
-                        ),
-                        skills,
-                    ),
-                    "ask_user",
-                    *self._mcp.tool_names,
-                ),
-                context,
-                policy=self._permissions,
-            ),
-            context=context,
-        )
+        self._session_opened = True
 
-        self.emit(**ready_message(
+        self.emit(**session_ready_message(
             session_id=self._session.session_id,
             workspace=str(workspace.path),
-            model=config.model,
+            provider=main_provider_name,
+            model=models[main_provider_name],
             resumed=resumed,
             message_count=len(self._session.items),
-            permission_preset=self._permissions.preset.value,
-            context_window=context_window_to_dict(
+            permission_preset=self._session.permission_preset.value,
+        ))
+        self._emit_runtime_state("inactive")
+
+    def _ensure_runtime(self) -> None:
+        if self._agent is not None:
+            return
+        if (
+            self._session is None
+            or self._store is None
+            or self._workspace is None
+            or self._sessions_directory is None
+            or self._config_path is None
+            or self._agent_config_path is None
+            or self._provider_name is None
+        ):
+            raise RuntimeError("received 'user_turn' before 'open_session'")
+
+        self._emit_runtime_state("starting")
+        config_path = self._config_path
+        workspace = self._workspace
+        _, config = load_config_with_name(config_path, self._provider_name)
+        try:
+            agent_config = load_agent_config(self._agent_config_path)
+            skills = SkillRegistry.discover(config_path.parent / "skills")
+
+            main_provider = LiteLLMProvider(
+                model=config.model,
+                base_url=config.url,
+                api_key=config.key,
+                max_context_tokens=config.max_context_tokens,
+                media_root=workspace.path,
+            )
+            vision_provider = self._provider_for(
+                load_vision_config(config_path), workspace
+            )
+
+            # One catalog of stateless Tool instances is shared by the main
+            # Agent and by every sub-agent role.
+            catalog = builtin_catalog()
+            self._mcp = McpClientManager(
+                agent_config.mcp,
+                workspace.path,
+                on_status=self._emit_mcp_status,
+            )
+            catalog = catalog.extend(self._mcp.start())
+
+            if self._permissions is None:
+                raise RuntimeError("session permissions are not initialized")
+            self._jobs = JobManager(self._session)
+            self._jobs.set_update_callback(
+                lambda update: self.emit(
+                    **event_to_message(
+                        JobStatusEvent(
+                            job_id=update.job_id,
+                            kind=update.kind,
+                            status=update.status,
+                        ),
+                        update.turn_id,
+                    )
+                )
+            )
+            subagents = self._subagent_runtime(
+                agent_config,
+                catalog,
+                config_path,
+                workspace,
+                self._permissions,
+            )
+            context = ToolExecutionContext(
+                workspace=workspace,
+                session=self._session,
+                sessions_directory=self._sessions_directory,
+                command_executor=SubprocessCommandExecutor(workspace.path),
+                max_generation_tokens=agent_config.max_generation_tokens,
+                vision_input=(
+                    "image" in main_provider.capabilities.input_modalities
+                ),
+                vision_provider=vision_provider,
+                mcp=self._mcp,
+                subagents=subagents,
+                jobs=self._jobs,
+                skills=skills,
+                ask_user=self.request_user_choice,
+            )
+            self._agent = Agent(
+                provider=main_provider,
+                session=self._session,
+                system_prompt=load_system_prompt(workspace, skills),
+                config=agent_config,
+                tools=catalog.select(
+                    (
+                        *skill_aware_tool_names(
+                            vision_aware_tool_names(
+                                agent_config.tools.enabled,
+                                main_provider,
+                                vision_provider,
+                            ),
+                            skills,
+                        ),
+                        "ask_user",
+                        *self._mcp.tool_names,
+                    ),
+                    context,
+                    policy=self._permissions,
+                ),
+                context=context,
+            )
+            self._context_window = context_window_to_dict(
                 self._agent.context_window()
+            )
+            self._skill_warnings = skills.warnings
+        except BaseException:
+            self._close_execution_plane()
+            raise
+
+    def _close_execution_plane(self) -> None:
+        self._agent = None
+        if self._jobs is not None:
+            self._jobs.close()
+            self._jobs = None
+        if self._mcp is not None:
+            self._mcp.close()
+            self._mcp = None
+
+    def _emit_runtime_state(
+        self,
+        phase: str,
+        *,
+        context_window: dict[str, int] | None = None,
+        skill_warnings: tuple[str, ...] = (),
+    ) -> None:
+        if context_window is not None:
+            self._context_window = context_window
+        self.emit(**runtime_state_message(
+            phase=phase,
+            turn_id=self._turn_id,
+            approval=None,
+            question=None,
+            provider=self._provider_name,
+            permission_preset=(
+                self._session.permission_preset.value
+                if self._session is not None
+                else PermissionPreset.ASK_FOR_APPROVAL.value
             ),
-            skill_warnings=skills.warnings,
+            context_window=self._context_window,
+            skill_warnings=skill_warnings,
         ))
 
     def _emit_sessions(self) -> None:
         """Answer ``list_sessions`` with this Workspace's stored Sessions."""
         if self._store is None or self._workspace is None:
-            raise RuntimeError("received 'list_sessions' before 'start'")
+            raise RuntimeError("received 'list_sessions' before 'open_session'")
         self.emit(
             **sessions_listed_message(
                 self._store.list_workspace_sessions(self._workspace.path)
@@ -519,7 +683,7 @@ class Bridge:
     def _emit_session_items(self) -> None:
         """Answer ``load_session`` with the conversation to render."""
         if self._session is None:
-            raise RuntimeError("received 'load_session' before 'start'")
+            raise RuntimeError("received 'load_session' before 'open_session'")
         self.emit(
             **session_items_message(
                 [message_to_dict(item) for item in self._session.items]
@@ -600,12 +764,28 @@ class Bridge:
         self.emit("mcp_server_status", **fields)
 
     def run_turn(self, message: dict[str, object]) -> None:
+        self._turn_id = str(message["turn_id"])
+        try:
+            self._ensure_runtime()
+        except Exception as error:
+            self.emit(
+                "turn_failed",
+                turn_id=self._turn_id,
+                error=_error_payload(error),
+            )
+            self._turn_id = None
+            self._emit_runtime_state("failed")
+            return
         if self._agent is None or self._session is None or self._store is None:
-            raise RuntimeError("received 'user_turn' before 'start'")
+            raise RuntimeError("runtime initialization did not create an agent")
         if self._workspace is None:
             raise RuntimeError("bridge workspace is not initialized")
 
-        self._turn_id = str(message["turn_id"])
+        self._emit_runtime_state(
+            "running",
+            skill_warnings=self._skill_warnings,
+        )
+        self._skill_warnings = ()
         control = TurnControl()
         with self._router_lock:
             self._turn_control = control
@@ -643,12 +823,14 @@ class Bridge:
                 "turn_cancelled",
                 turn_id=self._turn_id,
             )
+            self._turn_id = None
             return
         except Cancelled:
             self.emit(
                 "turn_cancelled",
                 turn_id=self._turn_id,
             )
+            self._turn_id = None
             return
         except Exception as error:
             self.emit(
@@ -656,6 +838,7 @@ class Bridge:
                 turn_id=self._turn_id,
                 error=_error_payload(error),
             )
+            self._turn_id = None
             return
         finally:
             with self._router_lock:
@@ -670,9 +853,10 @@ class Bridge:
             turn_id=self._turn_id,
             usage=usage_to_dict(result.response.usage),
         )
+        self._turn_id = None
 
     def serve(self) -> None:
-        started = False
+        opened = False
         while True:
             try:
                 message = self.read_message()
@@ -685,22 +869,26 @@ class Bridge:
 
             if message is None or message["type"] == "shutdown":
                 return
-            if not started:
-                if message["type"] != "start":
+            if not opened:
+                if message["type"] != "open_session":
                     self.emit(
                         "fatal",
                         error={
                             "type": "ProtocolError",
-                            "message": "first message must be 'start'",
+                            "message": "first message must be 'open_session'",
                         },
                     )
                     raise SystemExit(1)
-                self.start(message)
-                started = True
+                self.open_session(message)
+                opened = True
             elif message["type"] == "user_turn":
                 self.run_turn(message)
             elif message["type"] == "permission_set":
                 self._set_permission_preset(message)
+            elif message["type"] == "provider_set":
+                self._set_provider(message)
+            elif message["type"] == "workspace_set":
+                self._set_workspace(message)
             elif message["type"] == "list_sessions":
                 self._emit_sessions()
             elif message["type"] == "load_session":
@@ -708,12 +896,7 @@ class Bridge:
 
     def close(self) -> None:
         self._route_shutdown(notify_commands=False)
-        if self._jobs is not None:
-            self._jobs.close()
-            self._jobs = None
-        if self._mcp is not None:
-            self._mcp.close()
-            self._mcp = None
+        self._close_execution_plane()
 
 
 def _error_payload(error: Exception) -> dict[str, str]:

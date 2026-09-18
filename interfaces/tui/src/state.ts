@@ -10,6 +10,7 @@ import type {
 } from '@nosis/protocol';
 
 export type Status =
+  | 'opening'
   | 'starting'
   | 'idle'
   | 'streaming'
@@ -17,6 +18,7 @@ export type Status =
   | 'awaiting_approval'
   | 'awaiting_user'
   | 'cancelling'
+  | 'runtime_failed'
   | 'fatal';
 
 export type Entry =
@@ -52,7 +54,7 @@ export type State = {
   model: string;
   permissionPreset: PermissionPreset;
   entries: Entry[];
-  /** Latest MCP startup status; cleared once the agent is ready. */
+  /** Latest MCP startup status; cleared once Runtime initialization finishes. */
   mcpStatus: string | null;
   approval: {
     requestId: string;
@@ -88,7 +90,7 @@ export type Action =
   | { type: 'exited'; code: number | null };
 
 export const initialState: State = {
-  status: 'starting',
+  status: 'opening',
   sessionId: null,
   workspace: '',
   model: '',
@@ -385,9 +387,37 @@ function reduceAction(state: State, action: Action): State {
 
 function applyMessage(state: State, message: Incoming): State {
   switch (message.type) {
+    case 'runtime_state': {
+      const startupNotices: Entry[] = (message.skill_warnings ?? []).map((text) => ({
+        kind: 'notice',
+        id: nextId('notice'),
+        level: 'info',
+        text,
+      }));
+      const status: Status = message.phase === 'starting'
+        ? 'starting'
+        : message.phase === 'running'
+          ? 'running'
+          : message.phase === 'waiting_approval'
+            ? 'awaiting_approval'
+            : message.phase === 'waiting_user'
+              ? 'awaiting_user'
+              : message.phase === 'failed'
+                ? 'runtime_failed'
+                : 'idle';
+      return {
+        ...state,
+        status,
+        turnId: message.turn_id,
+        permissionPreset: message.permission_preset,
+        contextWindow: message.context_window ?? state.contextWindow,
+        mcpStatus: message.phase === 'starting' ? state.mcpStatus : null,
+        entries: [...state.entries, ...startupNotices],
+      };
+    }
+
     // Attachment bookkeeping belongs to the GUI server; the bridge
     // never sends it to this frontend.
-    case 'runtime_state':
     case 'attachment_replaced':
       return state;
 
@@ -397,13 +427,7 @@ function applyMessage(state: State, message: Incoming): State {
         mcpStatus: `MCP ${message.server}: ${message.status}${message.tool_count === undefined ? '' : ` (${message.tool_count} tools)`}${message.error === undefined ? '' : ` — ${message.error}`}`,
       };
 
-    case 'ready':
-      const startupNotices: Entry[] = (message.skill_warnings ?? []).map((text) => ({
-        kind: 'notice',
-        id: nextId('notice'),
-        level: 'info',
-        text,
-      }));
+    case 'session_ready':
       return {
         ...state,
         status: 'idle',
@@ -411,12 +435,9 @@ function applyMessage(state: State, message: Incoming): State {
         workspace: message.workspace,
         model: message.model,
         permissionPreset: message.permission_preset,
-        contextWindow: message.context_window,
-        mcpStatus: null,
         entries: message.resumed
           ? [
               ...state.entries,
-              ...startupNotices,
               {
                 kind: 'notice',
                 id: nextId('notice'),
@@ -424,7 +445,7 @@ function applyMessage(state: State, message: Incoming): State {
                 text: `Resumed session with ${message.message_count} message(s).`,
               },
             ]
-          : [...state.entries, ...startupNotices],
+          : state.entries,
       };
 
     case 'assistant_delta':
@@ -565,6 +586,10 @@ function applyMessage(state: State, message: Incoming): State {
           },
         ],
       };
+
+    case 'provider_changed':
+    case 'workspace_changed':
+      return state;
 
     case 'sessions_listed':
       return state.sessions === null

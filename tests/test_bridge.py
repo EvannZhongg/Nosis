@@ -18,7 +18,6 @@ from agent_core import (
     JsonlSessionStore,
     JobStatusEvent,
     Message,
-    PermissionController,
     PermissionPreset,
     ReasoningDeltaEvent,
     Session,
@@ -44,7 +43,7 @@ from interfaces.bridge.protocol import (
     decode,
     event_to_message,
     format_timestamp,
-    ready_message,
+    session_ready_message,
     runtime_state_message,
     usage_to_dict,
 )
@@ -219,26 +218,27 @@ class ProtocolTest(unittest.TestCase):
             {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3},
         )
 
-    def test_ready_message_includes_skill_warnings(self) -> None:
+    def test_session_ready_message_describes_the_control_plane(self) -> None:
         self.assertEqual(
-            ready_message(
+            session_ready_message(
                 session_id="s1",
                 workspace="/tmp/work",
+                provider="test",
                 model="test/model",
                 resumed=False,
                 message_count=0,
                 permission_preset="ask_for_approval",
-                context_window={
-                    "input_tokens": 10,
-                    "max_input_tokens": 900,
-                    "max_context_tokens": 1000,
-                    "output_reserve_tokens": 100,
-                    "compression_threshold": 720,
-                    "compression_count": 0,
-                },
-                skill_warnings=("Skipped invalid skill.",),
-            )["skill_warnings"],
-            ["Skipped invalid skill."],
+            ),
+            {
+                "type": "session_ready",
+                "session_id": "s1",
+                "workspace": "/tmp/work",
+                "provider": "test",
+                "model": "test/model",
+                "resumed": False,
+                "message_count": 0,
+                "permission_preset": "ask_for_approval",
+            },
         )
 
     def test_runtime_state_message_restores_gui_attachment_state(self) -> None:
@@ -250,7 +250,7 @@ class ProtocolTest(unittest.TestCase):
         }
         self.assertEqual(
             runtime_state_message(
-                running=True,
+                phase="waiting_approval",
                 turn_id="t1",
                 approval=approval,
                 question=None,
@@ -262,7 +262,7 @@ class ProtocolTest(unittest.TestCase):
             ),
             {
                 "type": "runtime_state",
-                "running": True,
+                "phase": "waiting_approval",
                 "turn_id": "t1",
                 "approval": approval,
                 "question": None,
@@ -271,13 +271,14 @@ class ProtocolTest(unittest.TestCase):
                 "context_window": {"input_tokens": 120},
                 "event_sequence": 12,
                 "jobs": [{"job_id": "j1", "kind": "shell", "status": "running"}],
+                "skill_warnings": [],
             },
         )
 
     def test_attachment_replaced_message_preserves_runtime_state(self) -> None:
         self.assertEqual(
-            attachment_replaced_message(running=True),
-            {"type": "attachment_replaced", "running": True},
+            attachment_replaced_message(phase="running"),
+            {"type": "attachment_replaced", "phase": "running"},
         )
 
     def test_format_timestamp_normalizes_to_utc(self) -> None:
@@ -308,25 +309,73 @@ def emitted(stdout: io.StringIO) -> list[dict]:
 
 
 class PermissionProtocolTest(unittest.TestCase):
-    def test_bridge_updates_runtime_permission_and_emits_event(self) -> None:
-        bridge, stdout = make_bridge([])
+    def test_bridge_updates_permission_before_runtime_initialization(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bridge, stdout = make_bridge([])
+            bridge.open_session(open_session_message(root, session_id="s"))
 
-        class UnusedPolicy:
-            def authorize(self, call: ToolCall, context) -> None:
-                raise AssertionError("no tool call expected")
+            bridge._set_permission_preset(
+                {"type": "permission_set", "preset": "full_access"}
+            )
 
-        session = Session("s")
-        bridge._permissions = PermissionController(session, UnusedPolicy())
+            self.assertIsNone(bridge._agent)
+            self.assertIsNone(bridge._mcp)
+            assert bridge._session is not None
+            self.assertEqual(
+                bridge._session.permission_preset,
+                PermissionPreset.FULL_ACCESS,
+            )
+            self.assertEqual(
+                JsonlSessionStore(root / "sessions").permission_preset_for("s"),
+                PermissionPreset.FULL_ACCESS,
+            )
+            self.assertEqual(JsonlSessionStore(root / "sessions").list_sessions(), [])
+            self.assertEqual(
+                emitted(stdout)[-1],
+                {"type": "permission_changed", "preset": "full_access"},
+            )
 
-        bridge._route_message(
-            {"type": "permission_set", "preset": "full_access"}
-        )
+    def test_bridge_changes_session_configuration_without_initializing_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            next_workspace = root / "next"
+            next_workspace.mkdir()
+            bridge, stdout = make_bridge([])
+            bridge.open_session(open_session_message(root, session_id="s"))
 
-        self.assertEqual(session.permission_preset, PermissionPreset.FULL_ACCESS)
-        self.assertEqual(
-            emitted(stdout)[-1],
-            {"type": "permission_changed", "preset": "full_access"},
-        )
+            bridge._set_provider({"type": "provider_set", "provider": "second"})
+            bridge._set_workspace(
+                {"type": "workspace_set", "workspace": str(next_workspace)}
+            )
+            bridge._set_permission_preset(
+                {"type": "permission_set", "preset": "full_access"}
+            )
+
+            self.assertIsNone(bridge._agent)
+            self.assertIsNone(bridge._mcp)
+            self.assertEqual(
+                JsonlSessionStore(root / "sessions").provider_for("s"),
+                "second",
+            )
+            self.assertEqual(
+                bridge._workspace.path,
+                next_workspace.resolve(),
+            )
+            self.assertEqual(
+                JsonlSessionStore(root / "sessions").permission_preset_for("s"),
+                PermissionPreset.FULL_ACCESS,
+            )
+            self.assertEqual(
+                [message["type"] for message in emitted(stdout)[-5:]],
+                [
+                    "provider_changed",
+                    "runtime_state",
+                    "workspace_changed",
+                    "runtime_state",
+                    "permission_changed",
+                ],
+            )
 
 
 class _SlowStdin:
@@ -365,7 +414,10 @@ class BridgeApprovalTest(unittest.TestCase):
              ' "approved": true}']
         )
         self.assertTrue(bridge.request_permission("ls"))
-        self.assertEqual(emitted(stdout)[0]["command"], "ls")
+        self.assertEqual(
+            next(message for message in emitted(stdout) if message["type"] == "approval_request")["command"],
+            "ls",
+        )
 
     def test_denies_when_response_is_false(self) -> None:
         bridge, _ = make_bridge(
@@ -523,7 +575,10 @@ class BridgeUserQuestionTest(unittest.TestCase):
             bridge.request_user_choice("Cache?", self.OPTIONS, False),
             {"type": "option", "id": "sqlite", "label": "SQLite"},
         )
-        self.assertEqual(emitted(stdout)[0]["type"], "user_question")
+        self.assertEqual(
+            next(message for message in emitted(stdout) if message["type"] == "user_question")["type"],
+            "user_question",
+        )
 
     def test_returns_trimmed_free_text(self) -> None:
         bridge, _ = make_bridge(
@@ -567,7 +622,7 @@ class BridgeServeTest(unittest.TestCase):
             with self.assertRaises(KeyboardInterrupt):
                 bridge.serve()
 
-    def test_rejects_turn_before_start(self) -> None:
+    def test_rejects_turn_before_open_session(self) -> None:
         bridge, _ = make_bridge(
             ['{"type": "user_turn", "turn_id": "t1", "text": "hi"}']
         )
@@ -598,7 +653,7 @@ class BridgeServeTest(unittest.TestCase):
 
             bridge, stdout = make_bridge(
                 [
-                    json.dumps(start_message(root, session_id="saved")),
+                    json.dumps(open_session_message(root, session_id="saved")),
                     '{"type": "load_session"}',
                     '{"type": "list_sessions"}',
                     '{"type": "shutdown"}',
@@ -626,8 +681,33 @@ class BridgeServeTest(unittest.TestCase):
                 [{"session_id": "saved", "title": "hello there"}],
             )
 
+    def test_applies_a_permission_queued_immediately_after_open_session(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bridge, stdout = make_bridge(
+                [
+                    json.dumps(open_session_message(root, session_id="empty")),
+                    '{"type": "permission_set", "preset": "full_access"}',
+                    '{"type": "shutdown"}',
+                ]
+            )
 
-def start_message(
+            bridge.serve()
+
+            self.assertEqual(
+                [message["type"] for message in emitted(stdout)],
+                ["session_ready", "runtime_state", "permission_changed"],
+            )
+            self.assertEqual(
+                JsonlSessionStore(root / "sessions").permission_preset_for(
+                    "empty"
+                ),
+                PermissionPreset.FULL_ACCESS,
+            )
+            self.assertIsNone(bridge._agent)
+
+
+def open_session_message(
     directory: Path,
     agent_config: dict | None = None,
     provider_config: dict | None = None,
@@ -669,7 +749,7 @@ def start_message(
         encoding="utf-8",
     )
     return {
-        "type": "start",
+        "type": "open_session",
         "workspace": str(directory),
         "session_id": None,
         "provider_config_path": str(provider_config_path),
@@ -740,11 +820,11 @@ class InterruptedTurnTest(unittest.TestCase):
         self.addCleanup(directory.cleanup)
         self.root = Path(directory.name)
         self.bridge, self.stdout = make_bridge([])
-        self.bridge.start(start_message(self.root))
+        self.bridge.open_session(open_session_message(self.root))
         self.session_id = next(
             message["session_id"]
             for message in emitted(self.stdout)
-            if message["type"] == "ready"
+            if message["type"] == "session_ready"
         )
         self.store = JsonlSessionStore(self.root / "sessions")
         session = self.bridge._session
@@ -953,13 +1033,13 @@ class InterruptedTurnTest(unittest.TestCase):
         )
 
 
-class BridgeStartTest(unittest.TestCase):
+class BridgeSessionOpenTest(unittest.TestCase):
     """The bridge selects the provider the interface asked for."""
 
     def started_model(self, **extra: object) -> str:
         with tempfile.TemporaryDirectory() as directory:
             bridge, stdout = make_bridge([])
-            bridge.start(start_message(Path(directory), **extra))
+            bridge.open_session(open_session_message(Path(directory), **extra))
             return str(emitted(stdout)[0]["model"])
 
     def test_uses_the_configured_provider_by_default(self) -> None:
@@ -973,6 +1053,58 @@ class BridgeStartTest(unittest.TestCase):
 
     def test_uses_the_configured_provider_when_selection_is_null(self) -> None:
         self.assertEqual(self.started_model(provider=None), "openai/first")
+
+    def test_restores_the_session_provider_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = JsonlSessionStore(root / "sessions")
+            store.set_provider("saved", "second", root)
+            bridge, stdout = make_bridge([])
+
+            bridge.open_session(open_session_message(root, session_id="saved"))
+
+            self.assertEqual(emitted(stdout)[0]["provider"], "second")
+            self.assertEqual(emitted(stdout)[0]["model"], "openai/second")
+
+    def test_opening_a_session_does_not_initialize_the_agent_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bridge, stdout = make_bridge([])
+
+            bridge.open_session(open_session_message(Path(directory)))
+
+            self.assertIsNone(bridge._agent)
+            self.assertIsNone(bridge._mcp)
+            self.assertEqual(
+                [message["type"] for message in emitted(stdout)],
+                ["session_ready", "runtime_state"],
+            )
+            self.assertEqual(emitted(stdout)[-1]["phase"], "inactive")
+
+    def test_opening_a_session_does_not_require_the_provider_key(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            message = open_session_message(
+                root,
+                provider_config={
+                    "main_agent": {"provider": "first"},
+                    "providers": {
+                        "first": {
+                            "model": "openai/first",
+                            "key": "${MISSING_NOSIS_TEST_KEY}",
+                        }
+                    },
+                },
+            )
+            bridge, stdout = make_bridge([])
+
+            bridge.open_session(message)
+
+            self.assertEqual(emitted(stdout)[0]["type"], "session_ready")
+            with self.assertRaisesRegex(
+                ValueError,
+                "MISSING_NOSIS_TEST_KEY",
+            ):
+                bridge._ensure_runtime()
 
     def test_restores_the_session_permission_preset(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -989,9 +1121,9 @@ class BridgeStartTest(unittest.TestCase):
             store.append_events(session.session_id, session.journal, workspace=root)
             bridge, stdout = make_bridge([])
 
-            bridge.start(start_message(root, session_id=session.session_id))
+            bridge.open_session(open_session_message(root, session_id=session.session_id))
 
-            ready = emitted(stdout)[-1]
+            ready = emitted(stdout)[0]
             self.assertEqual(ready["permission_preset"], "full_access")
             assert bridge._permissions is not None
             bridge._permissions.authorize(
@@ -1024,7 +1156,8 @@ class BridgeStartTest(unittest.TestCase):
             )
             bridge, _ = make_bridge([])
 
-            bridge.start(start_message(root))
+            bridge.open_session(open_session_message(root))
+            bridge._ensure_runtime()
 
             names = [item.name for item in bridge._agent._tools.definitions]
             prompt = bridge._agent._context._system_prompt
@@ -1050,14 +1183,16 @@ class BridgeStartTest(unittest.TestCase):
             )
             bridge, stdout = make_bridge([])
 
-            bridge.start(start_message(root))
+            bridge.open_session(open_session_message(root))
+            bridge._ensure_runtime()
 
-            ready = emitted(stdout)[-1]
+            runtime_state = emitted(stdout)[-1]
             names = [item.name for item in bridge._agent._tools.definitions]
 
-        self.assertEqual(ready["type"], "ready")
-        self.assertEqual(len(ready["skill_warnings"]), 1)
-        self.assertIn("Skipping skill at", ready["skill_warnings"][0])
+        self.assertEqual(runtime_state["type"], "runtime_state")
+        self.assertEqual(runtime_state["phase"], "starting")
+        self.assertEqual(len(bridge._skill_warnings), 1)
+        self.assertIn("Skipping skill at", bridge._skill_warnings[0])
         self.assertIn("read_skill", names)
 
 
@@ -1067,8 +1202,8 @@ class SubagentRoleStartTest(unittest.TestCase):
     def offered_roles(self, roles: dict) -> list[str]:
         with tempfile.TemporaryDirectory() as directory:
             bridge, _ = make_bridge([])
-            bridge.start(
-                start_message(
+            bridge.open_session(
+                open_session_message(
                     Path(directory),
                     agent_config={
                         "max_same_tool_calls": 5,
@@ -1078,6 +1213,7 @@ class SubagentRoleStartTest(unittest.TestCase):
                     },
                 )
             )
+            bridge._ensure_runtime()
             subagents = bridge._agent._tools._context.subagents
             if subagents is None:
                 return []
@@ -1117,8 +1253,8 @@ class SubagentRoleStartTest(unittest.TestCase):
         """With no role left there is nothing to delegate to."""
         with tempfile.TemporaryDirectory() as directory:
             bridge, _ = make_bridge([])
-            bridge.start(
-                start_message(
+            bridge.open_session(
+                open_session_message(
                     Path(directory),
                     agent_config={
                         "max_same_tool_calls": 5,
@@ -1134,6 +1270,7 @@ class SubagentRoleStartTest(unittest.TestCase):
                     },
                 )
             )
+            bridge._ensure_runtime()
 
             self.assertEqual(
                 [definition.name for definition in bridge._agent._tools.definitions],
@@ -1143,8 +1280,8 @@ class SubagentRoleStartTest(unittest.TestCase):
     def test_ask_user_is_registered_only_for_the_main_agent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             bridge, _ = make_bridge([])
-            bridge.start(
-                start_message(
+            bridge.open_session(
+                open_session_message(
                     Path(directory),
                     agent_config={
                         "max_same_tool_calls": 5,
@@ -1159,6 +1296,7 @@ class SubagentRoleStartTest(unittest.TestCase):
                     },
                 )
             )
+            bridge._ensure_runtime()
 
             main_names = {
                 definition.name for definition in bridge._agent._tools.definitions
@@ -1220,8 +1358,8 @@ class AnalyzeImageDerivationTest(unittest.TestCase):
             with patch.object(
                 LiteLLMProvider, "capabilities_for_model", _CAPABILITIES_PATCH
             ):
-                bridge.start(
-                    start_message(
+                bridge.open_session(
+                    open_session_message(
                         Path(directory),
                         provider_config={
                             "main_agent": main_agent,
@@ -1255,6 +1393,7 @@ class AnalyzeImageDerivationTest(unittest.TestCase):
                         },
                     )
                 )
+                bridge._ensure_runtime()
                 main_names = sorted(
                     d.name for d in bridge._agent._tools.definitions
                 )
@@ -1344,8 +1483,8 @@ class CrossFileRoleValidationTest(unittest.TestCase):
     def start(self, provider_roles: dict, agent_roles: dict) -> None:
         with tempfile.TemporaryDirectory() as directory:
             bridge, _ = make_bridge([])
-            bridge.start(
-                start_message(
+            bridge.open_session(
+                open_session_message(
                     Path(directory),
                     provider_config={
                         "main_agent": {"provider": "first"},
@@ -1366,6 +1505,7 @@ class CrossFileRoleValidationTest(unittest.TestCase):
                     },
                 )
             )
+            bridge._ensure_runtime()
 
     def test_rejects_a_provider_override_for_an_unknown_role(self) -> None:
         """A typo must fail loudly instead of silently doing nothing."""
