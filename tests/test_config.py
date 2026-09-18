@@ -136,7 +136,7 @@ class ConfigTest(unittest.TestCase):
             )
             self.assertEqual(
                 agent_config["context"]["compression"]["keep_recent_units"],
-                6,
+                8,
             )
             self.assertTrue((config_directory / "skills").is_dir())
             prompts = load_prompt_templates(config_directory / "prompts")

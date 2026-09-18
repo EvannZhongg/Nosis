@@ -10,7 +10,7 @@
     "compression": {
       "enabled": true,
       "trigger_ratio": null,
-      "keep_recent_units": 6
+      "keep_recent_units": 8
     }
   },
   "main_agent": {
@@ -33,18 +33,6 @@
         "read_file": true,
         "search_files": true,
         "list_directory": true
-      }
-    },
-    "coder": {
-      "enabled": true,
-      "description": "Implement a self-contained change in the workspace.",
-      "tools": {
-        "read_file": true,
-        "edit_file": true,
-        "write_file": true,
-        "search_files": true,
-        "list_directory": true,
-        "shell": true
       }
     }
   },

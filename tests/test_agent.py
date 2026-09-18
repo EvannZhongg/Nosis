@@ -151,6 +151,26 @@ def clock(*values: datetime):
 
 
 class AgentTest(unittest.TestCase):
+    def test_large_context_default_compression_threshold_is_fixed(self) -> None:
+        provider = MockProvider([], max_context_tokens=1_048_576)
+        context = ContextManager(
+            provider,
+            Session("session-1"),
+            "You are helpful.",
+            CONSOLIDATOR_PROMPT,
+            AgentConfig(
+                max_same_tool_calls=5,
+                output_reserve_tokens=8_192,
+                tools=ToolConfig(enabled=()),
+                workspace_instruction_files=(),
+            ),
+        )
+
+        window = context.window(0)
+
+        self.assertEqual(window.max_input_tokens, 1_040_384)
+        self.assertEqual(window.compression_threshold, 200_000)
+
     def test_applies_steering_after_a_tool_batch_commits(self) -> None:
         control = TurnControl()
         call = ToolCall("call-1", "echo", {"text": "hello"})

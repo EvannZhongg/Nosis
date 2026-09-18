@@ -83,11 +83,11 @@ class ContextManager:
                 "greater than 1"
             )
         compression = config.context
-        trigger_ratio = _compression_trigger_ratio(
+        threshold = _compression_threshold(
             provider.max_context_tokens,
+            hard_limit,
             compression.trigger_ratio,
         )
-        threshold = max(1, int(hard_limit * trigger_ratio))
         self.limits = ContextLimits(
             hard_limit=hard_limit,
             compression_enabled=compression.enabled,
@@ -346,14 +346,15 @@ def _timeline_message(items: list[Message]) -> Message:
     )
 
 
-def _compression_trigger_ratio(
+def _compression_threshold(
     max_context_tokens: int,
+    hard_limit: int,
     trigger_ratio: float | None,
-) -> float:
+) -> int:
     if trigger_ratio is not None:
-        return trigger_ratio
+        return max(1, int(hard_limit * trigger_ratio))
     if max_context_tokens <= 32 * 1024:
-        return 0.75
+        return max(1, int(hard_limit * 0.75))
     if max_context_tokens <= 256 * 1024:
-        return 0.80
-    return 200_000 / max_context_tokens
+        return max(1, int(hard_limit * 0.80))
+    return min(hard_limit, 200_000)
