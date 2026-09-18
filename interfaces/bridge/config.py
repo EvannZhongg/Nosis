@@ -76,9 +76,17 @@ def initialize_config_directory(directory: Path) -> tuple[Path, ...]:
     return tuple(created)
 
 
+# A skill is copied straight from the tree that holds it, which is the working
+# tree for an editable install, so byte-code caches and Finder metadata can sit
+# beside the real files. Neither belongs in an installed skill.
+_SKIPPED_RESOURCE_NAMES = frozenset({"__pycache__", ".DS_Store"})
+
+
 def _copy_resource_directory(source, destination: Path) -> None:
     destination.mkdir()
     for child in source.iterdir():
+        if child.name in _SKIPPED_RESOURCE_NAMES:
+            continue
         target = destination / child.name
         if child.is_dir():
             _copy_resource_directory(child, target)

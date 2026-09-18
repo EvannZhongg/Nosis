@@ -222,6 +222,39 @@ class ConfigTest(unittest.TestCase):
                 (config_directory / "skills" / "not-a-skill").exists()
             )
 
+    def test_installs_a_skill_without_caches_or_finder_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            defaults = root / "defaults"
+            defaults.mkdir()
+            for filename in ("provider_config.json", "agent_config.json"):
+                (defaults / filename).write_text("{}", encoding="utf-8")
+            prompts = defaults / "prompts_template"
+            prompts.mkdir()
+            for filename in ("Soul.md", "SubAgent.md", "Consolidator.md"):
+                (prompts / filename).write_text(filename, encoding="utf-8")
+
+            packaged = defaults / "skills" / "demo"
+            scripts = packaged / "scripts"
+            cache = scripts / "__pycache__"
+            cache.mkdir(parents=True)
+            (cache / "helper.cpython-312.pyc").write_bytes(b"cache")
+            (scripts / "helper.py").write_text("print()", encoding="utf-8")
+            (packaged / "SKILL.md").write_text("demo", encoding="utf-8")
+            (packaged / ".DS_Store").write_bytes(b"finder")
+
+            config_directory = root / "nosis"
+            with patch(
+                "interfaces.bridge.config.files",
+                return_value=defaults,
+            ):
+                initialize_config_directory(config_directory)
+
+            installed = config_directory / "skills" / "demo"
+            self.assertTrue((installed / "scripts" / "helper.py").is_file())
+            self.assertFalse((installed / "scripts" / "__pycache__").exists())
+            self.assertFalse((installed / ".DS_Store").exists())
+
     def test_loads_selected_provider_from_json_and_env(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.json"

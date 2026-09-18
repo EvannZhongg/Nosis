@@ -36,3 +36,13 @@ namespaces = false
     "defaults/skills/**/*",
 ]
 "interfaces.gui" = ["static/*", "static/assets/*"]
+
+# The recursive skill pattern above would otherwise carry whatever sits in the
+# working tree, so byte-code caches and Finder metadata reach the wheel when a
+# skill's own scripts have been run in place.
+[tool.setuptools.exclude-package-data]
+"interfaces.bridge" = [
+    "defaults/skills/**/__pycache__/*",
+    "defaults/skills/**/*.pyc",
+    "defaults/skills/**/.DS_Store",
+]
