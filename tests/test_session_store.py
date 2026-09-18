@@ -110,6 +110,20 @@ class JsonlSessionStoreTest(unittest.TestCase):
             self.assertEqual(store.list_sessions(), [])
             self.assertIsNone(store.workspace_for("orphan"))
 
+    def test_workspace_binding_exists_before_the_first_journal_event(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory) / "workspace"
+            workspace.mkdir()
+            store = JsonlSessionStore(Path(directory) / "sessions")
+
+            store.bind_workspace("session-1", workspace)
+
+            self.assertEqual(
+                store.workspace_for("session-1"),
+                str(workspace.resolve()),
+            )
+            self.assertEqual(store.list_sessions(), [])
+
     def test_stores_permission_preset_in_session_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)

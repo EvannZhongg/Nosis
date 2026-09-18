@@ -51,10 +51,7 @@ class JsonlSessionStore:
             directory = self._find_session_directory(session_id)
         else:
             directory = self._directory / session_id
-        if (
-            directory is None
-            or not (directory / f"{session_id}.jsonl").is_file()
-        ):
+        if directory is None:
             return False
         shutil.rmtree(directory)
         return True
@@ -145,6 +142,10 @@ class JsonlSessionStore:
                     f"session already exists in workspace: {session_id!r}"
                 )
             shutil.move(str(current), str(target))
+        target.mkdir(parents=True, exist_ok=True)
+        metadata_path = target / SESSION_METADATA_FILENAME
+        if not metadata_path.exists():
+            _write_session_metadata(target, {})
 
     def workspace_for(self, session_id: str) -> str | None:
         _validate_session_id(session_id)
