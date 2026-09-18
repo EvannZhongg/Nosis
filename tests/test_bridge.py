@@ -16,6 +16,7 @@ from agent_core import (
     ContextWindow,
     ContextWindowEvent,
     JsonlSessionStore,
+    JobHandle,
     JobStatusEvent,
     Message,
     PermissionPreset,
@@ -412,6 +413,49 @@ class _BlockingAfterLines:
 
 
 class BridgeApprovalTest(unittest.TestCase):
+    def test_runtime_state_contains_active_jobs(self) -> None:
+        class Jobs:
+            @staticmethod
+            def snapshot():
+                return (JobHandle("j1", "shell", "running"),)
+
+        with tempfile.TemporaryDirectory() as directory:
+            bridge, stdout = make_bridge([])
+            bridge.open_session(
+                open_session_message(Path(directory), session_id="s")
+            )
+            bridge._jobs = Jobs()
+
+            bridge._emit_runtime_state("running")
+
+            self.assertEqual(
+                emitted(stdout)[-1]["jobs"],
+                [{"job_id": "j1", "kind": "shell", "status": "running"}],
+            )
+
+    def test_runtime_state_contains_the_pending_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bridge, stdout = make_bridge(
+                ['{"type": "approval_response", "request_id": "t1:1",'
+                 ' "approved": true}']
+            )
+            bridge.open_session(
+                open_session_message(Path(directory), session_id="s")
+            )
+            bridge._turn_id = "t1"
+
+            self.assertTrue(bridge.request_permission("ls"))
+
+            states = [
+                message for message in emitted(stdout)
+                if message["type"] == "runtime_state"
+            ]
+            self.assertEqual(states[-2]["phase"], "waiting_approval")
+            self.assertEqual(states[-2]["approval"]["command"], "ls")
+            self.assertIsNone(states[-2]["question"])
+            self.assertIsNone(states[-1]["approval"])
+            self.assertEqual(states[-1]["phase"], "running")
+
     def test_approves_matching_request(self) -> None:
         bridge, stdout = make_bridge(
             ['{"type": "approval_response", "request_id": "None:1",'
@@ -568,6 +612,29 @@ class BridgeUserQuestionTest(unittest.TestCase):
         {"id": "memory", "label": "Memory"},
         {"id": "sqlite", "label": "SQLite"},
     ]
+
+    def test_runtime_state_contains_the_pending_question(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bridge, stdout = make_bridge(
+                ['{"type": "user_question_response", "request_id": "t1:1",'
+                 ' "option_id": "sqlite"}']
+            )
+            bridge.open_session(
+                open_session_message(Path(directory), session_id="s")
+            )
+            bridge._turn_id = "t1"
+
+            bridge.request_user_choice("Cache?", self.OPTIONS, False)
+
+            states = [
+                message for message in emitted(stdout)
+                if message["type"] == "runtime_state"
+            ]
+            self.assertEqual(states[-2]["phase"], "waiting_user")
+            self.assertEqual(states[-2]["question"]["question"], "Cache?")
+            self.assertIsNone(states[-2]["approval"])
+            self.assertIsNone(states[-1]["question"])
+            self.assertEqual(states[-1]["phase"], "running")
 
     def test_returns_the_selected_option(self) -> None:
         bridge, stdout = make_bridge(

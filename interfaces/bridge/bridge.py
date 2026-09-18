@@ -102,6 +102,8 @@ class Bridge:
         self._provider_name: str | None = None
         self._context_window: dict[str, int] | None = None
         self._skill_warnings: tuple[str, ...] = ()
+        self._approval: dict[str, object] | None = None
+        self._question: dict[str, object] | None = None
 
     def emit(self, type: str, **fields: object) -> None:
         with self._stdout_lock:
@@ -362,22 +364,25 @@ class Bridge:
         with self._interaction_lock:
             request_id = f"{self._turn_id}:{next(self._interaction_ids)}"
             waiter = self._register_interaction(request_id)
+            self._approval = {
+                "type": "approval_request",
+                "turn_id": self._turn_id,
+                "request_id": request_id,
+                "command": command,
+                "kind": kind,
+                "server": server,
+                "tool_name": tool_name,
+            }
+            self._question = None
             if self._session is not None:
                 self._emit_runtime_state("waiting_approval")
-            self.emit(
-                "approval_request",
-                turn_id=self._turn_id,
-                request_id=request_id,
-                command=command,
-                kind=kind,
-                server=server,
-                tool_name=tool_name,
-            )
+            self.emit(**self._approval)
             try:
                 message = self._wait_for_interaction(waiter)
                 return bool(message.get("approved"))
             finally:
                 self._unregister_interaction(request_id)
+                self._approval = None
                 if self._session is not None:
                     self._emit_runtime_state("running")
 
@@ -390,16 +395,18 @@ class Bridge:
         with self._interaction_lock:
             request_id = f"{self._turn_id}:{next(self._interaction_ids)}"
             waiter = self._register_interaction(request_id)
+            self._approval = None
+            self._question = {
+                "type": "user_question",
+                "turn_id": self._turn_id,
+                "request_id": request_id,
+                "question": question,
+                "options": options,
+                "allow_free_text": allow_free_text,
+            }
             if self._session is not None:
                 self._emit_runtime_state("waiting_user")
-            self.emit(
-                "user_question",
-                turn_id=self._turn_id,
-                request_id=request_id,
-                question=question,
-                options=options,
-                allow_free_text=allow_free_text,
-            )
+            self.emit(**self._question)
             option_by_id = {
                 str(option["id"]): option for option in options
             }
@@ -419,6 +426,7 @@ class Bridge:
                         return {"type": "text", "text": text.strip()}
             finally:
                 self._unregister_interaction(request_id)
+                self._question = None
                 if self._session is not None:
                     self._emit_runtime_state("running")
 
@@ -631,6 +639,8 @@ class Bridge:
 
     def _close_execution_plane(self) -> None:
         self._agent = None
+        self._approval = None
+        self._question = None
         if self._jobs is not None:
             self._jobs.close()
             self._jobs = None
@@ -647,11 +657,20 @@ class Bridge:
     ) -> None:
         if context_window is not None:
             self._context_window = context_window
+        jobs = (
+            [
+                job.to_dict()
+                for job in self._jobs.snapshot()
+                if job.status in {"submitted", "running"}
+            ]
+            if self._jobs is not None
+            else []
+        )
         self.emit(**runtime_state_message(
             phase=phase,
             turn_id=self._turn_id,
-            approval=None,
-            question=None,
+            approval=self._approval,
+            question=self._question,
             provider=self._provider_name,
             permission_preset=(
                 self._session.permission_preset.value
@@ -659,6 +678,7 @@ class Bridge:
                 else PermissionPreset.ASK_FOR_APPROVAL.value
             ),
             context_window=self._context_window,
+            jobs=jobs,
             skill_warnings=skill_warnings,
         ))
 

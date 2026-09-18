@@ -106,8 +106,8 @@ def runtime_state_message(
     provider: str | None,
     permission_preset: str,
     context_window: dict[str, int] | None,
+    jobs: list[dict[str, object]],
     event_sequence: int | None = None,
-    jobs: list[dict[str, object]] | None = None,
     skill_warnings: tuple[str, ...] = (),
 ) -> dict[str, object]:
     """Describe the execution plane independently from Session readiness."""
@@ -120,7 +120,7 @@ def runtime_state_message(
         "provider": provider,
         "permission_preset": permission_preset,
         "context_window": context_window,
-        "jobs": jobs or [],
+        "jobs": jobs,
         "skill_warnings": list(skill_warnings),
     }
     if event_sequence is not None:

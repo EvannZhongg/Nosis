@@ -403,10 +403,25 @@ class ActiveSession:
                     provider = message.get("provider")
                     if isinstance(provider, str):
                         self.provider = provider
+                    permission_preset = message.get("permission_preset")
+                    if isinstance(permission_preset, str):
+                        self.permission_preset = permission_preset
                     turn_id = message.get("turn_id")
                     self.turn_id = turn_id if isinstance(turn_id, str) else None
-                    if isinstance(message.get("context_window"), dict):
-                        self.context_window = message["context_window"]
+                    approval = message.get("approval")
+                    self.approval = approval if isinstance(approval, dict) else None
+                    question = message.get("question")
+                    self.question = question if isinstance(question, dict) else None
+                    context_window = message.get("context_window")
+                    self.context_window = (
+                        context_window if isinstance(context_window, dict) else None
+                    )
+                    jobs = message.get("jobs")
+                    self.jobs = {
+                        str(job["job_id"]): job
+                        for job in jobs
+                        if isinstance(job, dict) and isinstance(job.get("job_id"), str)
+                    } if isinstance(jobs, list) else {}
                     warnings = message.get("skill_warnings")
                     if isinstance(warnings, list) and warnings:
                         self.skill_warnings = tuple(

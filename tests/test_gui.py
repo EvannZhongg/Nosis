@@ -178,6 +178,35 @@ class ActiveSessionTest(unittest.IsolatedAsyncioTestCase):
             server.EVENT_REPLAY_LIMIT + 8,
         )
 
+    async def test_runtime_state_replaces_the_cached_attachment_snapshot(self) -> None:
+        bridge = FakeBridge()
+        runtime = server.ActiveSession("s1", "first", "/tmp", [], bridge)
+        self.addAsyncCleanup(runtime.close)
+        approval = {
+            "type": "approval_request",
+            "turn_id": "t1",
+            "request_id": "t1:1",
+            "command": "ls",
+        }
+        bridge.emit(server.runtime_state_message(
+            phase="waiting_approval",
+            turn_id="t1",
+            approval=approval,
+            question=None,
+            provider="first",
+            permission_preset="full_access",
+            context_window={"input_tokens": 1},
+            jobs=[{"job_id": "j1", "kind": "shell", "status": "running"}],
+        ))
+        await _wait_for_async(lambda: runtime.event_sequence == 1)
+
+        self.assertEqual(runtime.approval, approval)
+        self.assertIsNone(runtime.question)
+        self.assertEqual(runtime.permission_preset, "full_access")
+        self.assertEqual(list(runtime.jobs), ["j1"])
+        self.assertEqual(runtime.context_window, {"input_tokens": 1})
+
+
 @unittest.skipIf(TestClient is None, "Install the gui extra to test the GUI")
 class GuiTest(unittest.TestCase):
     def setUp(self) -> None:
