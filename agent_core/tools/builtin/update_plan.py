@@ -19,7 +19,9 @@ class UpdatePlanTool(Tool):
             description=(
                 "Create or replace the current plan for multi-step work. Send "
                 "the complete plan whenever progress changes, including after "
-                "finishing a step. Keep at most one step in_progress."
+                "finishing a step. Keep at most one step in_progress. After "
+                "each step finishes, update the plan before continuing or "
+                "replying, and mark that step completed."
             ),
             parameters={
                 "type": "object",
