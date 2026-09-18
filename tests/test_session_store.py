@@ -174,6 +174,18 @@ class JsonlSessionStoreTest(unittest.TestCase):
                 str(workspace.resolve()),
             )
 
+    def test_stores_provider_in_session_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory) / "workspace"
+            workspace.mkdir()
+            store = JsonlSessionStore(Path(directory) / "sessions")
+
+            store.set_provider("session-1", "second", workspace)
+
+            reopened = JsonlSessionStore(store.directory)
+            self.assertEqual(reopened.provider_for("session-1"), "second")
+            self.assertEqual(reopened.list_sessions(), [])
+
     def test_permission_metadata_can_exist_before_the_first_journal_event(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory) / "workspace"

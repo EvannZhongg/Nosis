@@ -182,6 +182,28 @@ class JsonlSessionStore:
         metadata["permission_preset"] = preset.value
         _write_session_metadata(directory, metadata)
 
+    def provider_for(self, session_id: str) -> str | None:
+        _validate_session_id(session_id)
+        if not self._group_by_workspace:
+            return None
+        current = self._find_session_directory(session_id)
+        if current is None:
+            return None
+        value = _session_metadata(current).get("provider")
+        return value if isinstance(value, str) and value else None
+
+    def set_provider(
+        self,
+        session_id: str,
+        provider: str,
+        workspace: Path | str,
+    ) -> None:
+        directory = session_directory(self._directory, workspace, session_id)
+        directory.mkdir(parents=True, exist_ok=True)
+        metadata = _session_metadata(directory)
+        metadata["provider"] = provider
+        _write_session_metadata(directory, metadata)
+
     def append_events(
         self,
         session_id: str,
