@@ -413,11 +413,14 @@ class _BlockingAfterLines:
 
 
 class BridgeApprovalTest(unittest.TestCase):
-    def test_runtime_state_contains_active_jobs(self) -> None:
+    def test_runtime_state_contains_only_the_jobs_that_are_running(self) -> None:
         class Jobs:
             @staticmethod
             def snapshot():
-                return (JobHandle("j1", "shell", "running"),)
+                return (
+                    JobHandle("j1", "shell", "running"),
+                    JobHandle("j2", "shell", "completed"),
+                )
 
         with tempfile.TemporaryDirectory() as directory:
             bridge, stdout = make_bridge([])
