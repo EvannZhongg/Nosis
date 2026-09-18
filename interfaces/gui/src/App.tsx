@@ -6,6 +6,7 @@ import { runtimeIsActive, type ContextWindow, type RuntimePhase } from "@nosis/p
 import { deleteSession, get, sessionUrl, type ModelOption, type ModelOptions, type Session, type WorkspaceSessions } from "./api";
 
 type ActiveSession = Session & { provider: string | null; phase: RuntimePhase };
+const SELECTED_SESSION_KEY = "nosis.selectedSessionId";
 
 function newSession(workspace?: string | null): Session {
   return {
@@ -17,10 +18,11 @@ function newSession(workspace?: string | null): Session {
 }
 
 export function App() {
-  const [initialSession] = useState<Session>(() => newSession());
+  const [rememberedSessionId] = useState(() => localStorage.getItem(SELECTED_SESSION_KEY));
   const [sessionGroups, setSessionGroups] = useState<WorkspaceSessions[]>([]);
-  const [chatSessions, setChatSessions] = useState<Session[]>([initialSession]);
-  const [selectedSessionId, setSelectedSessionId] = useState(initialSession.session_id);
+  const [chatSessions, setChatSessions] = useState<Session[]>([]);
+  const [selectedSessionId, setSelectedSessionId] = useState(rememberedSessionId ?? "");
+  const [restoringSession, setRestoringSession] = useState(true);
   const [busyBySession, setBusyBySession] = useState<Record<string, boolean>>({});
   const [contextBySession, setContextBySession] = useState<Record<string, ContextWindow | null>>({});
   const [loadingSessionId, setLoadingSessionId] = useState<string | null>(null);
@@ -42,10 +44,44 @@ export function App() {
 
   useEffect(() => { void refreshSessions(); }, [refreshSessions]);
   useEffect(() => {
-    get<{ root: string }>("/api/workspace").then(({ root }) => {
-      setChatSessions((all) => all.map((item) => item.session_id === initialSession.session_id && !item.workspace ? { ...item, workspace: root } : item));
-    }).catch(() => undefined);
-  }, [initialSession.session_id]);
+    let cancelled = false;
+    const restoreSession = async () => {
+      try {
+        const { root } = await get<{ root: string }>("/api/workspace");
+        const restored = rememberedSessionId
+          ? await get<Session>(sessionUrl(rememberedSessionId))
+          : newSession(root);
+        if (cancelled) return;
+        const selected = restored.workspace ? restored : { ...restored, workspace: root };
+        setChatSessions((all) => [
+          selected,
+          ...all.filter((item) => item.session_id !== selected.session_id),
+        ]);
+        setSelectedSessionId(selected.session_id);
+        if (selected.provider) {
+          setModelBySession((all) => ({ ...all, [selected.session_id]: selected.provider! }));
+        }
+        if (selected.context_window) {
+          setContextBySession((all) => ({ ...all, [selected.session_id]: selected.context_window ?? null }));
+        }
+      } catch (error) {
+        if (cancelled) return;
+        const fresh = newSession();
+        setChatSessions((all) => [fresh, ...all]);
+        setSelectedSessionId(fresh.session_id);
+        setError(String(error));
+      } finally {
+        if (!cancelled) setRestoringSession(false);
+      }
+    };
+    void restoreSession();
+    return () => { cancelled = true; };
+  }, [rememberedSessionId]);
+  useEffect(() => {
+    if (!restoringSession && selectedSessionId) {
+      localStorage.setItem(SELECTED_SESSION_KEY, selectedSessionId);
+    }
+  }, [restoringSession, selectedSessionId]);
   useEffect(() => {
     get<ModelOptions>("/api/models").then((options) => {
       setModels(options.models);
@@ -170,9 +206,9 @@ export function App() {
       </aside>
 
       <main className="chat-panel">
-        <header className="chat-header"><div className="breadcrumb">Chat <ChevronRight size={14} /><span>{selectedTitle}</span></div><span className="status-label"><span className={`status-dot ${busy ? "working" : ""}`} />{busy ? "Working" : "Ready"}</span></header>
+        <header className="chat-header"><div className="breadcrumb">Chat <ChevronRight size={14} /><span>{restoringSession ? "…" : selectedTitle}</span></div><span className="status-label"><span className={`status-dot ${busy ? "working" : ""}`} />{busy ? "Working" : "Ready"}</span></header>
         {error && <div className="error-banner" role="alert">{error}</div>}
-        {chatSessions.map((current) => {
+        {!restoringSession && chatSessions.map((current) => {
           const model = modelBySession[current.session_id] ?? defaultModel;
           return <div key={current.session_id} style={{ display: current.session_id === selectedSessionId ? "contents" : "none" }}><Chat session={current} selected={current.session_id === selectedSessionId} contextWindow={current.session_id === selectedSessionId ? contextWindow : contextBySession[current.session_id] ?? current.context_window ?? null} workspaceOptions={sessionGroups.map((group) => group.workspace)} backgroundActive={activeTurnIds.has(current.session_id)}
             models={models} model={model} onModelChange={(value) => setModelBySession((all) => ({ ...all, [current.session_id]: value }))} onBusyChange={(value) => {

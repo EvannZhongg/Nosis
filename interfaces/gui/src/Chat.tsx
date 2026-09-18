@@ -744,6 +744,8 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
   }
 
   function changePermissionPreset(preset: PermissionPreset) {
+    if (preset === permissionPreset) return;
+    setPermissionPreset(preset);
     setPermissionSaving(true);
     const socket = socketRef.current ?? connect();
     socket.send({ type: "permission_set", preset });
