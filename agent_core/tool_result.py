@@ -2,8 +2,7 @@ import json
 from pathlib import Path
 from urllib.parse import quote
 
-from .session_paths import session_directory, workspace_key
-from .session_paths import default_sessions_directory
+from .session_paths import default_sessions_directory, session_directory
 from .tools import ToolResult
 from .workspace import Workspace
 
@@ -20,6 +19,7 @@ class ToolResultNormalizer:
         max_chars: int = DEFAULT_MAX_TOOL_RESULT_CHARS,
         preview_chars: int = DEFAULT_TOOL_RESULT_PREVIEW_CHARS,
         sessions_directory: Path | None = None,
+        artifact_directory: Path | None = None,
     ) -> None:
         if max_chars < 1:
             raise ValueError("max_chars must be a positive integer")
@@ -33,19 +33,31 @@ class ToolResultNormalizer:
         self._sessions_directory = (
             sessions_directory or default_sessions_directory()
         ).expanduser().resolve()
-        session_directory(
+        default_artifact_directory = session_directory(
             self._sessions_directory,
             self._workspace.path,
             self._session_id,
+        )
+        self._artifact_directory = (
+            artifact_directory or default_artifact_directory
+        ).expanduser().resolve()
+        try:
+            artifact_relative = self._artifact_directory.relative_to(
+                self._sessions_directory
+            )
+        except ValueError as error:
+            raise ValueError(
+                "session artifact path must stay within sessions"
+            ) from error
+        self._artifact_path_prefix = (
+            Path(".nosis", "sessions") / artifact_relative
         )
 
     def normalize(self, result: ToolResult) -> str:
         content = result.to_content()
         size_chars = len(content)
         artifact_path = (
-            Path(".nosis", "sessions")
-            / workspace_key(self._workspace.path)
-            / self._session_id
+            self._artifact_path_prefix
             / f"{quote(result.tool_call_id, safe='')}.txt"
         )
         # A spooled result is already known to be larger than the inline
@@ -88,12 +100,7 @@ class ToolResultNormalizer:
 
     def _absolute_artifact_path(self, artifact_path: Path) -> Path:
         absolute_path = (
-            session_directory(
-                self._sessions_directory,
-                self._workspace.path,
-                self._session_id,
-            )
-            / artifact_path.name
+            self._artifact_directory / artifact_path.name
         ).resolve()
         try:
             absolute_path.relative_to(self._sessions_directory)
