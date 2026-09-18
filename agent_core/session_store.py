@@ -332,9 +332,26 @@ def _scan_sessions(directory: Path) -> list[tuple[int, str, Path]]:
         (path.stat().st_mtime_ns, session_dir.name, path)
         for session_dir in directory.iterdir()
         if (path := session_dir / f"{session_dir.name}.jsonl").is_file()
+        and _has_session_activity(path)
     ]
     found.sort(key=lambda entry: (entry[0], entry[1]), reverse=True)
     return found
+
+
+def _has_session_activity(path: Path) -> bool:
+    """Keep control-plane-only configuration out of conversation lists."""
+    try:
+        with path.open(encoding="utf-8") as file:
+            return any(
+                _event_from_dict(json.loads(line)).event_type
+                != "permission_preset_changed"
+                for line in file
+                if line.strip()
+            )
+    except (OSError, ValueError, json.JSONDecodeError):
+        # Preserve the previous behavior for damaged journals so they remain
+        # discoverable and can surface their load error instead of vanishing.
+        return True
 
 
 def _session_summary(session_id: str, path: Path) -> dict[str, object]:

@@ -207,6 +207,27 @@ class JsonlSessionStoreTest(unittest.TestCase):
             )
             self.assertEqual(reopened.list_sessions(), [])
 
+    def test_permission_journal_alone_is_not_listed_as_a_conversation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory) / "workspace"
+            workspace.mkdir()
+            store = JsonlSessionStore(Path(directory) / "sessions")
+            session = Session("session-1")
+            session.set_permission_preset(PermissionPreset.FULL_ACCESS)
+            persist(store, workspace, session)
+            store.set_permission_preset(
+                session.session_id,
+                PermissionPreset.FULL_ACCESS,
+                workspace,
+            )
+
+            self.assertEqual(store.list_sessions(), [])
+            self.assertEqual(store.list_workspace_sessions(workspace), [])
+            self.assertEqual(
+                store.load("session-1").permission_preset,
+                PermissionPreset.FULL_ACCESS,
+            )
+
     def test_ungrouped_store_reports_no_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "subagents"
