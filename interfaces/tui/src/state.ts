@@ -435,7 +435,6 @@ function applyMessage(state: State, message: Incoming): State {
     case 'session_ready':
       return {
         ...state,
-        status: 'idle',
         sessionId: message.session_id,
         workspace: message.workspace,
         model: message.model,

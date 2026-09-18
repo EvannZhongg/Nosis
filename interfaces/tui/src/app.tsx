@@ -279,6 +279,10 @@ export function App(props: AppProps): React.ReactElement {
   const submit = (value: string): void => {
     const text = value.trim();
     if (text === '') return;
+    // runtime_state is the synchronization barrier. Keep the draft editable
+    // while the Session opens, but do not let a command overtake its initial
+    // execution snapshot and then get reset back to idle by that snapshot.
+    if (state.status === 'opening') return;
     setDraft('');
     // Commands are answered by the TUI, so the agent never sees them.
     const command = findCommand(text);

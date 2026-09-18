@@ -147,6 +147,12 @@ describe('reducer', () => {
     expect(state.contextWindow?.input_tokens).toBe(10);
   });
 
+  it('does not unlock submission from session readiness alone', () => {
+    const state = reducer(initialState, { type: 'message', message: READY });
+    expect(state.status).toBe('opening');
+    expect(state.sessionId).toBe(READY.session_id);
+  });
+
   it('keeps MCP startup status out of the persistent transcript', () => {
     const state = reducer(initialState, {
       type: 'message',

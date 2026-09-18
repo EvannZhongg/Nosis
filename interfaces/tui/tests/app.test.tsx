@@ -12,8 +12,7 @@ vi.mock('../src/bridge.js', () => ({
     constructor(options: any) {
       emit = options.onMessage;
       if (autoReady) {
-        setTimeout(
-          () =>
+        setTimeout(() => {
             options.onMessage({
               type: 'session_ready',
               session_id: 'sess-1234',
@@ -23,9 +22,20 @@ vi.mock('../src/bridge.js', () => ({
               resumed: false,
               message_count: 0,
               permission_preset: 'ask_for_approval',
-            }),
-          10,
-        );
+            });
+            options.onMessage({
+              type: 'runtime_state',
+              phase: 'inactive',
+              turn_id: null,
+              provider: 'test',
+              permission_preset: 'ask_for_approval',
+              context_window: null,
+              jobs: [],
+              approval: null,
+              question: null,
+              plan: null,
+            });
+          }, 10);
       }
     }
     send(message: any) {
@@ -171,6 +181,42 @@ describe('App', () => {
     await waitFor(() =>
       expect(sent.find((m) => m.type === 'user_turn')).toMatchObject({ text: 'hello there' }),
     );
+  });
+
+  it('keeps an opening draft without submitting before runtime synchronization', async () => {
+    autoReady = false;
+    const { stdin, lastFrame } = renderApp();
+    await typeDraft(stdin, lastFrame, 'wait for sync');
+    stdin.write('\r');
+    await wait(20);
+    expect(turns()).toHaveLength(0);
+    expect(lastFrame()).toContain('wait for sync');
+
+    emit({
+      type: 'session_ready',
+      session_id: 'sess-1234',
+      workspace: '/w',
+      provider: 'test',
+      model: 'test/model',
+      resumed: false,
+      message_count: 0,
+      permission_preset: 'ask_for_approval',
+    });
+    emit({
+      type: 'runtime_state',
+      phase: 'inactive',
+      turn_id: null,
+      provider: 'test',
+      permission_preset: 'ask_for_approval',
+      context_window: null,
+      jobs: [],
+      approval: null,
+      question: null,
+      plan: null,
+    });
+    await waitForReady(lastFrame);
+    stdin.write('\r');
+    await waitFor(() => expect(turns()[0]).toMatchObject({ text: 'wait for sync' }));
   });
 
   it('opens /permissions and sends the selected preset', async () => {
@@ -569,6 +615,18 @@ describe('App', () => {
       resumed: false,
       message_count: 0,
       permission_preset: 'ask_for_approval',
+    });
+    emit({
+      type: 'runtime_state',
+      phase: 'inactive',
+      turn_id: null,
+      provider: 'test',
+      permission_preset: 'ask_for_approval',
+      context_window: null,
+      jobs: [],
+      approval: null,
+      question: null,
+      plan: null,
     });
     await waitForReady(lastFrame);
 
