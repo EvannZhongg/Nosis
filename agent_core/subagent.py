@@ -155,6 +155,7 @@ class SubagentRuntime:
             vision_provider=role.vision_provider,
             subagents=None,
             jobs=None,
+            plan=None,
             cancellation=cancellation,
         )
         child = Agent(

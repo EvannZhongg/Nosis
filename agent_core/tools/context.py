@@ -10,6 +10,7 @@ if TYPE_CHECKING:
     from ..execution import CommandExecutor
     from ..llm import LLMProvider
     from ..mcp.manager import McpClientManager
+    from ..plan import PlanManager
     from ..session import Session
     from ..skills import SkillRegistry
     from ..subagent import SubagentRuntime
@@ -48,6 +49,7 @@ class ToolExecutionContext:
     jobs: "JobManager | None" = None
     cancellation: "CancellationToken | None" = None
     skills: "SkillRegistry | None" = None
+    plan: "PlanManager | None" = None
     ask_user: (
         Callable[[str, list[dict[str, JSONValue]], bool], JSONValue] | None
     ) = None

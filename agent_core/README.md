@@ -39,7 +39,7 @@ Runtime 由 [`interfaces/bridge`](../interfaces/bridge/README.md) 统一装配�
 
 ### Tool
 
-内置 Tool 包括文件读写、搜索、Shell、Web Search、图片读取/分析、子 Agent、用户提问和 Skill 读取。每个 Agent 只获得配置中启用且运行依赖齐全的 Tool。
+内置 Tool 包括文件读写、搜索、Shell、Web Search、图片读取/分析、子 Agent、用户提问、计划更新和 Skill 读取。每个 Agent 只获得配置中启用且运行依赖齐全的 Tool。`ask_user` 与 `update_plan` 是仅由主 Agent 使用的 Runtime 能力，不属于用户配置开关。
 
 文件 Tool 限制在当前 Workspace；Shell 与需要确认的 MCP Tool 统一经过 Session 权限控制。较大的 Tool 输出会保存为 Session Artifact，供 Agent 后续读取。
 

@@ -10,6 +10,7 @@ from .subagent import SubagentTool
 from .analyze_image import AnalyzeImageTool
 from .write_file import WriteFileTool
 from .ask_user import AskUserTool
+from .update_plan import UpdatePlanTool
 
 
 def builtin_catalog():
@@ -35,6 +36,7 @@ def builtin_catalog():
             ReadSkillTool(),
             SubagentTool(),
             AskUserTool(),
+            UpdatePlanTool(),
         )
     )
 
@@ -50,6 +52,7 @@ __all__ = [
     "SearchFilesTool",
     "ShellTool",
     "SubagentTool",
+    "UpdatePlanTool",
     "WebSearchTool",
     "WriteFileTool",
     "builtin_catalog",
