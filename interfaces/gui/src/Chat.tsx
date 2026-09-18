@@ -83,17 +83,21 @@ function jobKindLabel(kind: string): string {
   return kind;
 }
 
-function BackgroundJobs({ jobs }: { jobs: BackgroundJob[] }) {
-  const [open, setOpen] = useState(false);
-  const detailsRef = useRef<HTMLDetailsElement | null>(null);
+function BackgroundJobs({ jobs, open, disabled, onOpenChange }: {
+  jobs: BackgroundJob[];
+  open: boolean;
+  disabled: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const rootRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!open) return;
     const closeOnOutsidePointer = (event: PointerEvent) => {
-      if (!detailsRef.current?.contains(event.target as Node)) setOpen(false);
+      if (!rootRef.current?.contains(event.target as Node)) onOpenChange(false);
     };
     const closeOnEscape = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
+      if (event.key === "Escape") onOpenChange(false);
     };
     document.addEventListener("pointerdown", closeOnOutsidePointer);
     document.addEventListener("keydown", closeOnEscape);
@@ -101,20 +105,20 @@ function BackgroundJobs({ jobs }: { jobs: BackgroundJob[] }) {
       document.removeEventListener("pointerdown", closeOnOutsidePointer);
       document.removeEventListener("keydown", closeOnEscape);
     };
-  }, [open]);
+  }, [onOpenChange, open]);
 
   if (jobs.length === 0) return null;
-  return <details ref={detailsRef} className="background-jobs" open={open} onToggle={(event) => setOpen(event.currentTarget.open)}>
-    <summary>{jobs.length} 个后台任务</summary>
-    <div className="background-job-list">
+  return <div ref={rootRef} className="background-jobs">
+    <button type="button" className="runtime-menu-trigger" aria-expanded={open} disabled={disabled} onClick={() => onOpenChange(!open)}>{jobs.length} 个后台任务</button>
+    {open && <div className="background-job-list" role="dialog" aria-label="后台任务">
       {jobs.map((job) => <div className="background-job" key={job.job_id}>
         <LoaderCircle size={12} className="spin" />
         <span>{jobKindLabel(job.kind)}</span>
         <code title={job.job_id}>{job.job_id}</code>
         <small>{job.status === "submitted" ? "等待开始" : "运行中"}</small>
       </div>)}
-    </div>
-  </details>;
+    </div>}
+  </div>;
 }
 
 function PlanCard({ plan, interactionActive }: { plan: PlanSnapshot; interactionActive: boolean }) {
@@ -291,6 +295,7 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
   const [approval, setApproval] = useState<Approval | null>(null);
   const [question, setQuestion] = useState<UserQuestion | null>(null);
   const [plan, setPlan] = useState<PlanSnapshot | null>(session.plan ?? null);
+  const [runtimePopover, setRuntimePopover] = useState<"plan" | "jobs" | null>(null);
   const [permissionPreset, setPermissionPreset] = useState<PermissionPreset>(session.permission_preset);
   const [permissionSaving, setPermissionSaving] = useState(false);
   const [providerSaving, setProviderSaving] = useState(false);
@@ -795,9 +800,17 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
   });
   const availableWorkspaces = Array.from(new Set([...workspaceOptions, workspaceDraft].filter(Boolean)));
   const activeJobs = Object.values(jobs);
+  const hasActiveJobs = activeJobs.length > 0;
   const visibleAlerts = Object.values(alerts);
   const visiblePlan = shouldShowPlan(plan) ? plan : null;
   const questionFocusOptionId = question?.options.find((option) => option.recommended)?.id ?? question?.options[0]?.id;
+  const setJobsOpen = useCallback((open: boolean) => setRuntimePopover(open ? "jobs" : null), []);
+
+  useEffect(() => {
+    if (interactionActive || reconnecting || (runtimePopover === "jobs" && !hasActiveJobs)) {
+      setRuntimePopover(null);
+    }
+  }, [hasActiveJobs, interactionActive, reconnecting, runtimePopover]);
 
   return <AssistantRuntimeProvider runtime={runtime}>
     <ThreadPrimitive.Root className="thread">
@@ -824,9 +837,11 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
         </div>}
         {visibleAlerts.length > 0 && <div className="feedback-alerts">{visibleAlerts.map((item) => <div className={`feedback-alert ${item.level}`} role="alert" key={item.id}><AlertTriangle size={15} /><span>{item.text}</span><button type="button" aria-label="关闭提示" onClick={() => setAlerts((current) => { const next = { ...current }; delete next[item.id]; return next; })}><X size={13} /></button></div>)}</div>}
         {toast && <div className={`feedback-toast ${toast.level}`} role="status">{toast.text}</div>}
-        {running && !attachmentReplaced && <div className="activity" role="status"><LoaderCircle size={13} className="spin" /><span>{reconnecting ? "连接中断，任务仍在后台运行，正在重新连接…" : runtimePhase === "starting" ? "正在启动 Agent…" : approval ? "等待你的确认" : question ? "等待你的选择" : pendingSteers ? `Nosis 正在处理… ${pendingSteers} 条引导待应用` : "Nosis 正在处理…"}</span>
-          {!reconnecting && !approval && !question && <BackgroundJobs jobs={activeJobs} />}
-          {!approval && !question && <button className="stop-button" aria-label="停止执行" onClick={() => { const turnId = activeTurnIdRef.current; if (turnId) socketRef.current?.send({ type: "cancel", turn_id: turnId }); }}><Square size={11} /> 停止</button>}
+        {running && !attachmentReplaced && <div className="activity"><LoaderCircle size={13} className="spin" /><span className="activity-label" role="status">{reconnecting ? "连接中断，任务仍在后台运行，正在重新连接…" : runtimePhase === "starting" ? "正在启动 Agent…" : approval ? "等待你的确认" : question ? "等待你的选择" : pendingSteers ? `Nosis 正在处理… ${pendingSteers} 条引导待应用` : "Nosis 正在处理…"}</span>
+          <div className="activity-controls">
+            {hasActiveJobs && <BackgroundJobs jobs={activeJobs} open={runtimePopover === "jobs" && !interactionActive && !reconnecting} disabled={interactionActive || reconnecting} onOpenChange={setJobsOpen} />}
+            {!interactionActive && <button className="stop-button" aria-label="停止执行" onClick={() => { const turnId = activeTurnIdRef.current; if (turnId) socketRef.current?.send({ type: "cancel", turn_id: turnId }); }}><Square size={11} /> 停止</button>}
+          </div>
         </div>}
         {pendingFiles.length > 0 && <div className="attachment-list" aria-label="待发送图片">{pendingFiles.map((file, index) => <PendingAttachment key={`${file.name}-${file.lastModified}-${index}`} file={file} onRemove={() => setPendingFiles((files) => files.filter((_, itemIndex) => itemIndex !== index))} />)}</div>}
         <ComposerPrimitive.Root className="composer" onSubmit={onComposerSubmit}><div ref={workspacePickerRef} className="workspace-picker-wrap"><button type="button" className="workspace-picker" onClick={() => setWorkspaceEditing((value) => { if (value && !workspaceDraft.trim()) setWorkspaceDraft(session.workspace ?? ""); return !value; })} disabled={controlsDisabled || running} aria-expanded={workspaceEditing}><span className="workspace-picker-icon">⌂</span><span className="workspace-picker-value">{workspaceDraft || "选择项目"}</span><ChevronDown size={14} /></button>{workspaceEditing && <div className="workspace-menu" role="menu"><div className="workspace-menu-heading">选择工作区</div>{availableWorkspaces.map((path) => <button type="button" role="menuitem" className={`workspace-option ${path === workspaceDraft ? "selected" : ""}`} key={path} onClick={() => { void saveWorkspace(path); setWorkspaceEditing(false); }} disabled={controlsDisabled || running || workspaceSaving} title={path}><span className="workspace-option-path">{path}</span></button>)}<div className="workspace-menu-divider" /><button type="button" role="menuitem" className="workspace-new-option" onClick={() => { void chooseNewWorkspace(); }} disabled={controlsDisabled || running || workspaceSaving}>＋ 新建工作区</button></div>}</div><ComposerPrimitive.Input placeholder={question ? "请先回答上方问题…" : approval ? "请先处理上方确认…" : "Ask Nosis…"} aria-label="消息" rows={2} autoFocus submitMode="none" disabled={composerDisabled} onKeyDown={onComposerKeyDown} onCompositionStart={onCompositionStart} onCompositionEnd={onCompositionEnd} onPaste={onPaste} /><div className="composer-bottom">

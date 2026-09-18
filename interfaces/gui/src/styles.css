@@ -170,8 +170,11 @@ pre { overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-famil
 .send-button:disabled { background: #e9edf3; color: #a9b2c2; opacity: 1; }
 .composer-footer { height: 37px; display: grid; place-items: center; font-size: 9px; letter-spacing: .3px; color: #b4bbc5; }
 .activity { display: flex; align-items: center; gap: 7px; font-size: 11px; color: #8c98ac; margin-bottom: 12px; }
-.activity > span { min-width: 0; }
-.stop-button { display: flex; align-items: center; gap: 4px; margin-left: auto; border: 1px solid #e2e6ee; border-radius: 5px; background: #fff; color: #7c879a; font-size: 11px; padding: 4px 9px; }
+.activity-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-controls { display: flex; align-items: center; gap: 4px; margin-left: auto; flex: none; }
+.runtime-menu-trigger { border: 0; border-radius: 4px; padding: 3px 6px; background: transparent; color: #7181a0; font-size: 11px; }
+.runtime-menu-trigger:hover, .runtime-menu-trigger[aria-expanded="true"] { background: #f0f3f7; color: #53698f; }
+.stop-button { display: flex; align-items: center; gap: 4px; border: 1px solid #e2e6ee; border-radius: 5px; background: #fff; color: #7c879a; font-size: 11px; padding: 4px 9px; }
 .stop-button:hover { border-color: #c9a3a3; color: #a45151; }
 .spin { animation: spin 1.4s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -208,10 +211,7 @@ pre { overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-famil
 .feedback-alert button { display: grid; place-items: center; flex: none; border: 0; border-radius: 4px; padding: 3px; background: transparent; color: currentColor; opacity: .65; cursor: pointer; }
 .feedback-alert button:hover { background: #0000000a; opacity: 1; }
 .background-jobs { position: relative; flex: none; }
-.background-jobs > summary { list-style: none; cursor: pointer; color: #7181a0; border-radius: 4px; padding: 2px 5px; }
-.background-jobs > summary::-webkit-details-marker { display: none; }
-.background-jobs > summary:hover, .background-jobs[open] > summary { background: #f0f3f7; color: #53698f; }
-.background-job-list { position: absolute; z-index: 10; left: 0; bottom: calc(100% + 7px); width: 330px; max-width: calc(100vw - 48px); padding: 7px; border: 1px solid #dfe4ed; border-radius: 8px; background: #fff; box-shadow: 0 10px 28px #20385c1c; }
+.background-job-list { position: absolute; z-index: 10; right: 0; bottom: calc(100% + 7px); width: 330px; max-width: calc(100vw - 48px); padding: 7px; border: 1px solid #dfe4ed; border-radius: 8px; background: #fff; box-shadow: 0 10px 28px #20385c1c; }
 .background-job { display: grid; grid-template-columns: 14px auto minmax(0, 1fr) auto; align-items: center; gap: 7px; padding: 7px 6px; color: #68758b; }
 .background-job + .background-job { border-top: 1px solid #f0f2f5; }
 .background-job code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #9aa3b1; font-size: 10px; }
