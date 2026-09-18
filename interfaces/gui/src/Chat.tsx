@@ -139,13 +139,16 @@ function PlanCard({ plan, interactionActive }: { plan: PlanSnapshot; interaction
 }
 
 function UserMessage() {
-  return <MessagePrimitive.Root className="user-message"><MessagePrimitive.Parts /><MessageTimestamp /></MessagePrimitive.Root>;
+  return <MessagePrimitive.Root className="user-turn">
+    <MessageTimestamp className="turn-timestamp" />
+    <div className="user-message"><MessagePrimitive.Parts /></div>
+  </MessagePrimitive.Root>;
 }
 
-function MessageTimestamp() {
+function MessageTimestamp({ className = "" }: { className?: string } = {}) {
   const createdAt = useAuiState((state) => state.message.createdAt);
   if (!createdAt) return null;
-  return <time className="message-timestamp" dateTime={createdAt.toISOString()}>{createdAt.toLocaleString()}</time>;
+  return <time className={`message-timestamp ${className}`.trim()} dateTime={createdAt.toISOString()}>{createdAt.toLocaleString()}</time>;
 }
 
 function MarkdownText() {
