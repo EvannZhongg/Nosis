@@ -6,6 +6,7 @@ from typing import Iterable
 from .config import AgentConfig
 from .content import historical_content
 from .llm import LLMProvider, LLMRequest, with_generation_limit
+from .plan import plan_snapshot_to_dict
 from .prompts import load_consolidator_prompt
 from .projection import ContextUnit, project_context_units
 from .session import Message, Session, UserAnchor
@@ -172,12 +173,21 @@ class ContextManager:
         return self._session.archived_item_cursor
 
     def _system_prompt_with_summary(self, base: str) -> str:
-        if self._session.archived_summary is None:
-            return base
-        return (
-            f"{base}\n\n[Archived Context Summary]\n"
-            f"{self._session.archived_summary}"
-        )
+        sections = [base]
+        if self._session.archived_summary is not None:
+            sections.append(
+                "[Archived Context Summary]\n"
+                f"{self._session.archived_summary}"
+            )
+        if self._session.plan is not None and self._session.plan.is_active:
+            sections.append(
+                "[Current Plan]\n"
+                + json.dumps(
+                    plan_snapshot_to_dict(self._session.plan),
+                    ensure_ascii=False,
+                )
+            )
+        return "\n\n".join(sections)
 
     def _lossless_user_anchor_content(self) -> str | None:
         return _lossless_user_anchors(
