@@ -12,7 +12,6 @@ DEFAULT_CONFIG_FILENAMES = (
     "provider_config.json",
     "agent_config.json",
 )
-BUILTIN_SKILL_NAMES = ("skill-creator",)
 
 
 @dataclass(frozen=True)
@@ -44,14 +43,13 @@ def initialize_config_directory(directory: Path) -> tuple[Path, ...]:
     skills_directory = directory / "skills"
     skills_directory.mkdir(exist_ok=True)
     packaged_skills = defaults.joinpath("skills")
-    for name in BUILTIN_SKILL_NAMES:
-        destination = skills_directory / name
+    for skill in sorted(packaged_skills.iterdir(), key=lambda item: item.name):
+        if not skill.is_dir() or not skill.joinpath("SKILL.md").is_file():
+            continue
+        destination = skills_directory / skill.name
         if destination.exists():
             continue
-        _copy_resource_directory(
-            packaged_skills.joinpath(name),
-            destination,
-        )
+        _copy_resource_directory(skill, destination)
         created.append(destination)
     return tuple(created)
 
