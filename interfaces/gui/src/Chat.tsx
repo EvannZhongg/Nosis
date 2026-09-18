@@ -60,6 +60,26 @@ export function shouldShowPlan(plan: PlanSnapshot | null): plan is PlanSnapshot 
   return plan !== null && plan.steps.some((step) => step.status !== "completed");
 }
 
+type RuntimeIndicator = "plan" | "jobs";
+
+export function updateRuntimeIndicatorOrder(
+  current: RuntimeIndicator[],
+  planVisible: boolean,
+  jobsVisible: boolean,
+): RuntimeIndicator[] {
+  const visible = new Set<RuntimeIndicator>([
+    ...(planVisible ? ["plan" as const] : []),
+    ...(jobsVisible ? ["jobs" as const] : []),
+  ]);
+  const next = current.filter((item) => visible.has(item));
+  for (const item of ["plan", "jobs"] as const) {
+    if (visible.has(item) && !next.includes(item)) next.push(item);
+  }
+  return next.length === current.length && next.every((item, index) => item === current[index])
+    ? current
+    : next;
+}
+
 function ToolCard({ toolName, args, result }: ToolCallMessagePartProps) {
   const running = useAuiState((state) => state.thread.isRunning);
   const output = result as { ok: boolean; output?: unknown; error?: { message: string } } | undefined;
@@ -121,25 +141,44 @@ function BackgroundJobs({ jobs, open, disabled, onOpenChange }: {
   </div>;
 }
 
-function PlanCard({ plan, interactionActive }: { plan: PlanSnapshot; interactionActive: boolean }) {
-  const [expanded, setExpanded] = useState(!interactionActive);
+function PlanStatus({ plan, open, disabled, onOpenChange }: {
+  plan: PlanSnapshot;
+  open: boolean;
+  disabled: boolean;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const rootRef = useRef<HTMLDivElement | null>(null);
   const completed = plan.steps.filter((step) => step.status === "completed").length;
 
   useEffect(() => {
-    if (interactionActive) setExpanded(false);
-  }, [interactionActive]);
+    if (!open) return;
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) onOpenChange(false);
+    };
+    const closeOnEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") onOpenChange(false);
+    };
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [onOpenChange, open]);
 
-  return <section className={`plan-card ${expanded ? "expanded" : "collapsed"}`} aria-label="Plan">
-    <button type="button" className="plan-header" aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>
-      <ChevronRight size={14} className="plan-chevron" />
-      <span className="plan-title">Plan</span>
-      <span className="plan-progress">{completed}/{plan.steps.length}</span>
+  return <div ref={rootRef} className="plan-status">
+    <button type="button" className="runtime-menu-trigger" aria-expanded={open} disabled={disabled} onClick={() => onOpenChange(!open)}>
+      Plan {completed}/{plan.steps.length}
     </button>
-    {expanded && <div className="plan-steps">{plan.steps.map((step) => {
-      const marker = step.status === "completed" ? "✓" : step.status === "in_progress" ? "◉" : step.status === "blocked" ? "×" : "○";
-      return <div className={`plan-step ${step.status}`} key={step.id}><span>{marker}</span><span><span className="plan-step-title">{step.title}</span>{step.outcome && <small>{step.outcome}</small>}</span></div>;
-    })}</div>}
-  </section>;
+    {open && <div className="plan-popover" role="dialog" aria-label="任务计划">
+      <div className="plan-popover-title">任务计划</div>
+      <div className="plan-goal">{plan.goal}</div>
+      <div className="plan-steps">{plan.steps.map((step) => {
+        const marker = step.status === "completed" ? "✓" : step.status === "in_progress" ? "◉" : step.status === "blocked" ? "×" : "○";
+        return <div className={`plan-step ${step.status}`} key={step.id}><span>{marker}</span><span><span className="plan-step-title">{step.title}</span>{step.outcome && <small>{step.outcome}</small>}</span></div>;
+      })}</div>
+    </div>}
+  </div>;
 }
 
 function UserMessage() {
@@ -296,6 +335,9 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
   const [question, setQuestion] = useState<UserQuestion | null>(null);
   const [plan, setPlan] = useState<PlanSnapshot | null>(session.plan ?? null);
   const [runtimePopover, setRuntimePopover] = useState<"plan" | "jobs" | null>(null);
+  const [runtimeIndicatorOrder, setRuntimeIndicatorOrder] = useState<RuntimeIndicator[]>(
+    () => shouldShowPlan(session.plan ?? null) ? ["plan"] : [],
+  );
   const [permissionPreset, setPermissionPreset] = useState<PermissionPreset>(session.permission_preset);
   const [permissionSaving, setPermissionSaving] = useState(false);
   const [providerSaving, setProviderSaving] = useState(false);
@@ -804,13 +846,27 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
   const visibleAlerts = Object.values(alerts);
   const visiblePlan = shouldShowPlan(plan) ? plan : null;
   const questionFocusOptionId = question?.options.find((option) => option.recommended)?.id ?? question?.options[0]?.id;
+  const setPlanOpen = useCallback((open: boolean) => setRuntimePopover(open ? "plan" : null), []);
   const setJobsOpen = useCallback((open: boolean) => setRuntimePopover(open ? "jobs" : null), []);
 
   useEffect(() => {
-    if (interactionActive || reconnecting || (runtimePopover === "jobs" && !hasActiveJobs)) {
+    setRuntimeIndicatorOrder((current) => updateRuntimeIndicatorOrder(
+      current,
+      visiblePlan !== null,
+      hasActiveJobs,
+    ));
+  }, [hasActiveJobs, visiblePlan]);
+
+  useEffect(() => {
+    if (
+      interactionActive
+      || reconnecting
+      || (runtimePopover === "plan" && visiblePlan === null)
+      || (runtimePopover === "jobs" && !hasActiveJobs)
+    ) {
       setRuntimePopover(null);
     }
-  }, [hasActiveJobs, interactionActive, reconnecting, runtimePopover]);
+  }, [hasActiveJobs, interactionActive, reconnecting, runtimePopover, visiblePlan]);
 
   return <AssistantRuntimeProvider runtime={runtime}>
     <ThreadPrimitive.Root className="thread">
@@ -821,7 +877,6 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
         <div className="messages"><ThreadPrimitive.Messages components={{ UserMessage, AssistantMessage }} /></div>
       </ThreadPrimitive.Viewport>
       <div className="composer-area">
-        {visiblePlan && <PlanCard key={visiblePlan.plan_id} plan={visiblePlan} interactionActive={interactionActive} />}
         {attachmentReplaced && <div className="attachment-replaced" role="status"><span>{running ? "此会话已在另一个页面接管。任务仍在后台运行，本页已暂停实时更新。" : "此会话已在另一个页面接管，本页已暂停实时更新。"}</span><button type="button" onClick={takeOverAttachment} disabled={attaching}>{attaching ? "正在接管…" : "在此页面接管"}</button></div>}
         {!attachmentReplaced && approval && <div className="approval-card" role="region" aria-label="工具执行确认"><div className="approval-title"><ShieldCheck size={17} /> 允许执行此工具调用？</div><pre>{approval.command}</pre><div className="approval-actions"><button onClick={() => respond(false)}>拒绝</button><button className="approve-button" onClick={() => respond(true)}>允许执行</button></div></div>}
         {!attachmentReplaced && question && <div className="question-card" role="region" aria-label="需要你的选择">
@@ -837,10 +892,14 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
         </div>}
         {visibleAlerts.length > 0 && <div className="feedback-alerts">{visibleAlerts.map((item) => <div className={`feedback-alert ${item.level}`} role="alert" key={item.id}><AlertTriangle size={15} /><span>{item.text}</span><button type="button" aria-label="关闭提示" onClick={() => setAlerts((current) => { const next = { ...current }; delete next[item.id]; return next; })}><X size={13} /></button></div>)}</div>}
         {toast && <div className={`feedback-toast ${toast.level}`} role="status">{toast.text}</div>}
-        {running && !attachmentReplaced && <div className="activity"><LoaderCircle size={13} className="spin" /><span className="activity-label" role="status">{reconnecting ? "连接中断，任务仍在后台运行，正在重新连接…" : runtimePhase === "starting" ? "正在启动 Agent…" : approval ? "等待你的确认" : question ? "等待你的选择" : pendingSteers ? `Nosis 正在处理… ${pendingSteers} 条引导待应用` : "Nosis 正在处理…"}</span>
+        {(running || visiblePlan) && !attachmentReplaced && <div className="activity">
+          {running && <LoaderCircle size={13} className="spin" />}
+          <span className="activity-label" role="status">{running ? reconnecting ? "连接中断，任务仍在后台运行，正在重新连接…" : runtimePhase === "starting" ? "正在启动 Agent…" : approval ? "等待你的确认" : question ? "等待你的选择" : pendingSteers ? `Nosis 正在处理… ${pendingSteers} 条引导待应用` : "Nosis 正在处理…" : "Plan 尚未完成"}</span>
           <div className="activity-controls">
-            {hasActiveJobs && <BackgroundJobs jobs={activeJobs} open={runtimePopover === "jobs" && !interactionActive && !reconnecting} disabled={interactionActive || reconnecting} onOpenChange={setJobsOpen} />}
-            {!interactionActive && <button className="stop-button" aria-label="停止执行" onClick={() => { const turnId = activeTurnIdRef.current; if (turnId) socketRef.current?.send({ type: "cancel", turn_id: turnId }); }}><Square size={11} /> 停止</button>}
+            {runtimeIndicatorOrder.map((item) => item === "plan"
+              ? visiblePlan && <PlanStatus key="plan" plan={visiblePlan} open={runtimePopover === "plan" && !interactionActive} disabled={interactionActive} onOpenChange={setPlanOpen} />
+              : hasActiveJobs && <BackgroundJobs key="jobs" jobs={activeJobs} open={runtimePopover === "jobs" && !interactionActive && !reconnecting} disabled={interactionActive || reconnecting} onOpenChange={setJobsOpen} />)}
+            {running && !interactionActive && <button className="stop-button" aria-label="停止执行" onClick={() => { const turnId = activeTurnIdRef.current; if (turnId) socketRef.current?.send({ type: "cancel", turn_id: turnId }); }}><Square size={11} /> 停止</button>}
           </div>
         </div>}
         {pendingFiles.length > 0 && <div className="attachment-list" aria-label="待发送图片">{pendingFiles.map((file, index) => <PendingAttachment key={`${file.name}-${file.lastModified}-${index}`} file={file} onRemove={() => setPendingFiles((files) => files.filter((_, itemIndex) => itemIndex !== index))} />)}</div>}

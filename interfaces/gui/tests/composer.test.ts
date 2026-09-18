@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { shouldBlockRunningAttachmentSubmit, shouldShowPlan, shouldSubmitComposerEnter, updateBackgroundJobs } from "../src/Chat";
+import { shouldBlockRunningAttachmentSubmit, shouldShowPlan, shouldSubmitComposerEnter, updateBackgroundJobs, updateRuntimeIndicatorOrder } from "../src/Chat";
 
 const enter = {
   key: "Enter",
@@ -120,5 +120,24 @@ describe("plan visibility", () => {
       revision: 2,
       steps: [{ id: "blocked", title: "Blocked", status: "blocked" }],
     })).toBe(true);
+  });
+});
+
+describe("runtime indicator order", () => {
+  it("appends indicators in appearance order", () => {
+    const jobsFirst = updateRuntimeIndicatorOrder([], false, true);
+    expect(jobsFirst).toEqual(["jobs"]);
+    expect(updateRuntimeIndicatorOrder(jobsFirst, true, true)).toEqual(["jobs", "plan"]);
+  });
+
+  it("moves remaining indicators forward and appends reappearing ones", () => {
+    const planRemoved = updateRuntimeIndicatorOrder(["plan", "jobs"], false, true);
+    expect(planRemoved).toEqual(["jobs"]);
+    expect(updateRuntimeIndicatorOrder(planRemoved, true, true)).toEqual(["jobs", "plan"]);
+  });
+
+  it("does not reorder indicators while they remain visible", () => {
+    const current = ["jobs", "plan"] as const;
+    expect(updateRuntimeIndicatorOrder([...current], true, true)).toEqual(current);
   });
 });

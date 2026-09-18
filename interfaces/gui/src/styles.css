@@ -97,14 +97,11 @@ pre { overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-famil
 .tool-caption { font-size: 10px; color: #9aa3b0; }
 .tool-body pre { margin: 5px 0 10px; max-height: 280px; }
 .composer-area { width: 100%; max-width: 820px; margin: 0 auto; padding: 5px 32px 0; }
-.plan-card { margin: 0 0 14px; border: 1px solid #e4e8ef; border-radius: 9px; background: #fafbfc; overflow: hidden; }
-.plan-header { display: flex; align-items: center; gap: 7px; width: 100%; padding: 10px 12px; border: 0; background: transparent; color: #596477; text-align: left; }
-.plan-header:hover { background: #f4f6f9; }
-.plan-title { font-size: 12px; font-weight: 650; }
-.plan-progress { margin-left: auto; color: #929baa; font-size: 10px; font-variant-numeric: tabular-nums; }
-.plan-chevron { color: #8b96a8; transition: transform .15s ease; }
-.plan-card.expanded .plan-chevron { transform: rotate(90deg); }
-.plan-steps { display: grid; gap: 5px; max-height: min(32vh, 260px); padding: 1px 14px 12px; overflow-y: auto; }
+.plan-status { position: relative; flex: none; }
+.plan-popover { position: absolute; z-index: 10; right: 0; bottom: calc(100% + 7px); width: 390px; max-width: calc(100vw - 48px); padding: 13px 14px; border: 1px solid #dfe4ed; border-radius: 9px; background: #fff; box-shadow: 0 10px 28px #20385c1c; }
+.plan-popover-title { color: #536078; font-size: 12px; font-weight: 650; }
+.plan-goal { margin: 3px 0 10px; color: #9199a7; font-size: 10px; line-height: 1.5; }
+.plan-steps { display: grid; gap: 5px; max-height: min(32vh, 260px); overflow-y: auto; }
 .plan-step { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 5px; color: #8d96a5; font-size: 11px; line-height: 1.5; }
 .plan-step.completed { color: #72a28a; }
 .plan-step.in_progress { color: #536f9d; }
@@ -169,7 +166,7 @@ pre { overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-famil
 .send-button { display: grid; place-items: center; border: 0; background: #556b97; color: white; width: 30px; height: 30px; border-radius: 8px; }
 .send-button:disabled { background: #e9edf3; color: #a9b2c2; opacity: 1; }
 .composer-footer { height: 37px; display: grid; place-items: center; font-size: 9px; letter-spacing: .3px; color: #b4bbc5; }
-.activity { display: flex; align-items: center; gap: 7px; font-size: 11px; color: #8c98ac; margin-bottom: 12px; }
+.activity { display: flex; align-items: center; gap: 7px; min-height: 27px; font-size: 11px; color: #8c98ac; margin-bottom: 12px; }
 .activity-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .activity-controls { display: flex; align-items: center; gap: 4px; margin-left: auto; flex: none; }
 .runtime-menu-trigger { border: 0; border-radius: 4px; padding: 3px 6px; background: transparent; color: #7181a0; font-size: 11px; }
