@@ -15,6 +15,7 @@ from .session import Session
 from .session_paths import session_directory
 from .session_store import JsonlSessionStore
 from .skills import SkillRegistry
+from .tool_result import ToolResultNormalizer
 from .tools.catalog import ToolCatalog
 from .tools.context import ToolExecutionContext
 from .tools.base import ToolPolicy
@@ -138,6 +139,7 @@ class SubagentRuntime:
         role = self._roles.get(role_name)
         session = Session()
         store = self._store(parent)
+        child_session_directory = store.directory / session.session_id
         session.attach_journal_sink(
             lambda events: store.append_events(session.session_id, events)
         )
@@ -173,6 +175,12 @@ class SubagentRuntime:
                 policy=self._tool_policy,
             ),
             context=context,
+            tool_result_normalizer=ToolResultNormalizer(
+                parent.workspace,
+                session.session_id,
+                sessions_directory=parent.sessions_directory,
+                artifact_directory=child_session_directory,
+            ),
         )
         # The child receives only the task text plus whatever the parent
         # was last shown, never the parent's transcript.
