@@ -1,3 +1,4 @@
+import json
 import tempfile
 import threading
 import unittest
@@ -16,13 +17,14 @@ from agent_core import (
     SubagentRoleRegistry,
     SubagentRuntime,
     SubagentTool,
+    ToolCall,
     ToolConfig,
     ToolExecutionContext,
     Workspace,
     builtin_catalog,
 )
 from agent_core.llm import LLMRequest
-from agent_core.session_paths import session_directory
+from agent_core.session_paths import session_directory, workspace_key
 
 
 SUBAGENT_CONFIG = AgentConfig(
@@ -53,6 +55,38 @@ class StaticProvider(LLMProvider):
         self.requests.append(request)
         on_text_delta(self.answer)
         return LLMResponse(content=self.answer)
+
+
+class ToolCallingProvider(StaticProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self._responses = iter(
+            (
+                LLMResponse(
+                    content=None,
+                    tool_calls=(
+                        ToolCall(
+                            "call-child",
+                            "read_file",
+                            {"path": "large.txt"},
+                        ),
+                    ),
+                ),
+                LLMResponse(content=self.answer),
+            )
+        )
+
+    def stream(
+        self,
+        request: LLMRequest,
+        on_text_delta,
+        on_reasoning_delta=None,
+    ) -> LLMResponse:
+        self.requests.append(request)
+        response = next(self._responses)
+        if response.content:
+            on_text_delta(response.content)
+        return response
 
 
 def role(
@@ -248,6 +282,61 @@ class SubagentRuntimeTest(unittest.TestCase):
             ["write the quarterly summary", "child answer"],
         )
         self.assertEqual(visible_sessions, [])
+
+    def test_saves_child_tool_results_beside_the_child_transcript(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "large.txt").write_text("x" * 20000, encoding="utf-8")
+            parent = Session("parent")
+            provider = ToolCallingProvider()
+            child_role = role(
+                "researcher",
+                "Reads.",
+                ("read_file",),
+                provider=provider,
+            )
+            tool_context = context(root, (child_role,), session=parent)
+
+            result = SubagentTool().execute(
+                {"role": "researcher", "task": "read the large file"},
+                tool_context,
+            )
+
+            subagents = (
+                session_directory(
+                    tool_context.sessions_directory,
+                    tool_context.workspace.path,
+                    parent.session_id,
+                )
+                / "subagents"
+            )
+            transcript = next(subagents.rglob("*.jsonl"))
+            child_id = transcript.parent.name
+            artifact = transcript.parent / "call-child.txt"
+            child = JsonlSessionStore(
+                subagents, group_by_workspace=False
+            ).load(child_id)
+            tool_message = next(
+                item for item in child.items if item.role == "tool"
+            )
+            artifact_path = (
+                f".nosis/sessions/{workspace_key(root)}/parent/subagents/"
+                f"{child_id}/call-child.txt"
+            )
+            misplaced_artifact = (
+                tool_context.sessions_directory
+                / workspace_key(root)
+                / child_id
+                / "call-child.txt"
+            )
+
+            self.assertEqual(result, "child answer")
+            self.assertTrue(artifact.is_file())
+            self.assertEqual(
+                json.loads(tool_message.content)["artifact_path"],
+                artifact_path,
+            )
+            self.assertFalse(misplaced_artifact.exists())
 
     def test_role_receives_only_its_declared_tools(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
