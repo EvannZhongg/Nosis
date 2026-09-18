@@ -13,7 +13,7 @@ import sys
 from importlib.resources import files
 from pathlib import Path
 
-from .bridge.config import default_config_directory, initialize_default_configs
+from .bridge.config import default_config_directory, initialize_config_directory
 
 
 def ui_bundle_path() -> Path:
@@ -35,7 +35,7 @@ def main() -> None:
             "Run 'npm install && npm run build' in interfaces/tui."
         )
 
-    initialize_default_configs(default_config_directory())
+    initialize_config_directory(default_config_directory())
 
     # The bridge must run in the interpreter that owns agent_core.
     os.environ["NOSIS_PYTHON"] = sys.executable

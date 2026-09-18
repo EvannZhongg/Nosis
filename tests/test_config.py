@@ -4,13 +4,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from agent_core import ProviderCapabilities
+from agent_core import ProviderCapabilities, SkillRegistry
 from agent_core.providers import LiteLLMProvider
 from interfaces.bridge.config import (
     ModelConfig,
     configured_role_names,
     default_config_directory,
-    initialize_default_configs,
+    initialize_config_directory,
     load_config,
     load_model_options,
     load_vision_config,
@@ -94,13 +94,14 @@ class ConfigTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             config_directory = Path(directory) / "nosis"
 
-            created = initialize_default_configs(config_directory)
+            created = initialize_config_directory(config_directory)
 
             self.assertEqual(
                 created,
                 (
                     config_directory / "provider_config.json",
                     config_directory / "agent_config.json",
+                    config_directory / "skills" / "skill-creator",
                 ),
             )
             provider_config = json.loads(created[0].read_text(encoding="utf-8"))
@@ -125,6 +126,15 @@ class ConfigTest(unittest.TestCase):
                 6,
             )
             self.assertTrue((config_directory / "skills").is_dir())
+            skill_directory = config_directory / "skills" / "skill-creator"
+            self.assertTrue((skill_directory / "SKILL.md").is_file())
+            self.assertTrue((skill_directory / "license.txt").is_file())
+            self.assertTrue((skill_directory / "scripts" / "init_skill.py").is_file())
+            self.assertTrue((skill_directory / "scripts" / "quick_validate.py").is_file())
+            self.assertEqual(
+                SkillRegistry.discover(config_directory / "skills").names,
+                ("skill-creator",),
+            )
             self.assertTrue(agent_config["main_agent"]["tools"]["read_file"])
             # Every shipped role carries an explicit enable switch.
             for name, role in agent_config["subagent_roles"].items():
@@ -137,7 +147,12 @@ class ConfigTest(unittest.TestCase):
             provider_path = config_directory / "provider_config.json"
             provider_path.write_text("custom", encoding="utf-8")
 
-            created = initialize_default_configs(config_directory)
+            existing_skill = config_directory / "skills" / "skill-creator"
+            existing_skill.mkdir(parents=True)
+            skill_path = existing_skill / "SKILL.md"
+            skill_path.write_text("custom skill", encoding="utf-8")
+
+            created = initialize_config_directory(config_directory)
 
             self.assertEqual(
                 created,
@@ -148,6 +163,8 @@ class ConfigTest(unittest.TestCase):
                 "custom",
             )
             self.assertTrue((config_directory / "skills").is_dir())
+            self.assertEqual(skill_path.read_text(encoding="utf-8"), "custom skill")
+            self.assertFalse((existing_skill / "scripts").exists())
 
     def test_loads_selected_provider_from_json_and_env(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

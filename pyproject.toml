@@ -31,5 +31,10 @@ namespaces = false
 [tool.setuptools.package-data]
 agent_core = ["prompts/*.md"]
 "interfaces" = ["tui/dist/app.js"]
-"interfaces.bridge" = ["defaults/*.json"]
+"interfaces.bridge" = [
+    "defaults/*.json",
+    "defaults/skills/*/SKILL.md",
+    "defaults/skills/*/license.txt",
+    "defaults/skills/*/scripts/*.py",
+]
 "interfaces.gui" = ["static/*", "static/assets/*"]

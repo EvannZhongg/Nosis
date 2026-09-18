@@ -1,30 +1,22 @@
 #!/usr/bin/env node
 import { render } from 'ink';
-import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { App } from './app.js';
 
 type Options = {
   workspace: string;
-  providerConfigPath: string;
-  agentConfigPath: string;
 };
 
 const USAGE = `Usage: nosis [options]
 
 Options:
   --workspace <path>      Workspace directory (default: current directory)
-  --config <path>         Provider configuration file
-  --agent-config <path>   Agent behaviour configuration file
   -h, --help              Show this message
 `;
 
 function parseArguments(argv: string[]): Options {
-  const configDirectory = join(homedir(), '.nosis');
   const options: Options = {
     workspace: process.cwd(),
-    providerConfigPath: join(configDirectory, 'provider_config.json'),
-    agentConfigPath: join(configDirectory, 'agent_config.json'),
   };
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -42,12 +34,6 @@ function parseArguments(argv: string[]): Options {
     switch (argument) {
       case '--workspace':
         options.workspace = resolve(value);
-        break;
-      case '--config':
-        options.providerConfigPath = resolve(value);
-        break;
-      case '--agent-config':
-        options.agentConfigPath = resolve(value);
         break;
       default:
         process.stderr.write(`Unknown option: ${argument}\n${USAGE}`);
@@ -91,8 +77,6 @@ render(
   <App
     python={python}
     workspace={options.workspace}
-    providerConfigPath={options.providerConfigPath}
-    agentConfigPath={options.agentConfigPath}
   />,
   {
     // Ink would otherwise unmount on Ctrl+C; we use it to cancel a turn.

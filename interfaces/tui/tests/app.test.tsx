@@ -75,8 +75,6 @@ function renderApp() {
     <App
       python="python3"
       workspace="/w"
-      providerConfigPath="/p"
-      agentConfigPath="/a"
     />,
   );
 }
@@ -154,15 +152,13 @@ describe('App', () => {
     });
   });
 
-  it('opens the session with the workspace and config paths', async () => {
+  it('opens the session with the workspace', async () => {
     renderApp();
     await waitFor(() =>
       expect(sent[0]).toMatchObject({
         type: 'open_session',
         workspace: '/w',
         session_id: null,
-        provider_config_path: '/p',
-        agent_config_path: '/a',
       }),
     );
   });

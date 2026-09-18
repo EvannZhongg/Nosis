@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
@@ -11,6 +12,7 @@ DEFAULT_CONFIG_FILENAMES = (
     "provider_config.json",
     "agent_config.json",
 )
+BUILTIN_SKILL_NAMES = ("skill-creator",)
 
 
 @dataclass(frozen=True)
@@ -25,10 +27,9 @@ def default_config_directory() -> Path:
     return Path.home() / ".nosis"
 
 
-def initialize_default_configs(directory: Path) -> tuple[Path, ...]:
+def initialize_config_directory(directory: Path) -> tuple[Path, ...]:
     created = []
     directory.mkdir(parents=True, exist_ok=True)
-    (directory / "skills").mkdir(exist_ok=True)
     defaults = files("interfaces.bridge.defaults")
     for filename in DEFAULT_CONFIG_FILENAMES:
         path = directory / filename
@@ -39,7 +40,31 @@ def initialize_default_configs(directory: Path) -> tuple[Path, ...]:
             encoding="utf-8",
         )
         created.append(path)
+
+    skills_directory = directory / "skills"
+    skills_directory.mkdir(exist_ok=True)
+    packaged_skills = defaults.joinpath("skills")
+    for name in BUILTIN_SKILL_NAMES:
+        destination = skills_directory / name
+        if destination.exists():
+            continue
+        _copy_resource_directory(
+            packaged_skills.joinpath(name),
+            destination,
+        )
+        created.append(destination)
     return tuple(created)
+
+
+def _copy_resource_directory(source, destination: Path) -> None:
+    destination.mkdir()
+    for child in source.iterdir():
+        target = destination / child.name
+        if child.is_dir():
+            _copy_resource_directory(child, target)
+            continue
+        with child.open("rb") as source_file, target.open("xb") as target_file:
+            shutil.copyfileobj(source_file, target_file)
 
 
 def _read_config(

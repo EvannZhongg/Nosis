@@ -38,7 +38,7 @@ from agent_core import (
 
 from ..bridge.config import (
     default_config_directory,
-    initialize_default_configs,
+    initialize_config_directory,
     load_model_options,
 )
 from ..bridge.process import cancel_process
@@ -50,9 +50,8 @@ HOST = "127.0.0.1"
 PORT = 8737
 SHUTDOWN_TIMEOUT_SECONDS = 2
 EVENT_REPLAY_LIMIT = 512
-# Messages the browser may forward to the bridge verbatim. 'start' is
-# excluded: the server builds it so a page cannot point the agent at an
-# arbitrary configuration file.
+# Messages the browser may forward to the bridge verbatim. ``open_session``
+# is excluded because the server owns the Workspace and provider selection.
 RELAYED_MESSAGE_TYPES = frozenset(
     {
         "user_turn",
@@ -505,8 +504,6 @@ class ActiveSession:
 def create_app(
     workspace: Workspace,
     store: JsonlSessionStore,
-    provider_config_path: Path,
-    agent_config_path: Path,
     *,
     models: dict[str, str],
     default_model: str,
@@ -868,8 +865,6 @@ def create_app(
             opening_message = _open_session_message(
                 opening,
                 current_workspace,
-                provider_config_path,
-                agent_config_path,
                 models,
             )
         except WebSocketDisconnect:
@@ -989,8 +984,6 @@ def create_app(
 def _open_session_message(
     opening: object,
     workspace: Workspace,
-    provider_config_path: Path,
-    agent_config_path: Path,
     models: dict[str, str],
 ) -> dict[str, object]:
     """Build the bridge's session-open command from the browser's choice."""
@@ -1009,8 +1002,6 @@ def _open_session_message(
         "type": "open_session",
         "workspace": str(workspace.path),
         "session_id": session_id,
-        "provider_config_path": str(provider_config_path),
-        "agent_config_path": str(agent_config_path),
         "provider": provider,
     }
 
@@ -1082,27 +1073,16 @@ def main(argv: list[str] | None = None) -> None:
     config_directory = default_config_directory()
     parser = argparse.ArgumentParser(prog="nosis-gui")
     parser.add_argument("--workspace", type=Path, default=None)
-    parser.add_argument(
-        "--config",
-        type=Path,
-        default=config_directory / "provider_config.json",
-    )
-    parser.add_argument(
-        "--agent-config",
-        type=Path,
-        default=config_directory / "agent_config.json",
-    )
     args = parser.parse_args(argv)
 
     try:
-        initialize_default_configs(config_directory)
+        initialize_config_directory(config_directory)
         workspace = Workspace(args.workspace or Path.cwd())
-        default_model, models = load_model_options(args.config)
+        provider_config_path = config_directory / "provider_config.json"
+        default_model, models = load_model_options(provider_config_path)
         app = create_app(
             workspace,
-            JsonlSessionStore(args.config.expanduser().resolve().parent / "sessions"),
-            args.config,
-            args.agent_config,
+            JsonlSessionStore(config_directory / "sessions"),
             models=models,
             default_model=default_model,
         )

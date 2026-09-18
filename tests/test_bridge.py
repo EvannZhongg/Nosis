@@ -316,10 +316,19 @@ class ProtocolTest(unittest.TestCase):
             decode('{"text": "hello"}')
 
 
-def make_bridge(lines: list[str]) -> tuple[Bridge, io.StringIO]:
+def make_bridge(
+    lines: list[str],
+    config_directory: Path | None = None,
+) -> tuple[Bridge, io.StringIO]:
     stdin = io.StringIO("".join(f"{line}\n" for line in lines))
     stdout = io.StringIO()
-    return Bridge(stdin, stdout), stdout
+    if config_directory is None:
+        return Bridge(stdin, stdout), stdout
+    with patch(
+        "interfaces.bridge.bridge.default_config_directory",
+        return_value=config_directory,
+    ):
+        return Bridge(stdin, stdout), stdout
 
 
 def emitted(stdout: io.StringIO) -> list[dict]:
@@ -334,7 +343,7 @@ class PermissionProtocolTest(unittest.TestCase):
     def test_bridge_updates_permission_before_runtime_initialization(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            bridge, stdout = make_bridge([])
+            bridge, stdout = make_bridge([], root)
             bridge.open_session(open_session_message(root, session_id="s"))
 
             bridge._set_permission_preset(
@@ -367,7 +376,7 @@ class PermissionProtocolTest(unittest.TestCase):
             root = Path(directory)
             next_workspace = root / "next"
             next_workspace.mkdir()
-            bridge, stdout = make_bridge([])
+            bridge, stdout = make_bridge([], root)
             bridge.open_session(open_session_message(root, session_id="s"))
 
             bridge._set_provider({"type": "provider_set", "provider": "second"})
@@ -444,7 +453,7 @@ class BridgeApprovalTest(unittest.TestCase):
                 )
 
         with tempfile.TemporaryDirectory() as directory:
-            bridge, stdout = make_bridge([])
+            bridge, stdout = make_bridge([], Path(directory))
             bridge.open_session(
                 open_session_message(Path(directory), session_id="s")
             )
@@ -461,7 +470,8 @@ class BridgeApprovalTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             bridge, stdout = make_bridge(
                 ['{"type": "approval_response", "request_id": "t1:1",'
-                 ' "approved": true}']
+                 ' "approved": true}'],
+                Path(directory),
             )
             bridge.open_session(
                 open_session_message(Path(directory), session_id="s")
@@ -641,7 +651,8 @@ class BridgeUserQuestionTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             bridge, stdout = make_bridge(
                 ['{"type": "user_question_response", "request_id": "t1:1",'
-                 ' "option_id": "sqlite"}']
+                 ' "option_id": "sqlite"}'],
+                Path(directory),
             )
             bridge.open_session(
                 open_session_message(Path(directory), session_id="s")
@@ -752,7 +763,8 @@ class BridgeServeTest(unittest.TestCase):
                     '{"type": "load_session"}',
                     '{"type": "list_sessions"}',
                     '{"type": "shutdown"}',
-                ]
+                ],
+                root,
             )
             bridge.serve()
 
@@ -784,7 +796,8 @@ class BridgeServeTest(unittest.TestCase):
                     json.dumps(open_session_message(root, session_id="empty")),
                     '{"type": "permission_set", "preset": "full_access"}',
                     '{"type": "shutdown"}',
-                ]
+                ],
+                root,
             )
 
             bridge.serve()
@@ -808,8 +821,7 @@ def open_session_message(
     provider_config: dict | None = None,
     **extra: object,
 ) -> dict:
-    provider_config_path = directory / "provider_config.json"
-    provider_config_path.write_text(
+    (directory / "provider_config.json").write_text(
         json.dumps(
             provider_config
             if provider_config is not None
@@ -830,8 +842,7 @@ def open_session_message(
         ),
         encoding="utf-8",
     )
-    agent_config_path = directory / "agent_config.json"
-    agent_config_path.write_text(
+    (directory / "agent_config.json").write_text(
         json.dumps(
             agent_config
             if agent_config is not None
@@ -847,8 +858,6 @@ def open_session_message(
         "type": "open_session",
         "workspace": str(directory),
         "session_id": None,
-        "provider_config_path": str(provider_config_path),
-        "agent_config_path": str(agent_config_path),
         **extra,
     }
 
@@ -914,7 +923,7 @@ class InterruptedTurnTest(unittest.TestCase):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.root = Path(directory.name)
-        self.bridge, self.stdout = make_bridge([])
+        self.bridge, self.stdout = make_bridge([], self.root)
         self.bridge.open_session(open_session_message(self.root))
         self.session_id = next(
             message["session_id"]
@@ -1133,8 +1142,9 @@ class BridgeSessionOpenTest(unittest.TestCase):
 
     def started_model(self, **extra: object) -> str:
         with tempfile.TemporaryDirectory() as directory:
-            bridge, stdout = make_bridge([])
-            bridge.open_session(open_session_message(Path(directory), **extra))
+            root = Path(directory)
+            bridge, stdout = make_bridge([], root)
+            bridge.open_session(open_session_message(root, **extra))
             return str(emitted(stdout)[0]["model"])
 
     def test_uses_the_configured_provider_by_default(self) -> None:
@@ -1154,7 +1164,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
             root = Path(directory)
             store = JsonlSessionStore(root / "sessions")
             store.set_provider("saved", "second", root)
-            bridge, stdout = make_bridge([])
+            bridge, stdout = make_bridge([], root)
 
             bridge.open_session(open_session_message(root, session_id="saved"))
 
@@ -1163,9 +1173,10 @@ class BridgeSessionOpenTest(unittest.TestCase):
 
     def test_opening_a_session_does_not_initialize_the_agent_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            bridge, stdout = make_bridge([])
+            root = Path(directory)
+            bridge, stdout = make_bridge([], root)
 
-            bridge.open_session(open_session_message(Path(directory)))
+            bridge.open_session(open_session_message(root))
 
             self.assertIsNone(bridge._agent)
             self.assertIsNone(bridge._mcp)
@@ -1190,7 +1201,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
                     },
                 },
             )
-            bridge, stdout = make_bridge([])
+            bridge, stdout = make_bridge([], root)
 
             bridge.open_session(message)
 
@@ -1214,7 +1225,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
                 root,
             )
             store.append_events(session.session_id, session.journal, workspace=root)
-            bridge, stdout = make_bridge([])
+            bridge, stdout = make_bridge([], root)
 
             bridge.open_session(open_session_message(root, session_id=session.session_id))
 
@@ -1247,7 +1258,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
                 "Ship plans",
                 (PlanStep("verify", "Verify recovery", "in_progress"),),
             )
-            bridge, stdout = make_bridge([])
+            bridge, stdout = make_bridge([], root)
 
             bridge.open_session(open_session_message(root, session_id="saved"))
 
@@ -1273,7 +1284,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
                 "# Detailed instructions\n",
                 encoding="utf-8",
             )
-            bridge, _ = make_bridge([])
+            bridge, _ = make_bridge([], root)
 
             bridge.open_session(open_session_message(root))
             bridge._ensure_runtime()
@@ -1300,7 +1311,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
                 "description: Still available.\n---\n",
                 encoding="utf-8",
             )
-            bridge, stdout = make_bridge([])
+            bridge, stdout = make_bridge([], root)
 
             bridge.open_session(open_session_message(root))
             bridge._ensure_runtime()
@@ -1320,7 +1331,7 @@ class SubagentRoleStartTest(unittest.TestCase):
 
     def offered_roles(self, roles: dict) -> list[str]:
         with tempfile.TemporaryDirectory() as directory:
-            bridge, _ = make_bridge([])
+            bridge, _ = make_bridge([], Path(directory))
             bridge.open_session(
                 open_session_message(
                     Path(directory),
@@ -1371,7 +1382,7 @@ class SubagentRoleStartTest(unittest.TestCase):
     def test_disabling_every_role_removes_the_subagent_tool(self) -> None:
         """With no role left there is nothing to delegate to."""
         with tempfile.TemporaryDirectory() as directory:
-            bridge, _ = make_bridge([])
+            bridge, _ = make_bridge([], Path(directory))
             bridge.open_session(
                 open_session_message(
                     Path(directory),
@@ -1398,7 +1409,7 @@ class SubagentRoleStartTest(unittest.TestCase):
 
     def test_runtime_tools_are_registered_only_for_the_main_agent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            bridge, _ = make_bridge([])
+            bridge, _ = make_bridge([], Path(directory))
             bridge.open_session(
                 open_session_message(
                     Path(directory),
@@ -1475,7 +1486,7 @@ class AnalyzeImageDerivationTest(unittest.TestCase):
         if vision_provider is not None:
             main_agent["vision_provider"] = vision_provider
         with tempfile.TemporaryDirectory() as directory:
-            bridge, _ = make_bridge([])
+            bridge, _ = make_bridge([], Path(directory))
             with patch.object(
                 LiteLLMProvider, "capabilities_for_model", _CAPABILITIES_PATCH
             ):
@@ -1603,7 +1614,7 @@ class CrossFileRoleValidationTest(unittest.TestCase):
 
     def start(self, provider_roles: dict, agent_roles: dict) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            bridge, _ = make_bridge([])
+            bridge, _ = make_bridge([], Path(directory))
             bridge.open_session(
                 open_session_message(
                     Path(directory),

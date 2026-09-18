@@ -18,8 +18,6 @@ import { initialState, reducer } from './state.js';
 export type AppProps = {
   python: string;
   workspace: string;
-  providerConfigPath: string;
-  agentConfigPath: string;
 };
 
 /** Keep Windows paths unambiguous on the newline-delimited JSON channel. */
@@ -76,8 +74,6 @@ export function App(props: AppProps): React.ReactElement {
       type: 'open_session',
       workspace: protocolPath(props.workspace),
       session_id: sessionId,
-      provider_config_path: protocolPath(props.providerConfigPath),
-      agent_config_path: protocolPath(props.agentConfigPath),
     });
     // The stored conversation is not part of `session_ready`: it is sent only when
     // asked, so a frontend that reads it elsewhere never pays for it.

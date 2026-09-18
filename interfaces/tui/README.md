@@ -7,11 +7,10 @@ Nosis 的终端界面使用 TypeScript、Ink 和 React。它只负责渲染 Brid
 ```bash
 nosis
 nosis --workspace ~/projects/my-project
-nosis --config path/to/provider_config.json \
-      --agent-config path/to/agent_config.json
 ```
 
 未传 `--workspace` 时，当前目录即 Workspace。
+Provider、Agent 与 Skill 固定从 `~/.nosis/` 读取。
 
 常用操作：
 

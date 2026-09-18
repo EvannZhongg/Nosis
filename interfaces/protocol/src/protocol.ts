@@ -233,8 +233,6 @@ export type Outgoing =
       type: 'open_session';
       workspace: string;
       session_id: string | null;
-      provider_config_path: string;
-      agent_config_path: string;
       attach_only?: boolean;
       after_event?: number;
       attachment_id?: string;

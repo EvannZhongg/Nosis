@@ -51,6 +51,7 @@ from agent_core.mcp.manager import McpClientManager, McpServerStatus
 
 from .config import (
     configured_role_names,
+    default_config_directory,
     load_config_with_name,
     load_model_options,
     load_vision_config,
@@ -100,8 +101,9 @@ class Bridge:
         self._permissions: PermissionController | None = None
         self._jobs: JobManager | None = None
         self._plan: PlanManager | None = None
-        self._config_path: Path | None = None
-        self._agent_config_path: Path | None = None
+        self._config_directory = default_config_directory().resolve()
+        self._config_path = self._config_directory / "provider_config.json"
+        self._agent_config_path = self._config_directory / "agent_config.json"
         self._provider_name: str | None = None
         self._context_window: dict[str, int] | None = None
         self._skill_warnings: tuple[str, ...] = ()
@@ -450,15 +452,14 @@ class Bridge:
         )
 
     def open_session(self, message: dict[str, object]) -> None:
-        config_path = Path(str(message["provider_config_path"])).expanduser().resolve()
-        agent_config_path = Path(str(message["agent_config_path"])).expanduser().resolve()
-        load_dotenv(config_path.parent / ".env")
+        config_path = self._config_path
+        load_dotenv(self._config_directory / ".env")
 
         workspace = Workspace(Path(str(message["workspace"])))
         provider = message.get("provider")
         default_provider, models = load_model_options(config_path)
         session_id = message.get("session_id")
-        sessions_directory = config_path.parent / "sessions"
+        sessions_directory = self._config_directory / "sessions"
         self._sessions_directory = sessions_directory
         self._store = JsonlSessionStore(sessions_directory)
         stored_provider = (
@@ -500,8 +501,6 @@ class Bridge:
             lambda snapshot: self.emit(**plan_updated_message(snapshot)),
         )
 
-        self._config_path = config_path
-        self._agent_config_path = agent_config_path
         self._provider_name = main_provider_name
         approval_policy = CompositeToolPolicy(
             ShellApprovalPolicy(self.request_permission),
@@ -540,8 +539,6 @@ class Bridge:
             or self._store is None
             or self._workspace is None
             or self._sessions_directory is None
-            or self._config_path is None
-            or self._agent_config_path is None
             or self._provider_name is None
         ):
             raise RuntimeError("received 'user_turn' before 'open_session'")
@@ -552,7 +549,7 @@ class Bridge:
         _, config = load_config_with_name(config_path, self._provider_name)
         try:
             agent_config = load_agent_config(self._agent_config_path)
-            skills = SkillRegistry.discover(config_path.parent / "skills")
+            skills = SkillRegistry.discover(self._config_directory / "skills")
 
             main_provider = LiteLLMProvider(
                 model=config.model,

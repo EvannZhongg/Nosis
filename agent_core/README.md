@@ -47,7 +47,7 @@ Runtime 由 [`interfaces/bridge`](../interfaces/bridge/README.md) 统一装配�
 
 MCP 在 `agent_config.json` 的 `mcp.servers` 中配置，支持 `stdio` 和 `streamable_http`。远程 Tool 可分别限制是否暴露以及是否需要人工确认。
 
-Skills 位于配置目录下的 `skills/<name>/SKILL.md`，默认即 `~/.nosis/skills/`。Runtime 只在需要时读取完整 Skill 内容。
+Skills 位于 `~/.nosis/skills/<name>/SKILL.md`。首次启动会安装内置 Skill；Runtime 只在需要时读取完整 Skill 内容。
 
 ### 子 Agent
 

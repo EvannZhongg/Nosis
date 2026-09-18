@@ -267,16 +267,12 @@ class GuiTest(unittest.TestCase):
         self.root = Path(directory.name)
         (self.root / "README.md").write_text("Hello Nosis", encoding="utf-8")
         (self.root / "src").mkdir()
-        self.provider_config_path = self.root / "provider_config.json"
-        self.agent_config_path = self.root / "agent_config.json"
         self.store = JsonlSessionStore(self.root / ".nosis" / "sessions")
 
     def client(self, bridge: FakeBridge | None = None) -> TestClient:
         app = server.create_app(
             Workspace(self.root),
             self.store,
-            self.provider_config_path,
-            self.agent_config_path,
             models={"first": "openai/first", "second": "openai/second"},
             default_model="first",
         )
@@ -298,7 +294,7 @@ class GuiTest(unittest.TestCase):
             self.addCleanup(patcher.stop)
         return client
 
-    def test_server_builds_open_session_so_pages_cannot_choose_a_config(self) -> None:
+    def test_server_builds_open_session_from_browser_session_choices(self) -> None:
         bridge = FakeBridge(replies={"user_turn": [{"type": "bye"}, None]})
         with self.client(bridge) as client:
             with client.websocket_connect("/api/session") as socket:
@@ -308,8 +304,6 @@ class GuiTest(unittest.TestCase):
                         "session_id": "resumed",
                         "attachment_id": "page-1",
                         "provider": "second",
-                        # Config paths are ignored; Workspace is a Session choice.
-                        "provider_config_path": "/etc/passwd",
                         "workspace": "/",
                     }
                 )
@@ -324,8 +318,6 @@ class GuiTest(unittest.TestCase):
                 "type": "open_session",
                 "workspace": "/",
                 "session_id": "resumed",
-                "provider_config_path": str(self.provider_config_path),
-                "agent_config_path": str(self.agent_config_path),
                 "provider": "second",
             },
         )
