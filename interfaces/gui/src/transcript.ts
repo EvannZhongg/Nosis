@@ -313,8 +313,7 @@ function itemParts(
 }
 
 /** Part indices that belong to a turn's collapsible reasoning/tool process. */
-export function turnProcessPartIndexes(parts: readonly { type: string }[], running: boolean): number[] {
-  if (running) return parts.map((_, index) => index);
+export function turnProcessPartIndexes(parts: readonly { type: string }[]): number[] {
   let processEnd = -1;
   for (let index = parts.length - 1; index >= 0; index -= 1) {
     if (parts[index]?.type !== "text") {

@@ -131,11 +131,10 @@ function TurnPartGroup({ children }: PropsWithChildren) {
 }
 
 function AssistantParts() {
-  const active = useAuiState((state) => state.thread.isRunning && state.message.isLast);
   const parts = useAuiState((state) => state.message.parts);
   const processParts = useMemo(() => new Set(
-    turnProcessPartIndexes(parts, active).map((index) => parts[index]),
-  ), [active, parts]);
+    turnProcessPartIndexes(parts).map((index) => parts[index]),
+  ), [parts]);
   const groupBy = useCallback((part: PartState) => (
     processParts.has(part) ? [TURN_PROCESS_GROUP] as const : []
   ), [processParts]);

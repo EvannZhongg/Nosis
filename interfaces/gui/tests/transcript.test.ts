@@ -467,7 +467,7 @@ describe("toMessages", () => {
     ]);
     const assistantParts = parts(messages[1]);
 
-    expect(turnProcessPartIndexes(assistantParts, false)).toEqual([0, 1, 2]);
+    expect(turnProcessPartIndexes(assistantParts)).toEqual([0, 1, 2]);
     expect(assistantParts[3]).toMatchObject({ type: "text", text: "Fixed." });
   });
 
@@ -476,7 +476,7 @@ describe("toMessages", () => {
       { type: "tool-call" },
       { type: "image" },
       { type: "text" },
-    ], false)).toEqual([0, 1]);
+    ])).toEqual([0, 1]);
   });
 
   it("does not treat tool-calling text as a final answer", () => {
@@ -485,16 +485,24 @@ describe("toMessages", () => {
       { role: "assistant", content: "Running it now.", tool_calls: [TOOL_CALL] },
     ]);
 
-    expect(turnProcessPartIndexes(parts(messages[1]), false)).toEqual([0, 1]);
+    expect(turnProcessPartIndexes(parts(messages[1]))).toEqual([0, 1]);
   });
 
-  it("keeps the active turn entirely inside the process group", () => {
+  it("streams a possible final answer outside the process group", () => {
     const messages = toMessages([
       { role: "user", content: "fix it" },
       { role: "assistant", content: "Still working." },
     ]);
 
-    expect(turnProcessPartIndexes(parts(messages[1]), true)).toEqual([0]);
+    expect(turnProcessPartIndexes(parts(messages[1]))).toEqual([]);
+  });
+
+  it("keeps process parts grouped while the trailing answer streams", () => {
+    expect(turnProcessPartIndexes([
+      { type: "reasoning" },
+      { type: "tool-call" },
+      { type: "text" },
+    ])).toEqual([0, 1]);
   });
 
   it("keeps earlier final answers visible while a new turn is running", () => {
@@ -505,8 +513,8 @@ describe("toMessages", () => {
       { role: "assistant", content: "Still working." },
     ]);
 
-    expect(turnProcessPartIndexes(parts(messages[1]), false)).toEqual([]);
-    expect(turnProcessPartIndexes(parts(messages[3]), true)).toEqual([0]);
+    expect(turnProcessPartIndexes(parts(messages[1]))).toEqual([]);
+    expect(turnProcessPartIndexes(parts(messages[3]))).toEqual([]);
   });
 
   it("starts a new assistant message after a user item", () => {
