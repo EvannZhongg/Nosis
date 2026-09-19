@@ -17,58 +17,44 @@ ENABLED_TOOLS = {
 
 
 class AgentConfigTest(unittest.TestCase):
-    def load(self, fields: dict) -> AgentConfig:
+    def load_json(self, payload: dict) -> AgentConfig:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "agent_config.json"
-            path.write_text(
-                json.dumps(
-                    {
-                        "max_same_tool_calls": 5,
-                        "output_reserve_tokens": 100,
-                        "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
-                        **fields,
-                    }
-                ),
-                encoding="utf-8",
-            )
+            path.write_text(json.dumps(payload), encoding="utf-8")
             return load_agent_config(path)
 
-    def test_loads_agent_behavior_config(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "agent_config.json"
-            path.write_text(
-                json.dumps(
-                    {
-                        "max_same_tool_calls": 5,
-                        "output_reserve_tokens": 100,
-                        "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
-                        "main_agent": {
-                            "tools": {
-                                **ENABLED_TOOLS,
-                                "edit_file": False,
-                                "shell": False,
-                            },
-                        },
-                    }
-                ),
-                encoding="utf-8",
-            )
+    def load(self, fields: dict) -> AgentConfig:
+        return self.load_json(
+            {
+                "max_same_tool_calls": 5,
+                "output_reserve_tokens": 100,
+                "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
+                **fields,
+            }
+        )
 
-            self.assertEqual(
-                load_agent_config(path),
-                AgentConfig(
-                    max_same_tool_calls=5,
-                    output_reserve_tokens=100,
-                    tools=ToolConfig(
-                        enabled=(
-                            "read_file",
-                            "search_files",
-                            "list_directory",
-                        )
-                    ),
-                    workspace_instruction_files=("CLAUDE.md", "AGENTS.md"),
+    def test_loads_agent_behavior_config(self) -> None:
+        self.assertEqual(
+            self.load(
+                {
+                    "main_agent": {
+                        "tools": {
+                            **ENABLED_TOOLS,
+                            "edit_file": False,
+                            "shell": False,
+                        }
+                    }
+                }
+            ),
+            AgentConfig(
+                max_same_tool_calls=5,
+                output_reserve_tokens=100,
+                tools=ToolConfig(
+                    enabled=("read_file", "search_files", "list_directory")
                 ),
+                workspace_instruction_files=("CLAUDE.md", "AGENTS.md"),
             )
+        )
 
     def test_loads_workspace_instruction_files_in_priority_order(self) -> None:
         config = self.load(
@@ -87,24 +73,14 @@ class AgentConfigTest(unittest.TestCase):
         )
 
     def test_requires_workspace_instruction_files(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "agent_config.json"
-            path.write_text(
-                json.dumps(
-                    {
-                        "max_same_tool_calls": 5,
-                        "output_reserve_tokens": 100,
-                        "main_agent": {"tools": ENABLED_TOOLS},
-                    }
-                ),
-                encoding="utf-8",
+        with self.assertRaisesRegex(ValueError, "workspace_instruction_files.*array"):
+            self.load_json(
+                {
+                    "max_same_tool_calls": 5,
+                    "output_reserve_tokens": 100,
+                    "main_agent": {"tools": ENABLED_TOOLS},
+                }
             )
-
-            with self.assertRaisesRegex(
-                ValueError,
-                "workspace_instruction_files.*array",
-            ):
-                load_agent_config(path)
 
     def test_rejects_non_root_workspace_instruction_paths(self) -> None:
         for value in ("../AGENTS.md", "docs/RULES.md", "/RULES.md"):
@@ -130,58 +106,18 @@ class AgentConfigTest(unittest.TestCase):
             )
 
     def test_rejects_non_positive_limit(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "agent_config.json"
-            path.write_text(
-                json.dumps(
-                    {
-                        "max_same_tool_calls": 0,
-                        "output_reserve_tokens": 100,
-                        "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
-                        "main_agent": {"tools": ENABLED_TOOLS},
-                    }
-                ),
-                encoding="utf-8",
-            )
-
-            with self.assertRaises(ValueError):
-                load_agent_config(path)
+        with self.assertRaises(ValueError):
+            self.load({"max_same_tool_calls": 0, "main_agent": {"tools": ENABLED_TOOLS}})
 
     def test_rejects_boolean_limit(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "agent_config.json"
-            path.write_text(
-                json.dumps(
-                    {
-                        "max_same_tool_calls": True,
-                        "output_reserve_tokens": 100,
-                        "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
-                        "main_agent": {"tools": ENABLED_TOOLS},
-                    }
-                ),
-                encoding="utf-8",
-            )
-
-            with self.assertRaises(ValueError):
-                load_agent_config(path)
+        with self.assertRaises(ValueError):
+            self.load({"max_same_tool_calls": True, "main_agent": {"tools": ENABLED_TOOLS}})
 
     def test_rejects_non_positive_output_reserve(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "agent_config.json"
-            path.write_text(
-                json.dumps(
-                    {
-                        "max_same_tool_calls": 5,
-                        "output_reserve_tokens": 0,
-                        "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
-                        "main_agent": {"tools": ENABLED_TOOLS},
-                    }
-                ),
-                encoding="utf-8",
+        with self.assertRaises(ValueError):
+            self.load(
+                {"output_reserve_tokens": 0, "main_agent": {"tools": ENABLED_TOOLS}}
             )
-
-            with self.assertRaises(ValueError):
-                load_agent_config(path)
 
     def test_loads_optional_generation_limit(self) -> None:
         config = self.load(
@@ -263,41 +199,20 @@ class AgentConfigTest(unittest.TestCase):
                     )
 
     def test_rejects_missing_tool_config(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "agent_config.json"
-            path.write_text(
-                json.dumps(
-                    {
-                        "max_same_tool_calls": 5,
-                        "output_reserve_tokens": 100,
-                        "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
-                    }
-                ),
-                encoding="utf-8",
+        with self.assertRaisesRegex(ValueError, "'main_agent'.*object"):
+            self.load_json(
+                {
+                    "max_same_tool_calls": 5,
+                    "output_reserve_tokens": 100,
+                    "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
+                }
             )
-
-            with self.assertRaisesRegex(ValueError, "'main_agent'.*object"):
-                load_agent_config(path)
 
     def test_defaults_missing_tools_to_disabled(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "agent_config.json"
-            path.write_text(
-                json.dumps(
-                    {
-                        "max_same_tool_calls": 5,
-                        "output_reserve_tokens": 100,
-                        "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
-                        "main_agent": {"tools": {"read_file": True}},
-                    }
-                ),
-                encoding="utf-8",
-            )
-
-            self.assertEqual(
-                load_agent_config(path).tools,
-                ToolConfig(enabled=("read_file",)),
-            )
+        self.assertEqual(
+            self.load({"main_agent": {"tools": {"read_file": True}}}).tools,
+            ToolConfig(enabled=("read_file",)),
+        )
 
     def test_orders_enabled_tools_by_the_canonical_tool_list(self) -> None:
         """Tool schemas are a prompt-cache prefix, so their order is fixed.
@@ -305,79 +220,40 @@ class AgentConfigTest(unittest.TestCase):
         The order follows TOOL_NAMES rather than the config's key order, so
         two configs that enable the same tools produce the same prefix.
         """
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "agent_config.json"
-            path.write_text(
-                json.dumps(
-                    {
-                        "max_same_tool_calls": 5,
-                        "output_reserve_tokens": 100,
-                        "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
-                        "main_agent": {
-                            "tools": {
-                                "shell": True,
-                                "read_file": True,
-                                "list_directory": True,
-                            }
-                        },
+        self.assertEqual(
+            self.load(
+                {
+                    "main_agent": {
+                        "tools": {
+                            "shell": True,
+                            "read_file": True,
+                            "list_directory": True,
+                        }
                     }
-                ),
-                encoding="utf-8",
-            )
-
-            self.assertEqual(
-                load_agent_config(path).tools.enabled,
-                ("read_file", "list_directory", "shell"),
-            )
+                }
+            ).tools.enabled,
+            ("read_file", "list_directory", "shell"),
+        )
 
     def test_rejects_non_boolean_tool_setting(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "agent_config.json"
-            path.write_text(
-                json.dumps(
-                    {
-                        "max_same_tool_calls": 5,
-                        "output_reserve_tokens": 100,
-                        "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
-                        "main_agent": {
-                            "tools": {
-                                **ENABLED_TOOLS,
-                                "shell": "true",
-                            },
-                        },
+        with self.assertRaisesRegex(ValueError, "tools.shell.*boolean"):
+            self.load(
+                {
+                    "main_agent": {
+                        "tools": {**ENABLED_TOOLS, "shell": "true"},
                     }
-                ),
-                encoding="utf-8",
+                }
             )
-
-            with self.assertRaisesRegex(
-                ValueError,
-                "tools.shell.*boolean",
-            ):
-                load_agent_config(path)
 
     def test_rejects_unknown_tool_setting(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "agent_config.json"
-            path.write_text(
-                json.dumps(
-                    {
-                        "max_same_tool_calls": 5,
-                        "output_reserve_tokens": 100,
-                        "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
-                        "main_agent": {
-                            "tools": {
-                                **ENABLED_TOOLS,
-                                "unknown": True,
-                            },
-                        },
+        with self.assertRaisesRegex(ValueError, "unknown"):
+            self.load(
+                {
+                    "main_agent": {
+                        "tools": {**ENABLED_TOOLS, "unknown": True},
                     }
-                ),
-                encoding="utf-8",
+                }
             )
-
-            with self.assertRaisesRegex(ValueError, "unknown"):
-                load_agent_config(path)
 
     def test_rejects_unknown_main_agent_field(self) -> None:
         with self.assertRaisesRegex(ValueError, "'main_agent': provider"):

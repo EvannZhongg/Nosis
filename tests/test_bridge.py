@@ -42,6 +42,7 @@ from agent_core.providers import LiteLLMProvider
 from agent_core.subagent import vision_aware_tool_names
 from agent_core.tools.config import TOOL_NAMES
 from interfaces.bridge.bridge import Bridge, Cancelled
+from interfaces.bridge.execution_plane import ExecutionPlane
 from interfaces.bridge.protocol import (
     attachment_replaced_message,
     decode,
@@ -55,6 +56,12 @@ from interfaces.bridge.protocol import (
 TOOL_CALL = ToolCall(id="call-1", name="shell", arguments={"command": "ls"})
 SECOND_TOOL_CALL = ToolCall(id="call-2", name="shell", arguments={"command": "pwd"})
 EVENT_TIME = datetime(2026, 9, 9, 8, 0, tzinfo=timezone.utc)
+
+
+class ExecutionPlaneTest(unittest.TestCase):
+    def test_uses_identity_equality_and_hashing(self) -> None:
+        self.assertIs(ExecutionPlane.__eq__, object.__eq__)
+        self.assertIs(ExecutionPlane.__hash__, object.__hash__)
 
 
 class ProtocolTest(unittest.TestCase):
@@ -350,8 +357,7 @@ class PermissionProtocolTest(unittest.TestCase):
                 {"type": "permission_set", "preset": "full_access"}
             )
 
-            self.assertIsNone(bridge._agent)
-            self.assertIsNone(bridge._mcp)
+            self.assertIsNone(bridge._execution_plane)
             assert bridge._session is not None
             self.assertEqual(
                 bridge._session.permission_preset,
@@ -387,8 +393,7 @@ class PermissionProtocolTest(unittest.TestCase):
                 {"type": "permission_set", "preset": "full_access"}
             )
 
-            self.assertIsNone(bridge._agent)
-            self.assertIsNone(bridge._mcp)
+            self.assertIsNone(bridge._execution_plane)
             self.assertEqual(
                 JsonlSessionStore(root / "sessions").provider_for("s"),
                 "second",
@@ -411,6 +416,65 @@ class PermissionProtocolTest(unittest.TestCase):
                     "permission_changed",
                 ],
             )
+
+    def test_provider_change_closes_the_execution_plane_once(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bridge, _ = make_bridge([], root)
+            bridge.open_session(open_session_message(root, session_id="s"))
+            plane = bridge._ensure_execution_plane()
+
+            with (
+                patch.object(
+                    plane.jobs,
+                    "close",
+                    wraps=plane.jobs.close,
+                ) as close_jobs,
+                patch.object(
+                    plane.mcp,
+                    "close",
+                    wraps=plane.mcp.close,
+                ) as close_mcp,
+            ):
+                bridge._set_provider(
+                    {"type": "provider_set", "provider": "second"}
+                )
+
+            self.assertIsNone(bridge._execution_plane)
+            close_jobs.assert_called_once_with()
+            close_mcp.assert_called_once_with()
+
+    def test_workspace_change_closes_the_execution_plane_once(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            next_workspace = root / "next"
+            next_workspace.mkdir()
+            bridge, _ = make_bridge([], root)
+            bridge.open_session(open_session_message(root, session_id="s"))
+            plane = bridge._ensure_execution_plane()
+
+            with (
+                patch.object(
+                    plane.jobs,
+                    "close",
+                    wraps=plane.jobs.close,
+                ) as close_jobs,
+                patch.object(
+                    plane.mcp,
+                    "close",
+                    wraps=plane.mcp.close,
+                ) as close_mcp,
+            ):
+                bridge._set_workspace(
+                    {
+                        "type": "workspace_set",
+                        "workspace": str(next_workspace),
+                    }
+                )
+
+            self.assertIsNone(bridge._execution_plane)
+            close_jobs.assert_called_once_with()
+            close_mcp.assert_called_once_with()
 
 
 class _SlowStdin:
@@ -452,12 +516,23 @@ class BridgeApprovalTest(unittest.TestCase):
                     JobHandle("j2", "shell", "completed"),
                 )
 
+        class Plane:
+            jobs = Jobs()
+            context_window = ContextWindow(
+                input_tokens=0,
+                max_input_tokens=900,
+                max_context_tokens=1000,
+                output_reserve_tokens=100,
+                compression_threshold=720,
+                compression_count=0,
+            )
+
         with tempfile.TemporaryDirectory() as directory:
             bridge, stdout = make_bridge([], Path(directory))
             bridge.open_session(
                 open_session_message(Path(directory), session_id="s")
             )
-            bridge._jobs = Jobs()
+            bridge._execution_plane = Plane()
 
             bridge._emit_runtime_state("running")
 
@@ -812,7 +887,7 @@ class BridgeServeTest(unittest.TestCase):
                 ),
                 PermissionPreset.FULL_ACCESS,
             )
-            self.assertIsNone(bridge._agent)
+            self.assertIsNone(bridge._execution_plane)
 
 
 def open_session_message(
@@ -937,6 +1012,7 @@ class InterruptedTurnTest(unittest.TestCase):
         self.addCleanup(directory.cleanup)
         self.root = Path(directory.name)
         self.bridge, self.stdout = make_bridge([], self.root)
+        self.addCleanup(self.bridge.close)
         self.bridge.open_session(open_session_message(self.root))
         self.session_id = next(
             message["session_id"]
@@ -949,12 +1025,8 @@ class InterruptedTurnTest(unittest.TestCase):
         self.session = session
 
     def start_turn(self, agent: object, text: str = "do the work") -> None:
-        agent_patcher = patch.object(self.bridge, "_agent", agent)
-        runtime_patcher = patch.object(self.bridge, "_ensure_runtime")
-        agent_patcher.start()
-        runtime_patcher.start()
-        self.addCleanup(agent_patcher.stop)
-        self.addCleanup(runtime_patcher.stop)
+        plane = self.bridge._ensure_execution_plane()
+        plane.agent = agent
         self.bridge.run_turn({"turn_id": "t1", "text": text})
 
     def stored_items(self) -> list[Message]:
@@ -1163,17 +1235,14 @@ class BridgeSessionOpenTest(unittest.TestCase):
             bridge.open_session(open_session_message(root, **extra))
             return str(emitted(stdout)[0]["model"])
 
-    def test_uses_the_configured_provider_by_default(self) -> None:
-        self.assertEqual(self.started_model(), "openai/first")
-
-    def test_uses_the_requested_provider(self) -> None:
-        self.assertEqual(
-            self.started_model(provider="second"),
-            "openai/second",
-        )
-
-    def test_uses_the_configured_provider_when_selection_is_null(self) -> None:
-        self.assertEqual(self.started_model(provider=None), "openai/first")
+    def test_selects_the_configured_or_requested_provider(self) -> None:
+        for label, extra, expected in (
+            ("default", {}, "openai/first"),
+            ("requested", {"provider": "second"}, "openai/second"),
+            ("explicit default", {"provider": None}, "openai/first"),
+        ):
+            with self.subTest(label=label):
+                self.assertEqual(self.started_model(**extra), expected)
 
     def test_restores_the_session_provider_selection(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1194,8 +1263,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
 
             bridge.open_session(open_session_message(root))
 
-            self.assertIsNone(bridge._agent)
-            self.assertIsNone(bridge._mcp)
+            self.assertIsNone(bridge._execution_plane)
             self.assertEqual(
                 [message["type"] for message in emitted(stdout)],
                 ["session_ready", "runtime_state"],
@@ -1226,7 +1294,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
                 ValueError,
                 "MISSING_NOSIS_TEST_KEY",
             ):
-                bridge._ensure_runtime()
+                bridge._ensure_execution_plane()
 
     def test_restores_the_session_permission_preset(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1303,10 +1371,10 @@ class BridgeSessionOpenTest(unittest.TestCase):
             bridge, _ = make_bridge([], root)
 
             bridge.open_session(open_session_message(root))
-            bridge._ensure_runtime()
+            plane = bridge._ensure_execution_plane()
 
-            names = [item.name for item in bridge._agent._tools.definitions]
-            prompt = bridge._agent._context._system_prompt
+            names = [item.name for item in plane.agent._tools.definitions]
+            prompt = plane.agent._context._system_prompt
 
         self.assertIn("read_skill", names)
         self.assertIn("demo-skill: Does demo work.", prompt)
@@ -1323,9 +1391,9 @@ class BridgeSessionOpenTest(unittest.TestCase):
             bridge, _ = make_bridge([], root)
 
             bridge.open_session(message)
-            bridge._ensure_runtime()
+            plane = bridge._ensure_execution_plane()
 
-            prompt = bridge._agent._context._system_prompt
+            prompt = plane.agent._context._system_prompt
 
         self.assertEqual(prompt, f"Custom prompt for {root.resolve()}")
 
@@ -1340,9 +1408,9 @@ class BridgeSessionOpenTest(unittest.TestCase):
             bridge, _ = make_bridge([], root)
 
             bridge.open_session(open_session_message(root, workspace=str(workspace)))
-            bridge._ensure_runtime()
+            plane = bridge._ensure_execution_plane()
 
-            prompt = bridge._agent._context._system_prompt
+            prompt = plane.agent._context._system_prompt
             session = bridge._session
             assert session is not None
 
@@ -1376,8 +1444,8 @@ class BridgeSessionOpenTest(unittest.TestCase):
             )
 
             bridge.open_session(message)
-            bridge._ensure_runtime()
-            prompt = bridge._agent._context._system_prompt
+            plane = bridge._ensure_execution_plane()
+            prompt = plane.agent._context._system_prompt
 
         self.assertIn("project rule", prompt)
         self.assertIn("<workspace>/PROJECT.md", prompt)
@@ -1391,18 +1459,20 @@ class BridgeSessionOpenTest(unittest.TestCase):
             instructions_path.write_text("first rule", encoding="utf-8")
             bridge, _ = make_bridge([], root)
             bridge.open_session(open_session_message(root))
-            bridge._ensure_runtime()
-            first_agent = bridge._agent
+            first_plane = bridge._ensure_execution_plane()
 
-            bridge._ensure_runtime()
-            self.assertIs(bridge._agent, first_agent)
+            self.assertIs(bridge._ensure_execution_plane(), first_plane)
 
             instructions_path.write_text("second rule", encoding="utf-8")
-            bridge._ensure_runtime()
+            second_plane = bridge._ensure_execution_plane()
 
-            self.assertIsNot(bridge._agent, first_agent)
-            self.assertIn("second rule", bridge._agent._context._system_prompt)
-            self.assertNotIn("first rule", bridge._agent._context._system_prompt)
+            self.assertIsNot(second_plane, first_plane)
+            self.assertIn(
+                "second rule", second_plane.agent._context._system_prompt
+            )
+            self.assertNotIn(
+                "first rule", second_plane.agent._context._system_prompt
+            )
 
     def test_rebuilds_runtime_when_the_configured_instruction_list_changes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1410,8 +1480,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
             (root / "PROJECT.md").write_text("project rule", encoding="utf-8")
             bridge, _ = make_bridge([], root)
             bridge.open_session(open_session_message(root))
-            bridge._ensure_runtime()
-            first_agent = bridge._agent
+            first_plane = bridge._ensure_execution_plane()
             config = json.loads(
                 (root / "agent_config.json").read_text(encoding="utf-8")
             )
@@ -1421,11 +1490,141 @@ class BridgeSessionOpenTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            bridge._ensure_runtime()
+            second_plane = bridge._ensure_execution_plane()
 
-            self.assertIsNot(bridge._agent, first_agent)
-            self.assertIn("project rule", bridge._agent._context._system_prompt)
-            self.assertIn("<workspace>/PROJECT.md", bridge._agent._context._system_prompt)
+            self.assertIsNot(second_plane, first_plane)
+            self.assertIn(
+                "project rule", second_plane.agent._context._system_prompt
+            )
+            self.assertIn(
+                "<workspace>/PROJECT.md",
+                second_plane.agent._context._system_prompt,
+            )
+
+    def test_rebuilds_the_execution_plane_when_agent_config_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bridge, _ = make_bridge([], root)
+            bridge.open_session(open_session_message(root))
+            first_plane = bridge._ensure_execution_plane()
+            config = json.loads(
+                (root / "agent_config.json").read_text(encoding="utf-8")
+            )
+            config["max_same_tool_calls"] = 6
+            (root / "agent_config.json").write_text(
+                json.dumps(config),
+                encoding="utf-8",
+            )
+
+            with (
+                patch.object(
+                    first_plane.jobs,
+                    "close",
+                    wraps=first_plane.jobs.close,
+                ) as close_jobs,
+                patch.object(
+                    first_plane.mcp,
+                    "close",
+                    wraps=first_plane.mcp.close,
+                ) as close_mcp,
+            ):
+                second_plane = bridge._ensure_execution_plane()
+
+            self.assertIsNot(second_plane, first_plane)
+            self.assertEqual(second_plane.agent_config.max_same_tool_calls, 6)
+            close_jobs.assert_called_once_with()
+            close_mcp.assert_called_once_with()
+
+    def test_rebuilds_the_execution_plane_when_provider_config_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bridge, _ = make_bridge([], root)
+            bridge.open_session(open_session_message(root))
+            first_plane = bridge._ensure_execution_plane()
+            config = json.loads(
+                (root / "provider_config.json").read_text(encoding="utf-8")
+            )
+            config["providers"]["first"]["model"] = "openai/updated"
+            (root / "provider_config.json").write_text(
+                json.dumps(config),
+                encoding="utf-8",
+            )
+
+            second_plane = bridge._ensure_execution_plane()
+
+            self.assertIsNot(second_plane, first_plane)
+            self.assertNotEqual(
+                second_plane.provider_config_fingerprint,
+                first_plane.provider_config_fingerprint,
+            )
+            self.assertEqual(
+                second_plane.agent._provider._model,
+                "openai/updated",
+            )
+
+    def test_failed_assembly_does_not_publish_a_partial_execution_plane(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bridge, _ = make_bridge([], root)
+            bridge.open_session(open_session_message(root))
+
+            with (
+                patch(
+                    "interfaces.bridge.bridge.Agent",
+                    side_effect=RuntimeError("assembly failed"),
+                ),
+                patch(
+                    "interfaces.bridge.bridge.JobManager.close",
+                    autospec=True,
+                ) as close_jobs,
+                patch(
+                    "interfaces.bridge.bridge.McpClientManager.close",
+                    autospec=True,
+                ) as close_mcp,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "assembly failed"):
+                    bridge._ensure_execution_plane()
+
+            self.assertIsNone(bridge._execution_plane)
+            close_jobs.assert_called_once()
+            close_mcp.assert_called_once()
+
+    def test_context_window_event_updates_the_execution_plane_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bridge, stdout = make_bridge([], root)
+            bridge.open_session(open_session_message(root))
+            plane = bridge._ensure_execution_plane()
+
+            bridge._emit_agent_event(
+                ContextWindowEvent(
+                    ContextWindow(
+                        input_tokens=240,
+                        max_input_tokens=900,
+                        max_context_tokens=1000,
+                        output_reserve_tokens=100,
+                        compression_threshold=720,
+                        compression_count=3,
+                    )
+                ),
+                "t1",
+            )
+            bridge._emit_runtime_state("running")
+
+            self.assertEqual(plane.context_window.input_tokens, 240)
+            self.assertEqual(
+                emitted(stdout)[-1]["context_window"],
+                {
+                    "input_tokens": 240,
+                    "max_input_tokens": 900,
+                    "max_context_tokens": 1000,
+                    "output_reserve_tokens": 100,
+                    "compression_threshold": 720,
+                    "compression_count": 3,
+                },
+            )
 
     def test_invalid_skill_does_not_prevent_bridge_startup(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1445,15 +1644,15 @@ class BridgeSessionOpenTest(unittest.TestCase):
             bridge, stdout = make_bridge([], root)
 
             bridge.open_session(open_session_message(root))
-            bridge._ensure_runtime()
+            plane = bridge._ensure_execution_plane()
 
             runtime_state = emitted(stdout)[-1]
-            names = [item.name for item in bridge._agent._tools.definitions]
+            names = [item.name for item in plane.agent._tools.definitions]
 
         self.assertEqual(runtime_state["type"], "runtime_state")
         self.assertEqual(runtime_state["phase"], "starting")
-        self.assertEqual(len(bridge._skill_warnings), 1)
-        self.assertIn("Skipping skill at", bridge._skill_warnings[0])
+        self.assertEqual(len(plane.skill_warnings), 1)
+        self.assertIn("Skipping skill at", plane.skill_warnings[0])
         self.assertIn("read_skill", names)
 
 
@@ -1475,8 +1674,8 @@ class SubagentRoleStartTest(unittest.TestCase):
                     },
                 )
             )
-            bridge._ensure_runtime()
-            subagents = bridge._agent._tools._context.subagents
+            plane = bridge._ensure_execution_plane()
+            subagents = plane.agent._tools._context.subagents
             if subagents is None:
                 return []
             return [role.name for role in subagents.roles]
@@ -1533,10 +1732,10 @@ class SubagentRoleStartTest(unittest.TestCase):
                     },
                 )
             )
-            bridge._ensure_runtime()
+            plane = bridge._ensure_execution_plane()
 
             self.assertEqual(
-                [definition.name for definition in bridge._agent._tools.definitions],
+                [definition.name for definition in plane.agent._tools.definitions],
                 ["ask_user", "update_plan"],
             )
 
@@ -1560,15 +1759,15 @@ class SubagentRoleStartTest(unittest.TestCase):
                     },
                 )
             )
-            bridge._ensure_runtime()
+            plane = bridge._ensure_execution_plane()
 
             main_names = {
-                definition.name for definition in bridge._agent._tools.definitions
+                definition.name for definition in plane.agent._tools.definitions
             }
-            subagent = bridge._agent._tools._context.subagents
+            subagent = plane.agent._tools._context.subagents
             assert subagent is not None
             role = subagent.roles.get("researcher")
-            role_context = bridge._agent._tools._context
+            role_context = plane.agent._tools._context
             role_names = {
                 definition.name
                 for definition in subagent._catalog.select(
@@ -1660,11 +1859,11 @@ class AnalyzeImageDerivationTest(unittest.TestCase):
                         },
                     )
                 )
-                bridge._ensure_runtime()
+                plane = bridge._ensure_execution_plane()
                 main_names = sorted(
-                    d.name for d in bridge._agent._tools.definitions
+                    d.name for d in plane.agent._tools.definitions
                 )
-                role = bridge._agent._tools._context.subagents.roles.get(
+                role = plane.agent._tools._context.subagents.roles.get(
                     "researcher"
                 )
                 role_names = sorted(
@@ -1674,34 +1873,21 @@ class AnalyzeImageDerivationTest(unittest.TestCase):
                 )
         return main_names, role_names
 
-    def test_a_vision_model_does_not_get_the_tool(self) -> None:
-        """Images inline, so the tool would be a second, redundant call."""
-        main, role = self.tool_names(VISION_MODEL, "seeing")
-
-        self.assertNotIn("analyze_image", main)
-        self.assertNotIn("analyze_image", role)
-
-    def test_a_vision_model_gets_read_image_instead(self) -> None:
-        """It can see for itself, so it is handed the pixels."""
-        main, role = self.tool_names(VISION_MODEL, "seeing")
-
-        self.assertIn("read_image", main)
-        self.assertIn("read_image", role)
-
-    def test_a_text_model_with_a_vision_provider_gets_the_tool(self) -> None:
-        main, role = self.tool_names(TEXT_MODEL, "seeing")
-
-        self.assertIn("analyze_image", main)
-        self.assertIn("analyze_image", role)
-
-    def test_a_text_model_never_gets_read_image(self) -> None:
-        """Inlining an image for a text model would be dropped anyway."""
-        for vision_provider in ("seeing", None):
-            with self.subTest(vision_provider=vision_provider):
-                main, role = self.tool_names(TEXT_MODEL, vision_provider)
-
-                self.assertNotIn("read_image", main)
-                self.assertNotIn("read_image", role)
+    def test_derives_the_single_image_tool_from_capabilities(self) -> None:
+        cases = (
+            ("vision model", VISION_MODEL, "seeing", "read_image"),
+            ("text model with route", TEXT_MODEL, "seeing", "analyze_image"),
+            ("text model without route", TEXT_MODEL, None, None),
+        )
+        for label, model, vision_provider, expected in cases:
+            with self.subTest(label=label):
+                main, role = self.tool_names(model, vision_provider)
+                for names in (main, role):
+                    image_tools = {"read_image", "analyze_image"} & set(names)
+                    if expected is None:
+                        self.assertEqual(image_tools, set())
+                    else:
+                        self.assertEqual(image_tools, {expected})
 
     def test_the_two_image_tools_are_never_both_registered(self) -> None:
         """They are alternatives: one route into context, not two."""
@@ -1773,7 +1959,7 @@ class CrossFileRoleValidationTest(unittest.TestCase):
                     },
                 )
             )
-            bridge._ensure_runtime()
+            bridge._ensure_execution_plane()
 
     def test_rejects_a_provider_override_for_an_unknown_role(self) -> None:
         """A typo must fail loudly instead of silently doing nothing."""

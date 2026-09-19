@@ -8,6 +8,7 @@ can drive it with plain string buffers.
 import json
 import _thread
 from collections import deque
+from hashlib import sha256
 from itertools import count
 from pathlib import Path
 from queue import Queue
@@ -18,7 +19,9 @@ from dotenv import load_dotenv
 
 from agent_core import (
     Agent,
+    AgentEvent,
     AgentCancelled as Cancelled,
+    ContextWindowEvent,
     JsonlSessionStore,
     JobManager,
     JobStatusEvent,
@@ -59,6 +62,7 @@ from .config import (
     load_prompt_templates,
     load_vision_config,
 )
+from .execution_plane import ExecutionPlane
 from .instructions import load_workspace_instructions
 from .protocol import (
     decode,
@@ -96,22 +100,17 @@ class Bridge:
         self._interaction_lock = Lock()
         self._turn_id: str | None = None
         self._turn_control: TurnControl | None = None
-        self._agent: Agent | None = None
         self._session: Session | None = None
         self._store: JsonlSessionStore | None = None
         self._sessions_directory: Path | None = None
-        self._mcp: McpClientManager | None = None
         self._workspace: Workspace | None = None
         self._permissions: PermissionController | None = None
-        self._jobs: JobManager | None = None
         self._plan: PlanManager | None = None
         self._config_directory = default_config_directory().resolve()
         self._config_path = self._config_directory / "provider_config.json"
         self._agent_config_path = self._config_directory / "agent_config.json"
         self._provider_name: str | None = None
-        self._context_window: dict[str, int] | None = None
-        self._skill_warnings: tuple[str, ...] = ()
-        self._workspace_instructions: WorkspaceInstructions | None = None
+        self._execution_plane: ExecutionPlane | None = None
         self._approval: dict[str, object] | None = None
         self._question: dict[str, object] | None = None
 
@@ -139,7 +138,7 @@ class Bridge:
             self._reader.start()
 
     def _read_stdin(self) -> None:
-        first_message = self._agent is None
+        first_message = not self._session_opened
         while True:
             try:
                 line = self._stdin.readline()
@@ -221,8 +220,6 @@ class Bridge:
             self.emit("provider_changed", provider=provider, model=models[provider])
             return
         self._close_execution_plane()
-        self._context_window = None
-        self._skill_warnings = ()
         self._provider_name = provider
         self._store.set_provider(
             self._session.session_id,
@@ -254,8 +251,6 @@ class Bridge:
             self.emit("workspace_changed", workspace=str(workspace.path))
             return
         self._close_execution_plane()
-        self._context_window = None
-        self._skill_warnings = ()
         self._store.bind_workspace(self._session.session_id, workspace.path)
         self._workspace = workspace
         self._session.workspace = str(workspace.path)
@@ -441,9 +436,10 @@ class Bridge:
                     self._emit_runtime_state("running")
 
     def request_mcp_permission(self, call) -> bool:
+        plane = self._execution_plane
         identity = (
-            self._mcp.tool_identity(call.name)
-            if self._mcp is not None
+            plane.mcp.tool_identity(call.name)
+            if plane is not None
             else None
         )
         server, tool_name = (
@@ -512,8 +508,8 @@ class Bridge:
             McpApprovalPolicy(
                 self.request_mcp_permission,
                 lambda name: (
-                    self._mcp.requires_approval(name)
-                    if self._mcp is not None
+                    self._execution_plane.mcp.requires_approval(name)
+                    if self._execution_plane is not None
                     else False
                 ),
             ),
@@ -536,7 +532,7 @@ class Bridge:
         ))
         self._emit_runtime_state("inactive")
 
-    def _ensure_runtime(self) -> None:
+    def _ensure_execution_plane(self) -> ExecutionPlane:
         if (
             self._session is None
             or self._store is None
@@ -547,24 +543,36 @@ class Bridge:
             raise RuntimeError("received 'user_turn' before 'open_session'")
 
         agent_config = load_agent_config(self._agent_config_path)
+        provider_config_fingerprint = sha256(
+            self._config_path.read_bytes()
+        ).hexdigest()
         instructions = load_workspace_instructions(
             self._config_directory,
             self._workspace,
             agent_config.workspace_instruction_files,
         )
-        if self._agent is not None:
-            assert self._workspace_instructions is not None
-            if (
-                self._workspace_instructions.fingerprint
-                == instructions.fingerprint
+        plane = self._execution_plane
+        if plane is not None:
+            if plane.matches(
+                workspace=self._workspace,
+                provider_name=self._provider_name,
+                agent_config=agent_config,
+                provider_config_fingerprint=provider_config_fingerprint,
+                instructions=instructions,
             ):
-                return
+                return plane
             self._close_execution_plane()
 
         self._emit_runtime_state("starting")
         config_path = self._config_path
         workspace = self._workspace
         _, config = load_config_with_name(config_path, self._provider_name)
+        mcp = McpClientManager(
+            agent_config.mcp,
+            workspace.path,
+            on_status=self._emit_mcp_status,
+        )
+        jobs: JobManager | None = None
         try:
             skills = SkillRegistry.discover(self._config_directory / "skills")
             prompts = load_prompt_templates(self._config_directory / "prompts")
@@ -583,17 +591,12 @@ class Bridge:
             # One catalog of stateless Tool instances is shared by the main
             # Agent and by every sub-agent role.
             catalog = builtin_catalog()
-            self._mcp = McpClientManager(
-                agent_config.mcp,
-                workspace.path,
-                on_status=self._emit_mcp_status,
-            )
-            catalog = catalog.extend(self._mcp.start())
+            catalog = catalog.extend(mcp.start())
 
             if self._permissions is None:
                 raise RuntimeError("session permissions are not initialized")
-            self._jobs = JobManager(self._session)
-            self._jobs.set_update_callback(
+            jobs = JobManager(self._session)
+            jobs.set_update_callback(
                 lambda update: self.emit(
                     **event_to_message(
                         JobStatusEvent(
@@ -625,9 +628,9 @@ class Bridge:
                     "image" in main_provider.capabilities.input_modalities
                 ),
                 vision_provider=vision_provider,
-                mcp=self._mcp,
+                mcp=mcp,
                 subagents=subagents,
-                jobs=self._jobs,
+                jobs=jobs,
                 skills=skills,
                 plan=self._plan,
                 ask_user=self.request_user_choice,
@@ -655,50 +658,57 @@ class Bridge:
                         ),
                         "ask_user",
                         "update_plan",
-                        *self._mcp.tool_names,
+                        *mcp.tool_names,
                     ),
                     context,
                     policy=self._permissions,
                 ),
                 context=context,
             )
-            context_window = context_window_to_dict(agent.context_window())
-            self._agent = agent
-            self._context_window = context_window
-            self._skill_warnings = skills.warnings
-            self._workspace_instructions = instructions
+            plane = ExecutionPlane(
+                workspace=workspace,
+                provider_name=self._provider_name,
+                agent_config=agent_config,
+                provider_config_fingerprint=provider_config_fingerprint,
+                instructions=instructions,
+                agent=agent,
+                jobs=jobs,
+                mcp=mcp,
+                context_window=agent.context_window(),
+                skill_warnings=skills.warnings,
+            )
         except BaseException:
-            self._close_execution_plane()
+            try:
+                if jobs is not None:
+                    jobs.close()
+            finally:
+                mcp.close()
             raise
+        self._execution_plane = plane
+        return plane
 
     def _close_execution_plane(self) -> None:
-        self._agent = None
-        self._workspace_instructions = None
+        plane = self._execution_plane
+        self._execution_plane = None
         self._approval = None
         self._question = None
-        if self._jobs is not None:
-            self._jobs.close()
-            self._jobs = None
-        if self._mcp is not None:
-            self._mcp.close()
-            self._mcp = None
+        if plane is not None:
+            plane.close()
 
     def _emit_runtime_state(
         self,
         phase: str,
         *,
-        context_window: dict[str, int] | None = None,
         skill_warnings: tuple[str, ...] = (),
     ) -> None:
-        if context_window is not None:
-            self._context_window = context_window
+        plane = self._execution_plane
         jobs = (
             [
                 job.to_dict()
-                for job in self._jobs.snapshot()
+                for job in plane.jobs.snapshot()
                 if job.status in {"submitted", "running"}
             ]
-            if self._jobs is not None
+            if plane is not None
             else []
         )
         self.emit(**runtime_state_message(
@@ -712,11 +722,21 @@ class Bridge:
                 if self._session is not None
                 else PermissionPreset.ASK_FOR_APPROVAL.value
             ),
-            context_window=self._context_window,
+            context_window=(
+                context_window_to_dict(plane.context_window)
+                if plane is not None
+                else None
+            ),
             jobs=jobs,
             skill_warnings=skill_warnings,
             plan=self._plan.snapshot if self._plan is not None else None,
         ))
+
+    def _emit_agent_event(self, event: AgentEvent, turn_id: str) -> None:
+        plane = self._execution_plane
+        if isinstance(event, ContextWindowEvent) and plane is not None:
+            plane.context_window = event.window
+        self.emit(**event_to_message(event, turn_id))
 
     def _emit_sessions(self) -> None:
         """Answer ``list_sessions`` with this Workspace's stored Sessions."""
@@ -820,7 +840,7 @@ class Bridge:
     def run_turn(self, message: dict[str, object]) -> None:
         self._turn_id = str(message["turn_id"])
         try:
-            self._ensure_runtime()
+            plane = self._ensure_execution_plane()
         except Exception as error:
             self.emit(
                 "turn_failed",
@@ -830,16 +850,16 @@ class Bridge:
             self._turn_id = None
             self._emit_runtime_state("failed")
             return
-        if self._agent is None or self._session is None or self._store is None:
-            raise RuntimeError("runtime initialization did not create an agent")
+        if self._session is None or self._store is None:
+            raise RuntimeError("execution plane has no session")
         if self._workspace is None:
             raise RuntimeError("bridge workspace is not initialized")
 
         self._emit_runtime_state(
             "running",
-            skill_warnings=self._skill_warnings,
+            skill_warnings=plane.skill_warnings,
         )
-        self._skill_warnings = ()
+        plane.skill_warnings = ()
         control = TurnControl()
         with self._router_lock:
             self._turn_control = control
@@ -861,12 +881,12 @@ class Bridge:
                 message.get("attachments"), self._workspace
             )
             kwargs = {
-                "on_event": lambda event: self.emit(
-                    **event_to_message(event, self._turn_id or "")
+                "on_event": lambda event: self._emit_agent_event(
+                    event, self._turn_id or ""
                 ),
                 "attachments": attachments,
             }
-            result = self._agent.run(
+            result = plane.agent.run(
                 str(message["text"]),
                 turn_id=self._turn_id,
                 turn_control=control,
