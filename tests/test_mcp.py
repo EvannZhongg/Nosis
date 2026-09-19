@@ -6,13 +6,77 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agent_core import Session, ToolCall, ToolExecutionContext, Workspace
-from agent_core.mcp.config import load_mcp_config
+from agent_core.mcp.config import (
+    load_mcp_config,
+    load_mcp_server_map,
+    merge_mcp_servers,
+    namespace_mcp_servers,
+)
 from agent_core.mcp.tool import McpTool, qualified_tool_name
 from agent_core.mcp.manager import McpClientManager
 from agent_core.tools.policy import McpApprovalPolicy
 
 
 class McpConfigTest(unittest.TestCase):
+    def test_loads_standard_server_map_transport_names(self) -> None:
+        servers = load_mcp_server_map(
+            {
+                "local": {"type": "stdio", "command": "python"},
+                "remote": {
+                    "type": "http",
+                    "url": "https://example.test/mcp",
+                },
+            }
+        )
+
+        self.assertEqual(
+            [server.transport for server in servers],
+            ["stdio", "streamable_http"],
+        )
+
+    def test_namespaces_plugin_servers_and_binds_their_working_directory(
+        self,
+    ) -> None:
+        root = Path.cwd() / "plugin-root"
+        servers = namespace_mcp_servers(
+            load_mcp_server_map(
+                {"demo": {"type": "stdio", "command": "python"}}
+            ),
+            "example",
+            base_directory=root,
+        )
+
+        server = servers[0]
+        self.assertEqual(server.identifier, "example:demo")
+        self.assertEqual(server.cwd, str(root.resolve()))
+
+    def test_merges_namespaced_server_collections(self) -> None:
+        standalone = load_mcp_config(
+            {
+                "enabled": True,
+                "servers": {"demo": {"command": "python"}},
+            }
+        )
+        plugin = namespace_mcp_servers(standalone.servers, "example")
+
+        merged = merge_mcp_servers((standalone.servers, plugin))
+
+        self.assertEqual(
+            [server.identifier for server in merged],
+            ["demo", "example:demo"],
+        )
+
+    def test_merge_rejects_duplicate_server_identity(self) -> None:
+        config = load_mcp_config(
+            {
+                "enabled": True,
+                "servers": {"demo": {"command": "python"}},
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "already registered"):
+            merge_mcp_servers((config.servers, config.servers))
+
     def test_loads_stdio_and_expands_environment(self) -> None:
         os.environ["MCP_TOKEN_TEST"] = "secret"
         config = load_mcp_config(
@@ -203,6 +267,12 @@ class McpConfigTest(unittest.TestCase):
 
 
 class McpToolTest(unittest.TestCase):
+    def test_normalizes_namespaced_server_in_tool_name(self) -> None:
+        self.assertEqual(
+            qualified_tool_name("example:demo", "echo.text"),
+            "mcp__example_demo__echo_text",
+        )
+
     def test_qualifies_remote_name_and_delegates_through_context(self) -> None:
         calls = []
 

@@ -57,7 +57,14 @@ from .plan import (
     plan_snapshot_to_dict,
 )
 from .session_store import JsonlSessionStore
-from .skills import Skill, SkillRegistry
+from .skills import (
+    DirectorySkillSource,
+    Skill,
+    SkillLoader,
+    SkillLocation,
+    SkillRegistry,
+    SkillSource,
+)
 from .subagent import (
     SubagentRole,
     SubagentRoleRegistry,
@@ -110,6 +117,9 @@ from .mcp import (
     McpTool,
     McpToolConfig,
     load_mcp_config,
+    load_mcp_server_map,
+    merge_mcp_servers,
+    namespace_mcp_servers,
 )
 from .workspace import Workspace
 from .workspace_instructions import WorkspaceInstruction, WorkspaceInstructions
@@ -139,6 +149,7 @@ __all__ = [
     "ContextWindowExceededError",
     "DEFAULT_MAX_TOOL_RESULT_CHARS",
     "DEFAULT_TOOL_RESULT_PREVIEW_CHARS",
+    "DirectorySkillSource",
     "EditFileTool",
     "ImageInfo",
     "ImagePart",
@@ -178,7 +189,10 @@ __all__ = [
     "SearchFilesTool",
     "Session",
     "Skill",
+    "SkillLoader",
+    "SkillLocation",
     "SkillRegistry",
+    "SkillSource",
     "ShellApprovalPolicy",
     "ShellTool",
     "SubagentRole",
@@ -222,6 +236,9 @@ __all__ = [
     "image_extension",
     "load_agent_config",
     "load_mcp_config",
+    "load_mcp_server_map",
+    "merge_mcp_servers",
+    "namespace_mcp_servers",
     "load_tool_config",
     "message_to_dict",
     "probe_image",

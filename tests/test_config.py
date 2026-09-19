@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from agent_core import ProviderCapabilities, SkillRegistry
+from agent_core import DirectorySkillSource, ProviderCapabilities, SkillLoader
 from agent_core.providers import LiteLLMProvider
 from interfaces.bridge.config import (
     ModelConfig,
@@ -139,6 +139,7 @@ class ConfigTest(unittest.TestCase):
                 8,
             )
             self.assertTrue((config_directory / "skills").is_dir())
+            self.assertTrue((config_directory / "plugins").is_dir())
             prompts = load_prompt_templates(config_directory / "prompts")
             self.assertIn("I am Nosis", prompts.system)
             self.assertIn("{{role}}", prompts.subagent)
@@ -149,7 +150,9 @@ class ConfigTest(unittest.TestCase):
             self.assertTrue((skill_directory / "scripts" / "init_skill.py").is_file())
             self.assertTrue((skill_directory / "scripts" / "quick_validate.py").is_file())
             self.assertEqual(
-                SkillRegistry.discover(config_directory / "skills").names,
+                SkillLoader().load(
+                    (DirectorySkillSource(config_directory / "skills"),)
+                ).names,
                 ("skill-creator",),
             )
             self.assertTrue(agent_config["main_agent"]["tools"]["read_file"])

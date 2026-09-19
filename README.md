@@ -90,6 +90,7 @@ GUI 默认监听 <http://127.0.0.1:8737>。
 | `~/.nosis/agent_config.json` | Tool、子 Agent、MCP 与上下文压缩 |
 | `~/.nosis/prompts/` | 主 Agent、子 Agent 与上下文压缩的 Prompt 模板 |
 | `~/.nosis/skills/` | Skill 目录，首次启动安装内置 Skill |
+| `~/.nosis/plugins/` | Plugin capability package；由 `plugin.json` 声明组件引用 |
 | `~/.nosis/AGENTS.md` | 用户级全局 Workspace Instruction |
 | `~/.nosis/.env` | 配置中 `${ENV_NAME}` 引用的密钥 |
 | `~/.nosis/sessions/<workspace-key>/<session-id>/` | Session 的 Journal、权限 preset、大输出与子 Agent 记录 |

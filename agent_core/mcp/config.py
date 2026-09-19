@@ -1,7 +1,8 @@
 import os
 import re
-from dataclasses import dataclass, field
-from typing import Literal
+from dataclasses import dataclass, field, replace
+from pathlib import Path
+from typing import Iterable, Literal
 
 
 McpTransport = Literal["stdio", "streamable_http"]
@@ -38,6 +39,13 @@ class McpServerConfig:
     tools: McpToolConfig = field(default_factory=McpToolConfig)
     startup_timeout_seconds: int = 15
     call_timeout_seconds: int = 60
+    namespace: str | None = None
+
+    @property
+    def identifier(self) -> str:
+        if self.namespace is None:
+            return self.name
+        return f"{self.namespace}:{self.name}"
 
 
 @dataclass(frozen=True)
@@ -63,6 +71,69 @@ def load_mcp_config(value: object) -> McpConfig:
         for name, server in servers_value.items()
     )
     return McpConfig(enabled=enabled, servers=servers)
+
+
+def load_mcp_server_map(value: object) -> tuple[McpServerConfig, ...]:
+    """Load the server-map form used by standalone ``.mcp.json`` files."""
+    if not isinstance(value, dict):
+        raise ValueError("MCP server map must be an object")
+    servers = {}
+    for name, settings in value.items():
+        if not isinstance(settings, dict):
+            raise ValueError(f"MCP server '{name}' must be an object")
+        adapted = dict(settings)
+        server_type = adapted.pop("type", None)
+        if server_type is not None:
+            if "transport" in adapted:
+                raise ValueError(
+                    f"MCP server '{name}' cannot specify both 'type' and "
+                    "'transport'"
+                )
+            if server_type == "http":
+                adapted["transport"] = "streamable_http"
+            elif server_type == "stdio":
+                adapted["transport"] = "stdio"
+            else:
+                raise ValueError(
+                    f"MCP server '{name}' type must be 'http' or 'stdio'"
+                )
+        servers[name] = adapted
+    return load_mcp_config({"servers": servers}).servers
+
+
+def namespace_mcp_servers(
+    source: Iterable[McpServerConfig],
+    namespace: str,
+    *,
+    base_directory: Path | None = None,
+) -> tuple[McpServerConfig, ...]:
+    """Bind server identities and relative stdio paths to one package."""
+    servers = []
+    for server in source:
+        cwd = server.cwd
+        if base_directory is not None and server.transport == "stdio":
+            if cwd is None:
+                cwd = str(base_directory.resolve())
+            elif not Path(cwd).is_absolute():
+                cwd = str((base_directory / cwd).resolve())
+        servers.append(replace(server, namespace=namespace, cwd=cwd))
+    return tuple(servers)
+
+
+def merge_mcp_servers(
+    sources: Iterable[Iterable[McpServerConfig]],
+) -> tuple[McpServerConfig, ...]:
+    """Combine MCP server collections and reject identity collisions."""
+    servers: dict[str, McpServerConfig] = {}
+    for source in sources:
+        for server in source:
+            identity = server.identifier
+            if identity in servers:
+                raise ValueError(
+                    f"MCP server '{identity}' is already registered"
+                )
+            servers[identity] = server
+    return tuple(servers.values())
 
 
 def _load_server(name: object, value: object) -> McpServerConfig:

@@ -27,12 +27,14 @@ from agent_core import (
     JobStatusEvent,
     Session,
     CompositeToolPolicy,
+    DirectorySkillSource,
+    McpConfig,
     McpApprovalPolicy,
     PermissionController,
     PermissionPreset,
     PlanManager,
     ShellApprovalPolicy,
-    SkillRegistry,
+    SkillLoader,
     SubagentRole,
     SubagentRoleRegistry,
     SubagentRuntime,
@@ -44,6 +46,7 @@ from agent_core import (
     ImagePart,
     builtin_catalog,
     load_agent_config,
+    merge_mcp_servers,
     message_to_dict,
     probe_image,
     vision_aware_tool_names,
@@ -64,6 +67,7 @@ from .config import (
 )
 from .execution_plane import ExecutionPlane
 from .instructions import load_workspace_instructions
+from .plugins import PluginManager
 from .protocol import (
     decode,
     encode,
@@ -567,14 +571,32 @@ class Bridge:
         config_path = self._config_path
         workspace = self._workspace
         _, config = load_config_with_name(config_path, self._provider_name)
+        plugins = PluginManager.discover(
+            self._config_directory / "plugins"
+        )
+        plugin_mcp_servers = (
+            plugins.mcp_servers() if agent_config.mcp.enabled else ()
+        )
+        mcp_config = McpConfig(
+            enabled=agent_config.mcp.enabled,
+            servers=merge_mcp_servers(
+                (agent_config.mcp.servers, plugin_mcp_servers)
+            ),
+        )
         mcp = McpClientManager(
-            agent_config.mcp,
+            mcp_config,
             workspace.path,
             on_status=self._emit_mcp_status,
         )
         jobs: JobManager | None = None
         try:
-            skills = SkillRegistry.discover(self._config_directory / "skills")
+            skills = SkillLoader().load(
+                (
+                    DirectorySkillSource(self._config_directory / "skills"),
+                    *plugins.skill_sources(),
+                ),
+                warnings=plugins.warnings,
+            )
             prompts = load_prompt_templates(self._config_directory / "prompts")
 
             main_provider = LiteLLMProvider(

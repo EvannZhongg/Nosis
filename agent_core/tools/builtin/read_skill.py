@@ -89,7 +89,7 @@ class ReadSkillTool(Tool):
         except UnicodeDecodeError as error:
             raise ValueError("read_skill requires a UTF-8 text file") from error
         return {
-            "name": skill.name,
+            "name": skill.identifier,
             "path": path,
             "file_size_bytes": file_size_bytes,
             "content": content,

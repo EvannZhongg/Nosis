@@ -69,6 +69,7 @@ def initialize_config_directory(directory: Path) -> tuple[Path, ...]:
 
     skills_directory = directory / "skills"
     skills_directory.mkdir(exist_ok=True)
+    (directory / "plugins").mkdir(exist_ok=True)
     packaged_skills = defaults.joinpath("skills")
     for skill in sorted(packaged_skills.iterdir(), key=lambda item: item.name):
         if not skill.is_dir() or not skill.joinpath("SKILL.md").is_file():

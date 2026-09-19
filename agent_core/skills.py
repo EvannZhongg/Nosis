@@ -1,10 +1,42 @@
-"""Skill discovery and metadata exposed to Agent runtimes."""
+"""Skill sources, loading, and metadata exposed to Agent runtimes."""
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Protocol
 
 import yaml
+
+
+@dataclass(frozen=True)
+class SkillLocation:
+    """A source-owned ``SKILL.md`` location and its optional namespace."""
+
+    path: Path
+    namespace: str | None = None
+
+
+class SkillSource(Protocol):
+    """Locate skills without deciding how they are parsed or registered."""
+
+    def skill_locations(self) -> Iterable[SkillLocation]: ...
+
+
+@dataclass(frozen=True)
+class DirectorySkillSource:
+    """Standalone skills stored as direct children of one directory."""
+
+    directory: Path
+    namespace: str | None = None
+
+    def skill_locations(self) -> Iterable[SkillLocation]:
+        root = self.directory.expanduser().resolve()
+        if not root.is_dir():
+            return ()
+        return tuple(
+            SkillLocation(child / "SKILL.md", self.namespace)
+            for child in sorted(root.iterdir(), key=lambda path: path.name)
+            if child.is_dir() and (child / "SKILL.md").is_file()
+        )
 
 
 @dataclass(frozen=True)
@@ -14,10 +46,17 @@ class Skill:
     name: str
     description: str
     directory: Path
+    namespace: str | None = None
+
+    @property
+    def identifier(self) -> str:
+        if self.namespace is None:
+            return self.name
+        return f"{self.namespace}:{self.name}"
 
 
 class SkillRegistry:
-    """Registered skills keyed by their front-matter name."""
+    """Parsed skills keyed by their externally visible identifier."""
 
     def __init__(
         self,
@@ -27,44 +66,12 @@ class SkillRegistry:
         self._skills: dict[str, Skill] = {}
         self._warnings = tuple(warnings)
         for skill in skills:
-            if skill.name in self._skills:
+            identifier = skill.identifier
+            if identifier in self._skills:
                 raise ValueError(
-                    f"skill '{skill.name}' is already registered"
+                    f"skill '{identifier}' is already registered"
                 )
-            self._skills[skill.name] = skill
-
-    @classmethod
-    def discover(cls, directory: Path) -> "SkillRegistry":
-        """Load valid, uniquely named ``SKILL.md`` files from children."""
-        root = directory.expanduser().resolve()
-        if not root.is_dir():
-            return cls()
-
-        skills: dict[str, Skill] = {}
-        discovery_warnings = []
-        for child in sorted(root.iterdir(), key=lambda path: path.name):
-            skill_path = child / "SKILL.md"
-            if not child.is_dir() or not skill_path.is_file():
-                continue
-            try:
-                skill, registered = _load_skill(skill_path)
-            except (OSError, ValueError) as error:
-                discovery_warnings.append(
-                    f"Skipping skill at '{skill_path}': {error}"
-                )
-                continue
-            if not registered:
-                continue
-            existing = skills.get(skill.name)
-            if existing is not None:
-                discovery_warnings.append(
-                    f"Skipping duplicate skill '{skill.name}' at "
-                    f"'{skill.directory}'; already registered from "
-                    f"'{existing.directory}'"
-                )
-                continue
-            skills[skill.name] = skill
-        return cls(skills.values(), discovery_warnings)
+            self._skills[identifier] = skill
 
     def __bool__(self) -> bool:
         return bool(self._skills)
@@ -94,7 +101,7 @@ class SkillRegistry:
         if not self._skills:
             return ""
         entries = "\n".join(
-            f"- {skill.name}: {skill.description}"
+            f"- {skill.identifier}: {skill.description}"
             for skill in self._skills.values()
         )
         return (
@@ -106,7 +113,42 @@ class SkillRegistry:
         )
 
 
-def _load_skill(path: Path) -> tuple[Skill, bool]:
+class SkillLoader:
+    """Parse Skill locations from any source into one registry."""
+
+    def load(
+        self,
+        sources: Iterable[SkillSource],
+        *,
+        warnings: Iterable[str] = (),
+    ) -> SkillRegistry:
+        skills: dict[str, Skill] = {}
+        load_warnings = list(warnings)
+        for source in sources:
+            for location in source.skill_locations():
+                try:
+                    skill, registered = _load_skill(location)
+                except (OSError, ValueError) as error:
+                    load_warnings.append(
+                        f"Skipping skill at '{location.path}': {error}"
+                    )
+                    continue
+                if not registered:
+                    continue
+                existing = skills.get(skill.identifier)
+                if existing is not None:
+                    load_warnings.append(
+                        f"Skipping duplicate skill '{skill.identifier}' at "
+                        f"'{skill.directory}'; already registered from "
+                        f"'{existing.directory}'"
+                    )
+                    continue
+                skills[skill.identifier] = skill
+        return SkillRegistry(skills.values(), load_warnings)
+
+
+def _load_skill(location: SkillLocation) -> tuple[Skill, bool]:
+    path = location.path.expanduser().resolve()
     try:
         text = path.read_text(encoding="utf-8")
     except UnicodeDecodeError as error:
@@ -118,7 +160,8 @@ def _load_skill(path: Path) -> tuple[Skill, bool]:
         Skill(
             name=name,
             description=description,
-            directory=path.parent.resolve(),
+            directory=path.parent,
+            namespace=location.namespace,
         ),
         _registration_enabled(front_matter.get("metadata"), path),
     )

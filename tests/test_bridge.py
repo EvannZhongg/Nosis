@@ -1,5 +1,6 @@
 import io
 import json
+import sys
 import tempfile
 import threading
 import time
@@ -1379,6 +1380,170 @@ class BridgeSessionOpenTest(unittest.TestCase):
         self.assertIn("read_skill", names)
         self.assertIn("demo-skill: Does demo work.", prompt)
         self.assertNotIn("# Detailed instructions", prompt)
+
+    def test_registers_plugin_skills_with_the_plugin_namespace(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            plugin = root / "plugins" / "example"
+            skill = plugin / "skills" / "demo"
+            skill.mkdir(parents=True)
+            (plugin / "plugin.json").write_text(
+                json.dumps(
+                    {
+                        "name": "example",
+                        "components": {"skills": ["skills"]},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (skill / "SKILL.md").write_text(
+                "---\n"
+                "name: demo-skill\n"
+                "description: Plugin demo work.\n"
+                "---\n",
+                encoding="utf-8",
+            )
+            bridge, _ = make_bridge([], root)
+
+            bridge.open_session(open_session_message(root))
+            plane = bridge._ensure_execution_plane()
+
+            skills = plane.agent._execution_context.skills
+            assert skills is not None
+            definition = next(
+                item
+                for item in plane.agent._tools.definitions
+                if item.name == "read_skill"
+            )
+
+        self.assertEqual(skills.names, ("example:demo-skill",))
+        self.assertEqual(
+            definition.parameters["properties"]["name"]["enum"],
+            ["example:demo-skill"],
+        )
+
+    def test_registers_and_calls_plugin_mcp_tools_in_the_execution_plane(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            plugin = root / "plugins" / "example"
+            plugin.mkdir(parents=True)
+            (plugin / "plugin.json").write_text(
+                json.dumps(
+                    {
+                        "name": "example",
+                        "components": {"mcp": [".mcp.json"]},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (plugin / ".mcp.json").write_text(
+                json.dumps(
+                    {
+                        "fake": {
+                            "type": "stdio",
+                            "command": sys.executable,
+                            "args": [
+                                str(
+                                    Path(__file__).with_name(
+                                        "fake_mcp_server.py"
+                                    )
+                                )
+                            ],
+                            "tools": {
+                                "enabled": ["echo"],
+                                "approval": "never",
+                            },
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            bridge, stdout = make_bridge([], root)
+            bridge.open_session(
+                open_session_message(
+                    root,
+                    agent_config={
+                        "max_same_tool_calls": 5,
+                        "output_reserve_tokens": 100,
+                        "workspace_instruction_files": [
+                            "CLAUDE.md",
+                            "AGENTS.md",
+                        ],
+                        "main_agent": {
+                            "tools": {
+                                name: False for name in TOOL_NAMES
+                            }
+                        },
+                        "mcp": {"enabled": True, "servers": {}},
+                    },
+                )
+            )
+
+            try:
+                plane = bridge._ensure_execution_plane()
+                names = {
+                    item.name for item in plane.agent._tools.definitions
+                }
+                result = plane.agent._tools.execute(
+                    ToolCall(
+                        "plugin-mcp",
+                        "mcp__example_fake__echo",
+                        {"text": "hello"},
+                    )
+                )
+                statuses = [
+                    message
+                    for message in emitted(stdout)
+                    if message["type"] == "mcp_server_status"
+                ]
+            finally:
+                bridge._close_execution_plane()
+
+        self.assertIn("mcp__example_fake__echo", names)
+        self.assertIsNone(result.error)
+        self.assertEqual(
+            result.output["structured_content"],
+            {"echo": "hello"},
+        )
+        self.assertTrue(
+            any(
+                status["server"] == "example:fake"
+                and status["status"] == "ready"
+                for status in statuses
+            )
+        )
+
+    def test_global_mcp_switch_prevents_loading_plugin_mcp(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            plugin = root / "plugins" / "example"
+            plugin.mkdir(parents=True)
+            (plugin / "plugin.json").write_text(
+                json.dumps(
+                    {
+                        "name": "example",
+                        "components": {"mcp": ["missing.json"]},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            bridge, stdout = make_bridge([], root)
+            bridge.open_session(open_session_message(root))
+
+            try:
+                plane = bridge._ensure_execution_plane()
+            finally:
+                bridge._close_execution_plane()
+
+        self.assertEqual(plane.mcp.tool_names, ())
+        self.assertFalse(
+            any(
+                message["type"] == "mcp_server_status"
+                for message in emitted(stdout)
+            )
+        )
 
     def test_uses_prompt_templates_from_the_config_directory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

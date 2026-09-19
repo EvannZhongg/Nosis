@@ -12,8 +12,9 @@ _INVALID_TOOL_NAME = re.compile(r"[^A-Za-z0-9_-]")
 
 
 def qualified_tool_name(server_name: str, tool_name: str) -> str:
+    server_name = _INVALID_TOOL_NAME.sub("_", server_name)
     normalized = _INVALID_TOOL_NAME.sub("_", tool_name)
-    if not normalized:
+    if not server_name or not normalized:
         raise ValueError(
             f"MCP server '{server_name}' returned an empty tool name"
         )

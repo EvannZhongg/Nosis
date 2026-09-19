@@ -3,9 +3,12 @@ import unittest
 from pathlib import Path
 
 from agent_core import (
+    DirectorySkillSource,
     ReadSkillTool,
     Session,
     Skill,
+    SkillLoader,
+    SkillLocation,
     SkillRegistry,
     ToolExecutionContext,
     Workspace,
@@ -38,7 +41,35 @@ def write_skill(
     return skill_path
 
 
+def load_skills(root: Path) -> SkillRegistry:
+    return SkillLoader().load((DirectorySkillSource(root),))
+
+
 class SkillRegistryTest(unittest.TestCase):
+    def test_loader_unifies_sources_and_preserves_namespaces(self) -> None:
+        class StaticSource:
+            def __init__(self, *locations: SkillLocation) -> None:
+                self.locations = locations
+
+            def skill_locations(self):
+                return self.locations
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            standalone = write_skill(root, "standalone", name="shared")
+            plugin = write_skill(root, "plugin", name="shared")
+
+            registry = SkillLoader().load(
+                (
+                    StaticSource(SkillLocation(standalone)),
+                    StaticSource(SkillLocation(plugin, "example")),
+                )
+            )
+
+        self.assertEqual(registry.names, ("shared", "example:shared"))
+        self.assertIsNone(registry.get("shared").namespace)
+        self.assertEqual(registry.get("example:shared").namespace, "example")
+
     def test_discovers_skill_metadata_without_loading_body_into_prompt(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -50,7 +81,7 @@ class SkillRegistryTest(unittest.TestCase):
                 body="SECRET DETAILED INSTRUCTIONS",
             )
 
-            registry = SkillRegistry.discover(root)
+            registry = load_skills(root)
             prompt = registry.prompt_section()
 
         self.assertEqual(registry.names, ("Demo Skill",))
@@ -67,14 +98,14 @@ class SkillRegistryTest(unittest.TestCase):
                 metadata="metadata: {nosis: {register: false}}\n",
             )
 
-            registry = SkillRegistry.discover(root)
+            registry = load_skills(root)
 
         self.assertFalse(registry)
         self.assertEqual(registry.names, ())
 
     def test_missing_directory_produces_an_empty_registry(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            registry = SkillRegistry.discover(Path(directory) / "missing")
+            registry = load_skills(Path(directory) / "missing")
 
         self.assertFalse(registry)
 
@@ -88,7 +119,7 @@ class SkillRegistryTest(unittest.TestCase):
                 root, "b-second", name="same", description="Second."
             )
 
-            registry = SkillRegistry.discover(root)
+            registry = load_skills(root)
 
         self.assertEqual(registry.names, ("same",))
         self.assertEqual(registry.get("same").directory, first.parent.resolve())
@@ -129,7 +160,7 @@ class SkillRegistryTest(unittest.TestCase):
                 )
             write_skill(root, "valid", name="valid-skill")
 
-            registry = SkillRegistry.discover(root)
+            registry = load_skills(root)
 
         self.assertEqual(registry.names, ("valid-skill",))
         self.assertEqual(len(registry.warnings), len(invalid_contents))
@@ -148,7 +179,7 @@ class SkillRegistryTest(unittest.TestCase):
             prompt = render_system_prompt(
                 "System for {{workspace}}",
                 Workspace(root),
-                skills=SkillRegistry.discover(skills),
+                skills=load_skills(skills),
             )
 
         self.assertIn("## Available Skills", prompt)
@@ -171,7 +202,7 @@ class ReadSkillToolTest(unittest.TestCase):
             reference = skill_path.parent / "references" / "details.md"
             reference.parent.mkdir()
             reference.write_text("details", encoding="utf-8")
-            registry = SkillRegistry.discover(skills)
+            registry = load_skills(skills)
             tool = ReadSkillTool()
             context = self.context(root, registry)
 
@@ -193,7 +224,7 @@ class ReadSkillToolTest(unittest.TestCase):
                 "demo",
                 body="first\nsecond\nthird\nfourth",
             )
-            context = self.context(root, SkillRegistry.discover(skills))
+            context = self.context(root, load_skills(skills))
 
             result = ReadSkillTool().execute(
                 {
@@ -214,7 +245,7 @@ class ReadSkillToolTest(unittest.TestCase):
             root = Path(directory)
             skills = root / "skills"
             write_skill(skills, "demo")
-            context = self.context(root, SkillRegistry.discover(skills))
+            context = self.context(root, load_skills(skills))
 
             for arguments in (
                 {"name": "demo-skill", "offset": 0},
@@ -232,7 +263,7 @@ class ReadSkillToolTest(unittest.TestCase):
             skills = root / "skills"
             write_skill(skills, "demo")
             (skills / "outside.txt").write_text("outside", encoding="utf-8")
-            context = self.context(root, SkillRegistry.discover(skills))
+            context = self.context(root, load_skills(skills))
 
             with self.assertRaisesRegex(ValueError, "inside the skill"):
                 ReadSkillTool().execute(
@@ -245,7 +276,7 @@ class ReadSkillToolTest(unittest.TestCase):
             root = Path(directory)
             skills = root / "skills"
             skill_path = write_skill(skills, "demo")
-            context = self.context(root, SkillRegistry.discover(skills))
+            context = self.context(root, load_skills(skills))
 
             with self.assertRaisesRegex(ValueError, "must be relative"):
                 ReadSkillTool().execute(
@@ -264,7 +295,7 @@ class ReadSkillToolTest(unittest.TestCase):
 
             skills = root / "skills"
             write_skill(skills, "demo")
-            populated = self.context(root, SkillRegistry.discover(skills))
+            populated = self.context(root, load_skills(skills))
             definitions = builtin_catalog().select(
                 ("read_skill",), populated
             ).definitions

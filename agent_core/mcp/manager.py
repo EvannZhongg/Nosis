@@ -63,7 +63,7 @@ class McpClientManager:
         self._tools: tuple[Tool, ...] = ()
         self._tool_origins: dict[str, tuple[str, str]] = {}
         self._servers = {
-            server.name: server
+            server.identifier: server
             for server in config.servers
             if config.enabled and server.enabled
         }
@@ -177,7 +177,7 @@ class McpClientManager:
         try:
             async with AsyncExitStack() as stack:
                 for config in self._servers.values():
-                    self._emit(config.name, "connecting")
+                    self._emit(config.identifier, "connecting")
 
                 # Servers start concurrently: the slowest budget, not the
                 # sum of them, decides how long startup takes. Each server
@@ -203,13 +203,13 @@ class McpClientManager:
                 ):
                     if not isinstance(outcome, tuple):
                         self._emit(
-                            config.name,
+                            config.identifier,
                             "unavailable",
                             error=_exception_message(outcome),
                         )
                         continue
                     session, server_tools = outcome
-                    sessions[config.name] = session
+                    sessions[config.identifier] = session
                     for tool in server_tools:
                         name = tool.name
                         if name in names:
@@ -218,11 +218,15 @@ class McpClientManager:
                             )
                         names.add(name)
                         self._tool_origins[name] = (
-                            config.name,
+                            config.identifier,
                             tool.remote_name,
                         )
                         tools.append(tool)
-                    self._emit(config.name, "ready", len(server_tools))
+                    self._emit(
+                        config.identifier,
+                        "ready",
+                        len(server_tools),
+                    )
                 self._tools = tuple(tools)
                 self._ready.set()
 
@@ -296,7 +300,7 @@ class McpClientManager:
                     continue
                 discovered.append(
                     McpTool(
-                        config.name,
+                        config.identifier,
                         remote.name,
                         remote.description,
                         remote.input_schema,

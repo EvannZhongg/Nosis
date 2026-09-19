@@ -48,9 +48,9 @@ Runtime 由 [`interfaces/bridge`](../interfaces/bridge/README.md) 统一装配�
 
 ### MCP 与 Skills
 
-MCP 在 `agent_config.json` 的 `mcp.servers` 中配置，支持 `stdio` 和 `streamable_http`。远程 Tool 可分别限制是否暴露以及是否需要人工确认。
+MCP 在 `agent_config.json` 的 `mcp.servers` 中配置，支持 `stdio` 和 `streamable_http`；`mcp.enabled` 是 standalone 与 Plugin MCP 共用的全局开关。Plugin 可声明 `.mcp.json` server map，由 Bridge 加 namespace 后合并进同一个 `McpClientManager`。远程 Tool 可分别限制是否暴露以及是否需要人工确认。
 
-Skills 位于 `~/.nosis/skills/<name>/SKILL.md`。首次启动会安装内置 Skill；Runtime 只在需要时读取完整 Skill 内容。
+Skill 通过 `SkillSource` 交给统一的 Loader 与 Registry，Core 不依赖其目录来源。standalone Skill 位于 `~/.nosis/skills/<name>/SKILL.md`；Plugin 也可提供标准 `SKILL.md`，并由 Bridge 以带 namespace 的 source 接入。Runtime 只在需要时读取完整 Skill 内容。
 
 ### Workspace Instructions
 
