@@ -62,12 +62,12 @@ export function applyMessage(
         items,
         permissionPreset: message.permission_preset,
         contextWindow: message.context_window ?? undefined,
-        feedback: message.skill_warnings?.length
+        feedback: message.runtime_warnings?.length
           ? {
               kind: "alert",
-              id: "skill-warnings",
+              id: "runtime-warnings",
               level: "warning",
-              text: message.skill_warnings.join("\n"),
+              text: message.runtime_warnings.join("\n"),
             }
           : undefined,
       };

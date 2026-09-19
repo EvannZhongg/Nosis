@@ -289,7 +289,7 @@ class ProtocolTest(unittest.TestCase):
                 "context_window": {"input_tokens": 120},
                 "event_sequence": 12,
                 "jobs": [{"job_id": "j1", "kind": "shell", "status": "running"}],
-                "skill_warnings": [],
+                "runtime_warnings": [],
                 "plan": {
                     "plan_id": "plan-1",
                     "goal": "Ship plan support",
@@ -1538,12 +1538,57 @@ class BridgeSessionOpenTest(unittest.TestCase):
                 bridge._close_execution_plane()
 
         self.assertEqual(plane.mcp.tool_names, ())
+        self.assertEqual(plane.runtime_warnings, ())
         self.assertFalse(
             any(
                 message["type"] == "mcp_server_status"
                 for message in emitted(stdout)
             )
         )
+
+    def test_missing_plugin_mcp_warns_without_failing_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            plugin = root / "plugins" / "example"
+            plugin.mkdir(parents=True)
+            (plugin / "plugin.json").write_text(
+                json.dumps(
+                    {
+                        "name": "example",
+                        "components": {"mcp": ["missing.json"]},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            bridge, _ = make_bridge([], root)
+            bridge.open_session(
+                open_session_message(
+                    root,
+                    agent_config={
+                        "max_same_tool_calls": 5,
+                        "output_reserve_tokens": 100,
+                        "workspace_instruction_files": [
+                            "CLAUDE.md",
+                            "AGENTS.md",
+                        ],
+                        "main_agent": {
+                            "tools": {
+                                name: False for name in TOOL_NAMES
+                            }
+                        },
+                        "mcp": {"enabled": True, "servers": {}},
+                    },
+                )
+            )
+
+            try:
+                plane = bridge._ensure_execution_plane()
+            finally:
+                bridge._close_execution_plane()
+
+        self.assertEqual(plane.mcp.tool_names, ())
+        self.assertEqual(len(plane.runtime_warnings), 1)
+        self.assertIn("Skipping MCP component", plane.runtime_warnings[0])
 
     def test_uses_prompt_templates_from_the_config_directory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1816,8 +1861,8 @@ class BridgeSessionOpenTest(unittest.TestCase):
 
         self.assertEqual(runtime_state["type"], "runtime_state")
         self.assertEqual(runtime_state["phase"], "starting")
-        self.assertEqual(len(plane.skill_warnings), 1)
-        self.assertIn("Skipping skill at", plane.skill_warnings[0])
+        self.assertEqual(len(plane.runtime_warnings), 1)
+        self.assertIn("Skipping skill at", plane.runtime_warnings[0])
         self.assertIn("read_skill", names)
 
 

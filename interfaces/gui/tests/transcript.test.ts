@@ -140,7 +140,7 @@ describe("applyMessage", () => {
       },
     ]);
   });
-  it("shows skill discovery warnings from runtime initialization", () => {
+  it("shows warnings from runtime initialization", () => {
     const { feedback } = applyMessage([], {
       type: "runtime_state",
       phase: "running",
@@ -158,13 +158,13 @@ describe("applyMessage", () => {
         compression_threshold: 720,
         compression_count: 0,
       },
-      skill_warnings: ["Skipping invalid skill."],
+      runtime_warnings: ["Skipping invalid skill."],
       plan: null,
     });
 
     expect(feedback).toEqual({
       kind: "alert",
-      id: "skill-warnings",
+      id: "runtime-warnings",
       level: "warning",
       text: "Skipping invalid skill.",
     });

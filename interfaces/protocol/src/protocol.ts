@@ -142,7 +142,7 @@ export type Incoming = (
         tool_name?: string;
       } | null;
       question: UserQuestion | null;
-      skill_warnings?: string[];
+      runtime_warnings?: string[];
       plan: PlanSnapshot | null;
     }
   | { type: 'attachment_replaced'; phase: RuntimePhase }

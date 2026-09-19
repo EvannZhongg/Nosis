@@ -120,7 +120,7 @@ def runtime_state_message(
     context_window: dict[str, int] | None,
     jobs: list[dict[str, object]],
     event_sequence: int | None = None,
-    skill_warnings: tuple[str, ...] = (),
+    runtime_warnings: tuple[str, ...] = (),
     plan: PlanSnapshot | dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Describe the execution plane independently from Session readiness.
@@ -138,7 +138,7 @@ def runtime_state_message(
         "permission_preset": permission_preset,
         "context_window": context_window,
         "jobs": jobs,
-        "skill_warnings": list(skill_warnings),
+        "runtime_warnings": list(runtime_warnings),
         "plan": _plan_payload(plan),
     }
     if event_sequence is not None:

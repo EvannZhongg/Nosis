@@ -207,7 +207,7 @@ class ActiveSession:
         self.permission_preset = "ask_for_approval"
         self.context_window: dict[str, object] | None = None
         self.plan: dict[str, object] | None = None
-        self.skill_warnings: tuple[str, ...] = ()
+        self.runtime_warnings: tuple[str, ...] = ()
         self.jobs: dict[str, dict[str, object]] = {}
         self.done = False
         self._closed = False
@@ -260,7 +260,7 @@ class ActiveSession:
                         permission_preset=self.permission_preset,
                         context_window=self.context_window,
                         jobs=list(self.jobs.values()),
-                        skill_warnings=self.skill_warnings,
+                        runtime_warnings=self.runtime_warnings,
                         plan=self.plan,
                         # The page holds everything the stream emitted, so
                         # its cursor is the newest event; a pending fatal is
@@ -430,9 +430,9 @@ class ActiveSession:
                         for job in jobs
                         if isinstance(job, dict) and isinstance(job.get("job_id"), str)
                     } if isinstance(jobs, list) else {}
-                    warnings = message.get("skill_warnings")
+                    warnings = message.get("runtime_warnings")
                     if isinstance(warnings, list) and warnings:
-                        self.skill_warnings = tuple(
+                        self.runtime_warnings = tuple(
                             warning for warning in warnings
                             if isinstance(warning, str)
                         )
@@ -468,7 +468,7 @@ class ActiveSession:
                     self.approval = None
                     self.question = None
                     self.jobs.clear()
-                    self.skill_warnings = ()
+                    self.runtime_warnings = ()
                 elif message_type == "fatal":
                     self.phase = "failed"
                     self.turn_id = None

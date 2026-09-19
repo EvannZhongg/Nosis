@@ -171,15 +171,15 @@ describe('reducer', () => {
     expect(state.entries[0]).toMatchObject({ kind: 'notice', level: 'info' });
   });
 
-  it('shows skill discovery warnings without blocking startup', () => {
+  it('shows runtime warnings without blocking startup', () => {
     const state = reducer(initialState, {
       type: 'message',
-      message: { ...RUNTIME_READY, skill_warnings: ['Skipping invalid skill.'] },
+      message: { ...RUNTIME_READY, runtime_warnings: ['Skipping invalid skill.'] },
     });
     expect(state.status).toBe('idle');
     expect(state.entries[0]).toMatchObject({
       kind: 'notice',
-      level: 'info',
+      level: 'warning',
       text: 'Skipping invalid skill.',
     });
   });

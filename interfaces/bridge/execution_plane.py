@@ -26,7 +26,7 @@ class ExecutionPlane:
     jobs: JobManager
     mcp: McpClientManager
     context_window: ContextWindow
-    skill_warnings: tuple[str, ...] = ()
+    runtime_warnings: tuple[str, ...] = ()
 
     def matches(
         self,

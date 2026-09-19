@@ -574,8 +574,10 @@ class Bridge:
         plugins = PluginManager.discover(
             self._config_directory / "plugins"
         )
-        plugin_mcp_servers = (
-            plugins.mcp_servers() if agent_config.mcp.enabled else ()
+        plugin_mcp_servers, mcp_warnings = (
+            plugins.load_mcp_servers()
+            if agent_config.mcp.enabled
+            else ((), ())
         )
         mcp_config = McpConfig(
             enabled=agent_config.mcp.enabled,
@@ -594,8 +596,7 @@ class Bridge:
                 (
                     DirectorySkillSource(self._config_directory / "skills"),
                     *plugins.skill_sources(),
-                ),
-                warnings=plugins.warnings,
+                )
             )
             prompts = load_prompt_templates(self._config_directory / "prompts")
 
@@ -697,7 +698,11 @@ class Bridge:
                 jobs=jobs,
                 mcp=mcp,
                 context_window=agent.context_window(),
-                skill_warnings=skills.warnings,
+                runtime_warnings=(
+                    *plugins.warnings,
+                    *mcp_warnings,
+                    *skills.warnings,
+                ),
             )
         except BaseException:
             try:
@@ -721,7 +726,7 @@ class Bridge:
         self,
         phase: str,
         *,
-        skill_warnings: tuple[str, ...] = (),
+        runtime_warnings: tuple[str, ...] = (),
     ) -> None:
         plane = self._execution_plane
         jobs = (
@@ -750,7 +755,7 @@ class Bridge:
                 else None
             ),
             jobs=jobs,
-            skill_warnings=skill_warnings,
+            runtime_warnings=runtime_warnings,
             plan=self._plan.snapshot if self._plan is not None else None,
         ))
 
@@ -879,9 +884,9 @@ class Bridge:
 
         self._emit_runtime_state(
             "running",
-            skill_warnings=plane.skill_warnings,
+            runtime_warnings=plane.runtime_warnings,
         )
-        plane.skill_warnings = ()
+        plane.runtime_warnings = ()
         control = TurnControl()
         with self._router_lock:
             self._turn_control = control

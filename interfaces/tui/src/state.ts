@@ -36,7 +36,7 @@ export type Entry =
       state: 'running' | 'ok' | 'error';
       error?: ProtocolError;
     }
-  | { kind: 'notice'; id: string; level: 'info' | 'error'; text: string };
+  | { kind: 'notice'; id: string; level: 'info' | 'warning' | 'error'; text: string };
 
 export type ApprovalChoice = 'deny' | 'allow';
 
@@ -392,10 +392,10 @@ function reduceAction(state: State, action: Action): State {
 function applyMessage(state: State, message: Incoming): State {
   switch (message.type) {
     case 'runtime_state': {
-      const startupNotices: Entry[] = (message.skill_warnings ?? []).map((text) => ({
+      const startupNotices: Entry[] = (message.runtime_warnings ?? []).map((text) => ({
         kind: 'notice',
         id: nextId('notice'),
-        level: 'info',
+        level: 'warning',
         text,
       }));
       const status: Status = message.phase === 'starting'

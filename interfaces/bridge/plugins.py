@@ -164,6 +164,15 @@ class PluginManager:
                 )
                 continue
             plugins[plugin.name] = plugin
+        for plugin in plugins.values():
+            if not plugin.enabled:
+                continue
+            for path in plugin.components.skills:
+                if not path.is_dir():
+                    warnings.append(
+                        f"Skipping Skill component for plugin "
+                        f"'{plugin.name}' at '{path}': directory does not exist"
+                    )
         return cls(plugins.values(), warnings)
 
     @property
@@ -181,26 +190,24 @@ class PluginManager:
     def skill_sources(self) -> tuple[PluginSkillSource, ...]:
         return tuple(PluginSkillSource(plugin) for plugin in self.enabled_plugins)
 
-    def mcp_servers(self) -> tuple[McpServerConfig, ...]:
+    def load_mcp_servers(
+        self,
+    ) -> tuple[tuple[McpServerConfig, ...], tuple[str, ...]]:
         """Load enabled MCP component references through the MCP subsystem."""
         servers = []
+        warnings = []
         for plugin in self.enabled_plugins:
             for path in plugin.components.mcp:
                 try:
                     with path.open(encoding="utf-8") as file:
                         data = json.load(file)
-                except json.JSONDecodeError as error:
-                    raise ValueError(
-                        f"invalid MCP JSON for plugin '{plugin.name}' at "
-                        f"'{path}': {error}"
-                    ) from error
-                try:
                     loaded = load_mcp_server_map(data)
-                except ValueError as error:
-                    raise ValueError(
-                        f"invalid MCP config for plugin '{plugin.name}' at "
-                        f"'{path}': {error}"
-                    ) from error
+                except (OSError, ValueError) as error:
+                    warnings.append(
+                        f"Skipping MCP component for plugin '{plugin.name}' "
+                        f"at '{path}': {error}"
+                    )
+                    continue
                 servers.extend(
                     namespace_mcp_servers(
                         loaded,
@@ -208,7 +215,7 @@ class PluginManager:
                         base_directory=plugin.root,
                     )
                 )
-        return tuple(servers)
+        return tuple(servers), tuple(warnings)
 
 
 def _component_paths(

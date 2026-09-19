@@ -559,12 +559,12 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
           setPermissionPreset(message.permission_preset);
           setPlan(message.plan ?? null);
           onContextWindowChange(message.context_window);
-          if (message.skill_warnings?.length) {
+          if (message.runtime_warnings?.length) {
             showAlert({
               kind: "alert",
-              id: "skill-warnings",
+              id: "runtime-warnings",
               level: "warning",
-              text: message.skill_warnings.join("\n"),
+              text: message.runtime_warnings.join("\n"),
             });
           }
           return;

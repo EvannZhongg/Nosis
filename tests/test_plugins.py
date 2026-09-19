@@ -81,6 +81,61 @@ class PluginLoaderTest(unittest.TestCase):
 
 
 class PluginManagerTest(unittest.TestCase):
+    def test_warns_when_a_declared_skill_source_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_manifest(
+                root,
+                "missing-skills",
+                components={"skills": ["skills"]},
+            )
+
+            manager = PluginManager.discover(root)
+            skills = SkillLoader().load(
+                manager.skill_sources(),
+                warnings=manager.warnings,
+            )
+
+        self.assertEqual(skills.names, ())
+        self.assertEqual(len(skills.warnings), 1)
+        self.assertIn("Skipping Skill component", skills.warnings[0])
+        self.assertIn("directory does not exist", skills.warnings[0])
+
+    def test_warns_and_skips_missing_or_invalid_mcp_components(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            missing = write_manifest(
+                root,
+                "missing-mcp",
+                components={"mcp": ["missing.json"]},
+            )
+            invalid = write_manifest(
+                root,
+                "invalid-mcp",
+                components={"mcp": [".mcp.json"]},
+            )
+            (invalid.parent / ".mcp.json").write_text(
+                "not json",
+                encoding="utf-8",
+            )
+
+            servers, warnings = PluginManager.discover(root).load_mcp_servers()
+
+        self.assertEqual(servers, ())
+        self.assertEqual(len(warnings), 2)
+        self.assertTrue(
+            any(
+                "Skipping MCP component for plugin 'missing-mcp'" in item
+                for item in warnings
+            )
+        )
+        self.assertTrue(
+            any(
+                "Skipping MCP component for plugin 'invalid-mcp'" in item
+                for item in warnings
+            )
+        )
+
     def test_loads_enabled_mcp_components_with_plugin_namespace(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -111,7 +166,7 @@ class PluginManagerTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            servers = PluginManager.discover(root).mcp_servers()
+            servers, warnings = PluginManager.discover(root).load_mcp_servers()
 
         self.assertEqual(len(servers), 1)
         self.assertEqual(servers[0].identifier, "enabled:demo")
@@ -119,6 +174,7 @@ class PluginManagerTest(unittest.TestCase):
             servers[0].cwd,
             str(enabled.parent.resolve()),
         )
+        self.assertEqual(warnings, ())
 
     def test_discovers_plugins_and_registers_only_enabled_skill_sources(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
