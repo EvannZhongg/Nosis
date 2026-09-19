@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 from agent_core import SkillLoader
+from agent_core.tools import ROLE_TOOL_NAMES
 from interfaces.bridge.plugins import PluginLoader, PluginManager
 
 
@@ -30,6 +31,27 @@ def write_skill(root: Path, name: str = "shared") -> None:
     )
 
 
+def write_agent(
+    root: Path,
+    name: str = "reviewer",
+    *,
+    fields: str = "",
+    body: str = "Review the requested code.",
+) -> Path:
+    agent = root / "agents" / f"{name}.md"
+    agent.parent.mkdir(parents=True, exist_ok=True)
+    agent.write_text(
+        "---\n"
+        f"name: {name}\n"
+        f"description: Review code as {name}.\n"
+        f"{fields}"
+        "---\n\n"
+        f"{body}\n",
+        encoding="utf-8",
+    )
+    return agent
+
+
 class PluginLoaderTest(unittest.TestCase):
     def test_loads_declarative_metadata_and_component_references(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -44,7 +66,6 @@ class PluginLoaderTest(unittest.TestCase):
                 components={
                     "skills": ["skills"],
                     "mcp": ["mcp/server.json"],
-                    "tools": ["tools/tool.py"],
                     "agents": ["agents/researcher.json"],
                     "hooks": ["hooks/on_start.py"],
                 },
@@ -58,7 +79,6 @@ class PluginLoaderTest(unittest.TestCase):
         self.assertEqual(plugin.capabilities, ("skills", "mcp"))
         self.assertEqual(plugin.components.skills, (plugin.root / "skills",))
         self.assertEqual(plugin.components.mcp, (plugin.root / "mcp/server.json",))
-        self.assertEqual(plugin.components.tools, (plugin.root / "tools/tool.py",))
         self.assertEqual(
             plugin.components.agents,
             (plugin.root / "agents/researcher.json",),
@@ -79,8 +99,81 @@ class PluginLoaderTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "stay inside"):
                 PluginLoader().load(manifest)
 
-
 class PluginManagerTest(unittest.TestCase):
+    def test_loads_namespaced_agents_with_body_and_default_tools(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = write_manifest(
+                root,
+                "review-kit",
+                components={"agents": ["agents/reviewer.md"]},
+            )
+            source = write_agent(
+                manifest.parent,
+                fields="model: inherit\ncolor: green\n",
+                body="Inspect the diff and report findings.",
+            )
+
+            agents, warnings = PluginManager.discover(root).load_agents()
+
+        self.assertEqual(warnings, ())
+        self.assertEqual(len(agents), 1)
+        self.assertEqual(agents[0].name, "review-kit:reviewer")
+        self.assertEqual(agents[0].description, "Review code as reviewer.")
+        self.assertEqual(
+            agents[0].instructions,
+            "Inspect the diff and report findings.",
+        )
+        self.assertIsNone(agents[0].tools)
+        self.assertEqual(agents[0].model, "inherit")
+        self.assertEqual(agents[0].source, source.resolve())
+
+    def test_loads_explicit_agent_tools_in_canonical_order(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = write_manifest(
+                root,
+                "review-kit",
+                components={"agents": ["agents/reviewer.md"]},
+            )
+            write_agent(
+                manifest.parent,
+                fields=(
+                    "tools:\n"
+                    "  - shell\n"
+                    "  - read_file\n"
+                    "  - search_files\n"
+                ),
+            )
+
+            agents, warnings = PluginManager.discover(root).load_agents()
+
+        self.assertEqual(warnings, ())
+        self.assertEqual(
+            agents[0].tools,
+            ("read_file", "search_files", "shell"),
+        )
+
+    def test_warns_and_skips_an_agent_with_an_unknown_tool(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = write_manifest(
+                root,
+                "review-kit",
+                components={"agents": ["agents/reviewer.md"]},
+            )
+            write_agent(
+                manifest.parent,
+                fields="tools:\n  - subagent\n",
+            )
+
+            agents, warnings = PluginManager.discover(root).load_agents()
+
+        self.assertEqual(agents, ())
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("unknown agent tool(s): subagent", warnings[0])
+        self.assertNotIn("subagent", ROLE_TOOL_NAMES)
+
     def test_warns_when_a_declared_skill_source_is_missing(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

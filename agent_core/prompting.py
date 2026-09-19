@@ -33,6 +33,8 @@ def render_subagent_prompt(
         .replace("{{role_description}}", role.description)
         .strip()
     )
+    if role.instructions:
+        prompt = f"{prompt}\n\n## Role Instructions\n{role.instructions.strip()}"
     return _with_runtime_context(prompt, instructions, skills)
 
 

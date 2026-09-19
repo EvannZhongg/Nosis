@@ -6,30 +6,36 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
 
+import yaml
+
 from agent_core import (
     McpServerConfig,
     SkillLocation,
     load_mcp_server_map,
     namespace_mcp_servers,
 )
+from agent_core.tools import ROLE_TOOL_NAMES
 
 
 _PLUGIN_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
-_COMPONENT_KINDS = ("skills", "mcp", "tools", "agents", "hooks")
+_COMPONENT_KINDS = ("skills", "mcp", "agents", "hooks")
+_AGENT_FRONTMATTER = re.compile(
+    r"\A---[ \t]*\r?\n(?P<metadata>.*?)\r?\n---[ \t]*(?:\r?\n|\Z)",
+    re.DOTALL,
+)
 
 
 @dataclass(frozen=True)
 class PluginComponents:
     """References declared by a plugin package.
 
-    Skill directories and MCP configurations are registered today. The
-    remaining references are retained as subsystem-specific extension points
-    and have no runtime behavior until their owning subsystem has an adapter.
+    Skill directories, MCP configurations, and Agent definitions are routed
+    to their existing Runtime subsystems. Hook references remain an extension
+    point without Runtime behavior.
     """
 
     skills: tuple[Path, ...] = ()
     mcp: tuple[Path, ...] = ()
-    tools: tuple[Path, ...] = ()
     agents: tuple[Path, ...] = ()
     hooks: tuple[Path, ...] = ()
 
@@ -46,6 +52,18 @@ class PluginDescriptor:
     dependencies: tuple[str, ...] = ()
     capabilities: tuple[str, ...] = ()
     components: PluginComponents = field(default_factory=PluginComponents)
+
+
+@dataclass(frozen=True)
+class PluginAgent:
+    """A plugin-provided sub-agent role before Runtime assembly."""
+
+    name: str
+    description: str
+    instructions: str
+    tools: tuple[str, ...] | None
+    model: str | None
+    source: Path
 
 
 class PluginLoader:
@@ -92,7 +110,6 @@ class PluginLoader:
         components = PluginComponents(
             skills=_component_paths(component_data, "skills", root),
             mcp=_component_paths(component_data, "mcp", root),
-            tools=_component_paths(component_data, "tools", root),
             agents=_component_paths(component_data, "agents", root),
             hooks=_component_paths(component_data, "hooks", root),
         )
@@ -216,6 +233,93 @@ class PluginManager:
                     )
                 )
         return tuple(servers), tuple(warnings)
+
+    def load_agents(
+        self,
+    ) -> tuple[tuple[PluginAgent, ...], tuple[str, ...]]:
+        """Load enabled Agent components as namespaced sub-agent roles."""
+        agents: dict[str, PluginAgent] = {}
+        warnings = []
+        for plugin in self.enabled_plugins:
+            for path in plugin.components.agents:
+                try:
+                    agent = _load_plugin_agent(path, plugin.name)
+                except (OSError, ValueError, yaml.YAMLError) as error:
+                    warnings.append(
+                        f"Skipping Agent component for plugin '{plugin.name}' "
+                        f"at '{path}': {error}"
+                    )
+                    continue
+                existing = agents.get(agent.name)
+                if existing is not None:
+                    warnings.append(
+                        f"Skipping duplicate Agent '{agent.name}' at "
+                        f"'{path}'; already loaded from '{existing.source}'"
+                    )
+                    continue
+                agents[agent.name] = agent
+        return tuple(agents.values()), tuple(warnings)
+
+
+def _load_plugin_agent(path: Path, plugin_name: str) -> PluginAgent:
+    content = path.read_text(encoding="utf-8")
+    match = _AGENT_FRONTMATTER.match(content)
+    if match is None:
+        raise ValueError("agent file must start with YAML frontmatter")
+    metadata = yaml.safe_load(match.group("metadata"))
+    if not isinstance(metadata, dict):
+        raise ValueError("agent frontmatter must be an object")
+
+    name = _agent_string(metadata, "name")
+    if not _PLUGIN_NAME.fullmatch(name):
+        raise ValueError(
+            "agent name may contain only letters, numbers, '.', '_', and '-', "
+            "and must start with a letter or number"
+        )
+    description = _agent_string(metadata, "description")
+    instructions = content[match.end() :].strip()
+    if not instructions:
+        raise ValueError("agent Markdown body must not be empty")
+    model = metadata.get("model")
+    if model is not None:
+        if not isinstance(model, str) or not model.strip():
+            raise ValueError("agent field 'model' must be a non-empty string")
+        model = model.strip()
+    return PluginAgent(
+        name=f"{plugin_name}:{name}",
+        description=description,
+        instructions=instructions,
+        tools=_agent_tools(metadata),
+        model=model,
+        source=path,
+    )
+
+
+def _agent_string(metadata: dict[object, object], field: str) -> str:
+    value = metadata.get(field)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"agent field '{field}' must be a non-empty string")
+    return value.strip()
+
+
+def _agent_tools(
+    metadata: dict[object, object],
+) -> tuple[str, ...] | None:
+    if "tools" not in metadata:
+        return None
+    value = metadata["tools"]
+    if not isinstance(value, list) or any(
+        not isinstance(item, str) or not item.strip() for item in value
+    ):
+        raise ValueError("agent field 'tools' must be an array of tool names")
+    requested = tuple(item.strip() for item in value)
+    if len(set(requested)) != len(requested):
+        raise ValueError("agent field 'tools' cannot contain duplicates")
+    unknown = set(requested) - set(ROLE_TOOL_NAMES)
+    if unknown:
+        names = ", ".join(sorted(unknown))
+        raise ValueError(f"unknown agent tool(s): {names}")
+    return tuple(name for name in ROLE_TOOL_NAMES if name in requested)
 
 
 def _component_paths(

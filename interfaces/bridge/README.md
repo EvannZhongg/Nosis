@@ -22,7 +22,7 @@ Agent Loop、Tool 执行和上下文管理仍属于 `agent_core`，前端与 Bri
 
 ## Plugin discovery
 
-Bridge 从 `~/.nosis/plugins/<plugin-name>/plugin.json` 发现 Plugin。Plugin 是能力组合与分发单元，不是 Runtime 或执行接口；启用后，Bridge 将 Skill 与 MCP 组件引用分别交给已有子系统。Tool、Agent 与 Hook 引用为对应子系统后续适配保留：
+Bridge 从 `~/.nosis/plugins/<plugin-name>/plugin.json` 发现 Plugin。Plugin 是能力组合与分发单元，不是 Runtime 或执行接口；启用后，Bridge 将 Skill、MCP 与 Agent 组件引用分别交给已有子系统。Hook 引用为对应子系统后续适配保留：
 
 ```json
 {
@@ -35,7 +35,6 @@ Bridge 从 `~/.nosis/plugins/<plugin-name>/plugin.json` 发现 Plugin。Plugin �
   "components": {
     "skills": ["skills"],
     "mcp": [],
-    "tools": [],
     "agents": [],
     "hooks": []
   }
@@ -43,6 +42,10 @@ Bridge 从 `~/.nosis/plugins/<plugin-name>/plugin.json` 发现 Plugin。Plugin �
 ```
 
 `components.skills` 中的路径是相对 Plugin 根目录的 Skill source 目录，每个直接子目录继续使用标准 `SKILL.md`。Plugin Skill 以 `<plugin-name>:<skill-name>` 注册；`~/.nosis/skills/<skill-name>/SKILL.md` 仍作为无 namespace 的 standalone Skill 加载。
+
+`components.agents` 中的每个路径指向一个 Markdown Agent 定义。YAML frontmatter 必须包含 `name` 与 `description`，可选的 `tools` 使用 Nosis Tool 名称；未声明 `tools` 时启用所有可供 subagent 使用的内置 Tool。frontmatter 后的 Markdown 正文作为该角色的 system prompt，并与 `SubAgent.md` 组合。Plugin Agent 以 `<plugin-name>:<agent-name>` 注册。
+
+Agent 的可选 `model` 若与 `provider_config.json` 中的 provider 名称相同，则直接选用该 provider；`inherit`、未配置或找不到同名 provider 时，沿用 role → subagent → main agent 的 provider 继承链。未被 Runtime 消费的 frontmatter 字段会被忽略。
 
 `components.mcp` 指向 `.mcp.json` server map，且只在 `agent_config.json` 的 `mcp.enabled` 为 true 时加载：插件声明 server，MCP 是否运行仍由用户的总开关决定。每个 server 继续使用 MCP 的 `stdio` 或 `http` transport 配置；Bridge 通过现有 MCP subsystem 加载，并以 `<plugin-name>:<server-name>` 保存 Runtime identity。模型侧 Tool 名会规范化为 `mcp__<plugin>_<server>__<tool>`。例如：
 

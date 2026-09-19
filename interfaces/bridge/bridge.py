@@ -56,6 +56,7 @@ from agent_core.prompting import render_system_prompt
 from agent_core.path_utils import path_for_comparison
 from agent_core.providers import LiteLLMProvider
 from agent_core.mcp.manager import McpClientManager, McpServerStatus
+from agent_core.tools import ROLE_TOOL_NAMES
 
 from .config import (
     configured_role_names,
@@ -67,7 +68,7 @@ from .config import (
 )
 from .execution_plane import ExecutionPlane
 from .instructions import load_workspace_instructions
-from .plugins import PluginManager
+from .plugins import PluginAgent, PluginManager
 from .protocol import (
     decode,
     encode,
@@ -579,6 +580,7 @@ class Bridge:
             if agent_config.mcp.enabled
             else ((), ())
         )
+        plugin_agents, agent_warnings = plugins.load_agents()
         mcp_config = McpConfig(
             enabled=agent_config.mcp.enabled,
             servers=merge_mcp_servers(
@@ -640,6 +642,7 @@ class Bridge:
                 prompts.subagent,
                 prompts.consolidator,
                 instructions,
+                plugin_agents,
             )
             context = ToolExecutionContext(
                 workspace=workspace,
@@ -701,6 +704,7 @@ class Bridge:
                 runtime_warnings=(
                     *plugins.warnings,
                     *mcp_warnings,
+                    *agent_warnings,
                     *skills.warnings,
                 ),
             )
@@ -810,22 +814,23 @@ class Bridge:
         subagent_prompt_template: str,
         consolidator_prompt: str,
         workspace_instructions: WorkspaceInstructions,
+        plugin_agents: tuple[PluginAgent, ...],
     ) -> SubagentRuntime | None:
         """Build the sub-agent runtime, or None when no role is configured."""
         if not agent_config.tools.is_enabled("subagent"):
             return None
         # A provider override for a role that does not exist is a typo, not
         # a silent no-op: the two config files must name the same roles.
-        unknown = configured_role_names(config_path) - set(
-            agent_config.subagent_roles
-        )
+        known_roles = set(agent_config.subagent_roles)
+        known_roles.update(agent.name for agent in plugin_agents)
+        unknown = configured_role_names(config_path) - known_roles
         if unknown:
             names = ", ".join(sorted(unknown))
             raise ValueError(
                 "provider_config.json configures unknown subagent role(s): "
                 f"{names}"
             )
-        roles = SubagentRoleRegistry(
+        roles = [
             SubagentRole(
                 name=name,
                 description=role.description,
@@ -840,13 +845,44 @@ class Bridge:
             )
             for name, role in agent_config.subagent_roles.items()
             if role.enabled
-        )
-        if not roles:
+        ]
+        provider_names = set(load_model_options(config_path)[1])
+        for agent in plugin_agents:
+            declared_provider = (
+                agent.model
+                if agent.model not in {None, "inherit"}
+                and agent.model in provider_names
+                else None
+            )
+            provider_config = (
+                load_config_with_name(config_path, declared_provider)[1]
+                if declared_provider is not None
+                else load_config_with_name(config_path, role=agent.name)[1]
+            )
+            roles.append(
+                SubagentRole(
+                    name=agent.name,
+                    description=agent.description,
+                    instructions=agent.instructions,
+                    tools=(
+                        ROLE_TOOL_NAMES
+                        if agent.tools is None
+                        else agent.tools
+                    ),
+                    provider=self._provider_for(provider_config, workspace),
+                    vision_provider=self._provider_for(
+                        load_vision_config(config_path, role=agent.name),
+                        workspace,
+                    ),
+                )
+            )
+        registry = SubagentRoleRegistry(roles)
+        if not registry:
             return None
         return SubagentRuntime(
             config=agent_config,
             catalog=catalog,
-            roles=roles,
+            roles=registry,
             subagent_prompt_template=subagent_prompt_template,
             consolidator_prompt=consolidator_prompt,
             workspace_instructions=workspace_instructions,

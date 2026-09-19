@@ -41,7 +41,7 @@ from agent_core.llm import TokenUsage
 from agent_core.projection import project_context_units
 from agent_core.providers import LiteLLMProvider
 from agent_core.subagent import vision_aware_tool_names
-from agent_core.tools.config import TOOL_NAMES
+from agent_core.tools.config import ROLE_TOOL_NAMES, TOOL_NAMES
 from interfaces.bridge.bridge import Bridge, Cancelled
 from interfaces.bridge.execution_plane import ExecutionPlane
 from interfaces.bridge.protocol import (
@@ -1989,6 +1989,93 @@ class SubagentRoleStartTest(unittest.TestCase):
             self.assertIn("update_plan", main_names)
             self.assertNotIn("ask_user", role_names)
             self.assertNotIn("update_plan", role_names)
+
+
+class PluginAgentStartTest(unittest.TestCase):
+    def test_assembles_plugin_agents_with_prompts_tools_and_providers(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            plugin = root / "plugins" / "review-kit"
+            agents = plugin / "agents"
+            agents.mkdir(parents=True)
+            (plugin / "plugin.json").write_text(
+                json.dumps(
+                    {
+                        "name": "review-kit",
+                        "components": {
+                            "agents": [
+                                "agents/matched.md",
+                                "agents/fallback.md",
+                                "agents/overridden.md",
+                            ]
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            for name, model in (
+                ("matched", "second"),
+                ("fallback", "opus"),
+                ("overridden", "inherit"),
+            ):
+                (agents / f"{name}.md").write_text(
+                    "---\n"
+                    f"name: {name}\n"
+                    f"description: Review as {name}.\n"
+                    f"model: {model}\n"
+                    "---\n\n"
+                    f"System instructions for {name}.\n",
+                    encoding="utf-8",
+                )
+            bridge, _ = make_bridge([], root)
+            bridge.open_session(
+                open_session_message(
+                    root,
+                    agent_config={
+                        "max_same_tool_calls": 5,
+                        "output_reserve_tokens": 100,
+                        "workspace_instruction_files": [
+                            "CLAUDE.md",
+                            "AGENTS.md",
+                        ],
+                        "main_agent": {"tools": {"subagent": True}},
+                    },
+                    provider_config={
+                        "main_agent": {"provider": "first"},
+                        "subagent": {"provider": "first"},
+                        "subagent_roles": {
+                            "review-kit:overridden": {"provider": "second"}
+                        },
+                        "providers": {
+                            "first": {
+                                "model": "openai/first",
+                                "max_context_tokens": 1000,
+                            },
+                            "second": {
+                                "model": "openai/second",
+                                "max_context_tokens": 1000,
+                            },
+                        },
+                    },
+                )
+            )
+
+            plane = bridge._ensure_execution_plane()
+            runtime = plane.agent._tools._context.subagents
+            assert runtime is not None
+            matched = runtime.roles.get("review-kit:matched")
+            fallback = runtime.roles.get("review-kit:fallback")
+            overridden = runtime.roles.get("review-kit:overridden")
+
+        self.assertEqual(matched.description, "Review as matched.")
+        self.assertEqual(
+            matched.instructions,
+            "System instructions for matched.",
+        )
+        self.assertEqual(matched.tools, ROLE_TOOL_NAMES)
+        self.assertEqual(matched.provider._model, "openai/second")
+        self.assertEqual(fallback.provider._model, "openai/first")
+        self.assertEqual(overridden.provider._model, "openai/second")
 
 
 VISION_MODEL = "vision/model"

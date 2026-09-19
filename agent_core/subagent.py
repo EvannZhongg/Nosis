@@ -1,8 +1,9 @@
 """Sub-agent roles and the Runtime that runs them.
 
-A role is a name, a description the parent model reads, and the set of
-Tool names the role may use. Roles share the Runtime's Tool Catalog, so
-adding one costs a config entry rather than a new Tool implementation.
+A role is a name, a description the parent model reads, private instructions
+for the child, and the set of Tool names the role may use. Roles share the
+Runtime's Tool Catalog, so adding one costs configuration rather than a new
+Tool implementation.
 """
 from dataclasses import dataclass, replace
 from typing import Iterable
@@ -60,7 +61,7 @@ def skill_aware_tool_names(
 
 @dataclass(frozen=True)
 class SubagentRole:
-    """A sub-agent role: its purpose, its tools, and the models it runs on.
+    """A sub-agent role: its purpose, instructions, tools, and providers.
 
     Each role carries its own providers, so one runtime can host a cheap
     read-only role and an expensive editing role side by side.
@@ -70,6 +71,7 @@ class SubagentRole:
     description: str
     tools: tuple[str, ...]
     provider: LLMProvider
+    instructions: str = ""
     vision_provider: LLMProvider | None = None
 
 

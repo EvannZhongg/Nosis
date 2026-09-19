@@ -117,6 +117,27 @@ class PromptsTest(unittest.TestCase):
         self.assertIn("claude rule", prompt)
         self.assertIn("agent rule", prompt)
 
+    def test_subagent_prompt_includes_role_instructions_after_template(self) -> None:
+        role = SubagentRole(
+            name="reviewer",
+            description="Review code.",
+            instructions="Inspect the diff and report only concrete findings.",
+            tools=("read_file",),
+            provider=_TextOnlyProvider(),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            prompt = render_subagent_prompt(
+                SUBAGENT_TEMPLATE,
+                Workspace(Path(directory)),
+                role,
+            )
+
+        self.assertLess(
+            prompt.index(role.description),
+            prompt.index(role.instructions),
+        )
+        self.assertIn("## Role Instructions", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()
