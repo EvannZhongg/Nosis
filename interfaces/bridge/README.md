@@ -44,7 +44,7 @@ Bridge 从 `~/.nosis/plugins/<plugin-name>/plugin.json` 发现 Plugin。Plugin �
 
 `components.skills` 中的路径是相对 Plugin 根目录的 Skill source 目录，每个直接子目录继续使用标准 `SKILL.md`。Plugin Skill 以 `<plugin-name>:<skill-name>` 注册；`~/.nosis/skills/<skill-name>/SKILL.md` 仍作为无 namespace 的 standalone Skill 加载。
 
-`components.mcp` 指向 `.mcp.json` server map。每个 server 继续使用 MCP 的 `stdio` 或 `http` transport 配置；Bridge 通过现有 MCP subsystem 加载，并以 `<plugin-name>:<server-name>` 保存 Runtime identity。模型侧 Tool 名会规范化为 `mcp__<plugin>_<server>__<tool>`。例如：
+`components.mcp` 指向 `.mcp.json` server map，且只在 `agent_config.json` 的 `mcp.enabled` 为 true 时加载：插件声明 server，MCP 是否运行仍由用户的总开关决定。每个 server 继续使用 MCP 的 `stdio` 或 `http` transport 配置；Bridge 通过现有 MCP subsystem 加载，并以 `<plugin-name>:<server-name>` 保存 Runtime identity。模型侧 Tool 名会规范化为 `mcp__<plugin>_<server>__<tool>`。例如：
 
 ```json
 {
