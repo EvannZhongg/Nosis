@@ -5,11 +5,35 @@ from urllib.parse import quote
 from .path_utils import path_for_comparison
 from .session_paths import default_sessions_directory, session_directory
 from .tools import ToolResult
+from .tools.budget import MAX_TOOL_RESULT_CHARS
 from .workspace import Workspace
 
 
-DEFAULT_MAX_TOOL_RESULT_CHARS = 16 * 1024
+DEFAULT_MAX_TOOL_RESULT_CHARS = MAX_TOOL_RESULT_CHARS
 DEFAULT_TOOL_RESULT_PREVIEW_CHARS = 1200
+
+
+def artifact_body(result: ToolResult) -> str:
+    """Render *result* the way it is stored on disk.
+
+    An artifact is written to be read back by ``read_file``, line by
+    line, not to be parsed again.  So it holds the payload itself rather
+    than the ``{"ok": ...}`` envelope: wrapping it would turn a report's
+    newlines into literal ``\\n`` and collapse the whole file onto one
+    line, which no amount of paging can walk through.
+    """
+    if result.error is not None:
+        return (
+            f"Tool '{result.name}' failed.\n"
+            f"error_type: {result.error.type}\n\n"
+            f"{result.error.message}"
+        )
+    output = result.output
+    if isinstance(output, str):
+        return output
+    # Indented so a structured payload still has the line breaks that
+    # paging needs to advance through it.
+    return json.dumps(output, ensure_ascii=False, indent=2)
 
 
 class ToolResultNormalizer:
@@ -58,7 +82,11 @@ class ToolResultNormalizer:
 
     def normalize(self, result: ToolResult) -> str:
         content = result.to_content()
-        size_chars = len(content)
+        # What decides spilling is the envelope, because that is what
+        # would enter the model's context.  What gets written is the
+        # payload, because that is what a reader needs back.
+        body = artifact_body(result)
+        size_chars = len(body)
         artifact_path = (
             self._artifact_path_prefix
             / f"{quote(result.tool_call_id, safe='')}.txt"
@@ -74,11 +102,11 @@ class ToolResultNormalizer:
             finally:
                 if result.artifact_cleanup is not None:
                     result.artifact_cleanup()
-        elif size_chars > self._max_chars:
+        elif len(content) > self._max_chars:
             try:
                 absolute_path = self._absolute_artifact_path(artifact_path)
                 absolute_path.parent.mkdir(parents=True, exist_ok=True)
-                absolute_path.write_text(content, encoding="utf-8")
+                absolute_path.write_text(body, encoding="utf-8")
             finally:
                 if result.artifact_cleanup is not None:
                     result.artifact_cleanup()
@@ -92,10 +120,12 @@ class ToolResultNormalizer:
             {
                 "artifact_path": relative_path,
                 "size_chars": size_chars,
-                "preview": content[: self._preview_chars],
+                "preview": body[: self._preview_chars],
                 "read_instruction": (
                     "Use read_file with path "
-                    f"'{relative_path}' to read the complete tool result."
+                    f"'{relative_path}' to read the complete tool result. "
+                    "It holds the raw result text, so page through it "
+                    "with 'offset' when one read does not reach the end."
                 ),
             },
             ensure_ascii=False,

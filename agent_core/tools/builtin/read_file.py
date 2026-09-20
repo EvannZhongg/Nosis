@@ -2,16 +2,33 @@ from pathlib import Path
 from typing import TextIO
 
 from ..base import JSONValue, Tool, ToolDefinition
+from ..budget import MAX_TOOL_RESULT_CHARS, escaped_length, envelope_chars
 from ..context import ToolExecutionContext
 from ..paths import resolve_readable_path
 
 
 DEFAULT_READ_LIMIT = 2000
-MAX_READ_CHARS = 64 * 1024
 MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024
 STATUS_RESERVE_CHARS = 256
 DISCARD_CHUNK_CHARS = 8192
 TRUNCATED_LINE_NOTICE = " …（该行被截断）"
+
+
+def content_budget(skeleton: dict[str, JSONValue]) -> int:
+    """Return how many escaped characters the content field may hold.
+
+    *skeleton* is the result the caller will return, with ``content``
+    left empty.  A read is sized against the envelope the Runtime will
+    wrap it in, so a result this tool means to return inline is not
+    spilled to an artifact behind its back.  That matters most when the
+    file *is* an artifact: a read that spilled again would leave the
+    tail of a large result unreachable no matter how the model paged.
+    """
+    return (
+        MAX_TOOL_RESULT_CHARS
+        - envelope_chars(skeleton)
+        - STATUS_RESERVE_CHARS
+    )
 
 
 class ReadFileTool(Tool):
@@ -22,9 +39,11 @@ class ReadFileTool(Tool):
             name=self.name,
             description=(
                 "Read a range of lines from a UTF-8 workspace file with "
-                "line numbers. Refuses files larger than 50 MiB and limits "
-                "returned content to 64K characters; overlong lines are "
-                "truncated with an explicit notice."
+                "line numbers. Refuses files larger than 50 MiB. One call "
+                "returns as much as fits in a tool result; when more "
+                "remains the status line reports the 'offset' to continue "
+                "from. Overlong lines are truncated with an explicit "
+                "notice."
             ),
             parameters={
                 "type": "object",
@@ -73,7 +92,18 @@ class ReadFileTool(Tool):
                 errors="strict",
                 newline=None,
             ) as file:
-                content = read_text_range(file, offset, limit)
+                content = read_text_range(
+                    file,
+                    offset,
+                    limit,
+                    content_budget(
+                        {
+                            "path": display_path,
+                            "file_size_bytes": file_size_bytes,
+                            "content": "",
+                        }
+                    ),
+                )
         except UnicodeDecodeError as error:
             raise ValueError(
                 "read_file requires a UTF-8 text file"
@@ -118,12 +148,23 @@ def _parse_arguments(
     return path, offset, limit
 
 
-def read_text_range(file: TextIO, offset: int, limit: int) -> str:
-    """Read a bounded, line-numbered range from an open text file."""
+def read_text_range(
+    file: TextIO,
+    offset: int,
+    limit: int,
+    budget: int,
+) -> str:
+    """Read a bounded, line-numbered range from an open text file.
+
+    *budget* counts characters as they will appear inside the JSON
+    result, not as they appear in the file, so a line dense with quotes
+    or newlines consumes what it will actually cost.
+    """
     skipped_lines = _skip_lines(file, offset - 1)
     if skipped_lines < offset - 1:
         return f"(End of file — {skipped_lines} lines total)"
 
+    notice_chars = escaped_length(TRUNCATED_LINE_NOTICE)
     rendered_lines: list[str] = []
     body_chars = 0
     line_number = offset
@@ -133,39 +174,56 @@ def read_text_range(file: TextIO, offset: int, limit: int) -> str:
 
     while len(rendered_lines) < limit:
         prefix = f"{line_number}| "
-        separator_chars = 1 if rendered_lines else 0
+        # The separator is a newline, which costs two characters escaped.
+        separator_chars = 2 if rendered_lines else 0
         available_chars = (
-            MAX_READ_CHARS
-            - STATUS_RESERVE_CHARS
+            budget
             - body_chars
             - separator_chars
             - len(prefix)
         )
-        if available_chars < len(TRUNCATED_LINE_NOTICE):
+        if available_chars < notice_chars:
             character_limit_reached = True
             next_offset = line_number
             break
 
+        # A line that does not fit here may still fit on a page of its
+        # own, so remember where it starts and hand it to the next call
+        # whole rather than truncating what the budget could carry.
+        line_start = file.tell()
+        # Escaping never shrinks a line, so a whole page's worth of raw
+        # characters bounds how much of it could possibly be kept.
         line, line_truncated, eof_after_line = _read_line_bounded(
             file,
-            available_chars,
+            budget - len(prefix),
         )
         if line is None:
             eof = True
             break
 
-        if line_truncated:
+        escaped_chars = escaped_length(line)
+        if (line_truncated or escaped_chars > available_chars) and (
+            rendered_lines
+        ):
+            file.seek(line_start)
+            next_offset = line_number
+            character_limit_reached = True
+            break
+
+        if line_truncated or escaped_chars > available_chars:
+            # Alone on its page and still too long: truncation is the
+            # only way to make progress.
             line = (
-                line[
-                    : available_chars - len(TRUNCATED_LINE_NOTICE)
-                ]
+                _trim_to_escaped(line, available_chars - notice_chars)
                 + TRUNCATED_LINE_NOTICE
             )
+            escaped_chars = escaped_length(line)
+            line_truncated = True
             character_limit_reached = True
 
         rendered_line = f"{prefix}{line}"
         rendered_lines.append(rendered_line)
-        body_chars += separator_chars + len(rendered_line)
+        body_chars += separator_chars + len(prefix) + escaped_chars
         line_number += 1
 
         if eof_after_line:
@@ -190,10 +248,18 @@ def read_text_range(file: TextIO, offset: int, limit: int) -> str:
         next_offset=next_offset,
         character_limit_reached=character_limit_reached,
     )
-    content = _join_content(rendered_lines, status)
-    if len(content) > MAX_READ_CHARS:
-        raise RuntimeError("text range exceeded its output character limit")
-    return content
+    return _join_content(rendered_lines, status)
+
+
+def _trim_to_escaped(line: str, budget: int) -> str:
+    """Return the longest prefix of *line* that fits *budget* escaped."""
+    used = 0
+    for index, character in enumerate(line):
+        cost = escaped_length(character)
+        if used + cost > budget:
+            return line[:index]
+        used += cost
+    return line
 
 
 def _skip_lines(file: TextIO, count: int) -> int:

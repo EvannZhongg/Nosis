@@ -8,6 +8,7 @@ from ...path_utils import path_for_comparison
 from .read_file import (
     DEFAULT_READ_LIMIT,
     MAX_FILE_SIZE_BYTES,
+    content_budget,
     read_text_range,
 )
 
@@ -85,7 +86,19 @@ class ReadSkillTool(Tool):
                 errors="strict",
                 newline=None,
             ) as file:
-                content = read_text_range(file, offset, limit)
+                content = read_text_range(
+                    file,
+                    offset,
+                    limit,
+                    content_budget(
+                        {
+                            "name": skill.identifier,
+                            "path": path,
+                            "file_size_bytes": file_size_bytes,
+                            "content": "",
+                        }
+                    ),
+                )
         except UnicodeDecodeError as error:
             raise ValueError("read_skill requires a UTF-8 text file") from error
         return {

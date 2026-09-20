@@ -75,8 +75,8 @@ class ToolCallingProvider(StaticProvider):
                     tool_calls=(
                         ToolCall(
                             "call-child",
-                            "read_file",
-                            {"path": "large.txt"},
+                            "list_directory",
+                            {"path": "."},
                         ),
                     ),
                 ),
@@ -342,19 +342,25 @@ class SubagentRuntimeTest(unittest.TestCase):
     def test_saves_child_tool_results_beside_the_child_transcript(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "large.txt").write_text("x" * 20000, encoding="utf-8")
+            # list_directory sets no bound of its own, so a crowded
+            # directory is what reliably overflows the inline budget.
+            # 1200 entries clear the 32K envelope by a wide margin.
+            for index in range(1200):
+                (root / f"generated_module_{index:04d}.py").write_text(
+                    "x", encoding="utf-8"
+                )
             parent = Session("parent")
             provider = ToolCallingProvider()
             child_role = role(
                 "researcher",
                 "Reads.",
-                ("read_file",),
+                ("list_directory",),
                 provider=provider,
             )
             tool_context = context(root, (child_role,), session=parent)
 
             result = SubagentTool().execute(
-                {"role": "researcher", "task": "read the large file"},
+                {"role": "researcher", "task": "list the workspace"},
                 tool_context,
             )
 

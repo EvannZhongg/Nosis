@@ -27,10 +27,9 @@ from agent_core import (
     Workspace,
     builtin_catalog,
 )
-from agent_core.tools.builtin.search_files import MAX_OUTPUT_CHARS
+from agent_core.tools.budget import MAX_TOOL_RESULT_CHARS
 from agent_core.tools.builtin.read_file import (
     MAX_FILE_SIZE_BYTES as MAX_READ_FILE_SIZE_BYTES,
-    MAX_READ_CHARS,
 )
 
 
@@ -679,27 +678,24 @@ class ReadFileToolTest(unittest.TestCase):
                 "(Showing line 2. Use offset=3 to continue.)",
             )
 
-    def test_defaults_to_first_2000_lines(self) -> None:
+    def test_stops_at_the_line_limit_when_the_budget_allows(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Workspace(Path(directory))
             (workspace.path / "notes.txt").write_text(
-                "\n".join(
-                    f"line {number}" for number in range(1, 2002)
-                ),
+                "\n".join(f"line {number}" for number in range(1, 2002)),
                 encoding="utf-8",
             )
 
-            result = _Bound(ReadFileTool(), workspace).execute({"path": "notes.txt"})
+            result = _Bound(ReadFileTool(), workspace).execute(
+                {"path": "notes.txt", "limit": 900}
+            )
 
             content_lines = result["content"].splitlines()
             self.assertEqual(content_lines[0], "1| line 1")
-            self.assertEqual(content_lines[1999], "2000| line 2000")
+            self.assertEqual(content_lines[899], "900| line 900")
             self.assertEqual(
                 content_lines[-1],
-                (
-                    "(Showing lines 1-2000. "
-                    "Use offset=2001 to continue.)"
-                ),
+                "(Showing lines 1-900. Use offset=901 to continue.)",
             )
 
     def test_returns_end_marker_when_offset_reaches_end(self) -> None:
@@ -759,7 +755,16 @@ class ReadFileToolTest(unittest.TestCase):
                 }
             )
 
-            self.assertLessEqual(len(result["content"]), MAX_READ_CHARS)
+            self.assertLessEqual(
+                len(
+                    ToolResult(
+                        tool_call_id="call-1",
+                        name="read_file",
+                        output=result,
+                    ).to_content()
+                ),
+                MAX_TOOL_RESULT_CHARS,
+            )
             self.assertIn("character limit reached", result["content"])
             self.assertIn("Use offset=", result["content"])
             numbered_lines = [
@@ -769,11 +774,73 @@ class ReadFileToolTest(unittest.TestCase):
             ]
             self.assertLess(len(numbered_lines), 80)
 
+    def test_defers_a_line_that_does_not_fit_to_the_next_page(self) -> None:
+        """Paging must not drop the tail of a line at a page boundary.
+
+        A line the current page cannot hold is handed to the next call
+        whole, so reading a file page by page reproduces it exactly.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+            lines = [f"line {number}: " + "abcdefgh" * 12 for number in range(400)]
+            (workspace.path / "notes.txt").write_text(
+                "\n".join(lines), encoding="utf-8"
+            )
+            tool = _Bound(ReadFileTool(), workspace)
+
+            recovered: list[str] = []
+            offset = 1
+            for _ in range(100):
+                result = tool.execute(
+                    {"path": "notes.txt", "offset": offset}
+                )
+                body = result["content"].splitlines()
+                recovered += [
+                    line.split("| ", 1)[1]
+                    for line in body
+                    if "| " in line and line.split("| ", 1)[0].isdigit()
+                ]
+                status = body[-1]
+                if "End of file" in status:
+                    break
+                offset = int(status.split("offset=")[1].split()[0])
+            else:
+                self.fail("paging never reached the end of the file")
+
+            self.assertEqual(recovered, lines)
+
+    def test_paging_advances_past_a_line_no_page_can_hold(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+            (workspace.path / "notes.txt").write_text(
+                "short a\n" + ("X" * 200000) + "\nshort b",
+                encoding="utf-8",
+            )
+            tool = _Bound(ReadFileTool(), workspace)
+
+            statuses = []
+            offset = 1
+            for _ in range(20):
+                result = tool.execute(
+                    {"path": "notes.txt", "offset": offset}
+                )
+                status = result["content"].splitlines()[-1]
+                statuses.append(status)
+                if "End of file" in status:
+                    break
+                following = int(status.split("offset=")[1].split()[0])
+                self.assertGreater(following, offset)
+                offset = following
+            else:
+                self.fail("paging never reached the end of the file")
+
+            self.assertIn("End of file — 3 lines total", statuses[-1])
+
     def test_truncates_an_overlong_single_line_with_notice(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Workspace(Path(directory))
             (workspace.path / "notes.txt").write_text(
-                "x" * (MAX_READ_CHARS * 2),
+                "x" * (MAX_TOOL_RESULT_CHARS * 2),
                 encoding="utf-8",
             )
 
@@ -781,7 +848,16 @@ class ReadFileToolTest(unittest.TestCase):
                 {"path": "notes.txt"}
             )
 
-            self.assertLessEqual(len(result["content"]), MAX_READ_CHARS)
+            self.assertLessEqual(
+                len(
+                    ToolResult(
+                        tool_call_id="call-1",
+                        name="read_file",
+                        output=result,
+                    ).to_content()
+                ),
+                MAX_TOOL_RESULT_CHARS,
+            )
             self.assertIn("该行被截断", result["content"])
             self.assertIn("character limit reached", result["content"])
 
@@ -1247,7 +1323,7 @@ class SearchFilesToolTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Workspace(Path(directory))
             (workspace.path / "notes.txt").write_text(
-                "Nosis " + ("x" * (MAX_OUTPUT_CHARS * 2)),
+                "Nosis " + ("x" * (MAX_TOOL_RESULT_CHARS * 2)),
                 encoding="utf-8",
             )
 
@@ -1260,7 +1336,7 @@ class SearchFilesToolTest(unittest.TestCase):
                 name="search_files",
                 output=result,
             ).to_content()
-            self.assertLessEqual(len(content), MAX_OUTPUT_CHARS)
+            self.assertLessEqual(len(content), MAX_TOOL_RESULT_CHARS)
             self.assertTrue(result["matches"][0]["line_truncated"])
 
     def test_skips_non_utf8_files(self) -> None:

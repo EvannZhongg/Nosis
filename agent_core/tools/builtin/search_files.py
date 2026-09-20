@@ -1,15 +1,14 @@
-import json
 import re
 from pathlib import Path
 
 from ..base import JSONValue, Tool, ToolDefinition
+from ..budget import output_fits
 from ..context import ToolExecutionContext
 from ...path_utils import path_for_comparison
 
 
 DEFAULT_SEARCH_LIMIT = 200
 MAX_SEARCH_LIMIT = 200
-MAX_OUTPUT_CHARS = 16 * 1024
 MAX_FILE_SIZE_BYTES = 1024 * 1024
 MAX_SCANNED_PATHS = 10_000
 DEFAULT_EXCLUDED_DIRECTORIES = frozenset(
@@ -376,16 +375,7 @@ def _result_fits(
             "skipped_files": MAX_SCANNED_PATHS,
         },
     )
-    return all(
-        len(
-            json.dumps(
-                {"ok": True, "output": result},
-                ensure_ascii=False,
-            )
-        )
-        <= MAX_OUTPUT_CHARS
-        for result in possible_results
-    )
+    return all(output_fits(result) for result in possible_results)
 
 
 def _truncate_match_to_fit(

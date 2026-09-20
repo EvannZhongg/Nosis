@@ -1,5 +1,4 @@
 import os
-import json
 from pathlib import Path
 from typing import Callable
 
@@ -223,25 +222,34 @@ def _shell_artifact_writer(
     stdout_spool: CommandOutputSpool | None,
     stderr_spool: CommandOutputSpool | None,
 ) -> Callable[[Path], int]:
-    """Stream the complete shell result as the canonical ToolResult JSON."""
+    """Stream the complete shell result as plain text.
+
+    The streams are written verbatim rather than JSON-escaped: an
+    artifact is paged back through ``read_file``, and escaping would
+    fold the whole run onto a single unreadable line.
+    """
 
     def write(path: Path) -> int:
         size_chars = 0
         with path.open("w", encoding="utf-8", newline="\n") as file:
-            size_chars += _write_text(file, '{"ok": true, "output": {')
-            size_chars += _write_json_value(file, "command", execution.command)
-            size_chars += _write_json_value(file, "exit_code", execution.exit_code)
-            size_chars += _write_json_stream_value(
+            size_chars += _write_text(file, f"$ {execution.command}\n")
+            size_chars += _write_text(
+                file, f"exit_code: {execution.exit_code}\n"
+            )
+            size_chars += _write_text(
+                file, f"timed_out: {str(execution.timed_out).lower()}\n"
+            )
+            if execution.timeout_seconds is not None:
+                size_chars += _write_text(
+                    file,
+                    f"timeout_seconds: {execution.timeout_seconds}\n",
+                )
+            size_chars += _write_stream(
                 file, "stdout", stdout_spool, execution.stdout
             )
-            size_chars += _write_json_stream_value(
+            size_chars += _write_stream(
                 file, "stderr", stderr_spool, execution.stderr
             )
-            size_chars += _write_json_value(file, "timed_out", execution.timed_out)
-            size_chars += _write_json_value(
-                file, "timeout_seconds", execution.timeout_seconds
-            )
-            size_chars += _write_text(file, "}}")
         return size_chars
 
     return write
@@ -252,37 +260,20 @@ def _write_text(file, value: str) -> int:
     return len(value)
 
 
-def _write_json_value(file, key: str, value: object) -> int:
-    prefix = ", " if file.tell() > len('{"ok": true, "output": {') else ""
-    rendered = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
-    text = f"{prefix}{json.dumps(key)}: {rendered}"
-    file.write(text)
-    return len(text)
-
-
-def _write_json_stream_value(
+def _write_stream(
     file,
-    key: str,
+    name: str,
     spool: CommandOutputSpool | None,
     preview: str,
 ) -> int:
-    prefix = ", " if file.tell() > len('{"ok": true, "output": {') else ""
-    key_text = f"{prefix}{json.dumps(key)}: "
-    file.write(key_text)
-    size_chars = len(key_text)
+    """Write one stream verbatim, from its spool when it has one."""
+    size_chars = _write_text(file, f"\n--- {name} ---\n")
     if spool is None:
-        rendered = json.dumps(preview, ensure_ascii=False)
-        file.write(rendered)
-        return size_chars + len(rendered)
+        return size_chars + _write_text(file, preview)
 
-    file.write('"')
-    size_chars += 1
     with spool.path.open(
         "r", encoding=spool.encoding, errors="replace", newline=""
     ) as source:
         for chunk in iter(lambda: source.read(8192), ""):
-            escaped = json.dumps(chunk, ensure_ascii=False)[1:-1]
-            file.write(escaped)
-            size_chars += len(escaped)
-    file.write('"')
-    return size_chars + 1
+            size_chars += _write_text(file, chunk)
+    return size_chars
