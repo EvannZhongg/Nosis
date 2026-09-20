@@ -379,10 +379,6 @@ The source of this plugin is `interfaces/bridge/defaults/plugins/plugin-dev/` in
 
 0.1.0 - Initial release with seven comprehensive skills and three validation agents
 
-## Author
-
-Daisy Hollman (daisy@anthropic.com)
-
 ## License
 
 MIT License - See repository for details
