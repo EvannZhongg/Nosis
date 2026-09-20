@@ -46,6 +46,8 @@ Runtime 由 [`interfaces/bridge`](../interfaces/bridge/README.md) 统一装配�
 
 文件 Tool 限制在当前 Workspace；Shell 与需要确认的 MCP Tool 统一经过 Session 权限控制。较大的 Tool 输出会保存为 Session Artifact，供 Agent 后续读取。
 
+Shell 用 `scope` 指定执行边界：`workspace`（默认）在沙箱内运行，除系统只读路径外只能访问 Workspace 与私有临时目录，且无网络（macOS 用 Seatbelt，Linux 用 bubblewrap）；`host` 以当前用户身份越过沙箱，Windows 目前只有这一种边界。权限控制按同一边界判定：`Ask for approval` 对两种 scope 都请求授权，`Workspace Access` 只对越过沙箱的 `host` 请求。
+
 ### MCP 与 Skills
 
 MCP 在 `agent_config.json` 的 `mcp.servers` 中配置，支持 `stdio` 和 `streamable_http`；`mcp.enabled` 是 standalone 与 Plugin MCP 共用的全局开关。Plugin 可声明 `.mcp.json` server map，由 Bridge 加 namespace 后合并进同一个 `McpClientManager`。远程 Tool 可分别限制是否暴露以及是否需要人工确认。
