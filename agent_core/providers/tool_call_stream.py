@@ -288,7 +288,7 @@ def _argument_object_candidates(
     candidates: dict[str, dict[str, object]] = {}
     joined = "".join(fragments)
 
-    _add_json_object_with_repeated_final_delimiter(
+    _add_json_object_with_repeated_closing_suffix(
         candidates,
         fragments,
         joined,
@@ -342,15 +342,15 @@ def _add_json_object(
         candidates[_canonical_json(value)] = value
 
 
-def _add_json_object_with_repeated_final_delimiter(
+def _add_json_object_with_repeated_closing_suffix(
     candidates: dict[str, dict[str, object]],
     fragments: tuple[str, ...],
     text: str,
 ) -> None:
-    """Recover arguments from a stream that repeats the closing brace.
+    """Recover arguments from a stream that repeats its closing sequence.
 
-    Only a split stream counts as a repeated delimiter: a single fragment with
-    trailing braces is not evidence of a re-sent terminator, so it stays
+    Only a split stream counts as a repeated suffix: a single fragment with
+    trailing delimiters is not evidence of a re-sent terminator, so it stays
     invalid instead of being silently truncated.
     """
     if len(fragments) < 2:
@@ -363,8 +363,16 @@ def _add_json_object_with_repeated_final_delimiter(
     if not isinstance(value, dict):
         return
     suffix = text[offset:]
-    if suffix and set(suffix) == {"}"}:
-        candidates[_canonical_json(value)] = value
+    closing_sequence = text[:offset].rstrip()
+    closing_start = len(closing_sequence.rstrip("]}"))
+    closing_sequence = closing_sequence[closing_start:]
+    if not suffix or not closing_sequence or not set(suffix) <= {"]", "}"}:
+        return
+    for width in range(1, len(closing_sequence) + 1):
+        unit = closing_sequence[-width:]
+        if len(suffix) % width == 0 and suffix == unit * (len(suffix) // width):
+            candidates[_canonical_json(value)] = value
+            return
 
 
 def _json_object(value: str) -> dict[str, object] | None:

@@ -1012,6 +1012,60 @@ class LiteLLMProviderTest(unittest.TestCase):
         )
 
     @patch("agent_core.providers.litellm_provider.completion")
+    def test_recovers_repeated_argument_closing_sequence(
+        self,
+        completion_mock,
+    ) -> None:
+        completion_mock.return_value = iter(
+            [
+                chunk(
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "id": "call-1",
+                            "function": {
+                                "name": "ask_user",
+                                "arguments": (
+                                    '{"question":"How should I proceed?",'
+                                    '"options":[{"id":"amend",'
+                                    '"label":"Amend"}]}'
+                                ),
+                            },
+                        }
+                    ]
+                ),
+                chunk(
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "function": {"arguments": "]}"},
+                        }
+                    ]
+                ),
+            ]
+        )
+        provider = LiteLLMProvider(
+            model="deepseek/deepseek-flash",
+            max_context_tokens=1000,
+        )
+
+        response = provider.stream(
+            LLMRequest(
+                system_prompt="You are helpful.",
+                messages=(Message(role="user", content="review it"),),
+            ),
+            lambda _text: None,
+        )
+
+        self.assertEqual(
+            response.tool_calls[0].arguments,
+            {
+                "question": "How should I proceed?",
+                "options": [{"id": "amend", "label": "Amend"}],
+            },
+        )
+
+    @patch("agent_core.providers.litellm_provider.completion")
     def test_rejects_a_repeated_closing_brace_in_one_fragment(
         self,
         completion_mock,
@@ -1117,6 +1171,51 @@ class LiteLLMProviderTest(unittest.TestCase):
                         {
                             "index": 0,
                             "function": {"arguments": "]"},
+                        }
+                    ]
+                ),
+            ]
+        )
+        provider = LiteLLMProvider(
+            model="deepseek/deepseek-flash",
+            max_context_tokens=1000,
+        )
+
+        with self.assertRaises(ProviderProtocolError) as raised:
+            provider.stream(
+                LLMRequest(
+                    system_prompt="You are helpful.",
+                    messages=(Message(role="user", content="review it"),),
+                ),
+                lambda _text: None,
+            )
+
+        self.assertEqual(raised.exception.details["reason"], "invalid_json")
+
+    @patch("agent_core.providers.litellm_provider.completion")
+    def test_rejects_closing_delimiters_not_repeated_from_the_object(
+        self,
+        completion_mock,
+    ) -> None:
+        completion_mock.return_value = iter(
+            [
+                chunk(
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "id": "call-1",
+                            "function": {
+                                "name": "ask_user",
+                                "arguments": '{"question":"Continue?"}',
+                            },
+                        }
+                    ]
+                ),
+                chunk(
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "function": {"arguments": "]}"},
                         }
                     ]
                 ),
