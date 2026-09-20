@@ -1,5 +1,6 @@
 import sys
 import platform
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -328,6 +329,67 @@ class SandboxedCommandExecutorTest(unittest.TestCase):
             self.assertNotEqual(read_result.exit_code, 0)
             self.assertNotIn("secret", read_result.stdout)
             self.assertNotEqual(network_result.exit_code, 0)
+
+    @unittest.skipUnless(platform.system() == "Windows", "Windows ACL test")
+    def test_windows_backend_allows_workspace_writes_and_host_reads(self) -> None:
+        test_root = Path.cwd() / f".sandbox-test-{time.time_ns()}"
+        workspace = test_root / "workspace"
+        outside = test_root / "outside.txt"
+        workspace.mkdir(parents=True)
+        self.addCleanup(shutil.rmtree, test_root, ignore_errors=True)
+        outside.write_text("host-readable", encoding="utf-8")
+        backend = platform_workspace_sandbox_backend()
+        executor = SandboxedCommandExecutor(workspace, backend)
+        self.assertEqual(
+            executor.policy.host_filesystem, FilesystemAccess.READ_ONLY
+        )
+        self.assertEqual(executor.policy.network, NetworkAccess.ALLOW)
+        try:
+            allowed = executor.execute(
+                f"Get-Content -LiteralPath '{outside}'; "
+                "Set-Content -LiteralPath inside.txt workspace; "
+                "Set-Content -LiteralPath "
+                "(Join-Path $env:TEMP temp.txt) temporary"
+            )
+            denied = executor.execute(
+                "$ErrorActionPreference = 'Stop'; "
+                f"Set-Content -LiteralPath '{test_root / 'blocked.txt'}' "
+                "blocked"
+            )
+            private_tmp = backend._temporary_directory
+            capability_sid = backend._sandbox._workspace_sid_value
+            acl_during = subprocess.run(
+                ["icacls", str(workspace)],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout
+            workspace_text = (workspace / "inside.txt").read_text(
+                encoding="utf-8"
+            ).strip()
+            temporary_text = (private_tmp / "temp.txt").read_text(
+                encoding="utf-8"
+            ).strip()
+            blocked_exists = (test_root / "blocked.txt").exists()
+        finally:
+            executor.close()
+        acl_after = subprocess.run(
+            ["icacls", str(workspace)],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+
+        self.assertEqual(allowed.exit_code, 0)
+        self.assertIn("host-readable", allowed.stdout)
+        self.assertEqual(workspace_text, "workspace")
+        self.assertIsNotNone(private_tmp)
+        self.assertEqual(temporary_text, "temporary")
+        self.assertNotEqual(denied.exit_code, 0)
+        self.assertFalse(blocked_exists)
+        self.assertFalse(private_tmp.exists())
+        self.assertIn(capability_sid, acl_during)
+        self.assertNotIn(capability_sid, acl_after)
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ from ...execution import (
     CommandExecutionResult,
     CommandOutputSpool,
     ExecutionScope,
+    NetworkAccess,
     execution_scope_from_arguments,
 )
 from ..base import JSONValue, Tool, ToolDefinition, ToolOutput
@@ -24,9 +25,9 @@ MAX_BACKGROUND_SHELL_TIMEOUT_SECONDS = MAX_COMMAND_TIMEOUT_SECONDS
 
 
 WINDOWS_SHELL_NOTE = (
-    "Commands run through Git Bash, so use POSIX shell syntax: chain "
-    "commands with ';' or '&&', and tools such as cat, grep, sed and "
-    "printf are available."
+    "On Windows, workspace scope runs through Windows PowerShell and host "
+    "scope runs through Git Bash. Use PowerShell syntax for workspace "
+    "commands and POSIX shell syntax for host commands."
 )
 POSIX_SHELL_NOTE = (
     "Commands run through /bin/sh, so use POSIX shell syntax: chain "
@@ -73,10 +74,21 @@ class ShellTool(Tool):
             f"{DEFAULT_SHELL_TIMEOUT_SECONDS} seconds, with a maximum of "
             f"{MAX_FOREGROUND_SHELL_TIMEOUT_SECONDS}."
         )
+        workspace_policy = getattr(
+            context.workspace_command_executor, "policy", None
+        )
+        workspace_description = (
+            "Workspace scope confines writes to the workspace; host files "
+            "remain readable and network access remains available. "
+            if getattr(workspace_policy, "network", None)
+            is NetworkAccess.ALLOW
+            else "Workspace scope is confined to the workspace with network "
+            "disabled. "
+        )
         description = (
             "Execute a shell command with the workspace as the current "
-            "directory. Workspace scope is the default and is confined to "
-            "the workspace with network disabled; request host scope only "
+            "directory. Workspace scope is the default. "
+            f"{workspace_description}Request host scope only "
             "when the command must cross that boundary. "
             f"{shell_note} Every call starts a fresh shell, so directory and "
             "environment changes do not persist. The command is killed after "
@@ -101,8 +113,8 @@ class ShellTool(Tool):
                 "type": "string",
                 "enum": [scope.value for scope in ExecutionScope],
                 "description": (
-                    "Execution boundary. 'workspace' is sandboxed to the "
-                    "workspace with no network; 'host' runs with the current "
+                    "Execution boundary. 'workspace' uses the platform's "
+                    "workspace sandbox; 'host' runs with the current "
                     "user's host access and may require approval."
                 ),
                 "default": ExecutionScope.WORKSPACE.value,

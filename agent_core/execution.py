@@ -1,6 +1,7 @@
 import locale
 import os
 import platform
+import secrets
 import shutil
 import signal
 import subprocess
@@ -12,7 +13,7 @@ from collections import deque
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Protocol
+from typing import Callable, Protocol
 
 
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 60
@@ -77,6 +78,18 @@ class CommandExecutor(Protocol):
     def close(self) -> None: ...
 
 
+class RunningProcess(Protocol):
+    pid: int
+    returncode: int | None
+
+    def poll(self) -> int | None: ...
+
+    def wait(self, timeout: float | None = None) -> int: ...
+
+
+ProcessLauncher = Callable[..., RunningProcess]
+
+
 class ExecutionScope(StrEnum):
     WORKSPACE = "workspace"
     HOST = "host"
@@ -104,6 +117,7 @@ class FilesystemAccess(StrEnum):
 
 class NetworkAccess(StrEnum):
     DENY = "deny"
+    ALLOW = "allow"
 
 
 class TemporaryDirectoryMode(StrEnum):
@@ -147,6 +161,10 @@ class SandboxBackend(ABC):
     ) -> CommandExecutionResult:
         raise NotImplementedError
 
+    @property
+    def default_policy(self) -> SandboxPolicy:
+        return SandboxPolicy()
+
     def close(self) -> None:
         """Release backend-owned resources such as roots or proxies."""
 
@@ -168,7 +186,7 @@ class LinuxSandboxBackend(SandboxBackend):
         timeout_seconds: int,
         cancellation: "CancellationSignal | None" = None,
     ) -> CommandExecutionResult:
-        _require_workspace_policy(policy)
+        _require_workspace_policy(policy, self.default_policy)
         executable = shutil.which("bwrap")
         if executable is None:
             raise RuntimeError(
@@ -249,7 +267,7 @@ class MacOSSandboxBackend(SandboxBackend):
         timeout_seconds: int,
         cancellation: "CancellationSignal | None" = None,
     ) -> CommandExecutionResult:
-        _require_workspace_policy(policy)
+        _require_workspace_policy(policy, self.default_policy)
         workspace = working_directory.resolve()
         private_tmp = self._temporary_directory.resolve()
         profile = self._PROFILE + _macos_ancestor_rules(
@@ -282,7 +300,16 @@ class MacOSSandboxBackend(SandboxBackend):
 
 
 class WindowsSandboxBackend(SandboxBackend):
-    """Windows has no backend in the first workspace-sandbox slice."""
+    """Restrict writes with a Windows WRITE_RESTRICTED access token.
+
+    Windows keeps the caller's readable host view.  The restricted token
+    adds write capabilities only for the workspace and a private temporary
+    directory.  Network access is not confined by this lightweight backend.
+    """
+
+    def __init__(self) -> None:
+        self._temporary_directory: Path | None = None
+        self._sandbox = None
 
     def execute(
         self,
@@ -293,7 +320,52 @@ class WindowsSandboxBackend(SandboxBackend):
         timeout_seconds: int,
         cancellation: "CancellationSignal | None" = None,
     ) -> CommandExecutionResult:
-        raise RuntimeError("workspace shell sandbox is not available on Windows")
+        _require_workspace_policy(policy, self.default_policy)
+        if os.name != "nt":
+            raise RuntimeError("the Windows sandbox backend requires Windows")
+
+        from .windows_sandbox import WindowsWriteRestrictedSandbox
+
+        workspace = working_directory.resolve()
+        if self._temporary_directory is None:
+            self._temporary_directory = workspace / (
+                ".nosis-sandbox-tmp-" + secrets.token_hex(8)
+            )
+            self._temporary_directory.mkdir()
+        private_tmp = self._temporary_directory.resolve()
+        if self._sandbox is None:
+            self._sandbox = WindowsWriteRestrictedSandbox(
+                workspace, private_tmp
+            )
+        elif self._sandbox.workspace != workspace:
+            raise RuntimeError(
+                "a Windows sandbox backend cannot be shared across workspaces"
+            )
+        return _execute_process(
+            _windows_powershell_argv(command),
+            command=command,
+            working_directory=workspace,
+            timeout_seconds=timeout_seconds,
+            cancellation=cancellation,
+            environment=_sandbox_environment(private_tmp),
+            spool_directory=private_tmp,
+            process_launcher=self._sandbox.start,
+        )
+
+    @property
+    def default_policy(self) -> SandboxPolicy:
+        return SandboxPolicy(
+            host_filesystem=FilesystemAccess.READ_ONLY,
+            network=NetworkAccess.ALLOW,
+        )
+
+    def close(self) -> None:
+        if self._sandbox is not None:
+            self._sandbox.close()
+            self._sandbox = None
+        if self._temporary_directory is not None:
+            shutil.rmtree(self._temporary_directory, ignore_errors=True)
+            self._temporary_directory = None
 
 
 class CancellationSignal(Protocol):
@@ -344,7 +416,7 @@ class SandboxedCommandExecutor:
     ) -> None:
         self._working_directory = working_directory
         self._backend = backend
-        self._policy = policy or SandboxPolicy()
+        self._policy = policy or backend.default_policy
 
     @property
     def policy(self) -> SandboxPolicy:
@@ -379,10 +451,13 @@ def platform_workspace_sandbox_backend() -> SandboxBackend:
     raise RuntimeError(f"workspace shell sandbox is not available on {system}")
 
 
-def _require_workspace_policy(policy: SandboxPolicy) -> None:
-    if policy != SandboxPolicy():
+def _require_workspace_policy(
+    policy: SandboxPolicy, supported: SandboxPolicy
+) -> None:
+    if policy != supported:
         raise ValueError(
-            "the workspace sandbox backend only supports SandboxPolicy()"
+            "the workspace sandbox backend does not support the requested "
+            "SandboxPolicy"
         )
 
 
@@ -435,6 +510,7 @@ def _execute_process(
     environment: dict[str, str] | None = None,
     spool_directory: Path | None = None,
     reports_sandbox_entry_failure: bool = False,
+    process_launcher: ProcessLauncher | None = None,
 ) -> CommandExecutionResult:
     if (
         isinstance(timeout_seconds, bool)
@@ -480,16 +556,25 @@ def _execute_process(
     process = None
     timed_out = False
     try:
-        process = subprocess.Popen(
-            argv,
-            cwd=working_directory,
-            env=environment,
-            # Commands must never read the stream the UI protocol uses.
-            stdin=subprocess.DEVNULL,
-            stdout=stdout_file,
-            stderr=stderr_file,
-            start_new_session=True,
-        )
+        if process_launcher is None:
+            process = subprocess.Popen(
+                argv,
+                cwd=working_directory,
+                env=environment,
+                # Commands must never read the stream the UI protocol uses.
+                stdin=subprocess.DEVNULL,
+                stdout=stdout_file,
+                stderr=stderr_file,
+                start_new_session=True,
+            )
+        else:
+            process = process_launcher(
+                argv,
+                cwd=working_directory,
+                environment=environment,
+                stdout=stdout_file,
+                stderr=stderr_file,
+            )
         deadline = time.monotonic() + timeout_seconds
         while process.poll() is None:
             if cancellation is not None and cancellation.cancelled:
@@ -562,6 +647,27 @@ def _shell_argv(command: str) -> list[str]:
     return ["/bin/sh", "-c", command]
 
 
+def _windows_powershell_argv(command: str) -> list[str]:
+    system_root = Path(os.environ.get("SystemRoot", r"C:\Windows"))
+    executable = (
+        system_root
+        / "System32"
+        / "WindowsPowerShell"
+        / "v1.0"
+        / "powershell.exe"
+    ).resolve()
+    if not executable.is_file():
+        raise RuntimeError("workspace shell requires Windows PowerShell")
+    return [
+        str(executable),
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        command,
+    ]
+
+
 def _git_bash() -> str:
     """Locate the Git Bash shipped with Git for Windows.
 
@@ -605,7 +711,7 @@ def _is_wsl_bash(path: str) -> bool:
     )
 
 
-def _kill_process_tree(process: subprocess.Popen[bytes]) -> None:
+def _kill_process_tree(process: RunningProcess) -> None:
     """Kill the command together with the processes it started.
 
     os.killpg is POSIX-only, and on Windows killing the shell alone
