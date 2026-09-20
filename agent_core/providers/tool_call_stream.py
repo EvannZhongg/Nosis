@@ -288,6 +288,12 @@ def _argument_object_candidates(
     candidates: dict[str, dict[str, object]] = {}
     joined = "".join(fragments)
 
+    _add_json_object_with_repeated_final_delimiter(
+        candidates,
+        fragments,
+        joined,
+    )
+
     complete_fragments: list[tuple[str, dict[str, object]]] = []
     for fragment in fragments:
         value = _json_object(fragment)
@@ -333,6 +339,31 @@ def _add_json_object(
 ) -> None:
     value = _json_object(text)
     if value is not None:
+        candidates[_canonical_json(value)] = value
+
+
+def _add_json_object_with_repeated_final_delimiter(
+    candidates: dict[str, dict[str, object]],
+    fragments: tuple[str, ...],
+    text: str,
+) -> None:
+    """Recover arguments from a stream that repeats the closing brace.
+
+    Only a split stream counts as a repeated delimiter: a single fragment with
+    trailing braces is not evidence of a re-sent terminator, so it stays
+    invalid instead of being silently truncated.
+    """
+    if len(fragments) < 2:
+        return
+    decoder = json.JSONDecoder()
+    try:
+        value, offset = decoder.raw_decode(text)
+    except json.JSONDecodeError:
+        return
+    if not isinstance(value, dict):
+        return
+    suffix = text[offset:]
+    if suffix and set(suffix) == {"}"}:
         candidates[_canonical_json(value)] = value
 
 

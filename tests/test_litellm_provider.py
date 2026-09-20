@@ -951,6 +951,194 @@ class LiteLLMProviderTest(unittest.TestCase):
         self.assertEqual(response.tool_calls[0].arguments, {"path": "README.md"})
 
     @patch("agent_core.providers.litellm_provider.completion")
+    def test_recovers_repeated_argument_closing_suffix(
+        self,
+        completion_mock,
+    ) -> None:
+        completion_mock.return_value = iter(
+            [
+                chunk(
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "id": "call-1",
+                            "function": {
+                                "name": "ask_user",
+                                "arguments": (
+                                    '{"question":"Continue?","options":['
+                                    '{"id":"yes","label":"Yes"}]'
+                                ),
+                            },
+                        }
+                    ]
+                ),
+                chunk(
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "function": {"arguments": "}}"},
+                        }
+                    ]
+                ),
+                chunk(
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "function": {"arguments": "}"},
+                        }
+                    ]
+                ),
+            ]
+        )
+        provider = LiteLLMProvider(
+            model="deepseek/deepseek-flash",
+            max_context_tokens=1000,
+        )
+
+        response = provider.stream(
+            LLMRequest(
+                system_prompt="You are helpful.",
+                messages=(Message(role="user", content="review it"),),
+            ),
+            lambda _text: None,
+        )
+
+        self.assertEqual(
+            response.tool_calls[0].arguments,
+            {
+                "question": "Continue?",
+                "options": [{"id": "yes", "label": "Yes"}],
+            },
+        )
+
+    @patch("agent_core.providers.litellm_provider.completion")
+    def test_rejects_a_repeated_closing_brace_in_one_fragment(
+        self,
+        completion_mock,
+    ) -> None:
+        completion_mock.return_value = iter(
+            [
+                chunk(
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "id": "call-1",
+                            "function": {
+                                "name": "ask_user",
+                                "arguments": '{"question":"Continue?"}}',
+                            },
+                        }
+                    ]
+                ),
+            ]
+        )
+        provider = LiteLLMProvider(
+            model="deepseek/deepseek-flash",
+            max_context_tokens=1000,
+        )
+
+        with self.assertRaises(ProviderProtocolError) as raised:
+            provider.stream(
+                LLMRequest(
+                    system_prompt="You are helpful.",
+                    messages=(Message(role="user", content="review it"),),
+                ),
+                lambda _text: None,
+            )
+
+        self.assertEqual(raised.exception.details["reason"], "invalid_json")
+
+    @patch("agent_core.providers.litellm_provider.completion")
+    def test_rejects_non_closing_argument_suffix(
+        self,
+        completion_mock,
+    ) -> None:
+        completion_mock.return_value = iter(
+            [
+                chunk(
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "id": "call-1",
+                            "function": {
+                                "name": "ask_user",
+                                "arguments": '{"question":"Continue?"}',
+                            },
+                        }
+                    ]
+                ),
+                chunk(
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "function": {"arguments": "unexpected"},
+                        }
+                    ]
+                ),
+            ]
+        )
+        provider = LiteLLMProvider(
+            model="deepseek/deepseek-flash",
+            max_context_tokens=1000,
+        )
+
+        with self.assertRaises(ProviderProtocolError) as raised:
+            provider.stream(
+                LLMRequest(
+                    system_prompt="You are helpful.",
+                    messages=(Message(role="user", content="review it"),),
+                ),
+                lambda _text: None,
+            )
+
+        self.assertEqual(raised.exception.details["reason"], "invalid_json")
+
+    @patch("agent_core.providers.litellm_provider.completion")
+    def test_rejects_a_different_argument_closing_suffix(
+        self,
+        completion_mock,
+    ) -> None:
+        completion_mock.return_value = iter(
+            [
+                chunk(
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "id": "call-1",
+                            "function": {
+                                "name": "ask_user",
+                                "arguments": '{"question":"Continue?"}',
+                            },
+                        }
+                    ]
+                ),
+                chunk(
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "function": {"arguments": "]"},
+                        }
+                    ]
+                ),
+            ]
+        )
+        provider = LiteLLMProvider(
+            model="deepseek/deepseek-flash",
+            max_context_tokens=1000,
+        )
+
+        with self.assertRaises(ProviderProtocolError) as raised:
+            provider.stream(
+                LLMRequest(
+                    system_prompt="You are helpful.",
+                    messages=(Message(role="user", content="review it"),),
+                ),
+                lambda _text: None,
+            )
+
+        self.assertEqual(raised.exception.details["reason"], "invalid_json")
+
+    @patch("agent_core.providers.litellm_provider.completion")
     def test_rejects_an_index_reused_for_a_different_id(
         self,
         completion_mock,
