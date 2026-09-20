@@ -34,6 +34,7 @@ namespaces = false
     "defaults/*.json",
     "defaults/prompts_template/*.md",
     "defaults/skills/**/*",
+    "defaults/plugins/**/*",
 ]
 "interfaces.gui" = ["static/*", "static/assets/*"]
 
@@ -45,4 +46,7 @@ namespaces = false
     "defaults/skills/**/__pycache__/*",
     "defaults/skills/**/*.pyc",
     "defaults/skills/**/.DS_Store",
+    "defaults/plugins/**/__pycache__/*",
+    "defaults/plugins/**/*.pyc",
+    "defaults/plugins/**/.DS_Store",
 ]

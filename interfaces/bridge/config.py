@@ -69,7 +69,8 @@ def initialize_config_directory(directory: Path) -> tuple[Path, ...]:
 
     skills_directory = directory / "skills"
     skills_directory.mkdir(exist_ok=True)
-    (directory / "plugins").mkdir(exist_ok=True)
+    plugins_directory = directory / "plugins"
+    plugins_directory.mkdir(exist_ok=True)
     packaged_skills = defaults.joinpath("skills")
     for skill in sorted(packaged_skills.iterdir(), key=lambda item: item.name):
         if not skill.is_dir() or not skill.joinpath("SKILL.md").is_file():
@@ -79,12 +80,22 @@ def initialize_config_directory(directory: Path) -> tuple[Path, ...]:
             continue
         _copy_resource_directory(skill, destination)
         created.append(destination)
+
+    packaged_plugins = defaults.joinpath("plugins")
+    for plugin in sorted(packaged_plugins.iterdir(), key=lambda item: item.name):
+        if not plugin.is_dir() or not plugin.joinpath("plugin.json").is_file():
+            continue
+        destination = plugins_directory / plugin.name
+        if destination.exists():
+            continue
+        _copy_resource_directory(plugin, destination)
+        created.append(destination)
     return tuple(created)
 
 
-# A skill is copied straight from the tree that holds it, which is the working
-# tree for an editable install, so byte-code caches and Finder metadata can sit
-# beside the real files. Neither belongs in an installed skill.
+# Packaged directories are copied straight from the tree that holds them, which
+# is the working tree for an editable install, so byte-code caches and Finder
+# metadata can sit beside the real files. Neither belongs in installed defaults.
 _SKIPPED_RESOURCE_NAMES = frozenset({"__pycache__", ".DS_Store"})
 
 

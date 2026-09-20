@@ -1,0 +1,14 @@
+{
+  "name": "plugin-dev",
+  "description": "Plugin development toolkit: skills and agents for authoring plugin structure, skills, commands, hooks and MCP integrations",
+  "enabled": true,
+  "capabilities": ["skills", "agents"],
+  "components": {
+    "skills": ["skills"],
+    "agents": [
+      "agents/agent-creator.md",
+      "agents/plugin-validator.md",
+      "agents/skill-reviewer.md"
+    ]
+  }
+}
