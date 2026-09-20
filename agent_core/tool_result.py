@@ -9,7 +9,6 @@ from .tools.budget import MAX_TOOL_RESULT_CHARS
 from .workspace import Workspace
 
 
-DEFAULT_MAX_TOOL_RESULT_CHARS = MAX_TOOL_RESULT_CHARS
 DEFAULT_TOOL_RESULT_PREVIEW_CHARS = 1200
 
 
@@ -41,7 +40,7 @@ class ToolResultNormalizer:
         self,
         workspace: Workspace,
         session_id: str,
-        max_chars: int = DEFAULT_MAX_TOOL_RESULT_CHARS,
+        max_chars: int = MAX_TOOL_RESULT_CHARS,
         preview_chars: int = DEFAULT_TOOL_RESULT_PREVIEW_CHARS,
         sessions_directory: Path | None = None,
         artifact_directory: Path | None = None,
@@ -83,37 +82,37 @@ class ToolResultNormalizer:
     def normalize(self, result: ToolResult) -> str:
         content = result.to_content()
         # What decides spilling is the envelope, because that is what
-        # would enter the model's context.  What gets written is the
-        # payload, because that is what a reader needs back.
+        # would enter the model's context.  Rendering the payload is
+        # only worth doing once that spill is certain: the common case
+        # returns the envelope and never touches the payload again.
+        spooled = result.artifact_writer is not None
+        if not spooled and len(content) <= self._max_chars:
+            if result.artifact_cleanup is not None:
+                result.artifact_cleanup()
+            return content
+
+        # What gets written is the payload, because that is what a
+        # reader needs back.
         body = artifact_body(result)
         size_chars = len(body)
         artifact_path = (
             self._artifact_path_prefix
             / f"{quote(result.tool_call_id, safe='')}.txt"
         )
-        # A spooled result is already known to be larger than the inline
-        # budget.  Let its writer stream the complete payload directly from
-        # disk instead of materializing it in memory again.
-        if result.artifact_writer is not None:
-            try:
-                absolute_path = self._absolute_artifact_path(artifact_path)
-                absolute_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            absolute_path = self._absolute_artifact_path(artifact_path)
+            absolute_path.parent.mkdir(parents=True, exist_ok=True)
+            if spooled:
+                # A spooled result is already known to be larger than the
+                # inline budget.  Let its writer stream the complete
+                # payload directly from disk instead of materializing it
+                # in memory again.
                 size_chars = result.artifact_writer(absolute_path)
-            finally:
-                if result.artifact_cleanup is not None:
-                    result.artifact_cleanup()
-        elif len(content) > self._max_chars:
-            try:
-                absolute_path = self._absolute_artifact_path(artifact_path)
-                absolute_path.parent.mkdir(parents=True, exist_ok=True)
+            else:
                 absolute_path.write_text(body, encoding="utf-8")
-            finally:
-                if result.artifact_cleanup is not None:
-                    result.artifact_cleanup()
-        else:
+        finally:
             if result.artifact_cleanup is not None:
                 result.artifact_cleanup()
-            return content
 
         relative_path = artifact_path.as_posix()
         return json.dumps(

@@ -8,6 +8,7 @@ from .base import (
     ToolPolicy,
     ToolResult,
 )
+from .budget import MAX_TOOL_RESULT_CHARS
 from .builtin import (
     AnalyzeImageTool,
     AskUserTool,
@@ -37,6 +38,7 @@ __all__ = [
     "EditFileTool",
     "JSONValue",
     "ListDirectoryTool",
+    "MAX_TOOL_RESULT_CHARS",
     "McpApprovalPolicy",
     "ROLE_TOOL_NAMES",
     "ReadFileTool",

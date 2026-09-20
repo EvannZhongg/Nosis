@@ -73,7 +73,6 @@ from .subagent import (
     vision_aware_tool_names,
 )
 from .tool_result import (
-    DEFAULT_MAX_TOOL_RESULT_CHARS,
     DEFAULT_TOOL_RESULT_PREVIEW_CHARS,
     ToolResultNormalizer,
 )
@@ -84,6 +83,7 @@ from .tools import (
     EditFileTool,
     JSONValue,
     ListDirectoryTool,
+    MAX_TOOL_RESULT_CHARS,
     McpApprovalPolicy,
     ReadFileTool,
     ReadImageTool,
@@ -147,7 +147,6 @@ __all__ = [
     "ContextCompressionConfig",
     "ContextManager",
     "ContextWindowExceededError",
-    "DEFAULT_MAX_TOOL_RESULT_CHARS",
     "DEFAULT_TOOL_RESULT_PREVIEW_CHARS",
     "DirectorySkillSource",
     "EditFileTool",
@@ -167,6 +166,7 @@ __all__ = [
     "ListDirectoryTool",
     "MAX_IMAGE_BYTES",
     "MAX_PLAN_STEP_OUTCOME_CHARS",
+    "MAX_TOOL_RESULT_CHARS",
     "McpApprovalPolicy",
     "McpConfig",
     "McpServerConfig",

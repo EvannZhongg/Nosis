@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from agent_core import (
     ToolResult,
@@ -32,6 +33,35 @@ class ToolResultNormalizerTest(unittest.TestCase):
 
             self.assertEqual(normalized, result.to_content())
             self.assertFalse((workspace.path / ".nosis" / "sessions").exists())
+
+    def test_does_not_render_the_payload_for_an_inline_result(self) -> None:
+        """An inline result must not pay to render a body nobody reads.
+
+        Every tool call takes this path, so rendering the artifact form
+        speculatively would cost a second serialization of the output on
+        the hot path.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+            result = ToolResult(
+                tool_call_id="call-1",
+                name="echo",
+                output={"text": "hello"},
+            )
+            normalizer = ToolResultNormalizer(
+                workspace,
+                "session-1",
+                max_chars=1000,
+                sessions_directory=workspace.path / ".nosis" / "sessions",
+            )
+
+            with patch(
+                "agent_core.tool_result.artifact_body"
+            ) as render_body:
+                normalized = normalizer.normalize(result)
+
+            render_body.assert_not_called()
+            self.assertEqual(normalized, result.to_content())
 
     def test_writes_large_result_and_returns_artifact_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
