@@ -237,6 +237,54 @@ describe('App', () => {
     expect(turns()).toHaveLength(0);
   });
 
+  it('opens /model and switches through provider_set', async () => {
+    const { stdin, lastFrame } = renderApp();
+    await waitForReady(lastFrame);
+    await typeDraft(stdin, lastFrame, '/model');
+    stdin.write('\r');
+    await waitFor(() => expect(sent).toContainEqual({ type: 'settings_get' }));
+    emit({
+      type: 'settings_snapshot',
+      settings: {
+        revision: 'r1',
+        config_directory: '/config',
+        default_provider: 'test',
+        providers: [
+          { id: 'test', model: 'test/model', url: null, max_context_tokens: null, credential: { source: 'none', env_name: null, configured: false } },
+          { id: 'second', model: 'test/second', url: null, max_context_tokens: null, credential: { source: 'none', env_name: null, configured: false } },
+        ],
+        routing: { main_agent: 'test', vision_provider: null, subagent: null, subagent_vision_provider: null, roles: {} },
+        agent: { max_same_tool_calls: 5, output_reserve_tokens: 100, max_generation_tokens: null, workspace_instruction_files: ['AGENTS.md'], tools: {}, context: { compression: { enabled: true, trigger_ratio: null, keep_recent_units: 4 } }, subagent_roles: {}, mcp_enabled: false },
+        skills: [], plugins: [], mcp_servers: [], plugin_agents: [], warnings: [],
+      },
+    });
+    await waitFor(() => expect(lastFrame()).toContain('❯ test · test/model'));
+    stdin.write('\u001b[B');
+    await waitFor(() => expect(lastFrame()).toContain('❯ second · test/second'));
+    stdin.write('\r');
+    await waitFor(() => expect(sent).toContainEqual({ type: 'provider_set', provider: 'second' }));
+    expect(turns()).toHaveLength(0);
+  });
+
+  it('shows /provider configuration without sending a turn', async () => {
+    const { stdin, lastFrame } = renderApp();
+    await waitForReady(lastFrame);
+    await typeDraft(stdin, lastFrame, '/provider');
+    stdin.write('\r');
+    emit({
+      type: 'settings_snapshot',
+      settings: {
+        revision: 'r1', config_directory: '/config', default_provider: 'test',
+        providers: [{ id: 'test', model: 'test/model', url: null, max_context_tokens: null, credential: { source: 'none', env_name: null, configured: false } }],
+        routing: { main_agent: 'test', vision_provider: null, subagent: null, subagent_vision_provider: null, roles: {} },
+        agent: { max_same_tool_calls: 5, output_reserve_tokens: 100, max_generation_tokens: null, workspace_instruction_files: ['AGENTS.md'], tools: {}, context: { compression: { enabled: true, trigger_ratio: null, keep_recent_units: 4 } }, subagent_roles: {}, mcp_enabled: false },
+        skills: [], plugins: [], mcp_servers: [], plugin_agents: [], warnings: [],
+      },
+    });
+    await waitFor(() => expect(lastFrame()).toContain('Configuration · /config'));
+    expect(turns()).toHaveLength(0);
+  });
+
   it('lists the commands after a slash and runs the highlighted one', async () => {
     const { stdin, lastFrame } = renderApp();
     await waitForReady(lastFrame);

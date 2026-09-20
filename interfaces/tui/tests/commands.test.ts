@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { COMMANDS, findCommand, matchCommands } from '../src/commands.js';
+import { COMMANDS, findCommand, matchCommands, parseCommand } from '../src/commands.js';
 
 const names = (value: string): string[] =>
   matchCommands(value, COMMANDS).map((command) => command.name);
@@ -21,6 +21,15 @@ describe('matchCommands', () => {
   it('ignores drafts that are not a command name', () => {
     expect(names('ask about /permissions')).toEqual([]);
     expect(names('/unknown')).toEqual([]);
+  });
+});
+
+describe('parseCommand', () => {
+  it('returns the command and its argument', () => {
+    expect(parseCommand('/model openai-main')).toEqual({
+      command: expect.objectContaining({ name: '/model' }),
+      argument: 'openai-main',
+    });
   });
 });
 

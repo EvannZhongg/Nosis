@@ -6,6 +6,7 @@ import type {
   ProtocolError,
   SessionItem,
   SessionSummary,
+  SettingsSnapshot,
   Usage,
   UserQuestionOption,
 } from '@nosis/protocol';
@@ -53,6 +54,7 @@ export type State = {
   sessionId: string | null;
   workspace: string;
   model: string;
+  provider: string;
   permissionPreset: PermissionPreset;
   entries: Entry[];
   /** Latest MCP startup status; cleared once Runtime initialization finishes. */
@@ -68,6 +70,7 @@ export type State = {
   question: UserQuestionState | null;
   /** Open session picker, filled once the bridge answers `list_sessions`. */
   sessions: { list: SessionSummary[]; selectedIndex: number } | null;
+  settings: SettingsSnapshot | null;
   turnId: string | null;
   usage: Usage | null;
   contextWindow: ContextWindow | null;
@@ -86,6 +89,7 @@ export type Action =
   | { type: 'sessions_opened' }
   | { type: 'sessions_choice'; selectedIndex: number }
   | { type: 'sessions_closed' }
+  | { type: 'settings_closed' }
   /** Drops everything the previous runtime reported, for a new Session. */
   | { type: 'restart' }
   | { type: 'cancelling' }
@@ -96,12 +100,14 @@ export const initialState: State = {
   sessionId: null,
   workspace: '',
   model: '',
+  provider: '',
   permissionPreset: 'ask_for_approval',
   entries: [],
   mcpStatus: null,
   approval: null,
   question: null,
   sessions: null,
+  settings: null,
   turnId: null,
   usage: null,
   contextWindow: null,
@@ -360,6 +366,9 @@ function reduceAction(state: State, action: Action): State {
     case 'sessions_closed':
       return { ...state, sessions: null };
 
+    case 'settings_closed':
+      return { ...state, settings: null };
+
     case 'restart':
       // The next runtime reports its own workspace, model and preset.
       return initialState;
@@ -437,6 +446,7 @@ function applyMessage(state: State, message: Incoming): State {
         ...state,
         sessionId: message.session_id,
         workspace: message.workspace,
+        provider: message.provider,
         model: message.model,
         permissionPreset: message.permission_preset,
         entries: message.resumed
@@ -596,6 +606,17 @@ function applyMessage(state: State, message: Incoming): State {
       };
 
     case 'provider_changed':
+      return { ...state, provider: message.provider, model: message.model };
+
+    case 'settings_snapshot':
+      return { ...state, settings: message.settings };
+
+    case 'settings_update_failed':
+      return {
+        ...state,
+        entries: [...state.entries, { kind: 'notice', id: nextId('notice'), level: 'error', text: message.error.message }],
+      };
+
     case 'workspace_changed':
       return state;
 

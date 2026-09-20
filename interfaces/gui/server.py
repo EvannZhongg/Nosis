@@ -18,7 +18,7 @@ from contextlib import asynccontextmanager
 from uuid import uuid4
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import Body, FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.encoders import jsonable_encoder
 from fastapi.staticfiles import StaticFiles
@@ -40,10 +40,10 @@ from agent_core.path_utils import path_for_comparison
 from ..bridge.config import (
     default_config_directory,
     initialize_config_directory,
-    load_model_options,
 )
 from ..bridge.process import cancel_process
 from ..bridge.protocol import attachment_replaced_message, runtime_state_message
+from ..bridge.settings import SettingsStore
 
 
 STATIC_PATH = Path(__file__).resolve().parent / "static"
@@ -505,9 +505,7 @@ class ActiveSession:
 def create_app(
     workspace: Workspace,
     store: JsonlSessionStore,
-    *,
-    models: dict[str, str],
-    default_model: str,
+    settings: SettingsStore,
 ) -> FastAPI:
     active_sessions: dict[str, ActiveSession] = {}
     active_session_lock = asyncio.Lock()
@@ -575,13 +573,62 @@ def create_app(
 
     @app.get("/api/models")
     def list_models() -> dict[str, object]:
+        default_provider, models = settings.model_options()
         return {
-            "default": default_model,
+            "default": default_provider,
             "models": [
                 {"id": name, "model": model}
                 for name, model in models.items()
             ],
         }
+
+    @app.get("/api/settings")
+    def get_settings() -> dict[str, object]:
+        try:
+            return settings.snapshot()
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+    @app.put("/api/settings/providers/{provider_id}")
+    def save_provider_settings(
+        provider_id: str,
+        payload: dict[str, object] = Body(...),
+    ) -> dict[str, object]:
+        try:
+            revision = payload.pop("expected_revision", None)
+            return settings.save_provider(
+                provider_id,
+                payload,
+                revision if isinstance(revision, str) else None,
+            )
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+    @app.put("/api/settings/agent")
+    def save_agent_settings(
+        payload: dict[str, object] = Body(...),
+    ) -> dict[str, object]:
+        try:
+            revision = payload.pop("expected_revision", None)
+            return settings.save_agent(
+                payload,
+                revision if isinstance(revision, str) else None,
+            )
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+    @app.put("/api/settings/routing")
+    def save_routing_settings(
+        payload: dict[str, object] = Body(...),
+    ) -> dict[str, object]:
+        try:
+            revision = payload.pop("expected_revision", None)
+            return settings.save_routing(
+                payload,
+                revision if isinstance(revision, str) else None,
+            )
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
 
     @app.get("/api/active-sessions")
     async def list_active_sessions() -> list[dict[str, object]]:
@@ -865,6 +912,7 @@ def create_app(
                 and requested_workspace
                 else session_workspace(opening_session_id)
             )
+            _, models = settings.model_options()
             opening_message = _open_session_message(
                 opening,
                 current_workspace,
@@ -1084,13 +1132,10 @@ def main(argv: list[str] | None = None) -> None:
     try:
         initialize_config_directory(config_directory)
         workspace = Workspace(args.workspace or Path.cwd())
-        provider_config_path = config_directory / "provider_config.json"
-        default_model, models = load_model_options(provider_config_path)
         app = create_app(
             workspace,
             JsonlSessionStore(config_directory / "sessions"),
-            models=models,
-            default_model=default_model,
+            SettingsStore(config_directory),
         )
     except (OSError, ValueError) as error:
         raise SystemExit(f"Failed to start Nosis: {error}") from error

@@ -18,10 +18,24 @@ export const COMMANDS: Command[] = [
     name: '/sessions',
     description: 'Switch to another conversation in this workspace',
   },
+  {
+    name: '/model',
+    description: 'Switch this session to another configured provider',
+  },
+  {
+    name: '/provider',
+    description: 'Inspect provider, skill, plugin and MCP configuration',
+  },
 ];
 
+export function parseCommand(value: string): { command: Command; argument: string } | undefined {
+  const [name, ...rest] = value.trim().split(/\s+/);
+  const command = COMMANDS.find((item) => item.name === name);
+  return command ? { command, argument: rest.join(' ') } : undefined;
+}
+
 export function findCommand(name: string): Command | undefined {
-  return COMMANDS.find((command) => command.name === name);
+  return parseCommand(name)?.command;
 }
 
 /**

@@ -20,7 +20,7 @@ class ExecutionPlane:
     workspace: Workspace
     provider_name: str
     agent_config: AgentConfig
-    provider_config_fingerprint: str
+    configuration_fingerprint: str
     instructions: WorkspaceInstructions
     agent: Agent
     jobs: JobManager
@@ -34,15 +34,15 @@ class ExecutionPlane:
         workspace: Workspace,
         provider_name: str,
         agent_config: AgentConfig,
-        provider_config_fingerprint: str,
+        configuration_fingerprint: str,
         instructions: WorkspaceInstructions,
     ) -> bool:
         return (
             self.workspace == workspace
             and self.provider_name == provider_name
             and self.agent_config == agent_config
-            and self.provider_config_fingerprint
-            == provider_config_fingerprint
+            and self.configuration_fingerprint
+            == configuration_fingerprint
             and self.instructions.fingerprint == instructions.fingerprint
         )
 

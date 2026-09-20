@@ -1,4 +1,5 @@
 import type { ContextWindow, PermissionPreset, PlanSnapshot, SessionItem, SessionSummary } from "@nosis/protocol";
+import type { SettingsSnapshot } from "@nosis/protocol";
 
 export type { SessionItem, SessionSummary };
 
@@ -30,6 +31,21 @@ export async function get<T>(path: string): Promise<T> {
   }
   return response.json();
 }
+
+export async function put<T>(path: string, body: unknown): Promise<T> {
+  const response = await fetch(path, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail ?? `保存失败 (${response.status})`);
+  }
+  return response.json();
+}
+
+export type { SettingsSnapshot };
 
 export function sessionUrl(sessionId: string): string {
   return `/api/sessions/${encodeURIComponent(sessionId)}`;

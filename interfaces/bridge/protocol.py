@@ -190,6 +190,35 @@ def session_items_message(
     }
 
 
+def settings_snapshot_message(
+    snapshot: dict[str, object],
+    request_id: str | None = None,
+) -> dict[str, object]:
+    message: dict[str, object] = {
+        "type": "settings_snapshot",
+        "settings": snapshot,
+    }
+    if request_id is not None:
+        message["request_id"] = request_id
+    return message
+
+
+def settings_update_failed_message(
+    error: Exception,
+    request_id: str | None = None,
+) -> dict[str, object]:
+    message: dict[str, object] = {
+        "type": "settings_update_failed",
+        "error": {
+            "type": type(error).__name__,
+            "message": str(error),
+        },
+    }
+    if request_id is not None:
+        message["request_id"] = request_id
+    return message
+
+
 def event_to_message(
     event: AgentEvent,
     turn_id: str,

@@ -8,14 +8,11 @@ can drive it with plain string buffers.
 import json
 import _thread
 from collections import deque
-from hashlib import sha256
 from itertools import count
 from pathlib import Path
 from queue import Queue
 from threading import Lock, Thread
 from typing import TextIO
-
-from dotenv import load_dotenv
 
 from agent_core import (
     Agent,
@@ -70,6 +67,7 @@ from .config import (
 from .execution_plane import ExecutionPlane
 from .instructions import load_workspace_instructions
 from .plugins import PluginAgent, PluginManager
+from .settings import EnvironmentReloader, SettingsStore, configuration_fingerprint
 from .protocol import (
     decode,
     encode,
@@ -81,6 +79,8 @@ from .protocol import (
     session_ready_message,
     session_items_message,
     sessions_listed_message,
+    settings_snapshot_message,
+    settings_update_failed_message,
     usage_to_dict,
 )
 
@@ -116,6 +116,8 @@ class Bridge:
         self._config_directory = default_config_directory().resolve()
         self._config_path = self._config_directory / "provider_config.json"
         self._agent_config_path = self._config_directory / "agent_config.json"
+        self._environment = EnvironmentReloader(self._config_directory / ".env")
+        self._settings = SettingsStore(self._config_directory, self._environment)
         self._provider_name: str | None = None
         self._execution_plane: ExecutionPlane | None = None
         self._approval: dict[str, object] | None = None
@@ -461,7 +463,7 @@ class Bridge:
 
     def open_session(self, message: dict[str, object]) -> None:
         config_path = self._config_path
-        load_dotenv(self._config_directory / ".env")
+        self._environment.reload()
 
         workspace = Workspace(Path(str(message["workspace"])))
         provider = message.get("provider")
@@ -549,10 +551,11 @@ class Bridge:
         ):
             raise RuntimeError("received 'user_turn' before 'open_session'")
 
+        self._environment.reload()
         agent_config = load_agent_config(self._agent_config_path)
-        provider_config_fingerprint = sha256(
-            self._config_path.read_bytes()
-        ).hexdigest()
+        config_fingerprint = configuration_fingerprint(
+            self._config_directory
+        )
         instructions = load_workspace_instructions(
             self._config_directory,
             self._workspace,
@@ -564,7 +567,7 @@ class Bridge:
                 workspace=self._workspace,
                 provider_name=self._provider_name,
                 agent_config=agent_config,
-                provider_config_fingerprint=provider_config_fingerprint,
+                configuration_fingerprint=config_fingerprint,
                 instructions=instructions,
             ):
                 return plane
@@ -697,7 +700,7 @@ class Bridge:
                 workspace=workspace,
                 provider_name=self._provider_name,
                 agent_config=agent_config,
-                provider_config_fingerprint=provider_config_fingerprint,
+                configuration_fingerprint=config_fingerprint,
                 instructions=instructions,
                 agent=agent,
                 jobs=jobs,
@@ -790,6 +793,63 @@ class Bridge:
                 [message_to_dict(item) for item in self._session.items]
             )
         )
+
+    def _settings_request_id(
+        self, message: dict[str, object]
+    ) -> str | None:
+        value = message.get("request_id")
+        return value if isinstance(value, str) and value else None
+
+    def _emit_settings(self, message: dict[str, object]) -> None:
+        request_id = self._settings_request_id(message)
+        try:
+            self.emit(**settings_snapshot_message(
+                self._settings.snapshot(), request_id
+            ))
+        except (OSError, ValueError) as error:
+            self.emit(**settings_update_failed_message(error, request_id))
+
+    def _save_provider_settings(self, message: dict[str, object]) -> None:
+        request_id = self._settings_request_id(message)
+        provider = message.get("provider")
+        settings = message.get("settings")
+        try:
+            if not isinstance(provider, str) or not provider:
+                raise ValueError("provider must be a non-empty string")
+            revision = message.get("expected_revision")
+            snapshot = self._settings.save_provider(
+                provider,
+                settings,
+                revision if isinstance(revision, str) else None,
+            )
+            self._environment.reload()
+            self.emit(**settings_snapshot_message(snapshot, request_id))
+        except (OSError, ValueError) as error:
+            self.emit(**settings_update_failed_message(error, request_id))
+
+    def _save_agent_settings(self, message: dict[str, object]) -> None:
+        request_id = self._settings_request_id(message)
+        try:
+            revision = message.get("expected_revision")
+            snapshot = self._settings.save_agent(
+                message.get("settings"),
+                revision if isinstance(revision, str) else None,
+            )
+            self.emit(**settings_snapshot_message(snapshot, request_id))
+        except (OSError, ValueError) as error:
+            self.emit(**settings_update_failed_message(error, request_id))
+
+    def _save_routing_settings(self, message: dict[str, object]) -> None:
+        request_id = self._settings_request_id(message)
+        try:
+            revision = message.get("expected_revision")
+            snapshot = self._settings.save_routing(
+                message.get("settings"),
+                revision if isinstance(revision, str) else None,
+            )
+            self.emit(**settings_snapshot_message(snapshot, request_id))
+        except (OSError, ValueError) as error:
+            self.emit(**settings_update_failed_message(error, request_id))
 
     def _provider_for(
         self,
@@ -1037,6 +1097,14 @@ class Bridge:
                 self._emit_sessions()
             elif message["type"] == "load_session":
                 self._emit_session_items()
+            elif message["type"] == "settings_get":
+                self._emit_settings(message)
+            elif message["type"] == "settings_provider_save":
+                self._save_provider_settings(message)
+            elif message["type"] == "settings_agent_save":
+                self._save_agent_settings(message)
+            elif message["type"] == "settings_routing_save":
+                self._save_routing_settings(message)
 
     def close(self) -> None:
         self._route_shutdown(notify_commands=False)

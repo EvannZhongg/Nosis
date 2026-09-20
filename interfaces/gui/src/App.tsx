@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { ChevronDown, ChevronRight, MessageSquare, Plus, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Bot, Boxes, ChevronDown, ChevronRight, KeyRound, MessageSquare, Plug, Plus, Settings as SettingsIcon, Sparkles, Trash2 } from "lucide-react";
 import { Chat } from "./Chat";
+import { Settings, type SettingsSection } from "./Settings";
 import { Workspace } from "./Workspace";
 import { runtimeIsActive, type ContextWindow, type RuntimePhase } from "@nosis/protocol";
 import { deleteSession, get, sessionUrl, type ModelOption, type ModelOptions, type Session, type WorkspaceSessions } from "./api";
@@ -28,11 +29,14 @@ export function App() {
   const [loadingSessionId, setLoadingSessionId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [workspaceVersion, setWorkspaceVersion] = useState(0);
-  const [models, setModels] = useState<ModelOption[]>([]);
-  const [defaultModel, setDefaultModel] = useState("");
-  const [modelBySession, setModelBySession] = useState<Record<string, string>>({});
+  const [providers, setProviders] = useState<ModelOption[]>([]);
+  const [defaultProvider, setDefaultProvider] = useState("");
+  const [providerBySession, setProviderBySession] = useState<Record<string, string>>({});
   const [activeTurnIds, setActiveTurnIds] = useState<Set<string>>(new Set());
   const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<Set<string>>(new Set());
+  const [settingsSection, setSettingsSection] = useState<SettingsSection | null>(null);
+  const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
+  const settingsMenuRef = useRef<HTMLDivElement>(null);
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -59,7 +63,7 @@ export function App() {
         ]);
         setSelectedSessionId(selected.session_id);
         if (selected.provider) {
-          setModelBySession((all) => ({ ...all, [selected.session_id]: selected.provider! }));
+          setProviderBySession((all) => ({ ...all, [selected.session_id]: selected.provider! }));
         }
         if (selected.context_window) {
           setContextBySession((all) => ({ ...all, [selected.session_id]: selected.context_window ?? null }));
@@ -82,12 +86,21 @@ export function App() {
       localStorage.setItem(SELECTED_SESSION_KEY, selectedSessionId);
     }
   }, [restoringSession, selectedSessionId]);
-  useEffect(() => {
+  const refreshModels = useCallback(() => {
     get<ModelOptions>("/api/models").then((options) => {
-      setModels(options.models);
-      setDefaultModel(options.default);
+      setProviders(options.models);
+      setDefaultProvider(options.default);
     }).catch((error) => setError(String(error)));
   }, []);
+  useEffect(() => { refreshModels(); }, [refreshModels]);
+  useEffect(() => {
+    if (!settingsMenuOpen) return;
+    const closeMenu = (event: MouseEvent) => {
+      if (!settingsMenuRef.current?.contains(event.target as Node)) setSettingsMenuOpen(false);
+    };
+    document.addEventListener("mousedown", closeMenu);
+    return () => document.removeEventListener("mousedown", closeMenu);
+  }, [settingsMenuOpen]);
   useEffect(() => {
     get<ActiveSession[]>("/api/active-sessions").then(async (activeSessions) => {
       setActiveTurnIds(new Set(
@@ -99,7 +112,7 @@ export function App() {
         ...all,
         ...Object.fromEntries(activeSessions.map((session) => [session.session_id, runtimeIsActive(session.phase)])),
       }));
-      setModelBySession((all) => ({
+      setProviderBySession((all) => ({
         ...all,
         ...Object.fromEntries(activeSessions.flatMap((session) => session.provider ? [[session.session_id, session.provider]] : [])),
       }));
@@ -131,7 +144,7 @@ export function App() {
       const loaded = await get<Session>(sessionUrl(id));
       setChatSessions((all) => all.some((item) => item.session_id === id) ? all : [...all, loaded]);
       if (loaded.provider) {
-        setModelBySession((all) => ({ ...all, [id]: loaded.provider! }));
+        setProviderBySession((all) => ({ ...all, [id]: loaded.provider! }));
       }
       if (loaded.context_window) {
         setContextBySession((all) => ({ ...all, [id]: loaded.context_window ?? null }));
@@ -168,7 +181,7 @@ export function App() {
       }
       setBusyBySession((all) => { const next = { ...all }; delete next[id]; return next; });
       setContextBySession((all) => { const next = { ...all }; delete next[id]; return next; });
-      setModelBySession((all) => { const next = { ...all }; delete next[id]; return next; });
+      setProviderBySession((all) => { const next = { ...all }; delete next[id]; return next; });
       await refreshSessions();
     } catch (error) {
       setError(String(error));
@@ -181,6 +194,13 @@ export function App() {
   const selectedTitle = sessions.find((item) => item.session_id === selectedSessionId)?.title ?? "New chat";
   const busy = Boolean(busyBySession[selectedSessionId]);
   const contextWindow = contextBySession[selectedSessionId] ?? selectedSession?.context_window ?? null;
+  const settingsItems: { id: SettingsSection; label: string; description: string; icon: typeof Bot }[] = [
+    { id: "providers", label: "Providers", description: "模型、密钥和路由", icon: KeyRound },
+    { id: "agent", label: "Agent", description: "工具和运行时设置", icon: Bot },
+    { id: "skills", label: "Skills", description: "查看可用技能", icon: Sparkles },
+    { id: "plugins", label: "Plugins", description: "查看已安装扩展", icon: Boxes },
+    { id: "mcp", label: "MCP", description: "查看外部工具服务", icon: Plug },
+  ];
 
   return (
     <div className="app-shell">
@@ -202,16 +222,23 @@ export function App() {
           })}
           {sessionGroups.length === 0 && <p className="session-empty">从一段对话开始。</p>}
         </nav>
-        <div className="sidebar-footer"><span className="status-dot" /> Personal workspace</div>
+        <div className="settings-menu-wrap" ref={settingsMenuRef}>
+          {settingsMenuOpen && <div className="settings-popover" role="menu">
+            <div className="settings-popover-label">Settings</div>
+            {settingsItems.map((item) => { const Icon = item.icon; return <button type="button" role="menuitem" key={item.id} onClick={() => { setSettingsSection(item.id); setSettingsMenuOpen(false); }}><Icon size={15} /><span><strong>{item.label}</strong><small>{item.description}</small></span><ChevronRight size={13} /></button>; })}
+          </div>}
+          <button className={`sidebar-footer ${settingsSection ? "selected" : ""}`} aria-expanded={settingsMenuOpen} onClick={() => setSettingsMenuOpen((open) => !open)}><SettingsIcon size={14} /> Settings<ChevronDown size={12} /></button>
+        </div>
       </aside>
 
-      <main className="chat-panel">
+      {settingsSection && <Settings section={settingsSection} onClose={() => setSettingsSection(null)} onChanged={refreshModels} />}
+      <main className="chat-panel" style={{ display: settingsSection ? "none" : undefined }}>
         <header className="chat-header"><div className="breadcrumb">Chat <ChevronRight size={14} /><span>{restoringSession ? "…" : selectedTitle}</span></div><span className="status-label"><span className={`status-dot ${busy ? "working" : ""}`} />{busy ? "Working" : "Ready"}</span></header>
         {error && <div className="error-banner" role="alert">{error}</div>}
         {!restoringSession && chatSessions.map((current) => {
-          const model = modelBySession[current.session_id] ?? defaultModel;
+          const provider = providerBySession[current.session_id] ?? defaultProvider;
           return <div key={current.session_id} style={{ display: current.session_id === selectedSessionId ? "contents" : "none" }}><Chat session={current} selected={current.session_id === selectedSessionId} contextWindow={current.session_id === selectedSessionId ? contextWindow : contextBySession[current.session_id] ?? current.context_window ?? null} workspaceOptions={sessionGroups.map((group) => group.workspace)} backgroundActive={activeTurnIds.has(current.session_id)}
-            models={models} model={model} onModelChange={(value) => setModelBySession((all) => ({ ...all, [current.session_id]: value }))} onBusyChange={(value) => {
+            providers={providers} provider={provider} onProviderChange={(value) => setProviderBySession((all) => ({ ...all, [current.session_id]: value }))} onBusyChange={(value) => {
               setBusyBySession((all) => ({ ...all, [current.session_id]: value }));
               setActiveTurnIds((all) => { const next = new Set(all); if (value) next.add(current.session_id); else next.delete(current.session_id); return next; });
             }} onContextWindowChange={(value) => setContextBySession((all) => ({ ...all, [current.session_id]: value }))} onTurnEnd={() => {
@@ -223,7 +250,7 @@ export function App() {
           }} /></div>;
         })}
       </main>
-      {selectedSession && <Workspace version={workspaceVersion} sessionId={selectedSession.session_id} />}
+      {!settingsSection && selectedSession && <Workspace version={workspaceVersion} sessionId={selectedSession.session_id} />}
     </div>
   );
 }

@@ -58,6 +58,49 @@ export type PlanSnapshot = {
 };
 
 export type PermissionPreset = 'ask_for_approval' | 'full_access';
+
+export type ProviderSetting = {
+  id: string;
+  model: string;
+  url: string | null;
+  max_context_tokens: number | null;
+  credential: {
+    source: 'env' | 'inline' | 'none';
+    env_name: string | null;
+    configured: boolean;
+  };
+};
+
+export type AgentSettings = {
+  max_same_tool_calls: number;
+  output_reserve_tokens: number;
+  max_generation_tokens: number | null;
+  workspace_instruction_files: string[];
+  tools: Record<string, boolean>;
+  context: { compression: { enabled: boolean; trigger_ratio: number | null; keep_recent_units: number } };
+  subagent_roles: Record<string, { enabled: boolean; description: string; tools: Record<string, boolean> }>;
+  mcp_enabled: boolean;
+};
+
+export type SettingsSnapshot = {
+  revision: string;
+  config_directory: string;
+  default_provider: string;
+  providers: ProviderSetting[];
+  routing: {
+    main_agent: string;
+    vision_provider: string | null;
+    subagent: string | null;
+    subagent_vision_provider: string | null;
+    roles: Record<string, { provider?: string; vision_provider?: string }>;
+  };
+  agent: AgentSettings;
+  skills: { id: string; name: string; description: string; source: string; path: string; content: string }[];
+  plugins: { name: string; version: string | null; description: string | null; enabled: boolean; capabilities: string[]; path: string; components: Record<string, string[]> }[];
+  mcp_servers: { id: string; source: string; enabled: boolean; transport: string; command: string | null; args: string[]; cwd: string | null; url: string | null; env_names: string[]; header_names: string[]; startup_timeout_seconds: number; call_timeout_seconds: number }[];
+  plugin_agents: { name: string; description: string; model: string | null; source: string }[];
+  warnings: string[];
+};
 export type RuntimePhase =
   | 'inactive'
   | 'starting'
@@ -225,6 +268,8 @@ export type Incoming = (
     }
   | { type: 'permission_changed'; preset: PermissionPreset }
   | { type: 'provider_changed'; provider: string; model: string }
+  | { type: 'settings_snapshot'; request_id?: string; settings: SettingsSnapshot }
+  | { type: 'settings_update_failed'; request_id?: string; error: ProtocolError }
   | { type: 'workspace_changed'; workspace: string }
   | { type: 'sessions_listed'; sessions: SessionSummary[] }
   | { type: 'session_items'; items: SessionItem[] }
@@ -254,6 +299,10 @@ export type Outgoing =
   | { type: 'approval_response'; request_id: string; approved: boolean }
   | { type: 'permission_set'; preset: PermissionPreset }
   | { type: 'provider_set'; provider: string }
+  | { type: 'settings_get'; request_id?: string }
+  | { type: 'settings_provider_save'; request_id?: string; expected_revision?: string; provider: string; settings: JSONValue }
+  | { type: 'settings_agent_save'; request_id?: string; expected_revision?: string; settings: JSONValue }
+  | { type: 'settings_routing_save'; request_id?: string; expected_revision?: string; settings: JSONValue }
   | { type: 'workspace_set'; workspace: string }
   | { type: 'cancel'; turn_id: string }
   | { type: 'user_question_response'; request_id: string; option_id?: string; text?: string }

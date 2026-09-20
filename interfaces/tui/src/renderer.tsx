@@ -3,7 +3,7 @@ import { Box, Static, Text, useBoxMetrics } from 'ink';
 import type { DOMElement } from 'ink';
 import Spinner from 'ink-spinner';
 import { formatArguments } from '@nosis/protocol';
-import type { PermissionPreset, PlanSnapshot, SessionSummary } from '@nosis/protocol';
+import type { PermissionPreset, PlanSnapshot, SessionSummary, SettingsSnapshot } from '@nosis/protocol';
 import type { ApprovalChoice, Entry, State, UserQuestionState } from './state.js';
 
 function EntryView({ entry }: { entry: Entry }): React.ReactElement {
@@ -455,6 +455,28 @@ export function SessionPicker({
       <Text dimColor>↑/↓ select · enter switch · esc close</Text>
     </Box>
   );
+}
+
+export function ModelPicker({ settings, selectedIndex }: { settings: SettingsSnapshot; selectedIndex: number }): React.ReactElement {
+  return <Box marginTop={1} flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1}>
+    <Text color="cyan" bold>Models</Text>
+    <Box marginTop={1} flexDirection="column">{settings.providers.map((provider, index) => <Text key={provider.id} color={index === selectedIndex ? 'cyan' : undefined} dimColor={index !== selectedIndex} bold={index === selectedIndex}>{index === selectedIndex ? '❯ ' : '  '}{provider.id} · {provider.model}{provider.id === settings.default_provider ? ' · default' : ''}</Text>)}</Box>
+    <Text dimColor>↑/↓ select · enter switch · esc close</Text>
+  </Box>;
+}
+
+export function ProviderOverview({ settings }: { settings: SettingsSnapshot }): React.ReactElement {
+  return <Box marginTop={1} flexDirection="column" borderStyle="round" borderColor="cyan" paddingX={1}>
+    <Text color="cyan" bold>Configuration · {settings.config_directory}</Text>
+    <Box marginTop={1} flexDirection="column">
+      <Text bold>Providers</Text>
+      {settings.providers.map((provider) => <Text key={provider.id}>{provider.id === settings.default_provider ? '●' : '○'} {provider.id} · {provider.model} · key {provider.credential.configured ? 'configured' : 'missing'}</Text>)}
+      <Text bold>Skills</Text><Text>{settings.skills.length ? settings.skills.map((skill) => skill.id).join(', ') : 'none'}</Text>
+      <Text bold>Plugins</Text><Text>{settings.plugins.length ? settings.plugins.map((plugin) => `${plugin.name} (${plugin.enabled ? 'enabled' : 'disabled'})`).join(', ') : 'none'}</Text>
+      <Text bold>MCP</Text><Text>{settings.agent.mcp_enabled ? settings.mcp_servers.map((server) => server.id).join(', ') || 'enabled, no servers' : 'disabled'}</Text>
+    </Box>
+    <Text dimColor>Use the GUI Settings screen to edit provider secrets and Agent configuration · esc close</Text>
+  </Box>;
 }
 
 export function UserQuestionPrompt({

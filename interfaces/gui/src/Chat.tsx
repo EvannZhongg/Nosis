@@ -327,13 +327,13 @@ function ContextWindowIndicator({ window }: { window: ContextWindow | null }) {
   </div>;
 }
 
-export function Chat({ session, selected, contextWindow, workspaceOptions = [], backgroundActive = false, models, model, onModelChange, onBusyChange, onContextWindowChange, onSessionAvailable, onTurnEnd, onWorkspaceChange }: {
+export function Chat({ session, selected, contextWindow, workspaceOptions = [], backgroundActive = false, providers, provider, onProviderChange, onBusyChange, onContextWindowChange, onSessionAvailable, onTurnEnd, onWorkspaceChange }: {
   session: Session; onBusyChange: (busy: boolean) => void; onTurnEnd: () => void;
   selected: boolean;
   contextWindow: ContextWindow | null;
   onContextWindowChange: (window: ContextWindow | null) => void;
   onSessionAvailable: () => void;
-  models: ModelOption[]; model: string; onModelChange: (model: string) => void;
+  providers: ModelOption[]; provider: string; onProviderChange: (provider: string) => void;
   backgroundActive?: boolean;
   workspaceOptions?: string[];
   onWorkspaceChange?: (workspace: string) => void;
@@ -425,21 +425,21 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
       if (!runningRef.current) {
         void releaseActiveSession(
           session.session_id,
-          socketModelRef.current || model,
+          socketModelRef.current || provider,
           attachmentId,
         ).catch(() => undefined);
       }
     };
     window.addEventListener("pagehide", releaseOnPageLeave);
     return () => window.removeEventListener("pagehide", releaseOnPageLeave);
-  }, [attachmentId, model, session.session_id]);
+  }, [attachmentId, provider, session.session_id]);
 
   useEffect(() => {
     if ((selected || backgroundActive) && socketRef.current === null) {
       setAttaching(true);
       connect({ attachOnly: !selected, takeover: true });
     }
-  }, [backgroundActive, model, selected, session.session_id, session.workspace]);
+  }, [backgroundActive, provider, selected, session.session_id, session.workspace]);
 
   useEffect(() => {
     if (selected || running || socketRef.current === null) return;
@@ -447,8 +447,8 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
     socketRef.current = null;
     socketModelRef.current = "";
     socket.close();
-    void releaseActiveSession(session.session_id, model, attachmentId).catch(() => undefined);
-  }, [attachmentId, model, running, selected, session.session_id]);
+    void releaseActiveSession(session.session_id, provider, attachmentId).catch(() => undefined);
+  }, [attachmentId, provider, running, selected, session.session_id]);
 
   const showToast = useCallback((next: Extract<Feedback, { kind: "toast" }>) => {
     if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
@@ -491,7 +491,7 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
     let socket: SessionSocket;
     socket = new SessionSocket({
       sessionId: session.session_id,
-      provider: model,
+      provider,
       workspace: workspaceDraft || session.workspace,
       attachmentId,
       attachOnly,
@@ -539,7 +539,7 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
           setAttachmentReplaced(false);
           if (message.provider) {
             socketModelRef.current = message.provider;
-            if (message.provider !== model) onModelChange(message.provider);
+            if (message.provider !== provider) onProviderChange(message.provider);
           }
           const active = runtimeIsActive(message.phase);
           setRuntimePhase(message.phase);
@@ -607,7 +607,7 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
         if (message.type === "provider_changed") {
           setProviderSaving(false);
           socketModelRef.current = message.provider;
-          if (message.provider !== model) onModelChange(message.provider);
+          if (message.provider !== provider) onProviderChange(message.provider);
           onContextWindowChange(null);
         }
         if (message.type === "workspace_changed") {
@@ -664,7 +664,7 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
       },
     });
     socketRef.current = socket;
-    socketModelRef.current = model;
+    socketModelRef.current = provider;
     return socket;
   }
 
@@ -931,9 +931,9 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
         <ComposerPrimitive.Root className="composer" onSubmit={onComposerSubmit}><div ref={workspacePickerRef} className="workspace-picker-wrap"><button type="button" className="workspace-picker" onClick={() => setWorkspaceEditing((value) => { if (value && !workspaceDraft.trim()) setWorkspaceDraft(session.workspace ?? ""); return !value; })} disabled={controlsDisabled || running} aria-expanded={workspaceEditing}><span className="workspace-picker-icon">⌂</span><span className="workspace-picker-value">{workspaceDraft || "选择项目"}</span><ChevronDown size={14} /></button>{workspaceEditing && <div className="workspace-menu" role="menu"><div className="workspace-menu-heading">选择工作区</div>{availableWorkspaces.map((path) => <button type="button" role="menuitem" className={`workspace-option ${path === workspaceDraft ? "selected" : ""}`} key={path} onClick={() => { void saveWorkspace(path); setWorkspaceEditing(false); }} disabled={controlsDisabled || running || workspaceSaving} title={path}><span className="workspace-option-path">{path}</span></button>)}<div className="workspace-menu-divider" /><button type="button" role="menuitem" className="workspace-new-option" onClick={() => { void chooseNewWorkspace(); }} disabled={controlsDisabled || running || workspaceSaving}>＋ 新建工作区</button></div>}</div><ComposerPrimitive.Input placeholder={question ? "请先回答上方问题…" : approval ? "请先处理上方确认…" : "Ask Nosis…"} aria-label="消息" rows={2} autoFocus submitMode="none" disabled={composerGate.inputDisabled} onKeyDown={onComposerKeyDown} onCompositionStart={onCompositionStart} onCompositionEnd={onCompositionEnd} onPaste={onPaste} /><div className="composer-bottom">
           <button type="button" className="attachment-button" aria-label="添加图片" title="添加图片" disabled={controlsDisabled || running} onClick={() => fileInputRef.current?.click()}><Paperclip size={15} /></button>
           <input ref={fileInputRef} className="attachment-input" type="file" accept="image/*" multiple onChange={(event) => { setPendingFiles((files) => [...files, ...Array.from(event.target.files ?? [])]); event.currentTarget.value = ""; }} />
-          <label className="model-selector" title={models.find((option) => option.id === model)?.model}>
-            <select aria-label="选择模型" value={model} disabled={controlsDisabled || running || providerSaving} onChange={(event) => changeProvider(event.target.value)}>
-              {models.map((option) => <option key={option.id} value={option.id}>{option.model}</option>)}
+          <label className="model-selector" title={providers.find((option) => option.id === provider)?.model}>
+            <select aria-label="选择模型" value={provider} disabled={controlsDisabled || running || providerSaving} onChange={(event) => changeProvider(event.target.value)}>
+              {providers.map((option) => <option key={option.id} value={option.id}>{option.model}</option>)}
             </select><ChevronDown size={12} />
           </label>
           <label className="permission-selector" title="权限模式">

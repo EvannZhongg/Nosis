@@ -21,6 +21,7 @@ Bridge 以独立进程运行，是前端驱动 Agent 的唯一通道，两端用
 - **会话持久化**：对话与执行事件以 append-only JSONL Journal 保存，重启后可以恢复；TUI 用 `/sessions` 切换历史会话，GUI 从侧边栏打开并默认回到上次的会话。
 - **上下文管理**：接近预算时自动压缩较早的历史并保留最近若干轮，另有硬上限；窗口占用在 GUI 中可见。
 - **一个 Runtime，两个前端**：驱动 Agent、执行 Tool、授权与取消只实现一次，TUI 与 GUI 只渲染状态并采集输入。
+- **统一设置**：GUI 可编辑 Provider 与 Agent 配置并查看 Skill、Plugin、MCP；TUI 可用 `/model` 切换当前 Session 的 Provider，并用 `/provider` 查看配置概览。
 
 ## 快速开始
 

@@ -9,3 +9,7 @@
 `turn_failed` 与 `fatal` 使用统一的结构化错误：`type`、`message` 和
 `details` 均为必填字段。Provider 协议错误可在 `details` 中携带阶段、模型、
 Tool Call 身份、参数长度、分片长度与摘要；不得传输完整 Tool 参数。
+
+设置读取与修改使用 `settings_get`、`settings_provider_save`、
+`settings_agent_save`、`settings_routing_save`。Bridge 返回脱敏后的
+`settings_snapshot`；配置校验失败返回非致命的 `settings_update_failed`。

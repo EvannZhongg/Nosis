@@ -2,12 +2,14 @@ import React, { useEffect, useReducer, useRef, useState } from 'react';
 import { Box, Text, useApp, useInput, useWindowSize } from 'ink';
 import type { PermissionPreset, SessionSummary } from '@nosis/protocol';
 import { BridgeClient } from './bridge.js';
-import { COMMANDS, findCommand } from './commands.js';
+import { COMMANDS, parseCommand } from './commands.js';
 import { Prompt } from './input.js';
 import {
   ApprovalPrompt,
   PermissionPrompt,
   PlanView,
+  ModelPicker,
+  ProviderOverview,
   SessionPicker,
   StatusBar,
   Transcript,
@@ -33,6 +35,8 @@ export function App(props: AppProps): React.ReactElement {
   const [questionDraft, setQuestionDraft] = useState('');
   const [permissionChoice, setPermissionChoice] = useState<PermissionPreset | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [settingsMode, setSettingsMode] = useState<'model' | 'provider' | null>(null);
+  const [modelChoice, setModelChoice] = useState(0);
   const [elapsed, setElapsed] = useState(0);
   const bridgeRef = useRef<BridgeClient | null>(null);
   const turnCounter = useRef(0);
@@ -134,6 +138,12 @@ export function App(props: AppProps): React.ReactElement {
     state.question?.allowFreeText
       && state.question.selectedIndex === state.question.options.length,
   );
+
+  useEffect(() => {
+    if (settingsMode !== 'model' || !state.settings) return;
+    const index = state.settings.providers.findIndex((provider) => provider.id === state.provider);
+    setModelChoice(index >= 0 ? index : 0);
+  }, [settingsMode, state.provider, state.settings]);
 
   useInput(
     (_input, key) => {
@@ -242,6 +252,30 @@ export function App(props: AppProps): React.ReactElement {
     { isActive: state.sessions !== null },
   );
 
+  useInput(
+    (_input, key) => {
+      if (!settingsMode) return;
+      if (key.escape) {
+        setSettingsMode(null);
+        dispatch({ type: 'settings_closed' });
+        return;
+      }
+      if (!state.settings) return;
+      if (settingsMode !== 'model' || state.settings.providers.length === 0) return;
+      if (key.upArrow || (key.tab && key.shift)) {
+        setModelChoice((index) => (index - 1 + state.settings!.providers.length) % state.settings!.providers.length);
+      } else if (key.downArrow || key.tab) {
+        setModelChoice((index) => (index + 1) % state.settings!.providers.length);
+      } else if (key.return) {
+        const choice = state.settings.providers[modelChoice];
+        if (choice) bridgeRef.current?.send({ type: 'provider_set', provider: choice.id });
+        setSettingsMode(null);
+        dispatch({ type: 'settings_closed' });
+      }
+    },
+    { isActive: settingsMode !== null && state.settings !== null },
+  );
+
   // Global keys. Ink delivers Ctrl+C as input, so cancelling is explicit.
   useInput(
     (input, key) => {
@@ -272,7 +306,7 @@ export function App(props: AppProps): React.ReactElement {
     {
       isActive:
         state.approval === null && state.question === null && permissionChoice === null
-        && state.sessions === null,
+        && state.sessions === null && settingsMode === null,
     },
   );
 
@@ -285,12 +319,20 @@ export function App(props: AppProps): React.ReactElement {
     if (state.status === 'opening') return;
     setDraft('');
     // Commands are answered by the TUI, so the agent never sees them.
-    const command = findCommand(text);
-    if (command) {
-      if (command.name === '/permissions') setPermissionChoice(state.permissionPreset);
-      else if (command.name === '/sessions') {
+    const parsed = parseCommand(text);
+    if (parsed) {
+      if (parsed.command.name === '/permissions') setPermissionChoice(state.permissionPreset);
+      else if (parsed.command.name === '/sessions') {
         bridgeRef.current?.send({ type: 'list_sessions' });
         dispatch({ type: 'sessions_opened' });
+      } else if (parsed.command.name === '/model') {
+        if (busy) return;
+        setSettingsMode('model');
+        setModelChoice(0);
+        bridgeRef.current?.send({ type: 'settings_get' });
+      } else if (parsed.command.name === '/provider') {
+        setSettingsMode('provider');
+        bridgeRef.current?.send({ type: 'settings_get' });
       }
       return;
     }
@@ -351,13 +393,16 @@ export function App(props: AppProps): React.ReactElement {
             />
           </Box>
         ) : null}
+        {settingsMode === 'model' && state.settings ? <Box flexShrink={0}><ModelPicker settings={state.settings} selectedIndex={modelChoice} /></Box> : null}
+        {settingsMode === 'provider' && state.settings ? <Box flexShrink={0}><ProviderOverview settings={state.settings} /></Box> : null}
+        {settingsMode && !state.settings ? <Box flexShrink={0} marginTop={1}><Text dimColor>Loading configuration…</Text></Box> : null}
       </Box>
 
       {state.status === 'fatal' ? (
         <Box flexShrink={0} marginTop={1}>
           <Text dimColor>Press Ctrl+C to exit.</Text>
         </Box>
-      ) : permissionChoice || state.sessions ? null : state.question && freeTextSelected ? (
+      ) : permissionChoice || state.sessions || settingsMode ? null : state.question && freeTextSelected ? (
         <Prompt
           value={questionDraft}
           onChange={setQuestionDraft}
@@ -375,7 +420,7 @@ export function App(props: AppProps): React.ReactElement {
           value={draft}
           onChange={setDraft}
           onSubmit={submit}
-          focus={state.approval === null && permissionChoice === null && state.sessions === null}
+          focus={state.approval === null && permissionChoice === null && state.sessions === null && settingsMode === null}
           busy={inputBusy}
           docked
           commands={COMMANDS}

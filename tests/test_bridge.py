@@ -909,6 +909,25 @@ class BridgeServeTest(unittest.TestCase):
             )
             self.assertIsNone(bridge._execution_plane)
 
+    def test_answers_settings_requests_without_starting_runtime(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bridge, stdout = make_bridge(
+                [
+                    json.dumps(open_session_message(root, session_id="empty")),
+                    '{"type": "settings_get", "request_id": "settings-1"}',
+                    '{"type": "shutdown"}',
+                ],
+                root,
+            )
+
+            bridge.serve()
+
+            snapshot = next(message for message in emitted(stdout) if message["type"] == "settings_snapshot")
+            self.assertEqual(snapshot["request_id"], "settings-1")
+            self.assertEqual(snapshot["settings"]["default_provider"], "first")
+            self.assertIsNone(bridge._execution_plane)
+
 
 def open_session_message(
     directory: Path,
@@ -1783,13 +1802,39 @@ class BridgeSessionOpenTest(unittest.TestCase):
 
             self.assertIsNot(second_plane, first_plane)
             self.assertNotEqual(
-                second_plane.provider_config_fingerprint,
-                first_plane.provider_config_fingerprint,
+                second_plane.configuration_fingerprint,
+                first_plane.configuration_fingerprint,
             )
             self.assertEqual(
                 second_plane.agent._provider._model,
                 "openai/updated",
             )
+
+    def test_rebuilds_the_execution_plane_when_dotenv_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = {
+                "main_agent": {"provider": "first"},
+                "subagent": {"provider": ""},
+                "providers": {
+                    "first": {
+                        "model": "openai/first",
+                        "key": "${FIRST_KEY}",
+                        "max_context_tokens": 1000,
+                    }
+                },
+            }
+            bridge, _ = make_bridge([], root)
+            open_session_message(root, provider_config=config)
+            (root / ".env").write_text("FIRST_KEY=first\n", encoding="utf-8")
+            bridge.open_session({"type": "open_session", "workspace": str(root), "session_id": None})
+            first_plane = bridge._ensure_execution_plane()
+
+            (root / ".env").write_text("FIRST_KEY=second\n", encoding="utf-8")
+            second_plane = bridge._ensure_execution_plane()
+
+            self.assertIsNot(second_plane, first_plane)
+            self.assertEqual(second_plane.agent._provider._api_key, "second")
 
     def test_failed_assembly_does_not_publish_a_partial_execution_plane(
         self,

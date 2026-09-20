@@ -18,6 +18,7 @@ from agent_core import (
     Session,
     Workspace,
 )
+from interfaces.bridge.settings import SettingsStore
 
 try:
     from fastapi.testclient import TestClient
@@ -268,13 +269,35 @@ class GuiTest(unittest.TestCase):
         (self.root / "README.md").write_text("Hello Nosis", encoding="utf-8")
         (self.root / "src").mkdir()
         self.store = JsonlSessionStore(self.root / ".nosis" / "sessions")
+        self.config = self.root / "config"
+        self.config.mkdir()
+        (self.config / "provider_config.json").write_text(json.dumps({
+            "main_agent": {"provider": "first", "vision_provider": ""},
+            "subagent": {"provider": "", "vision_provider": ""},
+            "subagent_roles": {},
+            "providers": {
+                "first": {"model": "openai/first"},
+                "second": {"model": "openai/second"},
+            },
+        }), encoding="utf-8")
+        (self.config / "agent_config.json").write_text(json.dumps({
+            "max_same_tool_calls": 5,
+            "output_reserve_tokens": 100,
+            "max_generation_tokens": None,
+            "workspace_instruction_files": ["AGENTS.md"],
+            "context": {"compression": {"enabled": True, "trigger_ratio": None, "keep_recent_units": 4}},
+            "main_agent": {"tools": {"read_file": True}},
+            "subagent_roles": {},
+            "mcp": {"enabled": False, "servers": {}},
+        }), encoding="utf-8")
+        (self.config / "skills").mkdir()
+        (self.config / "plugins").mkdir()
 
     def client(self, bridge: FakeBridge | None = None) -> TestClient:
         app = server.create_app(
             Workspace(self.root),
             self.store,
-            models={"first": "openai/first", "second": "openai/second"},
-            default_model="first",
+            SettingsStore(self.config),
         )
         client = TestClient(
             app,
@@ -1212,6 +1235,36 @@ class GuiTest(unittest.TestCase):
                     ],
                 },
             )
+
+    def test_models_are_read_from_current_configuration(self) -> None:
+        with self.client() as client:
+            document = json.loads((self.config / "provider_config.json").read_text())
+            document["main_agent"]["provider"] = "second"
+            document["providers"]["third"] = {"model": "openai/third"}
+            (self.config / "provider_config.json").write_text(json.dumps(document), encoding="utf-8")
+
+            response = client.get("/api/models").json()
+
+        self.assertEqual(response["default"], "second")
+        self.assertIn({"id": "third", "model": "openai/third"}, response["models"])
+
+    def test_settings_api_redacts_and_updates_provider(self) -> None:
+        with self.client() as client:
+            before = client.get("/api/settings").json()
+            response = client.put("/api/settings/providers/third", json={
+                "expected_revision": before["revision"],
+                "model": "openai/third",
+                "url": "https://example.test/v1",
+                "max_context_tokens": 2000,
+                "api_key": {"action": "set", "value": "secret"},
+                "set_default": True,
+            })
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["default_provider"], "third")
+        self.assertNotIn("secret", json.dumps(body))
+        self.assertIn("NOSIS_THIRD_API_KEY=secret", (self.config / ".env").read_text())
 
     def test_reads_history_written_by_the_tui(self) -> None:
         self.store.bind_workspace("from-tui", self.root)

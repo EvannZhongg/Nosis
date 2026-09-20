@@ -28,6 +28,8 @@ Provider、Agent 与 Skill 固定从 `~/.nosis/` 读取。
 
 - `/permissions`：切换当前 Session 的授权模式
 - `/sessions`：列出并切换当前 Workspace 的历史会话
+- `/model`：列出 Provider，并切换当前 Session 使用的模型配置
+- `/provider`：查看 Provider、Skill、Plugin 与 MCP 配置概览
 
 执行中提交的新输入会作为 steering 发送给当前轮次。
 
