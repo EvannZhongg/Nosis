@@ -157,8 +157,8 @@ export function App() {
     }
   }
 
-  function createNewChat() {
-    const fresh = newSession(selectedSession?.workspace);
+  function createNewChat(workspace = selectedSession?.workspace) {
+    const fresh = newSession(workspace);
     // Add the new chat to the stable mounted set before making it visible.
     setChatSessions((all) => [...all, fresh]);
     setSelectedSessionId(fresh.session_id);
@@ -206,17 +206,20 @@ export function App() {
     <div className="app-shell">
       <aside className="sessions-panel" aria-label="Sessions">
         <div className="brand"><span>Nosis<span className="brand-dot">.</span></span></div>
-        <button className="new-chat" onClick={createNewChat}><Plus size={17} /> New chat</button>
+        <button className="new-chat" onClick={() => createNewChat()}><Plus size={17} /> New chat</button>
         <div className="section-label">Projects</div>
         <nav className="session-list">
           {sessionGroups.map((group) => {
             const collapsed = collapsedWorkspaces.has(group.workspace);
             return <section className="workspace-group" key={group.workspace}>
-              <button className="workspace-group-title" title={group.workspace} aria-expanded={!collapsed} onClick={() => setCollapsedWorkspaces((previous) => {
-                const next = new Set(previous);
-                if (collapsed) next.delete(group.workspace); else next.add(group.workspace);
-                return next;
-              })}><span className="workspace-chevron">{collapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}</span><span className="workspace-group-name">{group.workspace.split(/[\\/]/).pop() || group.workspace}</span><small>{group.workspace}</small><span className="workspace-session-count">{group.sessions.length}</span></button>
+              <div className="workspace-group-header">
+                <button className="workspace-group-title" title={group.workspace} aria-expanded={!collapsed} onClick={() => setCollapsedWorkspaces((previous) => {
+                  const next = new Set(previous);
+                  if (collapsed) next.delete(group.workspace); else next.add(group.workspace);
+                  return next;
+                })}><span className="workspace-chevron">{collapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}</span><span className="workspace-group-name">{group.workspace.split(/[\\/]/).pop() || group.workspace}</span><small>{group.workspace}</small></button>
+                <button className="workspace-new-session" aria-label={`在 ${group.workspace} 中新建会话`} title="在此工作区新建会话" onClick={() => createNewChat(group.workspace)}><Plus size={14} /></button>
+              </div>
               {!collapsed && group.sessions.map((item) => <div className={`session-row ${item.session_id === selectedSessionId ? "selected" : ""}`} key={item.session_id}><button className="session-button" title={item.title} disabled={loadingSessionId === item.session_id} onClick={() => void selectSession(item.session_id)}><MessageSquare size={15} /><span>{item.title}</span></button><button className="delete-session" aria-label={`删除会话 ${item.title}`} title="删除会话" disabled={loadingSessionId === item.session_id || Boolean(busyBySession[item.session_id])} onClick={(event) => { event.stopPropagation(); void removeSession(item.session_id); }}><Trash2 size={14} /></button></div>)}
             </section>;
           })}

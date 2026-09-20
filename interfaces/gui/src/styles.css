@@ -28,11 +28,14 @@ svg { flex-shrink: 0; }
 .session-row:hover .delete-session, .session-row.selected .delete-session, .delete-session:focus-visible { opacity: 1; }
 .delete-session:hover { background: #f9e9e8; color: #ad6262; }
 .workspace-group { margin: 8px 0 14px; }
-.workspace-group-title { display: flex; align-items: center; gap: 5px; width: 100%; padding: 6px 7px; border: 0; border-radius: 5px; background: transparent; color: #8a94a6; text-align: left; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .3px; }
+.workspace-group-header { display: flex; align-items: center; border-radius: 5px; }
+.workspace-group-header:hover { background: #eceef3; }
+.workspace-group-title { display: flex; align-items: center; gap: 5px; flex: 1; min-width: 0; padding: 6px 7px; border: 0; border-radius: 5px; background: transparent; color: #8a94a6; text-align: left; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .3px; }
 .workspace-group-title:hover { background: #eceef3; color: #63708a; }
 .workspace-chevron { display: grid; place-items: center; color: #a3abba; }
 .workspace-group-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.workspace-session-count { margin-left: auto; font-size: 10px; color: #abb2bf; font-weight: 500; }
+.workspace-new-session { display: grid; place-items: center; width: 26px; height: 26px; margin-right: 2px; border: 0; border-radius: 5px; background: transparent; color: #9aa4b5; }
+.workspace-new-session:hover { background: #dfe3eb; color: #526486; }
 .workspace-group-title small { display: none; }
 .session-empty { font-size: 12px; margin: 16px 10px; color: #999fab; }
 .sidebar-footer { display: flex; align-items: center; gap: 8px; height: 54px; border-top: 1px solid #e6e8ed; font-size: 10px; color: #9198a4; padding: 0 9px; }
