@@ -367,6 +367,27 @@ def emitted(stdout: io.StringIO) -> list[dict]:
 
 
 class PermissionProtocolTest(unittest.TestCase):
+    def test_bridge_accepts_workspace_access_before_runtime_start(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bridge, stdout = make_bridge([], root)
+            bridge.open_session(open_session_message(root, session_id="s"))
+
+            bridge._set_permission_preset(
+                {"type": "permission_set", "preset": "workspace_access"}
+            )
+
+            self.assertIsNone(bridge._execution_plane)
+            assert bridge._session is not None
+            self.assertEqual(
+                bridge._session.permission_preset,
+                PermissionPreset.WORKSPACE_ACCESS,
+            )
+            self.assertEqual(
+                emitted(stdout)[-1],
+                {"type": "permission_changed", "preset": "workspace_access"},
+            )
+
     def test_bridge_updates_permission_before_runtime_initialization(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -455,6 +476,11 @@ class PermissionProtocolTest(unittest.TestCase):
                     "close",
                     wraps=plane.mcp.close,
                 ) as close_mcp,
+                patch.object(
+                    plane.executor,
+                    "close",
+                    wraps=plane.executor.close,
+                ) as close_executor,
             ):
                 bridge._set_provider(
                     {"type": "provider_set", "provider": "second"}
@@ -463,6 +489,7 @@ class PermissionProtocolTest(unittest.TestCase):
             self.assertIsNone(bridge._execution_plane)
             close_jobs.assert_called_once_with()
             close_mcp.assert_called_once_with()
+            close_executor.assert_called_once_with()
 
     def test_workspace_change_closes_the_execution_plane_once(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -484,6 +511,11 @@ class PermissionProtocolTest(unittest.TestCase):
                     "close",
                     wraps=plane.mcp.close,
                 ) as close_mcp,
+                patch.object(
+                    plane.executor,
+                    "close",
+                    wraps=plane.executor.close,
+                ) as close_executor,
             ):
                 bridge._set_workspace(
                     {
@@ -495,6 +527,7 @@ class PermissionProtocolTest(unittest.TestCase):
             self.assertIsNone(bridge._execution_plane)
             close_jobs.assert_called_once_with()
             close_mcp.assert_called_once_with()
+            close_executor.assert_called_once_with()
 
 
 class _SlowStdin:

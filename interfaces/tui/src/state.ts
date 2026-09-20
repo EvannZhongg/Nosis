@@ -591,6 +591,12 @@ function applyMessage(state: State, message: Incoming): State {
       };
 
     case 'permission_changed':
+      const permissionLabel =
+        message.preset === 'full_access'
+          ? 'Full Access'
+          : message.preset === 'workspace_access'
+            ? 'Workspace Access'
+            : 'Ask for approval';
       return {
         ...state,
         permissionPreset: message.preset,
@@ -600,7 +606,7 @@ function applyMessage(state: State, message: Incoming): State {
             kind: 'notice',
             id: nextId('notice'),
             level: 'info',
-            text: `Permissions changed to ${message.preset === 'full_access' ? 'Full Access' : 'Ask for approval'}.`,
+            text: `Permissions changed to ${permissionLabel}.`,
           },
         ],
       };

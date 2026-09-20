@@ -12,7 +12,7 @@ export type Command = {
 export const COMMANDS: Command[] = [
   {
     name: '/permissions',
-    description: 'Choose between Ask for approval and Full Access',
+    description: 'Choose the current permission mode',
   },
   {
     name: '/sessions',

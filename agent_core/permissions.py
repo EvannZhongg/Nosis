@@ -13,7 +13,13 @@ if TYPE_CHECKING:
 
 class PermissionPreset(StrEnum):
     ASK_FOR_APPROVAL = "ask_for_approval"
+    WORKSPACE_ACCESS = "workspace_access"
     FULL_ACCESS = "full_access"
+
+
+class ApprovalScope(StrEnum):
+    WORKSPACE = "workspace"
+    HOST = "host"
 
 
 class PermissionController:
@@ -50,14 +56,21 @@ class PermissionController:
     ) -> None:
         with self._lock:
             preset = self._session.permission_preset
-        if preset is PermissionPreset.ASK_FOR_APPROVAL:
-            try:
-                consulted = self._approval_policy.authorize(call, context)
-            except PermissionError:
-                self._record_approval(call, context, False)
-                raise
-            if consulted:
-                self._record_approval(call, context, True)
+        if preset is PermissionPreset.FULL_ACCESS:
+            return
+        if (
+            preset is PermissionPreset.WORKSPACE_ACCESS
+            and self._approval_policy.approval_scope(call, context)
+            is ApprovalScope.WORKSPACE
+        ):
+            return
+        try:
+            consulted = self._approval_policy.authorize(call, context)
+        except PermissionError:
+            self._record_approval(call, context, False)
+            raise
+        if consulted:
+            self._record_approval(call, context, True)
 
     def _record_approval(
         self,

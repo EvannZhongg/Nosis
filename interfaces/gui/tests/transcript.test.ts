@@ -121,6 +121,12 @@ describe("applyMessage", () => {
       preset: "full_access",
     });
     expect(changed.permissionPreset).toBe("full_access");
+
+    const workspaceChanged = applyMessage([], {
+      type: "permission_changed",
+      preset: "workspace_access",
+    });
+    expect(workspaceChanged.permissionPreset).toBe("workspace_access");
   });
 
   it("appends steering only when the runtime applies it", () => {

@@ -6,8 +6,10 @@ import subprocess
 import atexit
 import tempfile
 import time
+from abc import ABC, abstractmethod
 from collections import deque
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Protocol
 
@@ -71,6 +73,75 @@ class CommandExecutor(Protocol):
     ) -> CommandExecutionResult:
         raise NotImplementedError
 
+    def close(self) -> None: ...
+
+
+class FilesystemAccess(StrEnum):
+    DENIED = "denied"
+    READ_ONLY = "read_only"
+    READ_WRITE = "read_write"
+
+
+class NetworkAccess(StrEnum):
+    DENY = "deny"
+
+
+class TemporaryDirectoryMode(StrEnum):
+    PRIVATE = "private"
+
+
+class ProcessIsolation(StrEnum):
+    ISOLATED = "isolated"
+
+
+@dataclass(frozen=True)
+class SandboxPolicy:
+    """Isolation requested from a sandbox backend.
+
+    This is deliberately a small policy surface.  It describes the first
+    workspace sandbox contract without claiming that the host executor
+    enforces any of it.
+    """
+
+    workspace_filesystem: FilesystemAccess = FilesystemAccess.READ_WRITE
+    host_filesystem: FilesystemAccess = FilesystemAccess.DENIED
+    network: NetworkAccess = NetworkAccess.DENY
+    temporary_directory: TemporaryDirectoryMode = (
+        TemporaryDirectoryMode.PRIVATE
+    )
+    processes: ProcessIsolation = ProcessIsolation.ISOLATED
+
+
+class SandboxBackend(ABC):
+    """Platform confinement mechanism used by SandboxedCommandExecutor."""
+
+    @abstractmethod
+    def execute(
+        self,
+        command: str,
+        *,
+        working_directory: Path,
+        policy: SandboxPolicy,
+        timeout_seconds: int,
+        cancellation: "CancellationSignal | None" = None,
+    ) -> CommandExecutionResult:
+        raise NotImplementedError
+
+    def close(self) -> None:
+        """Release backend-owned resources such as roots or proxies."""
+
+
+class LinuxSandboxBackend(SandboxBackend):
+    """Extension point for a future Linux workspace sandbox."""
+
+
+class MacOSSandboxBackend(SandboxBackend):
+    """Extension point for a future macOS workspace sandbox."""
+
+
+class WindowsSandboxBackend(SandboxBackend):
+    """Extension point for a future Windows workspace sandbox."""
+
 
 class CancellationSignal(Protocol):
     @property
@@ -81,7 +152,13 @@ class CommandCancelled(BaseException):
     """The Runtime cancelled a running command and its process group."""
 
 
-class SubprocessCommandExecutor:
+class HostCommandExecutor:
+    """Run commands directly with the current host user's permissions.
+
+    This executor provides no filesystem, network, temporary-directory, or
+    process confinement.  Its working directory is only the command's cwd.
+    """
+
     def __init__(self, working_directory: Path) -> None:
         self._working_directory = working_directory
 
@@ -190,6 +267,44 @@ class SubprocessCommandExecutor:
             stdout_spool=stdout_spool,
             stderr_spool=stderr_spool,
         )
+
+    def close(self) -> None:
+        pass
+
+
+class SandboxedCommandExecutor:
+    """Run commands through a backend that enforces SandboxPolicy."""
+
+    def __init__(
+        self,
+        working_directory: Path,
+        backend: SandboxBackend,
+        policy: SandboxPolicy | None = None,
+    ) -> None:
+        self._working_directory = working_directory
+        self._backend = backend
+        self._policy = policy or SandboxPolicy()
+
+    @property
+    def policy(self) -> SandboxPolicy:
+        return self._policy
+
+    def execute(
+        self,
+        command: str,
+        timeout_seconds: int = DEFAULT_COMMAND_TIMEOUT_SECONDS,
+        cancellation: CancellationSignal | None = None,
+    ) -> CommandExecutionResult:
+        return self._backend.execute(
+            command,
+            working_directory=self._working_directory,
+            policy=self._policy,
+            timeout_seconds=timeout_seconds,
+            cancellation=cancellation,
+        )
+
+    def close(self) -> None:
+        self._backend.close()
 
 
 def _shell_argv(command: str) -> list[str]:

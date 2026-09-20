@@ -940,6 +940,7 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
             <ShieldCheck size={13} />
             <select aria-label="权限模式" value={permissionPreset} disabled={controlsDisabled || permissionSaving} onChange={(event) => changePermissionPreset(event.target.value as PermissionPreset)}>
               <option value="ask_for_approval">请求批准</option>
+              <option value="workspace_access">工作区访问</option>
               <option value="full_access">完全访问</option>
             </select>{permissionSaving ? <LoaderCircle size={12} className="spin" aria-label="正在保存权限" /> : <ChevronDown size={12} />}
           </label>

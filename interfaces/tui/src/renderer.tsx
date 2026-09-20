@@ -403,7 +403,11 @@ export function PermissionPrompt({
         <Text color={selected === 'ask_for_approval' ? 'cyan' : undefined} dimColor={selected !== 'ask_for_approval'} bold={selected === 'ask_for_approval'}>
           {selected === 'ask_for_approval' ? '❯ ' : '  '}Ask for approval
         </Text>
-        <Text dimColor>    Ask before Shell and configured MCP tool calls.</Text>
+        <Text dimColor>    Ask before operations that require authorization.</Text>
+        <Text color={selected === 'workspace_access' ? 'cyan' : undefined} dimColor={selected !== 'workspace_access'} bold={selected === 'workspace_access'}>
+          {selected === 'workspace_access' ? '❯ ' : '  '}Workspace Access
+        </Text>
+        <Text dimColor>    Allow workspace-confined operations; ask before host access.</Text>
         <Text color={selected === 'full_access' ? 'cyan' : undefined} dimColor={selected !== 'full_access'} bold={selected === 'full_access'}>
           {selected === 'full_access' ? '❯ ' : '  '}Full Access
         </Text>

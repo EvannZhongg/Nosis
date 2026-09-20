@@ -5,7 +5,19 @@ import time
 import unittest
 from pathlib import Path
 
-from agent_core import CancellationToken, CommandCancelled, SubprocessCommandExecutor
+from agent_core import (
+    CancellationToken,
+    CommandCancelled,
+    CommandExecutionResult,
+    FilesystemAccess,
+    HostCommandExecutor,
+    NetworkAccess,
+    ProcessIsolation,
+    SandboxBackend,
+    SandboxedCommandExecutor,
+    SandboxPolicy,
+    TemporaryDirectoryMode,
+)
 from agent_core.execution import (
     MAX_COMMAND_OUTPUT_CHARS,
     CommandOutputSpool,
@@ -23,13 +35,13 @@ def _python_script_command(working_directory: Path, script: str) -> str:
     return f'"{sys.executable}" command.py'
 
 
-class SubprocessCommandExecutorTest(unittest.TestCase):
+class HostCommandExecutorTest(unittest.TestCase):
     # Commands below use POSIX syntax on purpose: the shell is /bin/sh on
     # macOS and Linux, and Git Bash on Windows.
     def test_executes_command_in_working_directory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             working_directory = Path(directory)
-            executor = SubprocessCommandExecutor(working_directory)
+            executor = HostCommandExecutor(working_directory)
 
             result = executor.execute(
                 "printf 'hello'; "
@@ -51,7 +63,7 @@ class SubprocessCommandExecutorTest(unittest.TestCase):
 
     def test_returns_nonzero_exit_code(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            executor = SubprocessCommandExecutor(Path(directory))
+            executor = HostCommandExecutor(Path(directory))
 
             result = executor.execute("printf 'failed' >&2; exit 7")
 
@@ -62,7 +74,7 @@ class SubprocessCommandExecutorTest(unittest.TestCase):
     def test_times_out_and_kills_the_command_tree(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             working_directory = Path(directory)
-            executor = SubprocessCommandExecutor(working_directory)
+            executor = HostCommandExecutor(working_directory)
             command = _python_script_command(
                 working_directory,
                 "import time\n"
@@ -83,7 +95,7 @@ class SubprocessCommandExecutorTest(unittest.TestCase):
     def test_cancellation_kills_the_command_tree(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             working_directory = Path(directory)
-            executor = SubprocessCommandExecutor(working_directory)
+            executor = HostCommandExecutor(working_directory)
             cancellation = CancellationToken()
             command = _python_script_command(
                 working_directory,
@@ -116,7 +128,7 @@ class SubprocessCommandExecutorTest(unittest.TestCase):
     def test_limits_each_output_stream_and_keeps_both_ends(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             working_directory = Path(directory)
-            executor = SubprocessCommandExecutor(working_directory)
+            executor = HostCommandExecutor(working_directory)
             command = _python_script_command(
                 working_directory,
                 "import sys\n"
@@ -148,7 +160,7 @@ class SubprocessCommandExecutorTest(unittest.TestCase):
     def test_retains_oversized_streams_in_spools(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             working_directory = Path(directory)
-            executor = SubprocessCommandExecutor(working_directory)
+            executor = HostCommandExecutor(working_directory)
             command = _python_script_command(
                 working_directory,
                 "import sys\n"
@@ -188,7 +200,7 @@ class SubprocessCommandExecutorTest(unittest.TestCase):
     def test_decodes_output_that_is_not_utf8(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             working_directory = Path(directory)
-            executor = SubprocessCommandExecutor(working_directory)
+            executor = HostCommandExecutor(working_directory)
             command = _python_script_command(
                 working_directory,
                 "import sys\n"
@@ -205,6 +217,62 @@ class SubprocessCommandExecutorTest(unittest.TestCase):
     def test_decodes_a_missing_stream_as_empty_text(self) -> None:
         self.assertEqual(_decode_output(None), "")
         self.assertEqual(_decode_output(b""), "")
+
+
+class SandboxedCommandExecutorTest(unittest.TestCase):
+    def test_delegates_policy_and_lifecycle_to_backend(self) -> None:
+        class RecordingBackend(SandboxBackend):
+            def __init__(self) -> None:
+                self.calls = []
+                self.closed = False
+
+            def execute(
+                self,
+                command,
+                *,
+                working_directory,
+                policy,
+                timeout_seconds,
+                cancellation=None,
+            ):
+                self.calls.append(
+                    (
+                        command,
+                        working_directory,
+                        policy,
+                        timeout_seconds,
+                        cancellation,
+                    )
+                )
+                return CommandExecutionResult(command, 0, "ok", "")
+
+            def close(self) -> None:
+                self.closed = True
+
+        with tempfile.TemporaryDirectory() as directory:
+            working_directory = Path(directory)
+            backend = RecordingBackend()
+            executor = SandboxedCommandExecutor(working_directory, backend)
+
+            result = executor.execute("pwd", timeout_seconds=12)
+            executor.close()
+
+        self.assertEqual(result.stdout, "ok")
+        self.assertEqual(
+            executor.policy,
+            SandboxPolicy(
+                workspace_filesystem=FilesystemAccess.READ_WRITE,
+                host_filesystem=FilesystemAccess.DENIED,
+                network=NetworkAccess.DENY,
+                temporary_directory=TemporaryDirectoryMode.PRIVATE,
+                processes=ProcessIsolation.ISOLATED,
+            ),
+        )
+        self.assertEqual(
+            backend.calls[0][:4],
+            ("pwd", working_directory, executor.policy, 12),
+        )
+        self.assertTrue(backend.closed)
 
 
 if __name__ == "__main__":

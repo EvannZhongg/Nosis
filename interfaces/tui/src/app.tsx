@@ -22,6 +22,22 @@ export type AppProps = {
   workspace: string;
 };
 
+const PERMISSION_PRESETS: PermissionPreset[] = [
+  'ask_for_approval',
+  'workspace_access',
+  'full_access',
+];
+
+function nextPermissionPreset(
+  current: PermissionPreset,
+  direction: 1 | -1,
+): PermissionPreset {
+  const index = PERMISSION_PRESETS.indexOf(current);
+  return PERMISSION_PRESETS[
+    (index + direction + PERMISSION_PRESETS.length) % PERMISSION_PRESETS.length
+  ];
+}
+
 /** Keep Windows paths unambiguous on the newline-delimited JSON channel. */
 function protocolPath(path: string): string {
   return path.replaceAll('\\', '/');
@@ -199,8 +215,12 @@ export function App(props: AppProps): React.ReactElement {
 
   useInput(
     (_input, key) => {
-      if (key.upArrow || key.downArrow || key.tab || key.leftArrow || key.rightArrow) {
-        setPermissionChoice((current) => current === 'full_access' ? 'ask_for_approval' : 'full_access');
+      if (key.upArrow || key.leftArrow) {
+        setPermissionChoice((current) => current === null ? current : nextPermissionPreset(current, -1));
+        return;
+      }
+      if (key.downArrow || key.rightArrow || key.tab) {
+        setPermissionChoice((current) => current === null ? current : nextPermissionPreset(current, 1));
         return;
       }
       if (key.return && permissionChoice) {

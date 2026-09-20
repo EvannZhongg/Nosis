@@ -112,6 +112,15 @@ describe('permissions', () => {
       kind: 'notice',
       text: 'Permissions changed to Full Access.',
     });
+
+    state = reducer(state, {
+      type: 'message',
+      message: { type: 'permission_changed', preset: 'workspace_access' },
+    });
+    expect(state.permissionPreset).toBe('workspace_access');
+    expect(state.entries.at(-1)).toMatchObject({
+      text: 'Permissions changed to Workspace Access.',
+    });
   });
 });
 

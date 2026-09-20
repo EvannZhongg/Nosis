@@ -168,13 +168,18 @@ export function applyMessage(
       };
 
     case "permission_changed":
+      const permissionLabel = message.preset === "full_access"
+        ? "完全访问"
+        : message.preset === "workspace_access"
+          ? "工作区访问"
+          : "请求批准";
       return {
         items,
         permissionPreset: message.preset,
         feedback: {
           kind: "toast",
           level: "info",
-          text: `权限模式已切换为${message.preset === "full_access" ? "完全访问" : "请求批准"}。`,
+          text: `权限模式已切换为${permissionLabel}。`,
         },
       };
 

@@ -57,7 +57,7 @@ export type PlanSnapshot = {
   steps: PlanStep[];
 };
 
-export type PermissionPreset = 'ask_for_approval' | 'full_access';
+export type PermissionPreset = 'ask_for_approval' | 'workspace_access' | 'full_access';
 
 export type ProviderSetting = {
   id: string;

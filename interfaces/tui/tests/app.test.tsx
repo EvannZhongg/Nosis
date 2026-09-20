@@ -227,6 +227,8 @@ describe('App', () => {
     await waitFor(() => expect(lastFrame()).toContain('Ask for approval'));
 
     stdin.write('\u001b[B');
+    await waitFor(() => expect(lastFrame()).toContain('❯ Workspace Access'));
+    stdin.write('\u001b[B');
     await waitFor(() => expect(lastFrame()).toContain('❯ Full Access'));
     stdin.write('\r');
 
