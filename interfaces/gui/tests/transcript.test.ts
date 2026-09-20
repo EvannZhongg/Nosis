@@ -424,7 +424,7 @@ describe("applyMessage", () => {
       {
         type: "turn_failed",
         turn_id: "t1",
-        error: { type: "ContextWindowExceededError", message: "too long" },
+        error: { type: "ContextWindowExceededError", message: "too long", details: {} },
       },
     ]);
 

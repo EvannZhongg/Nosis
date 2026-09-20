@@ -29,6 +29,11 @@ from .execution import (
     CommandExecutor,
     SubprocessCommandExecutor,
 )
+from .errors import (
+    ProviderProtocolError,
+    RuntimeErrorInfo,
+    runtime_error_info,
+)
 from .jobs import CancellationToken, JobCancelled, JobHandle, JobManager, JobUpdate
 from .llm import LLMProvider, LLMRequest, LLMResponse, TokenUsage, ProviderCapabilities
 from .content import Content, ContentPart, TextPart, ImagePart
@@ -181,10 +186,12 @@ __all__ = [
     "PlanStep",
     "PlanStepStatus",
     "ProviderCapabilities",
+    "ProviderProtocolError",
     "ReadFileTool",
     "ReadImageTool",
     "ReadSkillTool",
     "ReasoningDeltaEvent",
+    "RuntimeErrorInfo",
     "SUPPORTED_IMAGE_MIME_TYPES",
     "SearchFilesTool",
     "Session",
@@ -245,6 +252,7 @@ __all__ = [
     "plan_snapshot_to_dict",
     "resolve_image",
     "resolve_readable_path",
+    "runtime_error_info",
     "skill_aware_tool_names",
     "vision_aware_tool_names",
 ]

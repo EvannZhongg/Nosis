@@ -17,6 +17,7 @@ from agent_core import (
     LLMRequest,
     LLMResponse,
     Message,
+    ProviderProtocolError,
     ReasoningDeltaEvent,
     Session,
     Tool,
@@ -122,6 +123,20 @@ class SteeringProvider(MockProvider):
         if text is not None:
             self._turn_control.steer(f"steer-{call_index}", text)
         return response
+
+
+class ProtocolFailingProvider(MockProvider):
+    def stream(self, request, on_text_delta, on_reasoning_delta=None):
+        self.requests.append(request)
+        raise ProviderProtocolError(
+            "invalid streamed arguments for tool 'shell'",
+            details={
+                "phase": "tool_call_assembly",
+                "provider": "deepseek",
+                "model": "deepseek/deepseek-flash",
+                "reason": "ambiguous_arguments",
+            },
+        )
 
 
 class EchoTool(Tool):
@@ -781,6 +796,32 @@ class AgentTest(unittest.TestCase):
                 ),
             ],
         )
+
+    def test_persists_structured_provider_error_with_model_call_index(self) -> None:
+        provider = ProtocolFailingProvider([])
+        session = Session(session_id="session-1")
+        agent = Agent(
+            provider=provider,
+            session=session,
+            system_prompt="You are helpful.",
+            consolidator_prompt=CONSOLIDATOR_PROMPT,
+            config=AGENT_CONFIG,
+            tools=tool_set(session=session),
+            context=ToolExecutionContext(
+                workspace=TEST_WORKSPACE, session=session
+            ),
+            now=clock(REQUEST_TIME),
+        )
+
+        with self.assertRaises(ProviderProtocolError):
+            agent.run("hello", turn_id="turn-1")
+
+        error = session.turns["turn-1"].error
+        self.assertIsNotNone(error)
+        assert error is not None
+        self.assertEqual(error.type, "ProviderProtocolError")
+        self.assertEqual(error.details["phase"], "tool_call_assembly")
+        self.assertEqual(error.details["model_call_index"], 1)
 
     def test_rejects_context_before_calling_provider(self) -> None:
         provider = MockProvider(["unused"], input_tokens=901)

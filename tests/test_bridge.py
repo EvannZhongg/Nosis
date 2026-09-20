@@ -52,6 +52,7 @@ from interfaces.bridge.protocol import (
     session_ready_message,
     runtime_state_message,
     usage_to_dict,
+    runtime_failure_to_dict,
 )
 
 TOOL_CALL = ToolCall(id="call-1", name="shell", arguments={"command": "ls"})
@@ -66,6 +67,24 @@ class ExecutionPlaneTest(unittest.TestCase):
 
 
 class ProtocolTest(unittest.TestCase):
+    def test_runtime_failure_to_dict_includes_details(self) -> None:
+        from agent_core import RuntimeErrorInfo
+
+        self.assertEqual(
+            runtime_failure_to_dict(
+                RuntimeErrorInfo(
+                    "ProviderProtocolError",
+                    "invalid tool arguments",
+                    {"phase": "tool_call_assembly"},
+                )
+            ),
+            {
+                "type": "ProviderProtocolError",
+                "message": "invalid tool arguments",
+                "details": {"phase": "tool_call_assembly"},
+            },
+        )
+
     def test_encodes_assistant_delta(self) -> None:
         self.assertEqual(
             event_to_message(

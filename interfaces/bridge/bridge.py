@@ -49,6 +49,7 @@ from agent_core import (
     merge_mcp_servers,
     message_to_dict,
     probe_image,
+    runtime_error_info,
     vision_aware_tool_names,
     skill_aware_tool_names,
 )
@@ -75,6 +76,7 @@ from .protocol import (
     event_to_message,
     context_window_to_dict,
     runtime_state_message,
+    runtime_failure_to_dict,
     plan_updated_message,
     session_ready_message,
     session_items_message,
@@ -908,7 +910,7 @@ class Bridge:
             self.emit(
                 "turn_failed",
                 turn_id=self._turn_id,
-                error=_error_payload(error),
+                error=runtime_failure_to_dict(runtime_error_info(error)),
             )
             self._turn_id = None
             self._emit_runtime_state("failed")
@@ -973,7 +975,7 @@ class Bridge:
             self.emit(
                 "turn_failed",
                 turn_id=self._turn_id,
-                error=_error_payload(error),
+                error=runtime_failure_to_dict(runtime_error_info(error)),
             )
             self._turn_id = None
             return
@@ -1000,7 +1002,11 @@ class Bridge:
             except (json.JSONDecodeError, ValueError) as error:
                 self.emit(
                     "fatal",
-                    error={"type": "ProtocolError", "message": str(error)},
+                    error={
+                        "type": "ProtocolError",
+                        "message": str(error),
+                        "details": {},
+                    },
                 )
                 raise SystemExit(1)
 
@@ -1013,6 +1019,7 @@ class Bridge:
                         error={
                             "type": "ProtocolError",
                             "message": "first message must be 'open_session'",
+                            "details": {},
                         },
                     )
                     raise SystemExit(1)
@@ -1034,12 +1041,6 @@ class Bridge:
     def close(self) -> None:
         self._route_shutdown(notify_commands=False)
         self._close_execution_plane()
-
-
-def _error_payload(error: Exception) -> dict[str, str]:
-    return {"type": type(error).__name__, "message": str(error)}
-
-
 def _parse_attachments(value: object, workspace: Workspace) -> tuple[ImagePart, ...]:
     if value is None:
         return ()

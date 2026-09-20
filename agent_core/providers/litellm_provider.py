@@ -1,6 +1,5 @@
 import json
 from contextvars import copy_context
-from dataclasses import dataclass
 from pathlib import Path
 from queue import Empty, Full, Queue
 from threading import Event, Thread
@@ -23,7 +22,9 @@ from agent_core.media import (
 )
 from agent_core.path_utils import path_for_comparison
 from agent_core.session import Message
-from agent_core.tools import AnalyzeImageTool, ToolCall, ToolDefinition
+from agent_core.tools import AnalyzeImageTool, ToolDefinition
+
+from .tool_call_stream import ToolCallStreamAssembler
 
 
 class LiteLLMProvider(LLMProvider):
@@ -197,7 +198,7 @@ class LiteLLMProvider(LLMProvider):
 
         content = ""
         reasoning = ""
-        tool_call_fragments: dict[int, _ToolCallFragment] = {}
+        tool_calls = ToolCallStreamAssembler(self._model)
         usage = None
 
         chunks = _cancellable_chunks(
@@ -237,16 +238,12 @@ class LiteLLMProvider(LLMProvider):
                     if on_reasoning_delta is not None:
                         on_reasoning_delta(value)
 
-            for tool_call in _get_field(delta, "tool_calls") or []:
-                _accumulate_tool_call(tool_call_fragments, tool_call)
+            tool_calls.add_batch(_get_field(delta, "tool_calls") or [])
 
         return LLMResponse(
             content=content or None,
             reasoning=reasoning or None,
-            tool_calls=tuple(
-                fragment.to_tool_call()
-                for _, fragment in sorted(tool_call_fragments.items())
-            ),
+            tool_calls=tool_calls.finish(),
             usage=TokenUsage(
                 input_tokens=usage.prompt_tokens,
                 output_tokens=usage.completion_tokens,
@@ -532,70 +529,6 @@ def _tool_definition_to_dict(tool: ToolDefinition) -> dict[str, object]:
             "parameters": tool.parameters,
         },
     }
-
-
-@dataclass
-class _ToolCallFragment:
-    """Streamed tool call assembled across chunks.
-
-    Providers send ``id`` and ``name`` once, then split
-    ``function.arguments`` into string fragments.
-    """
-
-    id: str | None = None
-    name: str | None = None
-    arguments: str = ""
-
-    def add_arguments(self, value: str) -> None:
-        """Accept both incremental and cumulative streamed arguments.
-
-        OpenAI-compatible streams normally send only the next substring, but
-        some providers repeat the complete argument text accumulated so far.
-        Appending those snapshots produces two adjacent JSON objects and a
-        misleading ``JSONDecodeError: Extra data`` at the end of the call.
-        """
-        if value.startswith(self.arguments):
-            self.arguments = value
-        else:
-            self.arguments += value
-
-    def to_tool_call(self) -> ToolCall:
-        if not isinstance(self.id, str) or not self.id:
-            raise ValueError("tool call id must be a non-empty string")
-        if not isinstance(self.name, str) or not self.name:
-            raise ValueError("tool call name must be a non-empty string")
-
-        arguments = json.loads(self.arguments) if self.arguments else {}
-        if not isinstance(arguments, dict):
-            raise ValueError("tool call arguments must be a JSON object")
-
-        return ToolCall(id=self.id, name=self.name, arguments=arguments)
-
-
-def _accumulate_tool_call(
-    fragments: dict[int, _ToolCallFragment],
-    tool_call: object,
-) -> None:
-    index = _get_field(tool_call, "index")
-    if not isinstance(index, int) or isinstance(index, bool):
-        index = 0
-
-    fragment = fragments.setdefault(index, _ToolCallFragment())
-    tool_call_id = _get_field(tool_call, "id")
-    if isinstance(tool_call_id, str) and tool_call_id:
-        fragment.id = tool_call_id
-
-    function = _get_field(tool_call, "function")
-    if function is None:
-        return
-
-    name = _get_field(function, "name")
-    if isinstance(name, str) and name:
-        fragment.name = name
-
-    arguments = _get_field(function, "arguments")
-    if isinstance(arguments, str):
-        fragment.add_arguments(arguments)
 
 
 def _get_field(value: object, name: str) -> object:

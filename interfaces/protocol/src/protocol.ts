@@ -22,6 +22,10 @@ export type ProtocolError = {
   message: string;
 };
 
+export type RuntimeFailure = ProtocolError & {
+  details: { readonly [key: string]: JSONValue };
+};
+
 export type Usage = {
   input_tokens: number | null;
   output_tokens: number | null;
@@ -229,8 +233,8 @@ export type Incoming = (
   | { type: 'mcp_server_status'; server: string; status: string; tool_count?: number; error?: string }
   | { type: 'turn_completed'; turn_id: string; usage: Usage | null }
   | { type: 'turn_cancelled'; turn_id: string }
-  | { type: 'turn_failed'; turn_id: string; error: ProtocolError }
-  | { type: 'fatal'; error: ProtocolError }
+  | { type: 'turn_failed'; turn_id: string; error: RuntimeFailure }
+  | { type: 'fatal'; error: RuntimeFailure }
 ) & { event_sequence?: number };
 
 export type Outgoing =

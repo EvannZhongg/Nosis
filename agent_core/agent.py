@@ -14,6 +14,7 @@ from .llm import (
 )
 from .session import Message, Session, ToolExecutionStatus
 from .content import ImagePart
+from .errors import ProviderProtocolError, runtime_error_info
 from .tool_result import ToolResultNormalizer
 from .tools import ToolCall, ToolExecutionContext, ToolResult, ToolSet
 from .turn_control import TurnControl, UserSteer
@@ -208,7 +209,7 @@ class Agent:
             self._cancel_jobs(self._session.current_turn_id)
             self._session.finish_turn(
                 "failed",
-                error=str(error),
+                error=runtime_error_info(error),
             )
             raise
         except BaseException as error:
@@ -220,7 +221,7 @@ class Agent:
                     or (turn_control is not None and turn_control.cancelled)
                 )
                 else "interrupted",
-                error=str(error),
+                error=runtime_error_info(error),
             )
             raise
         self._session.finish_turn("completed")
@@ -306,12 +307,21 @@ class Agent:
                 if on_event is not None:
                     on_event(ReasoningDeltaEvent(text=text, model_call_index=model_call_index))
 
-            response = self._provider.stream_cancellable(
-                request,
-                on_text_delta,
-                on_reasoning_delta,
-                lambda: _raise_if_cancelled(turn_control),
-            )
+            try:
+                response = self._provider.stream_cancellable(
+                    request,
+                    on_text_delta,
+                    on_reasoning_delta,
+                    lambda: _raise_if_cancelled(turn_control),
+                )
+            except ProviderProtocolError as error:
+                raise ProviderProtocolError(
+                    str(error),
+                    details={
+                        **error.details,
+                        "model_call_index": model_call_index,
+                    },
+                ) from error
             usage = response.usage
             self._session.model_completed(
                 model_call_index,

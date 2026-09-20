@@ -444,7 +444,7 @@ describe('reducer', () => {
       message: {
         type: 'turn_failed',
         turn_id: 't1',
-        error: { type: 'ValueError', message: 'boom' },
+        error: { type: 'ValueError', message: 'boom', details: {} },
       },
     });
     expect(state.status).toBe('idle');

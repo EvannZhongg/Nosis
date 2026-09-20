@@ -1092,7 +1092,11 @@ class GuiTest(unittest.TestCase):
             first.emit(
                 {
                     "type": "fatal",
-                    "error": {"type": "RuntimeError", "message": "broken"},
+                    "error": {
+                        "type": "RuntimeError",
+                        "message": "broken",
+                        "details": {},
+                    },
                 },
                 None,
             )

@@ -22,6 +22,7 @@ from agent_core import (
     UserSteerAppliedEvent,
     JobStatusEvent,
     PlanSnapshot,
+    RuntimeErrorInfo,
     plan_snapshot_to_dict,
 )
 from agent_core.llm import TokenUsage
@@ -63,6 +64,14 @@ def usage_to_dict(usage: TokenUsage | None) -> dict[str, object] | None:
         "input_tokens": usage.input_tokens,
         "output_tokens": usage.output_tokens,
         "total_tokens": usage.total_tokens,
+    }
+
+
+def runtime_failure_to_dict(error: RuntimeErrorInfo) -> dict[str, object]:
+    return {
+        "type": error.type,
+        "message": error.message,
+        "details": dict(error.details),
     }
 
 

@@ -1,6 +1,7 @@
 import unittest
 import base64
 import _thread
+import json
 import tempfile
 import threading
 import time
@@ -11,6 +12,7 @@ from agent_core import (
     ImagePart,
     LLMRequest,
     ProviderCapabilities,
+    ProviderProtocolError,
     Message,
     TokenUsage,
     ToolCall,
@@ -603,6 +605,452 @@ class LiteLLMProviderTest(unittest.TestCase):
                 ),
             ),
         )
+
+    @patch("agent_core.providers.litellm_provider.completion")
+    def test_assembles_multiple_tool_calls_by_id_without_indexes(
+        self,
+        completion_mock,
+    ) -> None:
+        completion_mock.return_value = iter(
+            [
+                chunk(
+                    tool_calls=[
+                        {
+                            "id": "call-1",
+                            "function": {
+                                "name": "read_file",
+                                "arguments": '{"path": "a.txt"}',
+                            },
+                        },
+                        {
+                            "id": "call-2",
+                            "function": {
+                                "name": "read_file",
+                                "arguments": '{"path": "b.txt"}',
+                            },
+                        },
+                    ]
+                )
+            ]
+        )
+        provider = LiteLLMProvider(
+            model="openai/test-model",
+            max_context_tokens=1000,
+        )
+
+        response = provider.stream(
+            LLMRequest(
+                system_prompt="You are helpful.",
+                messages=(Message(role="user", content="read both"),),
+            ),
+            lambda _text: None,
+        )
+
+        self.assertEqual(
+            response.tool_calls,
+            (
+                ToolCall("call-1", "read_file", {"path": "a.txt"}),
+                ToolCall("call-2", "read_file", {"path": "b.txt"}),
+            ),
+        )
+
+    @patch("agent_core.providers.litellm_provider.completion")
+    def test_orders_indexed_tool_calls_by_provider_index(
+        self,
+        completion_mock,
+    ) -> None:
+        completion_mock.return_value = iter(
+            [
+                chunk(
+                    tool_calls=[
+                        {
+                            "index": 1,
+                            "id": "call-2",
+                            "function": {
+                                "name": "read_file",
+                                "arguments": '{"path": "b.txt"}',
+                            },
+                        },
+                        {
+                            "index": 0,
+                            "id": "call-1",
+                            "function": {
+                                "name": "read_file",
+                                "arguments": '{"path": "a.txt"}',
+                            },
+                        },
+                    ]
+                )
+            ]
+        )
+        provider = LiteLLMProvider(
+            model="openai/test-model",
+            max_context_tokens=1000,
+        )
+
+        response = provider.stream(
+            LLMRequest(
+                system_prompt="You are helpful.",
+                messages=(Message(role="user", content="read both"),),
+            ),
+            lambda _text: None,
+        )
+
+        self.assertEqual(
+            [call.id for call in response.tool_calls],
+            ["call-1", "call-2"],
+        )
+
+    @patch("agent_core.providers.litellm_provider.completion")
+    def test_rejects_mixed_indexed_and_unindexed_tool_calls(
+        self,
+        completion_mock,
+    ) -> None:
+        completion_mock.return_value = iter(
+            [
+                chunk(
+                    tool_calls=[
+                        {
+                            "id": "call-1",
+                            "function": {
+                                "name": "read_file",
+                                "arguments": '{"path": "a.txt"}',
+                            },
+                        },
+                        {
+                            "index": 1,
+                            "id": "call-2",
+                            "function": {
+                                "name": "read_file",
+                                "arguments": '{"path": "b.txt"}',
+                            },
+                        },
+                    ]
+                )
+            ]
+        )
+        provider = LiteLLMProvider(
+            model="openai/test-model",
+            max_context_tokens=1000,
+        )
+
+        with self.assertRaises(ProviderProtocolError) as raised:
+            provider.stream(
+                LLMRequest(
+                    system_prompt="You are helpful.",
+                    messages=(Message(role="user", content="read both"),),
+                ),
+                lambda _text: None,
+            )
+
+        self.assertEqual(raised.exception.details["reason"], "ambiguous_order")
+
+    @patch("agent_core.providers.litellm_provider.completion")
+    def test_rejects_an_anonymous_initial_fragment(
+        self,
+        completion_mock,
+    ) -> None:
+        completion_mock.return_value = iter(
+            [
+                chunk(
+                    tool_calls=[
+                        {"function": {"arguments": '{"path"'}},
+                    ]
+                )
+            ]
+        )
+        provider = LiteLLMProvider(
+            model="openai/test-model",
+            max_context_tokens=1000,
+        )
+
+        with self.assertRaises(ProviderProtocolError) as raised:
+            provider.stream(
+                LLMRequest(
+                    system_prompt="You are helpful.",
+                    messages=(Message(role="user", content="read it"),),
+                ),
+                lambda _text: None,
+            )
+
+        self.assertEqual(raised.exception.details["reason"], "ambiguous_identity")
+
+    @patch("agent_core.providers.litellm_provider.completion")
+    def test_rejects_anonymous_parallel_tool_calls(self, completion_mock) -> None:
+        completion_mock.return_value = iter(
+            [
+                chunk(
+                    tool_calls=[
+                        {
+                            "function": {
+                                "name": "read_file",
+                                "arguments": '{"path": "a.txt"}',
+                            },
+                        },
+                        {
+                            "function": {
+                                "name": "read_file",
+                                "arguments": '{"path": "b.txt"}',
+                            },
+                        },
+                    ]
+                )
+            ]
+        )
+        provider = LiteLLMProvider(
+            model="openai/test-model",
+            max_context_tokens=1000,
+        )
+
+        with self.assertRaises(ProviderProtocolError) as raised:
+            provider.stream(
+                LLMRequest(
+                    system_prompt="You are helpful.",
+                    messages=(Message(role="user", content="read both"),),
+                ),
+                lambda _text: None,
+            )
+
+        self.assertEqual(raised.exception.details["reason"], "ambiguous_identity")
+
+    @patch("agent_core.providers.litellm_provider.completion")
+    def test_recovers_a_stale_shorter_argument_snapshot(
+        self,
+        completion_mock,
+    ) -> None:
+        complete = '{"path": "README.md"}'
+        completion_mock.return_value = iter(
+            [
+                chunk(
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "id": "call-1",
+                            "function": {
+                                "name": "read_file",
+                                "arguments": complete,
+                            },
+                        }
+                    ]
+                ),
+                chunk(
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "function": {"arguments": '{"path"'},
+                        }
+                    ]
+                ),
+            ]
+        )
+        provider = LiteLLMProvider(
+            model="openai/test-model",
+            max_context_tokens=1000,
+        )
+
+        response = provider.stream(
+            LLMRequest(
+                system_prompt="You are helpful.",
+                messages=(Message(role="user", content="read it"),),
+            ),
+            lambda _text: None,
+        )
+
+        self.assertEqual(response.tool_calls[0].arguments, {"path": "README.md"})
+
+    @patch("agent_core.providers.litellm_provider.completion")
+    def test_recovers_equivalent_complete_argument_snapshots(
+        self,
+        completion_mock,
+    ) -> None:
+        completion_mock.return_value = iter(
+            [
+                chunk(
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "id": "call-1",
+                            "function": {
+                                "name": "read_file",
+                                "arguments": '{"path":"README.md"}',
+                            },
+                        }
+                    ]
+                ),
+                chunk(
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "function": {
+                                "arguments": '{"path": "README.md"}',
+                            },
+                        }
+                    ]
+                ),
+            ]
+        )
+        provider = LiteLLMProvider(
+            model="openai/test-model",
+            max_context_tokens=1000,
+        )
+
+        response = provider.stream(
+            LLMRequest(
+                system_prompt="You are helpful.",
+                messages=(Message(role="user", content="read it"),),
+            ),
+            lambda _text: None,
+        )
+
+        self.assertEqual(response.tool_calls[0].arguments, {"path": "README.md"})
+
+    @patch("agent_core.providers.litellm_provider.completion")
+    def test_recovers_partially_overlapping_argument_fragments(
+        self,
+        completion_mock,
+    ) -> None:
+        completion_mock.return_value = iter(
+            [
+                chunk(
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "id": "call-1",
+                            "function": {
+                                "name": "read_file",
+                                "arguments": '{"path": "README.md"',
+                            },
+                        }
+                    ]
+                ),
+                chunk(
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "function": {
+                                "arguments": '"}',
+                            },
+                        }
+                    ]
+                ),
+            ]
+        )
+        provider = LiteLLMProvider(
+            model="openai/test-model",
+            max_context_tokens=1000,
+        )
+
+        response = provider.stream(
+            LLMRequest(
+                system_prompt="You are helpful.",
+                messages=(Message(role="user", content="read it"),),
+            ),
+            lambda _text: None,
+        )
+
+        self.assertEqual(response.tool_calls[0].arguments, {"path": "README.md"})
+
+    @patch("agent_core.providers.litellm_provider.completion")
+    def test_rejects_an_index_reused_for_a_different_id(
+        self,
+        completion_mock,
+    ) -> None:
+        completion_mock.return_value = iter(
+            [
+                chunk(
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "id": "call-1",
+                            "function": {
+                                "name": "read_file",
+                                "arguments": '{"path": "a.txt"}',
+                            },
+                        }
+                    ]
+                ),
+                chunk(
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "id": "call-2",
+                            "function": {
+                                "name": "read_file",
+                                "arguments": '{"path": "b.txt"}',
+                            },
+                        }
+                    ]
+                ),
+            ]
+        )
+        provider = LiteLLMProvider(
+            model="openai/test-model",
+            max_context_tokens=1000,
+        )
+
+        with self.assertRaises(ProviderProtocolError) as raised:
+            provider.stream(
+                LLMRequest(
+                    system_prompt="You are helpful.",
+                    messages=(Message(role="user", content="read it"),),
+                ),
+                lambda _text: None,
+            )
+
+        self.assertEqual(raised.exception.details["reason"], "conflicting_id")
+
+    @patch("agent_core.providers.litellm_provider.completion")
+    def test_rejects_two_distinct_complete_argument_objects(
+        self,
+        completion_mock,
+    ) -> None:
+        first = json.dumps({"command": "x" * 710}, separators=(",", ":"))
+        self.assertEqual(len(first), 724)
+        completion_mock.return_value = iter(
+            [
+                chunk(
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "id": "call-1",
+                            "function": {
+                                "name": "shell",
+                                "arguments": first,
+                            },
+                        }
+                    ]
+                ),
+                chunk(
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "function": {
+                                "arguments": '{"command":"next"}',
+                            },
+                        }
+                    ]
+                ),
+            ]
+        )
+        provider = LiteLLMProvider(
+            model="deepseek/deepseek-flash",
+            max_context_tokens=1000,
+        )
+
+        with self.assertRaises(ProviderProtocolError) as raised:
+            provider.stream(
+                LLMRequest(
+                    system_prompt="You are helpful.",
+                    messages=(Message(role="user", content="run it"),),
+                ),
+                lambda _text: None,
+            )
+
+        self.assertEqual(raised.exception.details["reason"], "ambiguous_arguments")
+        self.assertEqual(raised.exception.details["json_error_position"], 724)
+        self.assertEqual(raised.exception.details["candidate_count"], 2)
+        self.assertEqual(raised.exception.details["provider"], "deepseek")
+        self.assertNotIn("x" * 20, str(raised.exception.details))
 
     @patch(
         "agent_core.providers.litellm_provider.token_counter",

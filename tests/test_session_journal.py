@@ -8,6 +8,7 @@ from agent_core import (
     JsonlSessionStore,
     Message,
     PermissionPreset,
+    RuntimeErrorInfo,
     Session,
     ToolCall,
 )
@@ -15,6 +16,37 @@ from agent_core.projection import project_context_units
 
 
 class SessionJournalTest(unittest.TestCase):
+    def test_turn_failure_is_structured_and_replayed(self):
+        session = Session("s")
+        session.begin_turn("turn-1")
+        error = RuntimeErrorInfo(
+            type="ProviderProtocolError",
+            message="invalid streamed arguments",
+            details={"phase": "tool_call_assembly", "model_call_index": 2},
+        )
+
+        session.finish_turn("failed", error=error)
+
+        self.assertEqual(
+            session.journal[-1].payload,
+            {
+                "status": "failed",
+                "error": {
+                    "type": "ProviderProtocolError",
+                    "message": "invalid streamed arguments",
+                    "details": {
+                        "phase": "tool_call_assembly",
+                        "model_call_index": 2,
+                    },
+                },
+            },
+        )
+        replayed = Session("s")
+        for event in session.journal:
+            replayed.journal.append(event)
+            replayed.apply_event(event)
+        self.assertEqual(replayed.turns["turn-1"].error, error)
+
     def test_permission_preset_is_journaled_and_replayed(self):
         session = Session("s")
 

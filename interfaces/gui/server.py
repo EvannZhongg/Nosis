@@ -879,6 +879,7 @@ def create_app(
                     "error": {
                         "type": "ProtocolError",
                         "message": str(error),
+                        "details": {},
                     },
                 }
             )
@@ -894,6 +895,7 @@ def create_app(
                     "error": {
                         "type": "ProtocolError",
                         "message": "'attachment_id' must be a non-empty string",
+                        "details": {},
                     },
                 }
             )
@@ -908,6 +910,7 @@ def create_app(
                     "error": {
                         "type": "ProtocolError",
                         "message": "'after_event' must be a non-negative integer",
+                        "details": {},
                     },
                 }
             )

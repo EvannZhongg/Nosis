@@ -68,6 +68,9 @@ Session 是 append-only JSONL Journal，保存对话、执行事件和当前计�
 ~/.nosis/sessions/<workspace-key>/<session-id>/
 ```
 
+失败 Turn 将错误保存为 `{type, message, details}`。Provider 流协议错误的
+`details` 只记录定位所需的结构信息和参数摘要，不保存完整 Tool 参数。
+
 GUI 上传的附件保存在 Workspace 的 `.nosis/attachments/`，Session 只记录附件路径和类型。
 
 ## 代码入口

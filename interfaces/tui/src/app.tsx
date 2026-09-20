@@ -64,7 +64,7 @@ export function App(props: AppProps): React.ReactElement {
           type: 'message',
           message: {
             type: 'fatal',
-            error: { type: 'ProtocolError', message: error.message },
+            error: { type: 'ProtocolError', message: error.message, details: {} },
           },
         });
       },

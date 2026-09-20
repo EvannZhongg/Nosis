@@ -46,7 +46,11 @@ def main() -> None:
         if bridge is not None:
             bridge.emit(
                 "fatal",
-                error={"type": type(error).__name__, "message": str(error)},
+                error={
+                    "type": type(error).__name__,
+                    "message": str(error),
+                    "details": {},
+                },
             )
         raise SystemExit(1)
     finally:

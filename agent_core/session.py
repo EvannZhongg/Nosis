@@ -6,6 +6,10 @@ from threading import Lock
 from uuid import uuid4
 
 from .content import Content, ImagePart, TextPart, content_parts
+from .errors import (
+    RuntimeErrorInfo,
+    runtime_error_from_dict,
+)
 from .permissions import PermissionPreset
 from .plan import PlanSnapshot, plan_snapshot_from_dict, plan_snapshot_to_dict
 from .tools import ToolCall
@@ -69,7 +73,7 @@ class Turn:
     status: TurnStatus
     started_at: datetime | None = None
     finished_at: datetime | None = None
-    error: str | None = None
+    error: RuntimeErrorInfo | None = None
 
 
 @dataclass
@@ -174,8 +178,8 @@ class Session:
             turn.status = payload.get("status", "unknown")
             turn.finished_at = event.timestamp_utc
             turn.error = (
-                payload.get("error")
-                if isinstance(payload.get("error"), str)
+                runtime_error_from_dict(payload["error"])
+                if "error" in payload
                 else None
             )
         elif event.event_type == "tool_started" and event.tool_call_id:
@@ -404,14 +408,18 @@ class Session:
         status: TurnStatus,
         turn_id: str | None = None,
         *,
-        error: str | None = None,
+        error: RuntimeErrorInfo | None = None,
     ) -> None:
         turn_id = turn_id or self._current_turn_id
         if turn_id is None:
             return
         payload: dict[str, object] = {"status": status}
         if error is not None:
-            payload["error"] = error
+            payload["error"] = {
+                "type": error.type,
+                "message": error.message,
+                "details": dict(error.details),
+            }
         self._event(f"turn_{status}", turn_id, payload)
         if turn_id == self._current_turn_id:
             self._current_turn_id = None
