@@ -1,7 +1,4 @@
 # AGENTS.md
-
-本项目用于开发一个个人 AI Agent，支持 TUI 与可视化 GUI。开发时遵循以下要求。
-
 ## 1. 总体原则
 
 * 保持架构简单、清晰、可扩展，优先解决当前明确需求。
@@ -9,6 +6,7 @@
 * 不因潜在需求提前增加复杂的框架、配置层、防御逻辑或中间层。
 * 修改应聚焦任务本身，不顺带重构无关代码。
 * 优先复用现有实现，避免重复实现相同能力。
+* 重构过程无需考虑旧数据兼容，禁止为了旧实现加兼容层。
 
 ## 2. 架构要求
 
@@ -18,22 +16,21 @@ TUI (Ink + React) ──────┐
 GUI (React) ── FastAPI ─┘
 ```
 
-Bridge 以 `python -m interfaces.bridge` 作为独立进程运行，是前端与 Runtime 之间的唯一通道，两端用 newline-delimited JSON 交换协议消息。
+Bridge 以 `python -m interfaces.bridge` 作为独立进程运行，由前端宿主启动，是前端与 Runtime 之间的唯一通道，两端用 newline-delimited JSON 交换协议消息。
 
 * 依赖方向单向：`interfaces/* → agent_core`；`agent_core` 不得 import `interfaces`。
-* 驱动 Agent、执行 Tool、发起审批只能经由 Bridge 协议，前端不得自行运行 Agent Loop 或 Tool 执行。
-* 前端对 Core 的复用仅限只读能力（如 Session 读取、Workspace 路径解析）；执行语义不得在前端复制。
+* 驱动 Agent、执行 Tool、发起审批只能经由 Bridge 协议；前端不得运行 Agent Loop，也不得执行会改变 Workspace 或 Session 的 Tool。
+* 前端对 Core 的复用仅限只读能力（如 Session 读取、Workspace 路径解析、只读 Tool 的文件列举）；执行语义不得在前端复制。
 * TUI 和 GUI 仅作为交互层，共享同一套 Agent Runtime。
 * 授权、取消、Session 与 Tool 执行语义只实现一次，不得由两个前端各维护一套。
 * 保持清晰的依赖方向，避免模块间循环依赖。
-* 各层细节见 [README](README.md) 的文档导航；本文只记录约束与不变量。
 
 ## 3. Agent Core 与 Bridge
 
 新增能力的落点由职责决定：
 
 * 影响所有前端共享的执行语义 → `agent_core`。
-* 只决定选择、装配、进程与协议 → `interfaces/bridge`。
+* 只决定选择、装配与协议 → `interfaces/bridge`（Bridge 进程自身的生命周期由前端宿主管理，见 §2）。
 * 只影响单个前端的呈现与交互 → 对应前端；不得反向进入 Core。
 
 ### 3.1 Agent Core：机制
@@ -42,10 +39,16 @@ Bridge 以 `python -m interfaces.bridge` 作为独立进程运行，是前端与
 
 * Agent Loop、模型调用、错误处理与终止条件
 * 上下文管理与上下文压缩
-* Tool 调用与结果回灌
-* Session 状态
+* Tool 调用与结果回灌；超出预算的输出落盘为 Session Artifact
+* Session 状态与 append-only JSONL Journal，含权限 preset、Provider 与当前计划
 * 执行事件输出
 * Tool 抽象、Tool Catalog 与调用时依赖注入
+* Shell 进程执行的超时、输出上限与 spool
+* Skill 加载（`SkillSource` 与 Registry；Core 不决定 Skill 目录来源）
+* 计划状态与跨 Turn 的计划恢复
+* 后台 Jobs 与 Turn 控制（steer、cancel 的语义与终止条件）
+* 媒体与附件处理（图片探测、降级分析）
+* Workspace Instruction 的数据类型与 fingerprint（读取时机与来源顺序由 Bridge 决定）
 * 子 Agent Runtime 与角色注册表
 * Provider 抽象、MCP 客户端机制
 
@@ -59,18 +62,22 @@ Bridge 以 `python -m interfaces.bridge` 作为独立进程运行，是前端与
 
 Bridge 是唯一把 Core 拼装成可运行 Runtime 的地方，负责：
 
-* 选择 Provider，读取 `provider_config.json` 与 `agent_config.json`
+* 选择 Provider，读取 `provider_config.json` 与 `agent_config.json`，并处理配置写入
+* 初始化配置目录、安装内置 Skill 与 Plugin、读取 Prompt 模板与 Workspace Instructions
 * 组装 Tool Catalog、按角色 select、安装 `ToolPolicy`
 * MCP Server 生命周期
+* 发现 Plugin：把其声明的 Skill、MCP 与 Agent 组件加 namespace 后交给对应子系统
 * 子 Agent 角色注册表
 * Workspace 绑定、Session 存储位置、取消与持久化时机
-* 把 `AgentEvent` 翻译为协议消息，并转发用户输入与授权响应
+* 一次装配由一个 `ExecutionPlane` 原子持有；Provider、Workspace、配置或 Instructions 变化时整体重建
+* 把 `AgentEvent` 翻译为协议消息，并转发用户输入、授权、提问与取消
 
 约束：
 
 * Bridge 不含 Agent 决策逻辑：Agent Loop、上下文压缩、结果回灌都属于 Core。
-* Runtime 装配只有一处实现；TUI 与 GUI 不得各建一套。
-* 协议消息的增改必须同时更新 `interfaces/bridge/protocol.py` 与 `interfaces/protocol/src/protocol.ts`。
+* Runtime 装配只有一处实现；TUI 与 GUI 不得各建一套。前端只决定进程与附着（何时启动、接管或释放 Bridge），不参与 Runtime 装配。
+* 协议消息的增改必须同时更新 `interfaces/protocol/src/protocol.ts` 与发送方：`protocol.py` 定义大部分消息，其余由 `bridge.py` 与 `__main__.py` 内联发出。
+* 允许存在只服务单个前端的协议消息（如 `attach_only`、`takeover`、`attachment_replaced`），但它们只表达呈现与进程附着，不得承载 Agent 语义。
 
 ## 4. Tool 系统
 
@@ -79,6 +86,7 @@ Bridge 是唯一把 Core 拼装成可运行 Runtime 的地方，负责：
 * Shell、文件修改等高风险能力必须经过权限控制层。
 * 不允许模型绕过 Tool 系统直接执行系统操作。
 * Tool 的输入、输出和错误应使用结构化数据。
+* 输出超出预算的 Tool 由 Runtime 落盘为 Session Artifact，前端不参与截断或存储决策。
 
 ## 5. TUI 与 GUI
 
@@ -89,6 +97,7 @@ Bridge 是唯一把 Core 拼装成可运行 Runtime 的地方，负责：
 ## 6. Session 与状态
 
 * 对话和执行过程应围绕 Session 管理。
+* Session 以 append-only JSONL Journal 保存对话、执行事件与当前计划。
 * Session 状态不得依赖某个具体前端。
 * TUI 与 GUI 应能够读取和恢复同一类 Session。
 * 持久化数据与运行时对象分离。
