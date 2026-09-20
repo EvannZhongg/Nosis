@@ -36,7 +36,8 @@ class ToolExecutionContext:
     sessions_directory: Path = field(
         default_factory=default_sessions_directory
     )
-    command_executor: "CommandExecutor | None" = None
+    workspace_command_executor: "CommandExecutor | None" = None
+    host_command_executor: "CommandExecutor | None" = None
     max_generation_tokens: int | None = None
     # Whether the Agent's own model accepts image input.  It decides
     # which of the two image tools this Agent gets: the model either sees

@@ -18,7 +18,6 @@ from agent_core import (
     Agent,
     AgentEvent,
     AgentCancelled as Cancelled,
-    ApprovalScope,
     ContextWindowEvent,
     JsonlSessionStore,
     JobManager,
@@ -37,6 +36,7 @@ from agent_core import (
     SubagentRoleRegistry,
     SubagentRuntime,
     HostCommandExecutor,
+    SandboxedCommandExecutor,
     ToolExecutionContext,
     TurnControl,
     Workspace,
@@ -50,6 +50,7 @@ from agent_core import (
     runtime_error_info,
     vision_aware_tool_names,
     skill_aware_tool_names,
+    platform_workspace_sandbox_backend,
 )
 from agent_core.prompting import render_system_prompt
 from agent_core.path_utils import path_for_comparison
@@ -514,13 +515,7 @@ class Bridge:
 
         self._provider_name = main_provider_name
         approval_policy = CompositeToolPolicy(
-            # Shell still runs without confinement, so Workspace Access must
-            # continue to ask.  A real sandbox executor can be paired with a
-            # WORKSPACE approval scope when it is introduced.
-            ShellApprovalPolicy(
-                self.request_permission,
-                approval_scope=ApprovalScope.HOST,
-            ),
+            ShellApprovalPolicy(self.request_permission),
             McpApprovalPolicy(
                 self.request_mcp_permission,
                 lambda name: (
@@ -605,7 +600,8 @@ class Bridge:
             on_status=self._emit_mcp_status,
         )
         jobs: JobManager | None = None
-        executor: HostCommandExecutor | None = None
+        workspace_executor: SandboxedCommandExecutor | None = None
+        host_executor: HostCommandExecutor | None = None
         try:
             skills = SkillLoader().load(
                 (
@@ -634,7 +630,11 @@ class Bridge:
             if self._permissions is None:
                 raise RuntimeError("session permissions are not initialized")
             jobs = JobManager(self._session)
-            executor = HostCommandExecutor(workspace.path)
+            workspace_executor = SandboxedCommandExecutor(
+                workspace.path,
+                platform_workspace_sandbox_backend(),
+            )
+            host_executor = HostCommandExecutor(workspace.path)
             jobs.set_update_callback(
                 lambda update: self.emit(
                     **event_to_message(
@@ -662,7 +662,8 @@ class Bridge:
                 workspace=workspace,
                 session=self._session,
                 sessions_directory=self._sessions_directory,
-                command_executor=executor,
+                workspace_command_executor=workspace_executor,
+                host_command_executor=host_executor,
                 max_generation_tokens=agent_config.max_generation_tokens,
                 vision_input=(
                     "image" in main_provider.capabilities.input_modalities
@@ -712,7 +713,8 @@ class Bridge:
                 configuration_fingerprint=config_fingerprint,
                 instructions=instructions,
                 agent=agent,
-                executor=executor,
+                workspace_executor=workspace_executor,
+                host_executor=host_executor,
                 jobs=jobs,
                 mcp=mcp,
                 context_window=agent.context_window(),
@@ -731,8 +733,12 @@ class Bridge:
                 try:
                     mcp.close()
                 finally:
-                    if executor is not None:
-                        executor.close()
+                    try:
+                        if workspace_executor is not None:
+                            workspace_executor.close()
+                    finally:
+                        if host_executor is not None:
+                            host_executor.close()
             raise
         self._execution_plane = plane
         return plane

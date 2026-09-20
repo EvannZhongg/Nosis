@@ -1,11 +1,12 @@
 import locale
 import os
+import platform
 import shutil
 import signal
 import subprocess
-import atexit
 import tempfile
 import time
+import atexit
 from abc import ABC, abstractmethod
 from collections import deque
 from dataclasses import dataclass
@@ -76,6 +77,25 @@ class CommandExecutor(Protocol):
     def close(self) -> None: ...
 
 
+class ExecutionScope(StrEnum):
+    WORKSPACE = "workspace"
+    HOST = "host"
+
+
+def execution_scope_from_arguments(
+    arguments: dict[str, object],
+) -> ExecutionScope:
+    value = arguments.get("scope", ExecutionScope.WORKSPACE.value)
+    if not isinstance(value, str):
+        raise ValueError("execution scope must be 'workspace' or 'host'")
+    try:
+        return ExecutionScope(value)
+    except ValueError as error:
+        raise ValueError(
+            "execution scope must be 'workspace' or 'host'"
+        ) from error
+
+
 class FilesystemAccess(StrEnum):
     DENIED = "denied"
     READ_ONLY = "read_only"
@@ -132,15 +152,148 @@ class SandboxBackend(ABC):
 
 
 class LinuxSandboxBackend(SandboxBackend):
-    """Extension point for a future Linux workspace sandbox."""
+    """Confine a command with bubblewrap and a minimal filesystem view."""
+
+    def __init__(self) -> None:
+        self._temporary_directory = Path(
+            tempfile.mkdtemp(prefix="nosis-workspace-sandbox-")
+        )
+
+    def execute(
+        self,
+        command: str,
+        *,
+        working_directory: Path,
+        policy: SandboxPolicy,
+        timeout_seconds: int,
+        cancellation: "CancellationSignal | None" = None,
+    ) -> CommandExecutionResult:
+        _require_workspace_policy(policy)
+        executable = shutil.which("bwrap")
+        if executable is None:
+            raise RuntimeError(
+                "workspace shell requires bubblewrap (bwrap) on Linux"
+            )
+        workspace = working_directory.resolve()
+        private_tmp = self._temporary_directory.resolve()
+        argv = [
+            executable,
+            "--die-with-parent",
+            "--unshare-all",
+            "--new-session",
+            "--tmpfs",
+            "/",
+            "--proc",
+            "/proc",
+            "--dev",
+            "/dev",
+        ]
+        for path in ("/usr", "/bin", "/sbin", "/lib", "/lib64"):
+            if Path(path).exists():
+                argv.extend(("--ro-bind", path, path))
+        argv.extend(("--tmpfs", "/tmp"))
+        _append_linux_parent_directories(argv, workspace)
+        argv.extend(("--bind", str(workspace), str(workspace)))
+        argv.extend(("--chdir", str(workspace), "/bin/sh", "-c", command))
+        return _execute_process(
+            argv,
+            command=command,
+            working_directory=workspace,
+            timeout_seconds=timeout_seconds,
+            cancellation=cancellation,
+            environment=_sandbox_environment(Path("/tmp")),
+            spool_directory=private_tmp,
+        )
+
+    def close(self) -> None:
+        shutil.rmtree(self._temporary_directory, ignore_errors=True)
 
 
 class MacOSSandboxBackend(SandboxBackend):
-    """Extension point for a future macOS workspace sandbox."""
+    """Confine a command with the macOS Seatbelt sandbox."""
+
+    _PROFILE = """\
+(version 1)
+(deny default)
+(import "system.sb")
+(deny network*)
+(allow process*)
+(allow file-read*
+    (subpath (param "WORKSPACE"))
+    (subpath (param "PRIVATE_TMP"))
+    (subpath "/bin")
+    (subpath "/usr/bin")
+    (subpath "/usr/lib")
+    (subpath "/usr/share")
+    (subpath "/System")
+    (subpath "/Library/Apple")
+    (literal "/dev/null")
+    (literal "/dev/urandom"))
+(allow file-write*
+    (subpath (param "WORKSPACE"))
+    (subpath (param "PRIVATE_TMP"))
+    (literal "/dev/null"))
+"""
+
+    def __init__(self) -> None:
+        self._temporary_directory = Path(
+            tempfile.mkdtemp(prefix="nosis-workspace-sandbox-")
+        )
+
+    def execute(
+        self,
+        command: str,
+        *,
+        working_directory: Path,
+        policy: SandboxPolicy,
+        timeout_seconds: int,
+        cancellation: "CancellationSignal | None" = None,
+    ) -> CommandExecutionResult:
+        _require_workspace_policy(policy)
+        workspace = working_directory.resolve()
+        private_tmp = self._temporary_directory.resolve()
+        profile = self._PROFILE + _macos_ancestor_rules(
+            workspace, private_tmp
+        )
+        return _execute_process(
+            [
+                "/usr/bin/sandbox-exec",
+                "-D",
+                f"WORKSPACE={workspace}",
+                "-D",
+                f"PRIVATE_TMP={private_tmp}",
+                "-p",
+                profile,
+                "/bin/sh",
+                "-c",
+                command,
+            ],
+            command=command,
+            working_directory=workspace,
+            timeout_seconds=timeout_seconds,
+            cancellation=cancellation,
+            environment=_sandbox_environment(private_tmp),
+            spool_directory=private_tmp,
+            reports_sandbox_entry_failure=True,
+        )
+
+    def close(self) -> None:
+        shutil.rmtree(self._temporary_directory, ignore_errors=True)
 
 
 class WindowsSandboxBackend(SandboxBackend):
-    """Extension point for a future Windows workspace sandbox."""
+    """Windows has no backend in the first workspace-sandbox slice."""
+
+    def execute(
+        self,
+        command: str,
+        *,
+        working_directory: Path,
+        policy: SandboxPolicy,
+        timeout_seconds: int,
+        cancellation: "CancellationSignal | None" = None,
+    ) -> CommandExecutionResult:
+        raise RuntimeError("workspace shell sandbox is not available on Windows")
 
 
 class CancellationSignal(Protocol):
@@ -168,104 +321,12 @@ class HostCommandExecutor:
         timeout_seconds: int = DEFAULT_COMMAND_TIMEOUT_SECONDS,
         cancellation: CancellationSignal | None = None,
     ) -> CommandExecutionResult:
-        if (
-            isinstance(timeout_seconds, bool)
-            or not isinstance(timeout_seconds, int)
-            or timeout_seconds < 1
-            or timeout_seconds > MAX_COMMAND_TIMEOUT_SECONDS
-        ):
-            raise ValueError(
-                "command timeout must be an integer between 1 and "
-                f"{MAX_COMMAND_TIMEOUT_SECONDS} seconds"
-            )
-
-        _reap_stale_spools()
-        stdout_file = None
-        stderr_file = None
-        try:
-            stdout_file = tempfile.NamedTemporaryFile(
-                prefix=SPOOL_FILE_PREFIX, suffix="-stdout", delete=False
-            )
-            stdout_path = Path(stdout_file.name)
-            _SPOOL_PATHS.add(stdout_path)
-            stderr_file = tempfile.NamedTemporaryFile(
-                prefix=SPOOL_FILE_PREFIX, suffix="-stderr", delete=False
-            )
-            stderr_path = Path(stderr_file.name)
-            _SPOOL_PATHS.add(stderr_path)
-        except BaseException:
-            if stdout_file is not None:
-                stdout_file.close()
-            if stderr_file is not None:
-                stderr_file.close()
-            if stdout_file is not None:
-                _unlink_best_effort(stdout_path)
-            if stderr_file is not None:
-                _unlink_best_effort(stderr_path)
-            raise
-        process = None
-        timed_out = False
-        try:
-            process = subprocess.Popen(
-                _shell_argv(command),
-                cwd=self._working_directory,
-                # Commands must never read the stream the UI protocol uses.
-                stdin=subprocess.DEVNULL,
-                stdout=stdout_file,
-                stderr=stderr_file,
-                start_new_session=True,
-            )
-            deadline = time.monotonic() + timeout_seconds
-            while process.poll() is None:
-                if cancellation is not None and cancellation.cancelled:
-                    _kill_process_tree(process)
-                    process.wait()
-                    raise CommandCancelled
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    timed_out = True
-                    _kill_process_tree(process)
-                    process.wait()
-                    break
-                try:
-                    process.wait(timeout=min(0.1, remaining))
-                except subprocess.TimeoutExpired:
-                    pass
-        except BaseException:
-            # The command runs in its own process group, so an interrupted
-            # wait would otherwise leave it running detached.
-            if process is not None:
-                _kill_process_tree(process)
-                process.wait()
-            stdout_file.close()
-            stderr_file.close()
-            _unlink_best_effort(stdout_path)
-            _unlink_best_effort(stderr_path)
-            raise
-        finally:
-            stdout_file.close()
-            stderr_file.close()
-
-        try:
-            stdout, stdout_spool = _read_spooled_output(stdout_path)
-            stderr, stderr_spool = _read_spooled_output(stderr_path)
-        except BaseException:
-            _unlink_best_effort(stdout_path)
-            _unlink_best_effort(stderr_path)
-            raise
-        if stdout_spool is None:
-            _unlink_best_effort(stdout_path)
-        if stderr_spool is None:
-            _unlink_best_effort(stderr_path)
-        return CommandExecutionResult(
+        return _execute_process(
+            _shell_argv(command),
             command=command,
-            exit_code=process.returncode,
-            stdout=stdout,
-            stderr=stderr,
-            timed_out=timed_out,
+            working_directory=self._working_directory,
             timeout_seconds=timeout_seconds,
-            stdout_spool=stdout_spool,
-            stderr_spool=stderr_spool,
+            cancellation=cancellation,
         )
 
     def close(self) -> None:
@@ -305,6 +366,188 @@ class SandboxedCommandExecutor:
 
     def close(self) -> None:
         self._backend.close()
+
+
+def platform_workspace_sandbox_backend() -> SandboxBackend:
+    system = platform.system()
+    if system == "Darwin":
+        return MacOSSandboxBackend()
+    if system == "Linux":
+        return LinuxSandboxBackend()
+    if system == "Windows":
+        return WindowsSandboxBackend()
+    raise RuntimeError(f"workspace shell sandbox is not available on {system}")
+
+
+def _require_workspace_policy(policy: SandboxPolicy) -> None:
+    if policy != SandboxPolicy():
+        raise ValueError(
+            "the workspace sandbox backend only supports SandboxPolicy()"
+        )
+
+
+def _sandbox_environment(private_tmp: Path) -> dict[str, str]:
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "HOME": str(private_tmp),
+            "TMPDIR": str(private_tmp),
+            "TMP": str(private_tmp),
+            "TEMP": str(private_tmp),
+        }
+    )
+    return environment
+
+
+def _macos_ancestor_rules(*paths: Path) -> str:
+    ancestors = {
+        parent
+        for path in paths
+        for parent in path.parents
+        if parent != Path("/")
+    }
+    literals = " ".join(
+        f'(literal "{_escape_sandbox_string(str(path))}")'
+        for path in sorted(ancestors, key=str)
+    )
+    return f"\n(allow file-read-metadata file-test-existence {literals})\n"
+
+
+def _escape_sandbox_string(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _append_linux_parent_directories(argv: list[str], path: Path) -> None:
+    parents = tuple(reversed(path.parents))
+    for parent in (*parents, path):
+        if parent == Path("/"):
+            continue
+        argv.extend(("--dir", str(parent)))
+
+
+def _execute_process(
+    argv: list[str],
+    *,
+    command: str,
+    working_directory: Path,
+    timeout_seconds: int,
+    cancellation: CancellationSignal | None,
+    environment: dict[str, str] | None = None,
+    spool_directory: Path | None = None,
+    reports_sandbox_entry_failure: bool = False,
+) -> CommandExecutionResult:
+    if (
+        isinstance(timeout_seconds, bool)
+        or not isinstance(timeout_seconds, int)
+        or timeout_seconds < 1
+        or timeout_seconds > MAX_COMMAND_TIMEOUT_SECONDS
+    ):
+        raise ValueError(
+            "command timeout must be an integer between 1 and "
+            f"{MAX_COMMAND_TIMEOUT_SECONDS} seconds"
+        )
+
+    _reap_stale_spools()
+    stdout_file = None
+    stderr_file = None
+    try:
+        stdout_file = tempfile.NamedTemporaryFile(
+            prefix=SPOOL_FILE_PREFIX,
+            suffix="-stdout",
+            dir=spool_directory,
+            delete=False,
+        )
+        stdout_path = Path(stdout_file.name)
+        _SPOOL_PATHS.add(stdout_path)
+        stderr_file = tempfile.NamedTemporaryFile(
+            prefix=SPOOL_FILE_PREFIX,
+            suffix="-stderr",
+            dir=spool_directory,
+            delete=False,
+        )
+        stderr_path = Path(stderr_file.name)
+        _SPOOL_PATHS.add(stderr_path)
+    except BaseException:
+        if stdout_file is not None:
+            stdout_file.close()
+        if stderr_file is not None:
+            stderr_file.close()
+        if stdout_file is not None:
+            _unlink_best_effort(stdout_path)
+        if stderr_file is not None:
+            _unlink_best_effort(stderr_path)
+        raise
+    process = None
+    timed_out = False
+    try:
+        process = subprocess.Popen(
+            argv,
+            cwd=working_directory,
+            env=environment,
+            # Commands must never read the stream the UI protocol uses.
+            stdin=subprocess.DEVNULL,
+            stdout=stdout_file,
+            stderr=stderr_file,
+            start_new_session=True,
+        )
+        deadline = time.monotonic() + timeout_seconds
+        while process.poll() is None:
+            if cancellation is not None and cancellation.cancelled:
+                _kill_process_tree(process)
+                process.wait()
+                raise CommandCancelled
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                timed_out = True
+                _kill_process_tree(process)
+                process.wait()
+                break
+            try:
+                process.wait(timeout=min(0.1, remaining))
+            except subprocess.TimeoutExpired:
+                pass
+    except BaseException:
+        if process is not None:
+            _kill_process_tree(process)
+            process.wait()
+        stdout_file.close()
+        stderr_file.close()
+        _unlink_best_effort(stdout_path)
+        _unlink_best_effort(stderr_path)
+        raise
+    finally:
+        stdout_file.close()
+        stderr_file.close()
+
+    try:
+        stdout, stdout_spool = _read_spooled_output(stdout_path)
+        stderr, stderr_spool = _read_spooled_output(stderr_path)
+    except BaseException:
+        _unlink_best_effort(stdout_path)
+        _unlink_best_effort(stderr_path)
+        raise
+    if stdout_spool is None:
+        _unlink_best_effort(stdout_path)
+    if stderr_spool is None:
+        _unlink_best_effort(stderr_path)
+    if (
+        reports_sandbox_entry_failure
+        and process.returncode == 71
+        and "sandbox_apply: Operation not permitted" in stderr
+    ):
+        raise RuntimeError(
+            "workspace sandbox could not be entered: Operation not permitted"
+        )
+    return CommandExecutionResult(
+        command=command,
+        exit_code=process.returncode,
+        stdout=stdout,
+        stderr=stderr,
+        timed_out=timed_out,
+        timeout_seconds=timeout_seconds,
+        stdout_spool=stdout_spool,
+        stderr_spool=stderr_spool,
+    )
 
 
 def _shell_argv(command: str) -> list[str]:

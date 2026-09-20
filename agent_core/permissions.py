@@ -5,6 +5,8 @@ from enum import StrEnum
 from threading import Lock
 from typing import TYPE_CHECKING, Callable
 
+from .execution import ExecutionScope
+
 if TYPE_CHECKING:
     from .session import Session
     from .tools.base import ToolCall, ToolPolicy
@@ -15,11 +17,6 @@ class PermissionPreset(StrEnum):
     ASK_FOR_APPROVAL = "ask_for_approval"
     WORKSPACE_ACCESS = "workspace_access"
     FULL_ACCESS = "full_access"
-
-
-class ApprovalScope(StrEnum):
-    WORKSPACE = "workspace"
-    HOST = "host"
 
 
 class PermissionController:
@@ -56,12 +53,14 @@ class PermissionController:
     ) -> None:
         with self._lock:
             preset = self._session.permission_preset
+        scope = self._approval_policy.execution_scope(call, context)
+        if scope is None:
+            return
         if preset is PermissionPreset.FULL_ACCESS:
             return
         if (
             preset is PermissionPreset.WORKSPACE_ACCESS
-            and self._approval_policy.approval_scope(call, context)
-            is ApprovalScope.WORKSPACE
+            and scope is ExecutionScope.WORKSPACE
         ):
             return
         try:

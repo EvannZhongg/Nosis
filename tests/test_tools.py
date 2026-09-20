@@ -100,7 +100,7 @@ class NeedsExecutorTool(Tool):
     name = "needs_executor"
 
     def available(self, context) -> bool:
-        return context.command_executor is not None
+        return context.workspace_command_executor is not None
 
     def definition(self, context) -> ToolDefinition:
         return ToolDefinition(
@@ -156,7 +156,10 @@ class ToolCatalogTest(unittest.TestCase):
             )
             with_executor = catalog.select(
                 ("needs_executor",),
-                context_for(workspace, command_executor=UnusedExecutor()),
+                context_for(
+                    workspace,
+                    workspace_command_executor=UnusedExecutor(),
+                ),
             )
 
             self.assertEqual(without.definitions, ())
@@ -1476,7 +1479,10 @@ class ShellToolTest(unittest.TestCase):
 
         executor = RecordingExecutor()
         tool = _Bound(
-            ShellTool(), _TMP_WORKSPACE, command_executor=executor
+            ShellTool(),
+            _TMP_WORKSPACE,
+            workspace_command_executor=executor,
+            host_command_executor=UnusedExecutor(),
         )
 
         result = tool.execute({"command": "example command"})
@@ -1493,6 +1499,39 @@ class ShellToolTest(unittest.TestCase):
                 "timeout_seconds": 60,
             },
         )
+
+    def test_routes_each_call_by_execution_scope(self) -> None:
+        class RecordingExecutor:
+            def __init__(self, name):
+                self.name = name
+                self.commands = []
+
+            def execute(self, command, timeout_seconds=60):
+                self.commands.append(command)
+                return CommandExecutionResult(
+                    command=command,
+                    exit_code=0,
+                    stdout=self.name,
+                    stderr="",
+                    timeout_seconds=timeout_seconds,
+                )
+
+        workspace_executor = RecordingExecutor("workspace")
+        host_executor = RecordingExecutor("host")
+        tool = _Bound(
+            ShellTool(),
+            _TMP_WORKSPACE,
+            workspace_command_executor=workspace_executor,
+            host_command_executor=host_executor,
+        )
+
+        workspace_result = tool.execute({"command": "pwd"})
+        host_result = tool.execute({"command": "pwd", "scope": "host"})
+
+        self.assertEqual(workspace_result["stdout"], "workspace")
+        self.assertEqual(host_result["stdout"], "host")
+        self.assertEqual(workspace_executor.commands, ["pwd"])
+        self.assertEqual(host_executor.commands, ["pwd"])
 
     def test_allows_explicit_timeout_below_default(self) -> None:
         class RecordingExecutor:
@@ -1513,7 +1552,8 @@ class ShellToolTest(unittest.TestCase):
         tool = _Bound(
             ShellTool(),
             _TMP_WORKSPACE,
-            command_executor=executor,
+            workspace_command_executor=executor,
+            host_command_executor=UnusedExecutor(),
         )
 
         tool.execute({"command": "pwd", "timeout_seconds": 10})
@@ -1539,7 +1579,8 @@ class ShellToolTest(unittest.TestCase):
         tool = _Bound(
             ShellTool(),
             _TMP_WORKSPACE,
-            command_executor=executor,
+            workspace_command_executor=executor,
+            host_command_executor=UnusedExecutor(),
         )
 
         tool.execute({"command": "pwd", "timeout_seconds": 61})
@@ -1555,7 +1596,8 @@ class ShellToolTest(unittest.TestCase):
         tool = _Bound(
             ShellTool(),
             _TMP_WORKSPACE,
-            command_executor=UnusedExecutor(),
+            workspace_command_executor=UnusedExecutor(),
+            host_command_executor=UnusedExecutor(),
         )
 
         definition = tool.definition
@@ -1590,7 +1632,8 @@ class ShellToolTest(unittest.TestCase):
         context = context_for(
             _TMP_WORKSPACE,
             session=session,
-            command_executor=UnusedExecutor(),
+            workspace_command_executor=UnusedExecutor(),
+            host_command_executor=UnusedExecutor(),
             jobs=jobs,
         )
 
@@ -1613,13 +1656,18 @@ class ShellToolTest(unittest.TestCase):
                 raise AssertionError("executor should not be called")
 
         tool = _Bound(
-            ShellTool(), _TMP_WORKSPACE, command_executor=UnusedExecutor()
+            ShellTool(),
+            _TMP_WORKSPACE,
+            workspace_command_executor=UnusedExecutor(),
+            host_command_executor=UnusedExecutor(),
         )
 
         with self.assertRaisesRegex(ValueError, "non-empty string"):
             tool.execute({})
         with self.assertRaisesRegex(ValueError, "accepts only"):
             tool.execute({"command": "pwd", "extra": True})
+        with self.assertRaisesRegex(ValueError, "execution scope"):
+            tool.execute({"command": "pwd", "scope": "container"})
         with self.assertRaisesRegex(ValueError, "'background'.*boolean"):
             tool.execute(
                 {

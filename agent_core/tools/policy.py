@@ -1,6 +1,6 @@
 from typing import Callable
 
-from ..permissions import ApprovalScope
+from ..execution import ExecutionScope, execution_scope_from_arguments
 from .base import ToolCall, ToolPolicy
 from .context import ToolExecutionContext
 
@@ -9,17 +9,15 @@ class ShellApprovalPolicy:
     def __init__(
         self,
         request_permission: Callable[[str], bool],
-        approval_scope: ApprovalScope = ApprovalScope.HOST,
     ) -> None:
         self._request_permission = request_permission
-        self._approval_scope = approval_scope
 
-    def approval_scope(
+    def execution_scope(
         self, call: ToolCall, context: ToolExecutionContext
-    ) -> ApprovalScope | None:
+    ) -> ExecutionScope | None:
         if call.name != "shell":
             return None
-        return self._approval_scope
+        return execution_scope_from_arguments(call.arguments)
 
     def authorize(
         self, call: ToolCall, context: ToolExecutionContext
@@ -39,18 +37,18 @@ class CompositeToolPolicy:
     def __init__(self, *policies: ToolPolicy) -> None:
         self._policies = tuple(policies)
 
-    def approval_scope(
+    def execution_scope(
         self, call: ToolCall, context: ToolExecutionContext
-    ) -> ApprovalScope | None:
+    ) -> ExecutionScope | None:
         scopes = tuple(
             scope
             for policy in self._policies
-            if (scope := policy.approval_scope(call, context)) is not None
+            if (scope := policy.execution_scope(call, context)) is not None
         )
-        if ApprovalScope.HOST in scopes:
-            return ApprovalScope.HOST
-        if ApprovalScope.WORKSPACE in scopes:
-            return ApprovalScope.WORKSPACE
+        if ExecutionScope.HOST in scopes:
+            return ExecutionScope.HOST
+        if ExecutionScope.WORKSPACE in scopes:
+            return ExecutionScope.WORKSPACE
         return None
 
     def authorize(
@@ -71,12 +69,12 @@ class McpApprovalPolicy:
         self._request_permission = request_permission
         self._requires_approval = requires_approval
 
-    def approval_scope(
+    def execution_scope(
         self, call: ToolCall, context: ToolExecutionContext
-    ) -> ApprovalScope | None:
+    ) -> ExecutionScope | None:
         if not self._requires_approval(call.name):
             return None
-        return ApprovalScope.HOST
+        return ExecutionScope.HOST
 
     def authorize(
         self, call: ToolCall, context: ToolExecutionContext

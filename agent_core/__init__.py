@@ -27,6 +27,7 @@ from .execution import (
     CommandExecutionResult,
     CommandOutputSpool,
     CommandExecutor,
+    ExecutionScope,
     FilesystemAccess,
     HostCommandExecutor,
     LinuxSandboxBackend,
@@ -38,6 +39,7 @@ from .execution import (
     SandboxPolicy,
     TemporaryDirectoryMode,
     WindowsSandboxBackend,
+    platform_workspace_sandbox_backend,
 )
 from .errors import (
     ProviderProtocolError,
@@ -62,7 +64,7 @@ from .session import (
     Session,
     message_to_dict,
 )
-from .permissions import ApprovalScope, PermissionController, PermissionPreset
+from .permissions import PermissionController, PermissionPreset
 from .plan import (
     MAX_PLAN_STEP_OUTCOME_CHARS,
     PlanManager,
@@ -150,11 +152,11 @@ __all__ = [
     "AskUserTool",
     "AssistantMessageDeltaEvent",
     "AssistantMessageEvent",
-    "ApprovalScope",
     "CommandExecutionResult",
     "CommandCancelled",
     "CommandOutputSpool",
     "CommandExecutor",
+    "ExecutionScope",
     "FilesystemAccess",
     "CompositeToolPolicy",
     "Content",
@@ -255,6 +257,7 @@ __all__ = [
     "UserSteeringMailbox",
     "WebSearchTool",
     "WindowsSandboxBackend",
+    "platform_workspace_sandbox_backend",
     "WriteFileTool",
     "Workspace",
     "WorkspaceInstruction",

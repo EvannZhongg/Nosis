@@ -7,6 +7,8 @@ from ...execution import (
     MAX_COMMAND_TIMEOUT_SECONDS,
     CommandExecutionResult,
     CommandOutputSpool,
+    ExecutionScope,
+    execution_scope_from_arguments,
 )
 from ..base import JSONValue, Tool, ToolDefinition, ToolOutput
 from ..context import ToolExecutionContext
@@ -36,7 +38,10 @@ class ShellTool(Tool):
     name = "shell"
 
     def available(self, context: ToolExecutionContext) -> bool:
-        return context.command_executor is not None
+        return (
+            context.workspace_command_executor is not None
+            and context.host_command_executor is not None
+        )
 
     def definition(self, context: ToolExecutionContext) -> ToolDefinition:
         supports_background = context.jobs is not None
@@ -70,11 +75,13 @@ class ShellTool(Tool):
         )
         description = (
             "Execute a shell command with the workspace as the current "
-            f"directory. {shell_note} Every call starts a fresh shell, so "
-            "directory and environment changes do not persist. The command "
-            f"is killed after {DEFAULT_SHELL_TIMEOUT_SECONDS} seconds by "
-            f"default. {timeout_note} Its exit code, stdout and stderr are "
-            "returned."
+            "directory. Workspace scope is the default and is confined to "
+            "the workspace with network disabled; request host scope only "
+            "when the command must cross that boundary. "
+            f"{shell_note} Every call starts a fresh shell, so directory and "
+            "environment changes do not persist. The command is killed after "
+            f"{DEFAULT_SHELL_TIMEOUT_SECONDS} seconds by default. "
+            f"{timeout_note} Its exit code, stdout and stderr are returned."
         )
         properties: dict[str, JSONValue] = {
             "command": {
@@ -89,6 +96,16 @@ class ShellTool(Tool):
                 "minimum": 1,
                 "maximum": maximum_timeout,
                 "description": timeout_description,
+            },
+            "scope": {
+                "type": "string",
+                "enum": [scope.value for scope in ExecutionScope],
+                "description": (
+                    "Execution boundary. 'workspace' is sandboxed to the "
+                    "workspace with no network; 'host' runs with the current "
+                    "user's host access and may require approval."
+                ),
+                "default": ExecutionScope.WORKSPACE.value,
             },
         }
         if supports_background:
@@ -142,13 +159,24 @@ class ShellTool(Tool):
                 "shell requires 'timeout_seconds' to be an integer "
                 f"between 1 and {maximum_timeout}"
             )
-        if not set(arguments) <= {"command", "timeout_seconds", "background"}:
+        if not set(arguments) <= {
+            "command",
+            "timeout_seconds",
+            "background",
+            "scope",
+        }:
             raise ValueError(
-                "shell accepts only 'command', 'timeout_seconds' and 'background'"
+                "shell accepts only 'command', 'timeout_seconds', "
+                "'background' and 'scope'"
             )
-        executor = context.command_executor
+        scope = execution_scope_from_arguments(arguments)
+        executor = (
+            context.workspace_command_executor
+            if scope is ExecutionScope.WORKSPACE
+            else context.host_command_executor
+        )
         if executor is None:
-            raise ValueError("this runtime has no command executor")
+            raise ValueError(f"this runtime has no {scope.value} command executor")
         if background:
             jobs = context.jobs
             turn_id = context.session.current_turn_id

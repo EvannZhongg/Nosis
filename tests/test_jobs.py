@@ -104,7 +104,8 @@ class BackgroundJobTest(unittest.TestCase):
         context = ToolExecutionContext(
             workspace=Workspace(Path(__file__).parent),
             session=session,
-            command_executor=executor,
+            workspace_command_executor=executor,
+            host_command_executor=executor,
             jobs=jobs,
         )
         tools = ToolCatalog((ShellTool(),)).select(("shell",), context)
@@ -165,7 +166,8 @@ class BackgroundJobTest(unittest.TestCase):
         context = ToolExecutionContext(
             workspace=Workspace(Path(__file__).parent),
             session=session,
-            command_executor=ImmediateExecutor(),
+            workspace_command_executor=ImmediateExecutor(),
+            host_command_executor=ImmediateExecutor(),
             jobs=jobs,
         )
         tool = ShellTool()
@@ -252,7 +254,8 @@ class BackgroundJobTest(unittest.TestCase):
         context = ToolExecutionContext(
             workspace=Workspace(Path(__file__).parent),
             session=session,
-            command_executor=executor,
+            workspace_command_executor=executor,
+            host_command_executor=executor,
             jobs=jobs,
         )
         agent = Agent(

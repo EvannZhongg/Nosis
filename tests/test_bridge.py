@@ -412,10 +412,68 @@ class PermissionProtocolTest(unittest.TestCase):
                 bridge._session.journal[-1].event_type,
                 "permission_preset_changed",
             )
-            self.assertEqual(JsonlSessionStore(root / "sessions").list_sessions(), [])
+            self.assertEqual(
+                JsonlSessionStore(root / "sessions").list_sessions(), []
+            )
             self.assertEqual(
                 emitted(stdout)[-1],
                 {"type": "permission_changed", "preset": "full_access"},
+            )
+
+    def test_workspace_access_routes_shell_without_host_approval(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bridge, stdout = make_bridge([], root)
+            bridge.open_session(
+                open_session_message(
+                    root,
+                    session_id="s",
+                    agent_config={
+                        "max_same_tool_calls": 5,
+                        "output_reserve_tokens": 100,
+                        "workspace_instruction_files": [
+                            "CLAUDE.md",
+                            "AGENTS.md",
+                        ],
+                        "main_agent": {
+                            "tools": {
+                                name: name == "shell" for name in TOOL_NAMES
+                            }
+                        },
+                    },
+                )
+            )
+            bridge._set_permission_preset(
+                {"type": "permission_set", "preset": "workspace_access"}
+            )
+            plane = bridge._ensure_execution_plane()
+            try:
+                result = plane.agent._tools.execute(
+                    ToolCall(
+                        "call-workspace",
+                        "shell",
+                        {"command": "printf workspace > routed.txt"},
+                    )
+                )
+            finally:
+                bridge._close_execution_plane()
+
+            if (
+                result.error is not None
+                and result.error.type == "RuntimeError"
+                and "Operation not permitted" in result.error.message
+            ):
+                self.skipTest("the test runner already forbids nested Seatbelt")
+            self.assertIsNone(result.error)
+            self.assertEqual(
+                (root / "routed.txt").read_text(encoding="utf-8"),
+                "workspace",
+            )
+            self.assertFalse(
+                any(
+                    message["type"] == "approval_request"
+                    for message in emitted(stdout)
+                )
             )
 
     def test_bridge_changes_session_configuration_without_initializing_runtime(self) -> None:
@@ -477,10 +535,15 @@ class PermissionProtocolTest(unittest.TestCase):
                     wraps=plane.mcp.close,
                 ) as close_mcp,
                 patch.object(
-                    plane.executor,
+                    plane.workspace_executor,
                     "close",
-                    wraps=plane.executor.close,
-                ) as close_executor,
+                    wraps=plane.workspace_executor.close,
+                ) as close_workspace_executor,
+                patch.object(
+                    plane.host_executor,
+                    "close",
+                    wraps=plane.host_executor.close,
+                ) as close_host_executor,
             ):
                 bridge._set_provider(
                     {"type": "provider_set", "provider": "second"}
@@ -489,7 +552,8 @@ class PermissionProtocolTest(unittest.TestCase):
             self.assertIsNone(bridge._execution_plane)
             close_jobs.assert_called_once_with()
             close_mcp.assert_called_once_with()
-            close_executor.assert_called_once_with()
+            close_workspace_executor.assert_called_once_with()
+            close_host_executor.assert_called_once_with()
 
     def test_workspace_change_closes_the_execution_plane_once(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -512,10 +576,15 @@ class PermissionProtocolTest(unittest.TestCase):
                     wraps=plane.mcp.close,
                 ) as close_mcp,
                 patch.object(
-                    plane.executor,
+                    plane.workspace_executor,
                     "close",
-                    wraps=plane.executor.close,
-                ) as close_executor,
+                    wraps=plane.workspace_executor.close,
+                ) as close_workspace_executor,
+                patch.object(
+                    plane.host_executor,
+                    "close",
+                    wraps=plane.host_executor.close,
+                ) as close_host_executor,
             ):
                 bridge._set_workspace(
                     {
@@ -527,7 +596,8 @@ class PermissionProtocolTest(unittest.TestCase):
             self.assertIsNone(bridge._execution_plane)
             close_jobs.assert_called_once_with()
             close_mcp.assert_called_once_with()
-            close_executor.assert_called_once_with()
+            close_workspace_executor.assert_called_once_with()
+            close_host_executor.assert_called_once_with()
 
 
 class _SlowStdin:

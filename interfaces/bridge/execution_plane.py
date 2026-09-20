@@ -24,7 +24,8 @@ class ExecutionPlane:
     configuration_fingerprint: str
     instructions: WorkspaceInstructions
     agent: Agent
-    executor: CommandExecutor
+    workspace_executor: CommandExecutor
+    host_executor: CommandExecutor
     jobs: JobManager
     mcp: McpClientManager
     context_window: ContextWindow
@@ -55,7 +56,10 @@ class ExecutionPlane:
             try:
                 self.mcp.close()
             finally:
-                self.executor.close()
+                try:
+                    self.workspace_executor.close()
+                finally:
+                    self.host_executor.close()
 
 
 __all__ = ["ExecutionPlane"]

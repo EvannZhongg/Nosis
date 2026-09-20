@@ -2,8 +2,7 @@ import threading
 import unittest
 
 from agent_core import (
-    ApprovalScope,
-    HostCommandExecutor,
+    ExecutionScope,
     PermissionController,
     PermissionPreset,
     Session,
@@ -58,8 +57,8 @@ class PermissionControllerTest(unittest.TestCase):
         calls = []
 
         class RecordingPolicy:
-            def approval_scope(self, call: ToolCall, context):
-                return ApprovalScope.HOST
+            def execution_scope(self, call: ToolCall, context):
+                return ExecutionScope.HOST
 
             def authorize(self, call: ToolCall, context) -> None:
                 calls.append(call)
@@ -73,8 +72,8 @@ class PermissionControllerTest(unittest.TestCase):
 
     def test_records_an_approval_decision_as_a_user_anchor(self) -> None:
         class ApprovalPolicy:
-            def approval_scope(self, call: ToolCall, context):
-                return ApprovalScope.HOST
+            def execution_scope(self, call: ToolCall, context):
+                return ExecutionScope.HOST
 
             def authorize(self, call: ToolCall, context) -> bool:
                 return True
@@ -95,8 +94,8 @@ class PermissionControllerTest(unittest.TestCase):
 
     def test_records_a_denied_approval_as_a_user_anchor(self) -> None:
         class DenialPolicy:
-            def approval_scope(self, call: ToolCall, context):
-                return ApprovalScope.HOST
+            def execution_scope(self, call: ToolCall, context):
+                return ExecutionScope.HOST
 
             def authorize(self, call: ToolCall, context) -> bool:
                 raise PermissionError("not approved")
@@ -119,8 +118,8 @@ class PermissionControllerTest(unittest.TestCase):
         calls = []
 
         class RecordingPolicy:
-            def approval_scope(self, call: ToolCall, context):
-                return ApprovalScope.HOST
+            def execution_scope(self, call: ToolCall, context):
+                return ExecutionScope.HOST
 
             def authorize(self, call: ToolCall, context) -> None:
                 calls.append(call)
@@ -140,8 +139,8 @@ class PermissionControllerTest(unittest.TestCase):
         calls = []
 
         class WorkspacePolicy:
-            def approval_scope(self, call: ToolCall, context) -> ApprovalScope:
-                return ApprovalScope.WORKSPACE
+            def execution_scope(self, call: ToolCall, context) -> ExecutionScope:
+                return ExecutionScope.WORKSPACE
 
             def authorize(self, call: ToolCall, context) -> None:
                 calls.append(call)
@@ -157,7 +156,23 @@ class PermissionControllerTest(unittest.TestCase):
 
         self.assertEqual(calls, [])
 
-    def test_workspace_access_still_asks_for_host_executor(self) -> None:
+    def test_ask_for_approval_asks_for_workspace_scope(self) -> None:
+        requested_commands = []
+        controller = PermissionController(
+            Session("s"),
+            ShellApprovalPolicy(
+                lambda command: requested_commands.append(command) or True
+            ),
+        )
+
+        controller.authorize(
+            ToolCall("call-1", "shell", {"command": "pwd"}),
+            context(),
+        )
+
+        self.assertEqual(requested_commands, ["pwd"])
+
+    def test_workspace_access_still_asks_for_host_scope(self) -> None:
         requested_commands = []
         session = Session("s")
         controller = PermissionController(
@@ -167,26 +182,50 @@ class PermissionControllerTest(unittest.TestCase):
             ),
         )
         controller.set_preset(PermissionPreset.WORKSPACE_ACCESS)
-        tool_context = ToolExecutionContext(
-            Workspace(Path(__file__).parent),
-            session,
-            command_executor=HostCommandExecutor(Path(__file__).parent),
-        )
-
         controller.authorize(
-            ToolCall("call-1", "shell", {"command": "pwd"}),
-            tool_context,
+            ToolCall(
+                "call-1",
+                "shell",
+                {"command": "pwd", "scope": "host"},
+            ),
+            context(session),
         )
 
         self.assertEqual(requested_commands, ["pwd"])
+        self.assertEqual(
+            session.permission_preset,
+            PermissionPreset.WORKSPACE_ACCESS,
+        )
+
+    def test_full_access_skips_host_scope_approval(self) -> None:
+        requested_commands = []
+        session = Session("s")
+        controller = PermissionController(
+            session,
+            ShellApprovalPolicy(
+                lambda command: requested_commands.append(command) or True
+            ),
+        )
+        controller.set_preset(PermissionPreset.FULL_ACCESS)
+
+        controller.authorize(
+            ToolCall(
+                "call-1",
+                "shell",
+                {"command": "pwd", "scope": "host"},
+            ),
+            context(session),
+        )
+
+        self.assertEqual(requested_commands, [])
 
     def test_pending_approval_keeps_its_original_decision(self) -> None:
         entered = threading.Event()
         release = threading.Event()
 
         class BlockingPolicy:
-            def approval_scope(self, call: ToolCall, context):
-                return ApprovalScope.HOST
+            def execution_scope(self, call: ToolCall, context):
+                return ExecutionScope.HOST
 
             def authorize(self, call: ToolCall, context) -> None:
                 entered.set()

@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Callable, ClassVar, Protocol, TypeAlias
 from ..content import ImagePart
 
 if TYPE_CHECKING:
-    from ..permissions import ApprovalScope
+    from ..execution import ExecutionScope
     from .context import ToolExecutionContext
 
 
@@ -142,11 +142,11 @@ class Tool(ABC):
 
 
 class ToolPolicy(Protocol):
-    def approval_scope(
+    def execution_scope(
         self,
         call: ToolCall,
         context: "ToolExecutionContext",
-    ) -> "ApprovalScope | None":
+    ) -> "ExecutionScope | None":
         """Return the boundary crossed by a call that this policy covers."""
         raise NotImplementedError
 

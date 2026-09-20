@@ -1,4 +1,6 @@
 import sys
+import platform
+import subprocess
 import tempfile
 import threading
 import time
@@ -17,6 +19,7 @@ from agent_core import (
     SandboxedCommandExecutor,
     SandboxPolicy,
     TemporaryDirectoryMode,
+    platform_workspace_sandbox_backend,
 )
 from agent_core.execution import (
     MAX_COMMAND_OUTPUT_CHARS,
@@ -273,6 +276,58 @@ class SandboxedCommandExecutorTest(unittest.TestCase):
             ("pwd", working_directory, executor.policy, 12),
         )
         self.assertTrue(backend.closed)
+
+    @unittest.skipUnless(platform.system() == "Darwin", "macOS Seatbelt test")
+    def test_macos_backend_enforces_workspace_boundary_and_private_tmp(self) -> None:
+        probe = subprocess.run(
+            [
+                "/usr/bin/sandbox-exec",
+                "-p",
+                "(version 1) (allow default)",
+                "/usr/bin/true",
+            ],
+            capture_output=True,
+        )
+        if probe.returncode == 71 and b"Operation not permitted" in probe.stderr:
+            self.skipTest("the test runner already forbids nested Seatbelt")
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            outside = root / "outside.txt"
+            outside.write_text("secret", encoding="utf-8")
+            executor = SandboxedCommandExecutor(
+                workspace,
+                platform_workspace_sandbox_backend(),
+            )
+            try:
+                write_result = executor.execute(
+                    "printf workspace > inside.txt; "
+                    "printf temporary > \"$TMPDIR/value.txt\"; "
+                    "printf '%s' \"$TMPDIR\""
+                )
+                private_tmp = Path(write_result.stdout)
+                self.assertEqual(
+                    (private_tmp / "value.txt").read_text(encoding="utf-8"),
+                    "temporary",
+                )
+                read_result = executor.execute(f'cat "{outside}"')
+                network_result = executor.execute(
+                    "/usr/bin/curl --connect-timeout 1 http://127.0.0.1:9"
+                )
+            finally:
+                executor.close()
+
+            self.assertEqual(write_result.exit_code, 0)
+            self.assertEqual(
+                (workspace / "inside.txt").read_text(encoding="utf-8"),
+                "workspace",
+            )
+            self.assertNotEqual(private_tmp, Path(tempfile.gettempdir()))
+            self.assertFalse(private_tmp.exists())
+            self.assertNotEqual(read_result.exit_code, 0)
+            self.assertNotIn("secret", read_result.stdout)
+            self.assertNotEqual(network_result.exit_code, 0)
 
 
 if __name__ == "__main__":
