@@ -133,6 +133,8 @@ export function App() {
   );
 
   async function selectSession(id: string) {
+    setSettingsSection(null);
+    setSettingsMenuOpen(false);
     if (chatSessions.some((item) => item.session_id === id)) {
       setSelectedSessionId(id);
       setError("");
@@ -162,6 +164,8 @@ export function App() {
     // Add the new chat to the stable mounted set before making it visible.
     setChatSessions((all) => [...all, fresh]);
     setSelectedSessionId(fresh.session_id);
+    setSettingsSection(null);
+    setSettingsMenuOpen(false);
     setError("");
   }
 
@@ -235,7 +239,7 @@ export function App() {
         </div>
       </aside>
 
-      {settingsSection && <Settings section={settingsSection} onClose={() => { setSettingsSection(null); void refreshSessions(); }} onChanged={refreshModels} onOpenSession={(sessionId) => { setSettingsSection(null); void selectSession(sessionId); }} />}
+      {settingsSection && <Settings section={settingsSection} onClose={() => { setSettingsSection(null); void refreshSessions(); }} onChanged={refreshModels} onOpenSession={(sessionId) => void selectSession(sessionId)} />}
       <main className="chat-panel" style={{ display: settingsSection ? "none" : undefined }}>
         <header className="chat-header"><div className="breadcrumb">Chat <ChevronRight size={14} /><span>{restoringSession ? "…" : selectedTitle}</span></div><span className="status-label"><span className={`status-dot ${busy ? "working" : ""}`} />{busy ? "Working" : "Ready"}</span></header>
         {error && <div className="error-banner" role="alert">{error}</div>}
