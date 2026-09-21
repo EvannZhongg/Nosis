@@ -235,7 +235,10 @@ class MacOSSandboxBackend(SandboxBackend):
 (deny default)
 (import "system.sb")
 (deny network*)
-(allow process*)
+(allow process-exec)
+(allow process-fork)
+(allow signal (target same-sandbox))
+(allow process-info* (target same-sandbox))
 (allow file-read*
     (subpath (param "WORKSPACE"))
     (subpath (param "PRIVATE_TMP"))
@@ -245,6 +248,7 @@ class MacOSSandboxBackend(SandboxBackend):
     (subpath "/usr/share")
     (subpath "/System")
     (subpath "/Library/Apple")
+    (literal "/private/var/select/sh")
     (literal "/dev/null")
     (literal "/dev/urandom"))
 (allow file-write*

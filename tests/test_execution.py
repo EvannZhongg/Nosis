@@ -14,6 +14,7 @@ from agent_core import (
     CommandExecutionResult,
     FilesystemAccess,
     HostCommandExecutor,
+    MacOSSandboxBackend,
     NetworkAccess,
     ProcessIsolation,
     SandboxBackend,
@@ -225,6 +226,18 @@ class HostCommandExecutorTest(unittest.TestCase):
 
 
 class SandboxedCommandExecutorTest(unittest.TestCase):
+    @unittest.skipUnless(platform.system() == "Darwin", "macOS Seatbelt test")
+    def test_macos_profile_limits_process_interaction_to_same_sandbox(self) -> None:
+        profile = MacOSSandboxBackend._PROFILE
+        self.assertIn("(allow process-exec)", profile)
+        self.assertIn("(allow process-fork)", profile)
+        self.assertIn("(allow signal (target same-sandbox))", profile)
+        self.assertIn(
+            "(allow process-info* (target same-sandbox))",
+            profile,
+        )
+        self.assertNotIn("(allow process*)", profile)
+
     def test_delegates_policy_and_lifecycle_to_backend(self) -> None:
         class RecordingBackend(SandboxBackend):
             def __init__(self) -> None:
@@ -303,6 +316,7 @@ class SandboxedCommandExecutorTest(unittest.TestCase):
                 platform_workspace_sandbox_backend(),
             )
             try:
+                clean_result = executor.execute("true")
                 write_result = executor.execute(
                     "printf workspace > inside.txt; "
                     "printf temporary > \"$TMPDIR/value.txt\"; "
@@ -321,6 +335,8 @@ class SandboxedCommandExecutorTest(unittest.TestCase):
                 executor.close()
 
             self.assertEqual(write_result.exit_code, 0)
+            self.assertEqual(clean_result.exit_code, 0)
+            self.assertEqual(clean_result.stderr, "")
             self.assertEqual(
                 (workspace / "inside.txt").read_text(encoding="utf-8"),
                 "workspace",
