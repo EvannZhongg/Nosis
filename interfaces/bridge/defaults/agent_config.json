@@ -25,7 +25,8 @@
       "subagent": true,
       "create_scheduled_task": true,
       "update_scheduled_task": true,
-      "list_scheduled_tasks": true
+      "list_scheduled_tasks": true,
+      "delete_scheduled_task": true
     }
   },
   "subagent_roles": {

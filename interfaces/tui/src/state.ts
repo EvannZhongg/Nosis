@@ -8,6 +8,7 @@ import type {
   SessionSummary,
   SettingsSnapshot,
   Usage,
+  UserQuestion,
   UserQuestionOption,
 } from '@nosis/protocol';
 
@@ -119,6 +120,17 @@ let entryCounter = 0;
 function nextId(prefix: string): string {
   entryCounter += 1;
   return `${prefix}-${entryCounter}`;
+}
+
+function questionState(question: UserQuestion): UserQuestionState {
+  const recommendedIndex = question.options.findIndex((option) => option.recommended);
+  return {
+    requestId: question.request_id,
+    question: question.question,
+    options: question.options,
+    allowFreeText: question.allow_free_text,
+    selectedIndex: recommendedIndex >= 0 ? recommendedIndex : 0,
+  };
 }
 
 /** Appends to the open assistant entry, creating it on the first delta. */
@@ -426,6 +438,7 @@ function applyMessage(state: State, message: Incoming): State {
         contextWindow: message.context_window ?? state.contextWindow,
         plan: message.plan,
         mcpStatus: message.phase === 'starting' ? state.mcpStatus : null,
+        question: message.question ? questionState(message.question) : null,
         entries: [...state.entries, ...startupNotices],
       };
     }
@@ -637,17 +650,10 @@ function applyMessage(state: State, message: Incoming): State {
       return { ...state, entries: [...state.entries, ...historyEntries(message.items)] };
 
     case 'user_question': {
-      const recommendedIndex = message.options.findIndex((option) => option.recommended);
       return {
         ...state,
         status: 'awaiting_user',
-        question: {
-          requestId: message.request_id,
-          question: message.question,
-          options: message.options,
-          allowFreeText: message.allow_free_text,
-          selectedIndex: recommendedIndex >= 0 ? recommendedIndex : 0,
-        },
+        question: questionState(message),
       };
     }
 

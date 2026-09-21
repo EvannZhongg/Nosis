@@ -29,8 +29,12 @@ from agent_core import (
     builtin_catalog,
 )
 from agent_core.permissions import PermissionPreset
-from agent_core.scheduler import SchedulerService
-from agent_core.tools.builtin.schedule import CreateScheduledTaskTool
+from agent_core.scheduler import IntervalTrigger, SchedulerService
+from agent_core.tools.builtin.schedule import (
+    CreateScheduledTaskTool,
+    DeleteScheduledTaskTool,
+    UpdateScheduledTaskTool,
+)
 from agent_core.tools.budget import MAX_TOOL_RESULT_CHARS
 from agent_core.tools.builtin.read_file import (
     MAX_FILE_SIZE_BYTES as MAX_READ_FILE_SIZE_BYTES,
@@ -197,6 +201,93 @@ class ToolCatalogTest(unittest.TestCase):
 
 
 class ScheduledTaskToolTest(unittest.TestCase):
+    def test_create_schema_declares_trigger_properties_without_one_of(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            definition = CreateScheduledTaskTool().definition(
+                context_for(Workspace(Path(directory)))
+            )
+
+        trigger_schema = definition.parameters["properties"]["trigger"]
+        self.assertNotIn("oneOf", trigger_schema)
+        self.assertEqual(
+            trigger_schema["properties"]["type"]["enum"],
+            ["once", "interval", "cron"],
+        )
+        self.assertIn("explicit UTC offset", trigger_schema["properties"]["at"]["description"])
+        self.assertEqual(
+            trigger_schema["properties"]["at"]["pattern"],
+            "(?:Z|[+-][0-9]{2}:[0-9]{2})$",
+        )
+
+    def test_delete_schedule_is_model_callable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            scheduler = SchedulerService(root / "schedule.jsonl")
+            context = context_for(
+                Workspace(root),
+                sessions_directory=root / "sessions",
+                scheduler=scheduler,
+            )
+            created = CreateScheduledTaskTool().execute(
+                {
+                    "prompt": "scheduled prompt",
+                    "trigger": {"type": "once", "at": "2099-01-01T00:00:00+00:00"},
+                },
+                context,
+            )
+            toolset = builtin_catalog().select(("delete_scheduled_task",), context)
+            result = toolset.execute(
+                ToolCall(
+                    id="delete-1",
+                    name="delete_scheduled_task",
+                    arguments={"schedule_id": created["schedule_id"]},
+                )
+            )
+
+            self.assertEqual(json.loads(result.to_content())["ok"], True)
+            self.assertEqual(scheduler.schedules, [])
+
+    def test_create_interval_schedule(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            scheduler = SchedulerService(root / "schedule.jsonl")
+            context = context_for(
+                Workspace(root),
+                sessions_directory=root / "sessions",
+                scheduler=scheduler,
+            )
+            CreateScheduledTaskTool().execute(
+                {
+                    "prompt": "scheduled prompt",
+                    "trigger": {"type": "interval", "seconds": 90},
+                },
+                context,
+            )
+            self.assertIsInstance(scheduler.schedules[0].trigger, IntervalTrigger)
+            self.assertEqual(scheduler.schedules[0].trigger.seconds, 90)
+
+    def test_missing_trigger_fields_return_retryable_messages(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            context = context_for(
+                Workspace(Path(directory)),
+                scheduler=SchedulerService(Path(directory) / "schedule.jsonl"),
+            )
+            tool = CreateScheduledTaskTool()
+            with self.assertRaisesRegex(ValueError, "once trigger requires 'at'"):
+                tool.execute({"prompt": "p", "trigger": {"type": "once"}}, context)
+            with self.assertRaisesRegex(ValueError, "cron trigger requires 'expression'"):
+                tool.execute({"prompt": "p", "trigger": {"type": "cron"}}, context)
+
+    def test_delete_missing_schedule_reports_not_found(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            context = context_for(
+                Workspace(Path(directory)),
+                scheduler=SchedulerService(Path(directory) / "schedule.jsonl"),
+            )
+            with self.assertRaisesRegex(ValueError, "scheduled task not found"):
+                DeleteScheduledTaskTool().execute({"schedule_id": "missing"}, context)
+            with self.assertRaisesRegex(ValueError, "scheduled task not found"):
+                UpdateScheduledTaskTool().execute({"schedule_id": "missing"}, context)
     def test_new_schedule_session_inherits_provider_and_permissions(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

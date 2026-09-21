@@ -381,6 +381,36 @@ describe('reducer', () => {
     expect(state.status).toBe('running');
   });
 
+  it('restores a pending user question from the runtime snapshot', () => {
+    const state = reducer(ready(), {
+      type: 'message',
+      message: {
+        ...RUNTIME_READY,
+        phase: 'waiting_user',
+        turn_id: 't1',
+        question: {
+          type: 'user_question',
+          turn_id: 't1',
+          request_id: 't1:1',
+          question: 'Which cache?',
+          options: [
+            { id: 'memory', label: 'Memory' },
+            { id: 'sqlite', label: 'SQLite', recommended: true },
+          ],
+          allow_free_text: true,
+        },
+      },
+    });
+
+    expect(state.status).toBe('awaiting_user');
+    expect(state.question).toMatchObject({
+      requestId: 't1:1',
+      question: 'Which cache?',
+      selectedIndex: 1,
+      allowFreeText: true,
+    });
+  });
+
   it('records usage when a turn completes', () => {
     let state = ready();
     state = reducer(state, {

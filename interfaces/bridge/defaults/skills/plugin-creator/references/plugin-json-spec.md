@@ -81,7 +81,8 @@ Read the requested files, then report findings ordered by severity.
   a role, so state when the role applies, not only what it does.
 - `tools` (optional): Array of tool names, without duplicates. Omitted means every role tool.
   Allowed values: `read_file`, `edit_file`, `write_file`, `search_files`, `list_directory`,
-  `shell`, `web_search`, `create_scheduled_task`, `update_scheduled_task`, `list_scheduled_tasks`.
+  `shell`, `web_search`, `create_scheduled_task`, `update_scheduled_task`, `list_scheduled_tasks`,
+  `delete_scheduled_task`.
   `subagent` is never allowed: a role cannot delegate further.
 - `model` (optional, string): `inherit`, or a provider name from `provider_config.json`. A name that
   is not a configured provider falls back to the role's configured provider.

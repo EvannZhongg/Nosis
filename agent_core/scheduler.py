@@ -9,18 +9,21 @@ from __future__ import annotations
 import json
 import os
 import threading
-from dataclasses import asdict, dataclass, field
-from datetime import datetime, timedelta, timezone
+from dataclasses import asdict, dataclass, field, replace
+from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from typing import Callable, Literal
 from uuid import uuid4
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 @dataclass(frozen=True)
 class OneShotTrigger:
     at: datetime
     type: Literal["once"] = "once"
+
+    def __post_init__(self) -> None:
+        _require_aware(self.at, "once trigger at")
 
 
 @dataclass(frozen=True)
@@ -29,8 +32,26 @@ class CronTrigger:
     timezone: str = "UTC"
     type: Literal["cron"] = "cron"
 
+    def __post_init__(self) -> None:
+        _timezone(self.timezone)
 
-Trigger = OneShotTrigger | CronTrigger
+
+@dataclass(frozen=True)
+class IntervalTrigger:
+    """A fixed elapsed-time duration between successive runs."""
+
+    seconds: int
+    start_at: datetime | None = None
+    type: Literal["interval"] = "interval"
+
+    def __post_init__(self) -> None:
+        if isinstance(self.seconds, bool) or not isinstance(self.seconds, int) or self.seconds < 1:
+            raise ValueError("interval seconds must be a positive integer")
+        if self.start_at is not None:
+            _require_aware(self.start_at, "interval trigger start_at")
+
+
+Trigger = OneShotTrigger | CronTrigger | IntervalTrigger
 
 
 @dataclass(frozen=True)
@@ -52,6 +73,11 @@ class Schedule:
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     next_run_at: datetime | None = None
 
+    def __post_init__(self) -> None:
+        _require_aware(self.created_at, "schedule created_at")
+        if self.next_run_at is not None:
+            _require_aware(self.next_run_at, "schedule next_run_at")
+
 
 @dataclass
 class ScheduledRun:
@@ -70,19 +96,36 @@ def _dt(value: datetime | None) -> str | None:
     return value.isoformat() if value else None
 
 
+def _require_aware(value: datetime, name: str) -> None:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError(f"{name} must include a timezone offset")
+
+
+def _timezone(name: str) -> tzinfo:
+    if name == "UTC":
+        return timezone.utc
+    if not isinstance(name, str) or not name:
+        raise ValueError(f"unknown IANA timezone: {name}")
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError, TypeError) as error:
+        raise ValueError(f"unknown IANA timezone: {name}") from error
+
+
 def _parse_dt(value: object) -> datetime | None:
     if not isinstance(value, str) or not value:
         return None
     parsed = datetime.fromisoformat(value)
-    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+    _require_aware(parsed, "datetime value")
+    return parsed
 
 
 def _trigger_to_dict(trigger: Trigger) -> dict[str, object]:
-    value = asdict(trigger)
-    value["at"] = _dt(trigger.at) if isinstance(trigger, OneShotTrigger) else None
-    if value.get("at") is None and not isinstance(trigger, OneShotTrigger):
-        value.pop("at", None)
-    return value
+    if isinstance(trigger, OneShotTrigger):
+        return {"type": "once", "at": _dt(trigger.at)}
+    if isinstance(trigger, CronTrigger):
+        return {"type": "cron", "expression": trigger.expression, "timezone": trigger.timezone}
+    return {"type": "interval", "seconds": trigger.seconds, "start_at": _dt(trigger.start_at)}
 
 
 def _trigger_from_dict(value: dict[str, object]) -> Trigger:
@@ -93,6 +136,10 @@ def _trigger_from_dict(value: dict[str, object]) -> Trigger:
         return OneShotTrigger(at)
     if value.get("type") == "cron":
         return CronTrigger(str(value["expression"]), str(value.get("timezone", "UTC")))
+    if value.get("type") == "interval":
+        return IntervalTrigger(
+            value.get("seconds"), _parse_dt(value.get("start_at"))  # type: ignore[arg-type]
+        )
     raise ValueError("unknown trigger type")
 
 
@@ -120,6 +167,48 @@ def _schedule_from_dict(value: dict[str, object]) -> Schedule:
         created_at=_parse_dt(value.get("created_at")) or datetime.now(timezone.utc),
         next_run_at=_parse_dt(value.get("next_run_at")),
     )
+
+
+def _next_occurrence(
+    trigger: Trigger, end_at: datetime | None, after: datetime
+) -> datetime | None:
+    if isinstance(trigger, OneShotTrigger):
+        candidate = trigger.at if trigger.at > after else None
+    elif isinstance(trigger, IntervalTrigger):
+        delta = timedelta(seconds=trigger.seconds)
+        candidate = trigger.start_at or after + delta
+        if candidate <= after:
+            candidate += ((after - candidate) // delta + 1) * delta
+    else:
+        zone = _timezone(trigger.timezone)
+        cursor = after.astimezone(zone).replace(second=0, microsecond=0) + timedelta(minutes=1)
+        candidate = None
+        for _ in range(60 * 24 * 370):
+            if _cron_matches(trigger.expression, cursor):
+                candidate = cursor.astimezone(timezone.utc)
+                break
+            cursor += timedelta(minutes=1)
+    if candidate is None or (end_at is not None and candidate > end_at):
+        return None
+    return candidate
+
+
+def _missed(trigger: Trigger, scheduled_for: datetime, now: datetime) -> str | None:
+    if isinstance(trigger, CronTrigger) and scheduled_for < now - timedelta(minutes=1):
+        return "missed cron occurrence"
+    if isinstance(trigger, IntervalTrigger):
+        delta = timedelta(seconds=trigger.seconds)
+        # Permit normal poll jitter at the exact one-period boundary.
+        if now - scheduled_for > delta + timedelta(milliseconds=100):
+            return "missed interval occurrence"
+    return None
+
+
+def _next_after_missed_interval(
+    trigger: IntervalTrigger, scheduled_for: datetime, now: datetime
+) -> datetime:
+    delta = timedelta(seconds=trigger.seconds)
+    return scheduled_for + ((now - scheduled_for) // delta + 1) * delta
 
 
 class SchedulerService:
@@ -187,15 +276,23 @@ class SchedulerService:
     def create_schedule(self, *, trigger: Trigger, prompt: str, workspace: str, origin_session_id: str, schedule_session_id: str, end_at: datetime | None = None) -> Schedule:
         if not prompt.strip():
             raise ValueError("prompt must be non-empty")
-        if isinstance(trigger, OneShotTrigger) and trigger.at.tzinfo is None:
-            trigger = OneShotTrigger(trigger.at.replace(tzinfo=timezone.utc))
-        if end_at is not None and end_at.tzinfo is None:
-            end_at = end_at.replace(tzinfo=timezone.utc)
-        schedule = Schedule(str(uuid4()), trigger, AgentTurnAction(prompt.strip()), str(Path(workspace).expanduser().resolve()), origin_session_id, schedule_session_id, end_at=end_at)
-        if isinstance(trigger, OneShotTrigger):
-            schedule.next_run_at = trigger.at
+        if end_at is not None:
+            _require_aware(end_at, "schedule end_at")
+        now = datetime.now(timezone.utc)
+        if isinstance(trigger, IntervalTrigger):
+            next_run_at = _next_occurrence(trigger, end_at, now)
         else:
-            schedule.next_run_at = self.next_occurrence(schedule, datetime.now(timezone.utc) - timedelta(seconds=1))
+            next_run_at = _next_occurrence(trigger, end_at, now - timedelta(seconds=1))
+        schedule = Schedule(
+            str(uuid4()),
+            trigger,
+            AgentTurnAction(prompt.strip()),
+            str(Path(workspace).expanduser().resolve()),
+            origin_session_id,
+            schedule_session_id,
+            end_at=end_at,
+            next_run_at=next_run_at,
+        )
         with self._lock:
             self._reload()
             self._schedules[schedule.schedule_id] = schedule
@@ -206,63 +303,95 @@ class SchedulerService:
         with self._lock:
             self._reload()
             schedule = self._schedules[schedule_id]
+            action = schedule.action
+            trigger = schedule.trigger
+            enabled = schedule.enabled
+            end_at = schedule.end_at
             if "prompt" in changes:
-                schedule.action = AgentTurnAction(str(changes["prompt"]))
+                action = AgentTurnAction(str(changes["prompt"]))
             if "trigger" in changes:
-                schedule.trigger = changes["trigger"]  # type: ignore[assignment]
+                requested_trigger = changes["trigger"]
+                if not isinstance(requested_trigger, (OneShotTrigger, CronTrigger, IntervalTrigger)):
+                    raise ValueError("trigger must be a supported trigger")
+                trigger = requested_trigger
             if "enabled" in changes:
-                schedule.enabled = bool(changes["enabled"])
+                enabled = bool(changes["enabled"])
             if "end_at" in changes:
-                schedule.end_at = changes["end_at"]  # type: ignore[assignment]
-            schedule.next_run_at = self.next_occurrence(schedule, datetime.now(timezone.utc) - timedelta(seconds=1))
-            self._append({"op": "update", "schedule": _schedule_to_dict(schedule)})
-            return schedule
+                requested_end_at = changes["end_at"]
+                if requested_end_at is not None and not isinstance(requested_end_at, datetime):
+                    raise ValueError("end_at must be a datetime or null")
+                if requested_end_at is not None:
+                    _require_aware(requested_end_at, "schedule end_at")
+                end_at = requested_end_at  # type: ignore[assignment]
+            now = datetime.now(timezone.utc)
+            if isinstance(trigger, IntervalTrigger):
+                next_run_at = _next_occurrence(trigger, end_at, now)
+            else:
+                next_run_at = _next_occurrence(trigger, end_at, now - timedelta(seconds=1))
+            updated = replace(
+                schedule,
+                action=action,
+                trigger=trigger,
+                enabled=enabled,
+                end_at=end_at,
+                next_run_at=next_run_at,
+            )
+            self._schedules[schedule_id] = updated
+            self._append({"op": "update", "schedule": _schedule_to_dict(updated)})
+            return updated
 
     def delete_schedule(self, schedule_id: str) -> None:
         with self._lock:
             self._reload()
-            self._schedules.pop(schedule_id, None)
+            schedule = self._schedules.get(schedule_id)
+            if schedule is None:
+                raise KeyError(schedule_id)
+            self._schedules.pop(schedule_id)
             self._append({"op": "delete", "schedule_id": schedule_id})
 
     def next_occurrence(self, schedule: Schedule, after: datetime) -> datetime | None:
-        trigger = schedule.trigger
-        if isinstance(trigger, OneShotTrigger):
-            return trigger.at if trigger.at > after and (schedule.end_at is None or trigger.at <= schedule.end_at) else None
-        try:
-            zone = ZoneInfo(trigger.timezone)
-        except Exception:
-            zone = timezone.utc
-        cursor = after.astimezone(zone).replace(second=0, microsecond=0) + timedelta(minutes=1)
-        for _ in range(60 * 24 * 370):
-            if _cron_matches(trigger.expression, cursor):
-                candidate = cursor.astimezone(timezone.utc)
-                if schedule.end_at is None or candidate <= schedule.end_at:
-                    return candidate
-            cursor += timedelta(minutes=1)
-        return None
+        _require_aware(after, "next occurrence after")
+        return _next_occurrence(schedule.trigger, schedule.end_at, after)
 
     def poll_once(self, now: datetime | None = None) -> list[ScheduledRun]:
         now = now or datetime.now(timezone.utc)
-        due: list[tuple[Schedule, datetime]] = []
+        _require_aware(now, "scheduler poll time")
+        due: list[tuple[Schedule, datetime, str | None]] = []
         with self._lock:
             self._reload()
             for schedule in self._schedules.values():
                 if schedule.enabled and schedule.next_run_at and schedule.next_run_at <= now:
-                    due.append((schedule, schedule.next_run_at))
-            for schedule, scheduled_for in due:
-                if isinstance(schedule.trigger, CronTrigger) and scheduled_for < now - timedelta(minutes=1):
-                    schedule.next_run_at = self.next_occurrence(schedule, now)
+                    due.append(
+                        (
+                            schedule,
+                            schedule.next_run_at,
+                            _missed(schedule.trigger, schedule.next_run_at, now),
+                        )
+                    )
+            for schedule, scheduled_for, missed in due:
+                if missed:
+                    if isinstance(schedule.trigger, IntervalTrigger):
+                        candidate = _next_after_missed_interval(
+                            schedule.trigger, scheduled_for, now
+                        )
+                        schedule.next_run_at = (
+                            candidate
+                            if schedule.end_at is None or candidate <= schedule.end_at
+                            else None
+                        )
+                    else:
+                        schedule.next_run_at = self.next_occurrence(schedule, now)
                 else:
                     schedule.next_run_at = self.next_occurrence(schedule, scheduled_for)
                 if isinstance(schedule.trigger, OneShotTrigger):
                     schedule.enabled = False
                 self._append({"op": "update", "schedule": _schedule_to_dict(schedule)})
         created: list[ScheduledRun] = []
-        for schedule, scheduled_for in due:
+        for schedule, scheduled_for, missed_reason in due:
             run = ScheduledRun(str(uuid4()), schedule.schedule_id, schedule.schedule_session_id, str(uuid4()), scheduled_for)
             with self._lock:
-                if isinstance(schedule.trigger, CronTrigger) and scheduled_for < now - timedelta(minutes=1):
-                    run.status, run.error = "skipped", "missed cron occurrence"
+                if missed_reason:
+                    run.status, run.error = "skipped", missed_reason
                 elif schedule.schedule_id in self._running:
                     run.status, run.error = "skipped", "previous scheduled run still running"
                 elif self.runner is None:
@@ -382,4 +511,4 @@ def _cron_matches(expression: str, value: datetime) -> bool:
     return True
 
 
-__all__ = ["OneShotTrigger", "CronTrigger", "AgentTurnAction", "Schedule", "ScheduledRun", "SchedulerService"]
+__all__ = ["OneShotTrigger", "CronTrigger", "IntervalTrigger", "AgentTurnAction", "Schedule", "ScheduledRun", "SchedulerService"]

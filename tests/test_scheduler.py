@@ -1,13 +1,125 @@
 import tempfile
 import time
 import unittest
-from datetime import datetime, timezone
+from unittest.mock import patch
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfoNotFoundError
 
-from agent_core.scheduler import OneShotTrigger, SchedulerService
+from agent_core.scheduler import (
+    AgentTurnAction,
+    CronTrigger,
+    IntervalTrigger,
+    OneShotTrigger,
+    Schedule,
+    SchedulerService,
+    _schedule_to_dict,
+)
 
 
 class SchedulerServiceTest(unittest.TestCase):
+    def test_cron_rejects_unknown_timezone_instead_of_falling_back_to_utc(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unknown IANA timezone"):
+            CronTrigger("0 9 * * *", "Asia/Shangai")
+
+    def test_absolute_times_require_an_explicit_timezone(self) -> None:
+        with self.assertRaisesRegex(ValueError, "timezone offset"):
+            OneShotTrigger(datetime(2099, 1, 1))
+
+    def test_interval_supports_elapsed_seconds_and_minutes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            service = SchedulerService(Path(directory) / "schedule.jsonl")
+            start = datetime(2099, 1, 1, tzinfo=timezone.utc)
+            for seconds in (30, 90, 90 * 60):
+                schedule = service.create_schedule(
+                    trigger=IntervalTrigger(seconds, start),
+                    prompt="scheduled prompt",
+                    workspace=directory,
+                    origin_session_id="origin",
+                    schedule_session_id="scheduled-session",
+                )
+                self.assertEqual(service.next_occurrence(schedule, start), start + timedelta(seconds=seconds))
+
+    def test_cron_field_steps_are_anchored_to_each_hour(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            service = SchedulerService(Path(directory) / "schedule.jsonl")
+            schedule = Schedule(
+                schedule_id="cron",
+                trigger=CronTrigger("*/7 * * * *", "UTC"),
+                action=AgentTurnAction("scheduled prompt"),
+                workspace=directory,
+                origin_session_id="origin",
+                schedule_session_id="scheduled-session",
+            )
+            after = datetime(2099, 1, 1, 12, 1, tzinfo=timezone.utc)
+            self.assertEqual(
+                service.next_occurrence(schedule, after),
+                datetime(2099, 1, 1, 12, 7, tzinfo=timezone.utc),
+            )
+            self.assertEqual(
+                service.next_occurrence(
+                    schedule, datetime(2099, 1, 1, 12, 55, tzinfo=timezone.utc)
+                ),
+                datetime(2099, 1, 1, 12, 56, tzinfo=timezone.utc),
+            )
+            self.assertEqual(
+                service.next_occurrence(
+                    schedule, datetime(2099, 1, 1, 12, 56, tzinfo=timezone.utc)
+                ),
+                datetime(2099, 1, 1, 13, 0, tzinfo=timezone.utc),
+            )
+
+    def test_utc_cron_does_not_require_tzdata(self) -> None:
+        with patch("agent_core.scheduler.ZoneInfo", side_effect=ZoneInfoNotFoundError("tzdata unavailable")):
+            trigger = CronTrigger("0 9 * * *")
+            self.assertEqual(trigger.timezone, "UTC")
+
+    def test_invalid_timezone_names_have_stable_errors(self) -> None:
+        for name in ("", "../UTC"):
+            with self.assertRaisesRegex(ValueError, "unknown IANA timezone"):
+                CronTrigger("0 9 * * *", name)
+
+    def test_missed_interval_skips_to_next_boundary(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            service = SchedulerService(
+                Path(directory) / "schedule.jsonl", runner=lambda schedule, run: None
+            )
+            start = datetime(2099, 1, 1, tzinfo=timezone.utc)
+            schedule = service.create_schedule(
+                trigger=IntervalTrigger(1, start),
+                prompt="scheduled prompt",
+                workspace=directory,
+                origin_session_id="origin",
+                schedule_session_id="scheduled-session",
+            )
+            schedule.next_run_at = start
+            service._append({"op": "update", "schedule": _schedule_to_dict(schedule)})
+            now = start + timedelta(seconds=12)
+            runs = service.poll_once(now)
+            self.assertEqual(len(runs), 1)
+            self.assertEqual(runs[0].status, "skipped")
+            self.assertEqual(runs[0].error, "missed interval occurrence")
+            self.assertEqual(service.schedules[0].next_run_at, start + timedelta(seconds=13))
+
+    def test_cron_next_occurrence_uses_declared_timezone(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            service = SchedulerService(Path(directory) / "schedule.jsonl")
+            schedule = Schedule(
+                schedule_id="cron",
+                trigger=CronTrigger("0 9 * * *", "Asia/Shanghai"),
+                action=AgentTurnAction("scheduled prompt"),
+                workspace=directory,
+                origin_session_id="origin",
+                schedule_session_id="scheduled-session",
+            )
+
+            self.assertEqual(
+                service.next_occurrence(
+                    schedule, datetime(2099, 1, 1, 0, 0, tzinfo=timezone.utc)
+                ),
+                datetime(2099, 1, 1, 1, 0, tzinfo=timezone.utc),
+            )
+
     def test_due_schedule_without_a_runner_fails_instead_of_staying_running(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             service = SchedulerService(Path(directory) / "schedule.jsonl")

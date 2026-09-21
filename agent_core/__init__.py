@@ -77,6 +77,7 @@ from .session_store import JsonlSessionStore
 from .scheduler import (
     AgentTurnAction,
     CronTrigger,
+    IntervalTrigger,
     OneShotTrigger,
     Schedule,
     ScheduledRun,
@@ -269,6 +270,7 @@ __all__ = [
     "WriteFileTool",
     "AgentTurnAction",
     "CronTrigger",
+    "IntervalTrigger",
     "OneShotTrigger",
     "Schedule",
     "ScheduledRun",

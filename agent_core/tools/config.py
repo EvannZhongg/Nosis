@@ -13,6 +13,7 @@ TOOL_NAMES = (
     "create_scheduled_task",
     "update_scheduled_task",
     "list_scheduled_tasks",
+    "delete_scheduled_task",
 )
 
 # ``read_image``, ``analyze_image`` and ``read_skill`` are absent by design:
