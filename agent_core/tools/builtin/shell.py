@@ -25,9 +25,10 @@ MAX_BACKGROUND_SHELL_TIMEOUT_SECONDS = MAX_COMMAND_TIMEOUT_SECONDS
 
 
 WINDOWS_SHELL_NOTE = (
-    "On Windows, workspace scope runs through Windows PowerShell and host "
-    "scope runs through Git Bash. Use PowerShell syntax for workspace "
-    "commands and POSIX shell syntax for host commands."
+    "On Windows, workspace scope runs through PowerShell 7 and host scope "
+    "runs through Git Bash. Use PowerShell syntax for workspace commands "
+    "and POSIX shell syntax for host commands. Git's MSYS tools such as "
+    "bash, grep, sed and printf are unavailable in workspace scope."
 )
 POSIX_SHELL_NOTE = (
     "Commands run through /bin/sh, so use POSIX shell syntax: chain "

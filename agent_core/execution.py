@@ -342,12 +342,12 @@ class WindowsSandboxBackend(SandboxBackend):
                 "a Windows sandbox backend cannot be shared across workspaces"
             )
         return _execute_process(
-            _windows_powershell_argv(command),
+            _windows_powershell_argv(command, workspace),
             command=command,
             working_directory=workspace,
             timeout_seconds=timeout_seconds,
             cancellation=cancellation,
-            environment=_sandbox_environment(private_tmp),
+            environment=_windows_sandbox_environment(private_tmp),
             spool_directory=private_tmp,
             process_launcher=self._sandbox.start,
         )
@@ -472,6 +472,34 @@ def _sandbox_environment(private_tmp: Path) -> dict[str, str]:
         }
     )
     return environment
+
+
+def _windows_sandbox_environment(private_tmp: Path) -> dict[str, str]:
+    environment = _sandbox_environment(private_tmp)
+    environment["PATH"] = os.pathsep.join(
+        entry
+        for entry in environment.get("PATH", "").split(os.pathsep)
+        if not _is_msys_runtime_path(entry)
+    )
+    return environment
+
+
+def _is_msys_runtime_path(value: str) -> bool:
+    path = os.path.normcase(os.path.normpath(value)).rstrip("\\")
+    parts = path.split("\\")
+    try:
+        git_index = max(
+            index for index, part in enumerate(parts) if part == "git"
+        )
+    except ValueError:
+        return False
+    relative = parts[git_index + 1 :]
+    return relative in (
+        ["bin"],
+        ["usr", "bin"],
+        ["mingw32", "bin"],
+        ["mingw64", "bin"],
+    )
 
 
 def _macos_ancestor_rules(*paths: Path) -> str:
@@ -647,25 +675,39 @@ def _shell_argv(command: str) -> list[str]:
     return ["/bin/sh", "-c", command]
 
 
-def _windows_powershell_argv(command: str) -> list[str]:
-    system_root = Path(os.environ.get("SystemRoot", r"C:\Windows"))
-    executable = (
-        system_root
-        / "System32"
-        / "WindowsPowerShell"
-        / "v1.0"
-        / "powershell.exe"
-    ).resolve()
-    if not executable.is_file():
-        raise RuntimeError("workspace shell requires Windows PowerShell")
+def _windows_powershell_argv(
+    command: str, working_directory: Path
+) -> list[str]:
+    executable = _powershell_7()
     return [
         str(executable),
         "-NoLogo",
         "-NoProfile",
         "-NonInteractive",
+        "-WorkingDirectory",
+        str(working_directory),
         "-Command",
         command,
     ]
+
+
+def _powershell_7() -> str:
+    candidates: list[str | None] = []
+    program_files = os.environ.get("ProgramFiles")
+    if program_files:
+        candidates.append(
+            str(Path(program_files) / "PowerShell" / "7" / "pwsh.exe")
+        )
+    candidates.append(shutil.which("pwsh.exe"))
+    for candidate in candidates:
+        if candidate is None:
+            continue
+        executable = Path(candidate).resolve()
+        if executable.is_file():
+            return str(executable)
+    raise RuntimeError(
+        "Windows workspace shell requires PowerShell 7 (pwsh.exe)"
+    )
 
 
 def _git_bash() -> str:

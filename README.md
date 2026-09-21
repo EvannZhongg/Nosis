@@ -14,7 +14,7 @@ Bridge 以独立进程运行，是前端驱动 Agent 的唯一通道，两端用
 
 ## 能力
 
-- **本地执行，人工确认**：Session 支持 `Ask for approval`、`Workspace Access` 与 `Full Access`，选择随 Session 持久化。Shell 默认以 `workspace` scope 在沙箱内运行（限定 Workspace、断开网络），`host` scope 才越过沙箱，因此 `Workspace Access` 只对 host scope 请求授权；沙箱在 macOS 用 Seatbelt、Linux 用 bubblewrap，Windows 暂无 workspace scope。文件类 Tool 只作用于当前 Workspace。
+- **本地执行，人工确认**：Session 支持 `Ask for approval`、`Workspace Access` 与 `Full Access`，选择随 Session 持久化。Shell 默认以 `workspace` scope 在沙箱内运行，`host` scope 才越过沙箱，因此 `Workspace Access` 只对 host scope 请求授权；macOS 使用 Seatbelt、Linux 使用 bubblewrap，二者仅暴露最小只读系统视图并断开网络；Windows 使用受限令牌与 ACL，允许读取宿主文件但只允许写入 Workspace，暂不限制网络。文件类 Tool 只作用于当前 Workspace。
 - **Tool 与扩展**：内置文件读写、搜索、Shell、Web Search、图片读取、子 Agent 等 Tool；可接入 MCP Server，并可用 Skill 扩展工作流。
 - **模型路由**：主 Agent、子 Agent 与每个角色都可以单独选择 Provider（LiteLLM 支持多家模型），图片分析可另配 vision Provider。
 - **子 Agent 与计划**：按角色派发子 Agent（默认 `researcher` 只读），主 Agent 维护跨轮次的执行计划，两个前端都展示进度。
@@ -119,7 +119,7 @@ npm test
 
 ## 说明
 
-Windows 用户需要安装 [Git for Windows](https://git-scm.com/download/win)，`shell` Tool 使用其中的 Git Bash。
+Windows 用户需要安装 [PowerShell 7](https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-windows) 与 [Git for Windows](https://git-scm.com/download/win)。`shell` Tool 的 `workspace` scope 使用 PowerShell 7，`host` scope 使用 Git Bash。
 
 ## 许可
 

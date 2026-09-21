@@ -448,11 +448,17 @@ class PermissionProtocolTest(unittest.TestCase):
             )
             plane = bridge._ensure_execution_plane()
             try:
+                command = (
+                    "Set-Content -NoNewline -LiteralPath routed.txt "
+                    "-Value workspace"
+                    if sys.platform == "win32"
+                    else "printf workspace > routed.txt"
+                )
                 result = plane.agent._tools.execute(
                     ToolCall(
                         "call-workspace",
                         "shell",
-                        {"command": "printf workspace > routed.txt"},
+                        {"command": command},
                     )
                 )
             finally:

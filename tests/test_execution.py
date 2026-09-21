@@ -26,6 +26,7 @@ from agent_core.execution import (
     MAX_COMMAND_OUTPUT_CHARS,
     CommandOutputSpool,
     _decode_output,
+    _is_msys_runtime_path,
 )
 
 
@@ -335,9 +336,16 @@ class SandboxedCommandExecutorTest(unittest.TestCase):
         test_root = Path.cwd() / f".sandbox-test-{time.time_ns()}"
         workspace = test_root / "workspace"
         outside = test_root / "outside.txt"
+        blocked = test_root / "blocked.txt"
         workspace.mkdir(parents=True)
         self.addCleanup(shutil.rmtree, test_root, ignore_errors=True)
         outside.write_text("host-readable", encoding="utf-8")
+        acl_before = subprocess.run(
+            ["icacls", str(workspace)],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
         backend = platform_workspace_sandbox_backend()
         executor = SandboxedCommandExecutor(workspace, backend)
         self.assertEqual(
@@ -349,12 +357,12 @@ class SandboxedCommandExecutorTest(unittest.TestCase):
                 f"Get-Content -LiteralPath '{outside}'; "
                 "Set-Content -LiteralPath inside.txt workspace; "
                 "Set-Content -LiteralPath "
-                "(Join-Path $env:TEMP temp.txt) temporary"
+                "(Join-Path $env:TEMP temp.txt) temporary; "
+                "Set-Content chain-a.txt a && Set-Content chain-b.txt b"
             )
             denied = executor.execute(
                 "$ErrorActionPreference = 'Stop'; "
-                f"Set-Content -LiteralPath '{test_root / 'blocked.txt'}' "
-                "blocked"
+                f"Set-Content -LiteralPath '{blocked}' blocked"
             )
             private_tmp = backend._temporary_directory
             capability_sid = backend._sandbox._workspace_sid_value
@@ -370,7 +378,7 @@ class SandboxedCommandExecutorTest(unittest.TestCase):
             temporary_text = (private_tmp / "temp.txt").read_text(
                 encoding="utf-8"
             ).strip()
-            blocked_exists = (test_root / "blocked.txt").exists()
+            blocked_exists = blocked.exists()
         finally:
             executor.close()
         acl_after = subprocess.run(
@@ -379,10 +387,18 @@ class SandboxedCommandExecutorTest(unittest.TestCase):
             text=True,
             check=True,
         ).stdout
+        child_acl_after = subprocess.run(
+            ["icacls", str(workspace / "inside.txt")],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
 
         self.assertEqual(allowed.exit_code, 0)
         self.assertIn("host-readable", allowed.stdout)
         self.assertEqual(workspace_text, "workspace")
+        self.assertTrue((workspace / "chain-a.txt").exists())
+        self.assertTrue((workspace / "chain-b.txt").exists())
         self.assertIsNotNone(private_tmp)
         self.assertEqual(temporary_text, "temporary")
         self.assertNotEqual(denied.exit_code, 0)
@@ -390,6 +406,20 @@ class SandboxedCommandExecutorTest(unittest.TestCase):
         self.assertFalse(private_tmp.exists())
         self.assertIn(capability_sid, acl_during)
         self.assertNotIn(capability_sid, acl_after)
+        self.assertNotIn(capability_sid, child_acl_after)
+        self.assertEqual(acl_after, acl_before)
+
+    @unittest.skipUnless(platform.system() == "Windows", "Windows PATH test")
+    def test_windows_workspace_hides_msys_runtime_but_keeps_git(self) -> None:
+        self.assertTrue(
+            _is_msys_runtime_path(r"C:\Program Files\Git\usr\bin")
+        )
+        self.assertTrue(
+            _is_msys_runtime_path(r"C:\Program Files\Git\bin")
+        )
+        self.assertFalse(
+            _is_msys_runtime_path(r"C:\Program Files\Git\cmd")
+        )
 
 
 if __name__ == "__main__":

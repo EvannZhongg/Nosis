@@ -28,6 +28,7 @@ DISABLE_MAX_PRIVILEGE = 0x0001
 LUA_TOKEN = 0x0004
 WRITE_RESTRICTED = 0x0008
 TOKEN_GROUPS = 2
+TOKEN_USER = 1
 TOKEN_DEFAULT_DACL = 6
 SE_PRIVILEGE_ENABLED = 0x00000002
 WIN_WORLD_SID = 1
@@ -398,8 +399,10 @@ class WindowsWriteRestrictedSandbox:
         self._api = _WindowsApi()
         self._workspace_sid: ctypes.c_void_p | None = None
         self._temporary_sid: ctypes.c_void_p | None = None
+        self._user_sid: ctypes.Array | None = None
         self._token: wintypes.HANDLE | None = None
         self._granted_paths: list[tuple[Path, ctypes.c_void_p]] = []
+        self._workspace_dacl: bytes | None = None
         try:
             self._workspace_sid_value = _capability_sid(
                 str(workspace), temporary=False
@@ -412,6 +415,11 @@ class WindowsWriteRestrictedSandbox:
             )
             self._temporary_sid = self._convert_sid(
                 self._temporary_sid_value
+            )
+            self._user_sid = self._current_user_sid()
+            self._workspace_dacl = self._read_dacl(workspace)
+            self._grant_write(
+                workspace, ctypes.cast(self._user_sid, ctypes.c_void_p)
             )
             self._granted_paths.append((workspace, self._workspace_sid))
             self._grant_write(workspace, self._workspace_sid)
@@ -500,6 +508,12 @@ class WindowsWriteRestrictedSandbox:
             except BaseException as error:
                 failures.append(error)
         self._granted_paths.clear()
+        if self._workspace_dacl is not None:
+            try:
+                self._restore_dacl(self.workspace, self._workspace_dacl)
+            except BaseException as error:
+                failures.append(error)
+            self._workspace_dacl = None
         for attribute in ("_workspace_sid", "_temporary_sid"):
             pointer = getattr(self, attribute, None)
             if pointer is not None:
@@ -560,6 +574,43 @@ class WindowsWriteRestrictedSandbox:
                 self._api.local_free(new_acl)
         finally:
             self._api.local_free(descriptor)
+
+    def _read_dacl(self, path: Path) -> bytes:
+        old_acl = ctypes.c_void_p()
+        descriptor = ctypes.c_void_p()
+        result = self._api.advapi32.GetNamedSecurityInfoW(
+            str(path),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            None,
+            None,
+            ctypes.byref(old_acl),
+            None,
+            ctypes.byref(descriptor),
+        )
+        if result:
+            raise self._api.error("GetNamedSecurityInfoW", result)
+        try:
+            if not old_acl:
+                raise RuntimeError("workspace directory has a null DACL")
+            size = ctypes.cast(old_acl, ctypes.POINTER(ACL)).contents.AclSize
+            return ctypes.string_at(old_acl, size)
+        finally:
+            self._api.local_free(descriptor)
+
+    def _restore_dacl(self, path: Path, value: bytes) -> None:
+        acl = ctypes.create_string_buffer(value, len(value))
+        result = self._api.advapi32.SetNamedSecurityInfoW(
+            str(path),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            None,
+            None,
+            ctypes.cast(acl, ctypes.c_void_p),
+            None,
+        )
+        if result:
+            raise self._api.error("SetNamedSecurityInfoW(restore DACL)", result)
 
     def _revoke_write(self, path: Path, sid: ctypes.c_void_p) -> None:
         old_acl = ctypes.c_void_p()
@@ -689,6 +740,41 @@ class WindowsWriteRestrictedSandbox:
                 self._api.close_handle(token)
                 raise
             return token
+        finally:
+            self._api.close_handle(current_token)
+
+    def _current_user_sid(self) -> ctypes.Array:
+        current_token = wintypes.HANDLE()
+        if not self._api.advapi32.OpenProcessToken(
+            self._api.kernel32.GetCurrentProcess(),
+            TOKEN_QUERY,
+            ctypes.byref(current_token),
+        ):
+            raise self._api.error("OpenProcessToken")
+        try:
+            needed = wintypes.DWORD()
+            self._api.advapi32.GetTokenInformation(
+                current_token, TOKEN_USER, None, 0, ctypes.byref(needed)
+            )
+            if not needed.value:
+                raise self._api.error("GetTokenInformation(TokenUser)")
+            token_user = ctypes.create_string_buffer(needed.value)
+            if not self._api.advapi32.GetTokenInformation(
+                current_token,
+                TOKEN_USER,
+                token_user,
+                needed,
+                ctypes.byref(needed),
+            ):
+                raise self._api.error("GetTokenInformation(TokenUser)")
+            sid = ctypes.c_void_p.from_buffer(token_user).value
+            length = self._api.advapi32.GetLengthSid(sid)
+            if not length:
+                raise self._api.error("GetLengthSid(TokenUser)")
+            copied = ctypes.create_string_buffer(length)
+            if not self._api.advapi32.CopySid(length, copied, sid):
+                raise self._api.error("CopySid(TokenUser)")
+            return copied
         finally:
             self._api.close_handle(current_token)
 
