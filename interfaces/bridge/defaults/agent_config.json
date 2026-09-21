@@ -40,7 +40,7 @@
     }
   },
   "mcp": {
-    "enabled": false,
+    "enabled": true,
     "servers": {}
   }
 }

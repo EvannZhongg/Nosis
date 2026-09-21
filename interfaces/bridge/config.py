@@ -71,26 +71,40 @@ def initialize_config_directory(directory: Path) -> tuple[Path, ...]:
     skills_directory.mkdir(exist_ok=True)
     plugins_directory = directory / "plugins"
     plugins_directory.mkdir(exist_ok=True)
-    packaged_skills = defaults.joinpath("skills")
-    for skill in sorted(packaged_skills.iterdir(), key=lambda item: item.name):
-        if not skill.is_dir() or not skill.joinpath("SKILL.md").is_file():
-            continue
-        destination = skills_directory / skill.name
-        if destination.exists():
-            continue
-        _copy_resource_directory(skill, destination)
-        created.append(destination)
+    created.extend(
+        _install_packaged_directories(
+            defaults.joinpath("skills"),
+            skills_directory,
+            "SKILL.md",
+        )
+    )
+    created.extend(
+        _install_packaged_directories(
+            defaults.joinpath("plugins"),
+            plugins_directory,
+            "plugin.json",
+        )
+    )
 
-    packaged_plugins = defaults.joinpath("plugins")
-    for plugin in sorted(packaged_plugins.iterdir(), key=lambda item: item.name):
-        if not plugin.is_dir() or not plugin.joinpath("plugin.json").is_file():
-            continue
-        destination = plugins_directory / plugin.name
-        if destination.exists():
-            continue
-        _copy_resource_directory(plugin, destination)
-        created.append(destination)
     return tuple(created)
+
+
+def _install_packaged_directories(
+    source,
+    destination: Path,
+    entrypoint: str,
+) -> list[Path]:
+    """Copy each packaged subdirectory that carries its entrypoint file."""
+    installed = []
+    for child in sorted(source.iterdir(), key=lambda item: item.name):
+        if not child.is_dir() or not child.joinpath(entrypoint).is_file():
+            continue
+        target = destination / child.name
+        if target.exists():
+            continue
+        _copy_resource_directory(child, target)
+        installed.append(target)
+    return installed
 
 
 # Packaged directories are copied straight from the tree that holds them, which

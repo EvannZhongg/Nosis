@@ -35,6 +35,9 @@ namespaces = false
     "defaults/prompts_template/*.md",
     "defaults/skills/**/*",
     "defaults/plugins/**/*",
+    # The glob above skips dotfiles, so a plugin's MCP declaration needs its
+    # own pattern to reach the wheel.
+    "defaults/plugins/*/.mcp.json",
 ]
 "interfaces.gui" = ["static/*", "static/assets/*"]
 

@@ -16,6 +16,7 @@ from interfaces.bridge.config import (
     load_prompt_templates,
     load_vision_config,
 )
+from interfaces.bridge.plugins import PluginManager
 
 
 class ConfigTest(unittest.TestCase):
@@ -106,8 +107,9 @@ class ConfigTest(unittest.TestCase):
                     config_directory / "prompts" / "Soul.md",
                     config_directory / "prompts" / "SubAgent.md",
                     config_directory / "prompts" / "Consolidator.md",
+                    config_directory / "skills" / "plugin-creator",
                     config_directory / "skills" / "skill-creator",
-                    config_directory / "plugins" / "plugin-dev",
+                    config_directory / "plugins" / "playwright",
                 ),
             )
             provider_config = json.loads(created[0].read_text(encoding="utf-8"))
@@ -127,6 +129,8 @@ class ConfigTest(unittest.TestCase):
                 },
             )
             self.assertEqual(agent_config["max_same_tool_calls"], 5)
+            # The built-in MCP plugin only loads while MCP is switched on.
+            self.assertTrue(agent_config["mcp"]["enabled"])
             self.assertEqual(
                 agent_config["workspace_instruction_files"],
                 ["CLAUDE.md", "AGENTS.md"],
@@ -154,8 +158,21 @@ class ConfigTest(unittest.TestCase):
                 SkillLoader().load(
                     (DirectorySkillSource(config_directory / "skills"),)
                 ).names,
-                ("skill-creator",),
+                ("plugin-creator", "skill-creator"),
             )
+            plugins = PluginManager.discover(config_directory / "plugins")
+            self.assertEqual(plugins.warnings, ())
+            self.assertEqual(
+                [plugin.name for plugin in plugins.plugins],
+                ["playwright"],
+            )
+            servers, warnings = plugins.load_mcp_servers()
+            self.assertEqual(warnings, ())
+            self.assertEqual(
+                [server.identifier for server in servers],
+                ["playwright:browser"],
+            )
+            self.assertIn("--output-dir", servers[0].args)
             self.assertTrue(agent_config["main_agent"]["tools"]["read_file"])
             # Every shipped role carries an explicit enable switch.
             for name, role in agent_config["subagent_roles"].items():
@@ -172,6 +189,10 @@ class ConfigTest(unittest.TestCase):
             existing_skill.mkdir(parents=True)
             skill_path = existing_skill / "SKILL.md"
             skill_path.write_text("custom skill", encoding="utf-8")
+            existing_plugin = config_directory / "plugins" / "playwright"
+            existing_plugin.mkdir(parents=True)
+            plugin_path = existing_plugin / "plugin.json"
+            plugin_path.write_text("custom plugin", encoding="utf-8")
             prompts_directory = config_directory / "prompts"
             prompts_directory.mkdir()
             soul_path = prompts_directory / "Soul.md"
@@ -187,7 +208,7 @@ class ConfigTest(unittest.TestCase):
                     config_directory / "agent_config.json",
                     config_directory / "prompts" / "SubAgent.md",
                     config_directory / "prompts" / "Consolidator.md",
-                    config_directory / "plugins" / "plugin-dev",
+                    config_directory / "skills" / "plugin-creator",
                 ),
             )
             self.assertEqual(
@@ -196,6 +217,11 @@ class ConfigTest(unittest.TestCase):
             )
             self.assertTrue((config_directory / "skills").is_dir())
             self.assertEqual(skill_path.read_text(encoding="utf-8"), "custom skill")
+            self.assertEqual(
+                plugin_path.read_text(encoding="utf-8"),
+                "custom plugin",
+            )
+            self.assertFalse((existing_plugin / ".mcp.json").exists())
             self.assertEqual(soul_path.read_text(encoding="utf-8"), "custom prompt")
             self.assertEqual(
                 instructions_path.read_text(encoding="utf-8"),
@@ -214,11 +240,11 @@ class ConfigTest(unittest.TestCase):
             prompts.mkdir()
             for filename in ("Soul.md", "SubAgent.md", "Consolidator.md"):
                 (prompts / filename).write_text(filename, encoding="utf-8")
+            (defaults / "plugins").mkdir()
 
             direct = defaults / "skills" / "direct"
             direct.mkdir(parents=True)
             (direct / "SKILL.md").write_text("direct", encoding="utf-8")
-            (defaults / "plugins").mkdir()
             nested = defaults / "skills" / "group" / "nested"
             nested.mkdir(parents=True)
             (nested / "SKILL.md").write_text("nested", encoding="utf-8")
@@ -243,6 +269,45 @@ class ConfigTest(unittest.TestCase):
                 (config_directory / "skills" / "not-a-skill").exists()
             )
 
+    def test_installs_only_plugin_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            defaults = root / "defaults"
+            defaults.mkdir()
+            for filename in ("provider_config.json", "agent_config.json"):
+                (defaults / filename).write_text("{}", encoding="utf-8")
+            prompts = defaults / "prompts_template"
+            prompts.mkdir()
+            for filename in ("Soul.md", "SubAgent.md", "Consolidator.md"):
+                (prompts / filename).write_text(filename, encoding="utf-8")
+            (defaults / "skills").mkdir()
+
+            packaged = defaults / "plugins" / "demo"
+            packaged.mkdir(parents=True)
+            (packaged / "plugin.json").write_text("{}", encoding="utf-8")
+            (packaged / ".mcp.json").write_text("{}", encoding="utf-8")
+            nested = defaults / "plugins" / "group" / "nested"
+            nested.mkdir(parents=True)
+            (nested / "plugin.json").write_text("{}", encoding="utf-8")
+            without_manifest = defaults / "plugins" / "not-a-plugin"
+            without_manifest.mkdir()
+            (without_manifest / "resource.txt").write_text("x", encoding="utf-8")
+
+            config_directory = root / "nosis"
+            with patch(
+                "interfaces.bridge.config.files",
+                return_value=defaults,
+            ):
+                initialize_config_directory(config_directory)
+
+            installed = config_directory / "plugins" / "demo"
+            self.assertTrue((installed / "plugin.json").is_file())
+            self.assertTrue((installed / ".mcp.json").is_file())
+            self.assertFalse((config_directory / "plugins" / "group").exists())
+            self.assertFalse(
+                (config_directory / "plugins" / "not-a-plugin").exists()
+            )
+
     def test_installs_a_skill_without_caches_or_finder_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -254,6 +319,7 @@ class ConfigTest(unittest.TestCase):
             prompts.mkdir()
             for filename in ("Soul.md", "SubAgent.md", "Consolidator.md"):
                 (prompts / filename).write_text(filename, encoding="utf-8")
+            (defaults / "plugins").mkdir()
 
             packaged = defaults / "skills" / "demo"
             scripts = packaged / "scripts"
@@ -263,7 +329,6 @@ class ConfigTest(unittest.TestCase):
             (scripts / "helper.py").write_text("print()", encoding="utf-8")
             (packaged / "SKILL.md").write_text("demo", encoding="utf-8")
             (packaged / ".DS_Store").write_bytes(b"finder")
-            (defaults / "plugins").mkdir()
 
             config_directory = root / "nosis"
             with patch(
@@ -276,88 +341,6 @@ class ConfigTest(unittest.TestCase):
             self.assertTrue((installed / "scripts" / "helper.py").is_file())
             self.assertFalse((installed / "scripts" / "__pycache__").exists())
             self.assertFalse((installed / ".DS_Store").exists())
-
-    def test_installs_a_packaged_plugin_without_caches_or_finder_metadata(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            defaults = root / "defaults"
-            defaults.mkdir()
-            for filename in ("provider_config.json", "agent_config.json"):
-                (defaults / filename).write_text("{}", encoding="utf-8")
-            prompts = defaults / "prompts_template"
-            prompts.mkdir()
-            for filename in ("Soul.md", "SubAgent.md", "Consolidator.md"):
-                (prompts / filename).write_text(filename, encoding="utf-8")
-            (defaults / "skills").mkdir()
-
-            packaged = defaults / "plugins" / "demo"
-            packaged.mkdir(parents=True)
-            (packaged / "plugin.json").write_text(
-                '{"name": "demo"}', encoding="utf-8"
-            )
-            skill = packaged / "skills" / "helper"
-            skill.mkdir(parents=True)
-            (skill / "SKILL.md").write_text("helper", encoding="utf-8")
-            (packaged / ".DS_Store").write_bytes(b"finder")
-            (defaults / "plugins" / "no-manifest").mkdir()
-
-            config_directory = root / "nosis"
-            with patch(
-                "interfaces.bridge.config.files",
-                return_value=defaults,
-            ):
-                initialize_config_directory(config_directory)
-
-            installed = config_directory / "plugins" / "demo"
-            self.assertTrue((installed / "plugin.json").is_file())
-            self.assertTrue(
-                (installed / "skills" / "helper" / "SKILL.md").is_file()
-            )
-            self.assertFalse((installed / ".DS_Store").exists())
-            self.assertFalse(
-                (config_directory / "plugins" / "no-manifest").exists()
-            )
-
-    def test_keeps_an_already_installed_plugin(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            defaults = root / "defaults"
-            defaults.mkdir()
-            for filename in ("provider_config.json", "agent_config.json"):
-                (defaults / filename).write_text("{}", encoding="utf-8")
-            prompts = defaults / "prompts_template"
-            prompts.mkdir()
-            for filename in ("Soul.md", "SubAgent.md", "Consolidator.md"):
-                (prompts / filename).write_text(filename, encoding="utf-8")
-            (defaults / "skills").mkdir()
-
-            packaged = defaults / "plugins" / "demo"
-            packaged.mkdir(parents=True)
-            (packaged / "plugin.json").write_text(
-                '{"name": "demo"}', encoding="utf-8"
-            )
-            (packaged / "extra.md").write_text("packaged", encoding="utf-8")
-
-            config_directory = root / "nosis"
-            installed = config_directory / "plugins" / "demo"
-            installed.mkdir(parents=True)
-            (installed / "plugin.json").write_text(
-                '{"name": "demo", "enabled": false}', encoding="utf-8"
-            )
-
-            with patch(
-                "interfaces.bridge.config.files",
-                return_value=defaults,
-            ):
-                initialize_config_directory(config_directory)
-
-            self.assertEqual(
-                (installed / "plugin.json").read_text(encoding="utf-8"),
-                '{"name": "demo", "enabled": false}',
-            )
-            self.assertFalse((installed / "extra.md").exists())
 
     def test_loads_selected_provider_from_json_and_env(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -1,0 +1,8 @@
+{
+  "browser": {
+    "type": "stdio",
+    "command": "npx",
+    "args": ["@playwright/mcp@latest", "--output-dir", "output"],
+    "startup_timeout_seconds": 60
+  }
+}

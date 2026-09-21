@@ -1,0 +1,9 @@
+{
+  "name": "playwright",
+  "version": "0.1.0",
+  "description": "Browser automation through the Playwright MCP server",
+  "capabilities": ["mcp"],
+  "components": {
+    "mcp": [".mcp.json"]
+  }
+}
