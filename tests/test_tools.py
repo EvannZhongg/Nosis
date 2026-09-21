@@ -12,6 +12,7 @@ from agent_core import (
     AskUserTool,
     CommandExecutionResult,
     EditFileTool,
+    JsonlSessionStore,
     ListDirectoryTool,
     ReadFileTool,
     SearchFilesTool,
@@ -27,6 +28,9 @@ from agent_core import (
     Workspace,
     builtin_catalog,
 )
+from agent_core.permissions import PermissionPreset
+from agent_core.scheduler import SchedulerService
+from agent_core.tools.builtin.schedule import CreateScheduledTaskTool
 from agent_core.tools.budget import MAX_TOOL_RESULT_CHARS
 from agent_core.tools.builtin.read_file import (
     MAX_FILE_SIZE_BYTES as MAX_READ_FILE_SIZE_BYTES,
@@ -190,6 +194,47 @@ class ToolCatalogTest(unittest.TestCase):
         self.assertEqual(
             extended.names, ("failing", "needs_executor")
         )
+
+
+class ScheduledTaskToolTest(unittest.TestCase):
+    def test_new_schedule_session_inherits_provider_and_permissions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = Workspace(root)
+            sessions_directory = root / "sessions"
+            store = JsonlSessionStore(sessions_directory)
+            session = Session("origin")
+            session.permission_preset = PermissionPreset.WORKSPACE_ACCESS
+            store.bind_workspace(session.session_id, workspace.path)
+            store.set_provider(session.session_id, "configured", workspace.path)
+            scheduler = SchedulerService(root / "schedule.jsonl")
+            context = context_for(
+                workspace,
+                session=session,
+                sessions_directory=sessions_directory,
+                scheduler=scheduler,
+            )
+
+            result = CreateScheduledTaskTool().execute(
+                {
+                    "prompt": "scheduled prompt",
+                    "trigger": {
+                        "type": "once",
+                        "at": "2099-01-01T00:00:00+00:00",
+                    },
+                },
+                context,
+            )
+
+            scheduled_session = result["schedule_session_id"]
+            self.assertEqual(
+                store.permission_preset_for(scheduled_session),
+                PermissionPreset.WORKSPACE_ACCESS,
+            )
+            self.assertEqual(
+                store.provider_for(scheduled_session),
+                "configured",
+            )
 
 
 class ToolSetTest(unittest.TestCase):

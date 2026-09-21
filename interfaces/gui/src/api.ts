@@ -14,7 +14,24 @@ export type Session = {
   plan?: PlanSnapshot | null;
 };
 export type WorkspaceSessions = { workspace: string; sessions: SessionSummary[] };
-export type ScheduleSummary = { schedule_id: string; prompt: string; workspace: string; schedule_session_id: string; enabled: boolean; next_run_at?: string | null };
+export type ScheduleSummary = {
+  schedule_id: string;
+  prompt: string;
+  workspace: string;
+  origin_session_id: string;
+  schedule_session_id: string;
+  session_available: boolean;
+  enabled: boolean;
+  next_run_at?: string | null;
+  latest_run?: {
+    run_id: string;
+    status: string;
+    scheduled_for: string;
+    started_at?: string | null;
+    finished_at?: string | null;
+    error?: string | null;
+  } | null;
+};
 export type ModelOption = { id: string; model: string };
 export type ModelOptions = { default: string; models: ModelOption[] };
 export type ImageAttachment = { type: "image"; path: string; mime_type: string };

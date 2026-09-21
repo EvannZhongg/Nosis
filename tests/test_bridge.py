@@ -37,6 +37,13 @@ from agent_core import (
     TurnControl,
     Workspace,
 )
+from agent_core.scheduler import (
+    AgentTurnAction,
+    OneShotTrigger,
+    Schedule,
+    ScheduledRun,
+    SchedulerService,
+)
 from agent_core.llm import TokenUsage
 from agent_core.projection import project_context_units
 from agent_core.providers import LiteLLMProvider
@@ -350,12 +357,12 @@ def make_bridge(
     stdin = io.StringIO("".join(f"{line}\n" for line in lines))
     stdout = io.StringIO()
     if config_directory is None:
-        return Bridge(stdin, stdout), stdout
+        return Bridge(stdin, stdout, start_scheduler=False), stdout
     with patch(
         "interfaces.bridge.bridge.default_config_directory",
         return_value=config_directory,
     ):
-        return Bridge(stdin, stdout), stdout
+        return Bridge(stdin, stdout, start_scheduler=False), stdout
 
 
 def emitted(stdout: io.StringIO) -> list[dict]:
@@ -764,7 +771,7 @@ class BridgeApprovalTest(unittest.TestCase):
             for index in range(1, approvals + 1)
         ]
         stdout = io.StringIO()
-        bridge = Bridge(_SlowStdin(responses), stdout)
+        bridge = Bridge(_SlowStdin(responses), stdout, start_scheduler=False)
         results: list[bool] = []
         lock = threading.Lock()
         barrier = threading.Barrier(approvals, timeout=5)
@@ -804,7 +811,7 @@ class BridgeApprovalTest(unittest.TestCase):
             ]
         )
         stdout = io.StringIO()
-        bridge = Bridge(stdin, stdout)
+        bridge = Bridge(stdin, stdout, start_scheduler=False)
         control = TurnControl()
         bridge._turn_id = "t1"
         bridge._turn_control = control
@@ -1371,6 +1378,82 @@ class InterruptedTurnTest(unittest.TestCase):
             [message.content for message in self.stored_items()],
             ["second try"],
         )
+
+
+class ScheduledTurnTest(unittest.TestCase):
+    def test_scheduled_turn_uses_normal_runtime_and_persists_session(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            open_session_message(root)
+            scheduler = SchedulerService(root / "schedule.jsonl")
+
+            class ScheduledAgent:
+                def __init__(self, session: Session) -> None:
+                    self.session = session
+
+                def run(self, user_input: str, **kwargs: object) -> object:
+                    turn_id = kwargs.get("turn_id")
+                    self.session.begin_turn(
+                        turn_id if isinstance(turn_id, str) else None
+                    )
+                    self.session.add_item("user", user_input)
+                    self.session.add_item("assistant", "scheduled answer")
+                    self.session.finish_turn("completed")
+                    return type(
+                        "Result",
+                        (),
+                        {"response": type("Response", (), {"usage": None})()},
+                    )()
+
+            def execution_plane(bridge: Bridge) -> object:
+                assert bridge._session is not None
+                return type(
+                    "Plane",
+                    (),
+                    {
+                        "agent": ScheduledAgent(bridge._session),
+                        "jobs": type("Jobs", (), {"snapshot": lambda self: []})(),
+                        "runtime_warnings": (),
+                    },
+                )()
+
+            with patch(
+                "interfaces.bridge.bridge.default_config_directory",
+                return_value=root,
+            ), patch.object(Bridge, "_ensure_execution_plane", execution_plane):
+                bridge = Bridge(
+                    io.StringIO(),
+                    io.StringIO(),
+                    scheduler=scheduler,
+                    start_scheduler=False,
+                )
+                schedule = Schedule(
+                    "schedule-1",
+                    OneShotTrigger(datetime.now(timezone.utc)),
+                    AgentTurnAction("scheduled prompt"),
+                    str(root),
+                    "origin",
+                    "scheduled-session",
+                )
+                run = ScheduledRun(
+                    "run-1",
+                    schedule.schedule_id,
+                    schedule.schedule_session_id,
+                    "turn-1",
+                    datetime.now(timezone.utc),
+                )
+
+                bridge._run_scheduled_turn(schedule, run)
+                bridge.close()
+
+            stored = JsonlSessionStore(root / "sessions").load(
+                "scheduled-session"
+            )
+            self.assertEqual(
+                [item.content for item in stored.items],
+                ["scheduled prompt", "scheduled answer"],
+            )
+            self.assertEqual(stored.turns["turn-1"].status, "completed")
 
 
 class BridgeSessionOpenTest(unittest.TestCase):

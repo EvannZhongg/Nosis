@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { ArrowLeft, Boxes, Check, ChevronRight, CircleAlert, KeyRound, Plus, RefreshCw, Save, ServerCog } from "lucide-react";
+import { ArrowLeft, Boxes, Check, ChevronRight, CircleAlert, KeyRound, MessageSquare, Plus, RefreshCw, Save, ServerCog } from "lucide-react";
 import { get, put, type SettingsSnapshot, type ScheduleSummary } from "./api";
 
 export type SettingsSection = "providers" | "agent" | "skills" | "plugins" | "mcp" | "schedules";
@@ -13,11 +13,12 @@ const sectionLabels: Record<SettingsSection, string> = {
   schedules: "Schedules",
 };
 
-export function Settings({ section, onClose, onChanged }: { section: SettingsSection; onClose: () => void; onChanged: () => void }) {
+export function Settings({ section, onClose, onChanged, onOpenSession }: { section: SettingsSection; onClose: () => void; onChanged: () => void; onOpenSession: (sessionId: string) => void }) {
   const [settings, setSettings] = useState<SettingsSnapshot>();
   const [selected, setSelected] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [scheduleRefresh, setScheduleRefresh] = useState(0);
 
   async function refresh() {
     try {
@@ -75,11 +76,11 @@ export function Settings({ section, onClose, onChanged }: { section: SettingsSec
   return <section className="settings-shell">
     <header className="settings-header">
       <h1>{sectionLabels[section]}</h1>
-      <div className="settings-header-actions"><button className="secondary-button" onClick={() => void refresh()} disabled={saving}><RefreshCw size={14} /> 刷新</button><button className="settings-back" onClick={onClose}><ArrowLeft size={14} /> 返回对话</button></div>
+      <div className="settings-header-actions"><button className="secondary-button" onClick={() => section === "schedules" ? setScheduleRefresh((value) => value + 1) : void refresh()} disabled={saving}><RefreshCw size={14} /> 刷新</button><button className="settings-back" onClick={onClose}><ArrowLeft size={14} /> 返回对话</button></div>
     </header>
     {error && <div className="settings-error" role="alert"><CircleAlert size={15} /><span>{error}</span></div>}
     <div className="settings-layout"><main className="settings-content">
-        {!settings && section !== "schedules" ? <LoadingState /> : section === "schedules" ? <ScheduleSettings /> : section === "providers" ? <ProviderSettings settings={settings!} selected={selected} onSelect={setSelected} saving={saving} onSave={saveProvider} onSaveRouting={saveRouting} />
+        {!settings && section !== "schedules" ? <LoadingState /> : section === "schedules" ? <ScheduleSettings refreshVersion={scheduleRefresh} onOpenSession={onOpenSession} /> : section === "providers" ? <ProviderSettings settings={settings!} selected={selected} onSelect={setSelected} saving={saving} onSave={saveProvider} onSaveRouting={saveRouting} />
           : section === "agent" ? <AgentSettingsForm key={settings!.revision} settings={settings!} saving={saving} onSave={saveAgent} />
           : section === "skills" ? <DetailCollection eyebrow="Skill library" items={settings!.skills.map((item) => ({ id: item.id, title: item.name, subtitle: `${item.source} · ${item.path}`, body: item.content, status: "Available" }))} selected={selected} onSelect={setSelected} empty="没有发现 Skill。" />
           : section === "plugins" ? <DetailCollection eyebrow="Plugin catalog" items={settings!.plugins.map((item) => ({ id: item.name, title: item.name, subtitle: item.description ?? item.path, status: item.enabled ? "Enabled" : "Disabled", body: JSON.stringify({ version: item.version, capabilities: item.capabilities, components: item.components, path: item.path }, null, 2) }))} selected={selected} onSelect={setSelected} empty="没有发现 Plugin。" />
@@ -90,12 +91,47 @@ export function Settings({ section, onClose, onChanged }: { section: SettingsSec
   </section>;
 }
 
-function ScheduleSettings() {
+function formatScheduleTime(value?: string | null) {
+  if (!value) return null;
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
+function scheduleStatus(item: ScheduleSummary) {
+  const status = item.latest_run?.status;
+  if (status === "running") return item.session_available
+    ? { label: "执行中", tone: "running" }
+    : { label: "执行未完成", tone: "failed" };
+  if (status === "failed") return { label: "执行失败", tone: "failed" };
+  if (status === "skipped") return { label: "已跳过", tone: "muted" };
+  if (status === "completed" && !item.enabled) return { label: "已完成", tone: "complete" };
+  return item.enabled
+    ? { label: "已启用", tone: "active" }
+    : { label: "已停用", tone: "muted" };
+}
+
+function ScheduleSettings({ refreshVersion, onOpenSession }: { refreshVersion: number; onOpenSession: (sessionId: string) => void }) {
   const [items, setItems] = useState<ScheduleSummary[]>([]);
   const [error, setError] = useState("");
-  const refresh = () => get<ScheduleSummary[]>("/api/schedules").then(setItems).catch((reason) => setError(String(reason)));
-  useEffect(() => { void refresh(); }, []);
-  return <div><div className="settings-toolbar"><p>持久化任务计划</p><button className="secondary-button" onClick={() => void refresh()}>刷新</button></div>{error && <p>{error}</p>}{items.length === 0 ? <div className="empty-settings"><strong>暂无定时任务</strong></div> : items.map((item) => <SettingsCard key={item.schedule_id} title={item.prompt} description={`${item.workspace} · ${item.next_run_at ?? "已结束"}`}><p>{item.enabled ? "启用" : "已停用"} · Session {item.schedule_session_id}</p></SettingsCard>)}</div>;
+  const refresh = () => get<ScheduleSummary[]>("/api/schedules").then((value) => { setItems(value); setError(""); }).catch((reason) => setError(String(reason)));
+  useEffect(() => { void refresh(); }, [refreshVersion]);
+  return <div className="schedule-settings">
+    {error && <p className="schedule-error">{error}</p>}
+    {items.length === 0 ? <div className="empty-settings"><strong>暂无定时任务</strong></div> : <div className="schedule-list">{items.map((item) => {
+      const status = scheduleStatus(item);
+      const time = formatScheduleTime(item.next_run_at ?? item.latest_run?.scheduled_for);
+      return <section className="schedule-row" key={item.schedule_id}>
+        <span className={`schedule-state ${status.tone}`} aria-hidden="true" />
+        <div className="schedule-copy"><strong title={item.prompt}>{item.prompt}</strong><small title={item.workspace}>{item.workspace}{time ? ` · ${item.next_run_at ? "下次" : "最近"} ${time}` : ""}</small></div>
+        <span className={`schedule-status ${status.tone}`} title={item.latest_run?.error ?? undefined}>{status.label}</span>
+        <button className="schedule-session-button" disabled={!item.session_available} title={item.session_available ? `打开 Session ${item.schedule_session_id}` : "本次执行尚未生成会话记录"} onClick={() => onOpenSession(item.schedule_session_id)}><MessageSquare size={13} />{item.session_available ? "会话" : "无记录"}</button>
+      </section>;
+    })}</div>}
+  </div>;
 }
 
 function LoadingState() {

@@ -7,8 +7,8 @@ is supplied by a callback that builds the normal Agent runtime.
 from __future__ import annotations
 
 import json
+import os
 import threading
-import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -133,39 +133,56 @@ class SchedulerService:
         self._running: set[str] = set()
         self._lock = threading.RLock()
         self._stop = threading.Event()
-        self._load()
+        self._leader_lock = None
+        self._reload()
 
     @property
     def schedules(self) -> list[Schedule]:
         with self._lock:
+            self._reload()
             return list(self._schedules.values())
 
     @property
     def runs(self) -> list[ScheduledRun]:
         with self._lock:
+            self._reload()
             return list(self._runs.values())
 
     def _append(self, record: dict[str, object]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+            handle.flush()
 
-    def _load(self) -> None:
+    def _reload(self) -> None:
+        schedules: dict[str, Schedule] = {}
+        runs: dict[str, ScheduledRun] = {}
         if not self.path.is_file():
+            self._schedules = schedules
+            self._runs = runs
             return
-        for line in self.path.read_text(encoding="utf-8").splitlines():
+        text = self.path.read_text(encoding="utf-8")
+        lines = text.splitlines()
+        for index, line in enumerate(lines):
             if not line.strip():
                 continue
-            record = json.loads(line)
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                if index == len(lines) - 1 and not text.endswith("\n"):
+                    break
+                raise
             op = record.get("op")
             if op in {"create", "update"}:
                 schedule = _schedule_from_dict(record["schedule"])
-                self._schedules[schedule.schedule_id] = schedule
+                schedules[schedule.schedule_id] = schedule
             elif op == "delete":
-                self._schedules.pop(str(record["schedule_id"]), None)
+                schedules.pop(str(record["schedule_id"]), None)
             elif op == "run":
                 run = _run_from_dict(record["run"])
-                self._runs[run.run_id] = run
+                runs[run.run_id] = run
+        self._schedules = schedules
+        self._runs = runs
 
     def create_schedule(self, *, trigger: Trigger, prompt: str, workspace: str, origin_session_id: str, schedule_session_id: str, end_at: datetime | None = None) -> Schedule:
         if not prompt.strip():
@@ -180,12 +197,14 @@ class SchedulerService:
         else:
             schedule.next_run_at = self.next_occurrence(schedule, datetime.now(timezone.utc) - timedelta(seconds=1))
         with self._lock:
+            self._reload()
             self._schedules[schedule.schedule_id] = schedule
             self._append({"op": "create", "schedule": _schedule_to_dict(schedule)})
         return schedule
 
     def update_schedule(self, schedule_id: str, **changes: object) -> Schedule:
         with self._lock:
+            self._reload()
             schedule = self._schedules[schedule_id]
             if "prompt" in changes:
                 schedule.action = AgentTurnAction(str(changes["prompt"]))
@@ -201,6 +220,7 @@ class SchedulerService:
 
     def delete_schedule(self, schedule_id: str) -> None:
         with self._lock:
+            self._reload()
             self._schedules.pop(schedule_id, None)
             self._append({"op": "delete", "schedule_id": schedule_id})
 
@@ -225,6 +245,7 @@ class SchedulerService:
         now = now or datetime.now(timezone.utc)
         due: list[tuple[Schedule, datetime]] = []
         with self._lock:
+            self._reload()
             for schedule in self._schedules.values():
                 if schedule.enabled and schedule.next_run_at and schedule.next_run_at <= now:
                     due.append((schedule, schedule.next_run_at))
@@ -244,6 +265,11 @@ class SchedulerService:
                     run.status, run.error = "skipped", "missed cron occurrence"
                 elif schedule.schedule_id in self._running:
                     run.status, run.error = "skipped", "previous scheduled run still running"
+                elif self.runner is None:
+                    run.status = "failed"
+                    run.error = "scheduled task runner is unavailable"
+                    run.started_at = now
+                    run.finished_at = now
                 else:
                     self._running.add(schedule.schedule_id)
                     run.status = "running"
@@ -265,19 +291,66 @@ class SchedulerService:
             run.finished_at = datetime.now(timezone.utc)
             with self._lock:
                 self._running.discard(schedule.schedule_id)
+                self._runs[run.run_id] = run
                 self._append({"op": "run", "run": _run_to_dict(run)})
 
     def start(self, interval: float = 1.0) -> threading.Thread:
         def loop() -> None:
-            while not self._stop.is_set():
-                self.poll_once()
-                self._stop.wait(interval)
+            try:
+                while not self._stop.is_set():
+                    if self._leader_lock is not None or self._acquire_leader_lock():
+                        self.poll_once()
+                    self._stop.wait(interval)
+            finally:
+                self._release_leader_lock()
         thread = threading.Thread(target=loop, name="nosis-scheduler", daemon=True)
         thread.start()
         return thread
 
     def close(self) -> None:
         self._stop.set()
+
+    def _acquire_leader_lock(self) -> bool:
+        lock_path = self.path.with_suffix(self.path.suffix + ".lock")
+        try:
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            handle = lock_path.open("a+b")
+            if handle.tell() == 0:
+                handle.write(b"\0")
+                handle.flush()
+            handle.seek(0)
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            if "handle" in locals():
+                handle.close()
+            return False
+        self._leader_lock = handle
+        return True
+
+    def _release_leader_lock(self) -> None:
+        handle = self._leader_lock
+        self._leader_lock = None
+        if handle is None:
+            return
+        try:
+            handle.seek(0)
+            if os.name == "nt":
+                import msvcrt
+
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
 
 
 def _run_to_dict(run: ScheduledRun) -> dict[str, object]:

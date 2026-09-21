@@ -235,7 +235,7 @@ export function App() {
         </div>
       </aside>
 
-      {settingsSection && <Settings section={settingsSection} onClose={() => setSettingsSection(null)} onChanged={refreshModels} />}
+      {settingsSection && <Settings section={settingsSection} onClose={() => { setSettingsSection(null); void refreshSessions(); }} onChanged={refreshModels} onOpenSession={(sessionId) => { setSettingsSection(null); void selectSession(sessionId); }} />}
       <main className="chat-panel" style={{ display: settingsSection ? "none" : undefined }}>
         <header className="chat-header"><div className="breadcrumb">Chat <ChevronRight size={14} /><span>{restoringSession ? "…" : selectedTitle}</span></div><span className="status-label"><span className={`status-dot ${busy ? "working" : ""}`} />{busy ? "Working" : "Ready"}</span></header>
         {error && <div className="error-banner" role="alert">{error}</div>}

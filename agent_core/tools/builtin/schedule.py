@@ -37,7 +37,20 @@ class CreateScheduledTaskTool(Tool):
         end_at = arguments.get("end_at")
         end = datetime.fromisoformat(str(end_at)) if isinstance(end_at, str) else None
         schedule_session_id = str(uuid4())
-        JsonlSessionStore(context.sessions_directory).bind_workspace(schedule_session_id, context.workspace.path)
+        store = JsonlSessionStore(context.sessions_directory)
+        store.bind_workspace(schedule_session_id, context.workspace.path)
+        store.set_permission_preset(
+            schedule_session_id,
+            context.session.permission_preset,
+            context.workspace.path,
+        )
+        provider = store.provider_for(context.session.session_id)
+        if provider is not None:
+            store.set_provider(
+                schedule_session_id,
+                provider,
+                context.workspace.path,
+            )
         schedule = _service(context).create_schedule(trigger=parsed, prompt=str(arguments["prompt"]), workspace=str(context.workspace.path), origin_session_id=context.session.session_id, schedule_session_id=schedule_session_id, end_at=end)
         return {"schedule_id": schedule.schedule_id, "schedule_session_id": schedule.schedule_session_id, "workspace": schedule.workspace, "next_run_at": schedule.next_run_at.isoformat() if schedule.next_run_at else None}
 

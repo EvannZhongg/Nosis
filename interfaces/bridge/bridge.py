@@ -8,6 +8,7 @@ can drive it with plain string buffers.
 import json
 import _thread
 from collections import deque
+from io import StringIO
 from itertools import count
 from pathlib import Path
 from queue import Queue
@@ -42,6 +43,8 @@ from agent_core import (
     Workspace,
     WorkspaceInstructions,
     ImagePart,
+    Schedule,
+    ScheduledRun,
     builtin_catalog,
     load_agent_config,
     merge_mcp_servers,
@@ -89,7 +92,15 @@ from .protocol import (
 
 
 class Bridge:
-    def __init__(self, stdin: TextIO, stdout: TextIO) -> None:
+    def __init__(
+        self,
+        stdin: TextIO,
+        stdout: TextIO,
+        *,
+        scheduler: SchedulerService | None = None,
+        start_scheduler: bool = True,
+        interactive: bool = True,
+    ) -> None:
         self._stdin = stdin
         self._stdout = stdout
         self._stdout_lock = Lock()
@@ -105,6 +116,7 @@ class Bridge:
         self._shutdown_requested = False
         self._session_opened = False
         self._interaction_ids = count(1)
+        self._interactive = interactive
         # The interface presents one approval/question at a time even when
         # parallel tools request several interactions concurrently.
         self._interaction_lock = Lock()
@@ -125,8 +137,16 @@ class Bridge:
         self._execution_plane: ExecutionPlane | None = None
         self._approval: dict[str, object] | None = None
         self._question: dict[str, object] | None = None
-        self._scheduler = SchedulerService()
-        self._scheduler_thread = self._scheduler.start()
+        self._owns_scheduler = scheduler is None
+        self._scheduler = scheduler or SchedulerService(
+            self._config_directory / "schedule.jsonl",
+            runner=self._run_scheduled_turn,
+        )
+        self._scheduler_thread = (
+            self._scheduler.start()
+            if self._owns_scheduler and start_scheduler
+            else None
+        )
 
     def emit(self, type: str, **fields: object) -> None:
         with self._stdout_lock:
@@ -378,6 +398,8 @@ class Bridge:
         server: str | None = None,
         tool_name: str | None = None,
     ) -> bool:
+        if not self._interactive:
+            return False
         # Serialized so concurrent tool calls queue their prompts instead of
         # racing for each other's answers; the user still answers one at a time.
         with self._interaction_lock:
@@ -411,6 +433,10 @@ class Bridge:
         options: list[dict[str, object]],
         allow_free_text: bool,
     ) -> object:
+        if not self._interactive:
+            raise RuntimeError(
+                "scheduled tasks cannot request interactive user input"
+            )
         with self._interaction_lock:
             request_id = f"{self._turn_id}:{next(self._interaction_ids)}"
             waiter = self._register_interaction(request_id)
@@ -677,7 +703,9 @@ class Bridge:
                 jobs=jobs,
                 skills=skills,
                 plan=self._plan,
-                ask_user=self.request_user_choice,
+                ask_user=(
+                    self.request_user_choice if self._interactive else None
+                ),
                 scheduler=self._scheduler,
             )
             agent = Agent(
@@ -1078,6 +1106,72 @@ class Bridge:
         )
         self._turn_id = None
 
+    def _run_scheduled_turn(
+        self,
+        schedule: Schedule,
+        run: ScheduledRun,
+    ) -> None:
+        """Execute one scheduled action through the normal Bridge runtime."""
+        worker = Bridge(
+            StringIO(),
+            StringIO(),
+            scheduler=self._scheduler,
+            start_scheduler=False,
+            interactive=False,
+        )
+        try:
+            worker.open_session(
+                {
+                    "type": "open_session",
+                    "workspace": schedule.workspace,
+                    "session_id": run.session_id,
+                    "provider": None,
+                }
+            )
+            worker._ensure_execution_plane()
+            worker.run_turn(
+                {
+                    "type": "user_turn",
+                    "turn_id": run.turn_id,
+                    "text": schedule.action.prompt,
+                }
+            )
+            session = worker._session
+            turn = session.turns.get(run.turn_id) if session is not None else None
+            if turn is None or turn.status != "completed":
+                message = (
+                    turn.error.message
+                    if turn is not None and turn.error is not None
+                    else "scheduled turn did not complete"
+                )
+                raise RuntimeError(message)
+        except Exception as error:
+            session = worker._session
+            if session is None:
+                store = JsonlSessionStore(
+                    worker._config_directory / "sessions"
+                )
+                store.bind_workspace(run.session_id, Path(schedule.workspace))
+                session = Session(run.session_id, workspace=schedule.workspace)
+                session.attach_journal_sink(
+                    lambda events: store.append_events(
+                        run.session_id,
+                        events,
+                        workspace=schedule.workspace,
+                    )
+                )
+            if run.turn_id not in session.turns:
+                session.begin_turn(run.turn_id)
+                session.add_item("user", schedule.action.prompt)
+                session.finish_turn(
+                    "failed",
+                    run.turn_id,
+                    error=runtime_error_info(error),
+                )
+            raise
+        finally:
+            worker.close()
+
     def serve(self) -> None:
         opened = False
         while True:
@@ -1133,7 +1227,8 @@ class Bridge:
     def close(self) -> None:
         self._route_shutdown(notify_commands=False)
         self._close_execution_plane()
-        self._scheduler.close()
+        if self._owns_scheduler:
+            self._scheduler.close()
 def _parse_attachments(value: object, workspace: Workspace) -> tuple[ImagePart, ...]:
     if value is None:
         return ()

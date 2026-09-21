@@ -510,8 +510,6 @@ def create_app(
 ) -> FastAPI:
     active_sessions: dict[str, ActiveSession] = {}
     active_session_lock = asyncio.Lock()
-    scheduler = SchedulerService()
-
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         yield
@@ -519,7 +517,6 @@ def create_app(
             *(runtime.close() for runtime in tuple(active_sessions.values())),
             return_exceptions=True,
         )
-        scheduler.close()
 
     app = FastAPI(
         title="Nosis",
@@ -594,14 +591,72 @@ def create_app(
 
     @app.get("/api/schedules")
     def list_schedules() -> list[dict[str, object]]:
-        current = SchedulerService()
-        return [{"schedule_id": item.schedule_id, "prompt": item.action.prompt, "workspace": item.workspace, "origin_session_id": item.origin_session_id, "schedule_session_id": item.schedule_session_id, "enabled": item.enabled, "next_run_at": item.next_run_at.isoformat() if item.next_run_at else None} for item in current.schedules]
+        current = SchedulerService(settings.directory / "schedule.jsonl")
+        latest_runs = {}
+        for run in current.runs:
+            previous = latest_runs.get(run.schedule_id)
+            if previous is None or run.scheduled_for > previous.scheduled_for:
+                latest_runs[run.schedule_id] = run
+        return [
+            {
+                "schedule_id": item.schedule_id,
+                "prompt": item.action.prompt,
+                "workspace": item.workspace,
+                "origin_session_id": item.origin_session_id,
+                "schedule_session_id": item.schedule_session_id,
+                "session_available": store.has_journal(item.schedule_session_id),
+                "enabled": item.enabled,
+                "next_run_at": (
+                    item.next_run_at.isoformat() if item.next_run_at else None
+                ),
+                "latest_run": (
+                    {
+                        "run_id": latest_runs[item.schedule_id].run_id,
+                        "status": latest_runs[item.schedule_id].status,
+                        "scheduled_for": latest_runs[
+                            item.schedule_id
+                        ].scheduled_for.isoformat(),
+                        "started_at": (
+                            latest_runs[item.schedule_id].started_at.isoformat()
+                            if latest_runs[item.schedule_id].started_at
+                            else None
+                        ),
+                        "finished_at": (
+                            latest_runs[item.schedule_id].finished_at.isoformat()
+                            if latest_runs[item.schedule_id].finished_at
+                            else None
+                        ),
+                        "error": latest_runs[item.schedule_id].error,
+                    }
+                    if item.schedule_id in latest_runs
+                    else None
+                ),
+            }
+            for item in current.schedules
+        ]
 
     @app.put("/api/schedules/{schedule_id}")
-    def update_schedule(schedule_id: str, payload: dict[str, object] = Body(...)) -> dict[str, object]:
+    def update_schedule(
+        schedule_id: str,
+        payload: dict[str, object] = Body(...),
+    ) -> dict[str, object]:
         try:
-            item = scheduler.update_schedule(schedule_id, **{key: payload[key] for key in ("prompt", "enabled") if key in payload})
-            return {"schedule_id": item.schedule_id, "enabled": item.enabled, "next_run_at": item.next_run_at.isoformat() if item.next_run_at else None}
+            current = SchedulerService(settings.directory / "schedule.jsonl")
+            item = current.update_schedule(
+                schedule_id,
+                **{
+                    key: payload[key]
+                    for key in ("prompt", "enabled")
+                    if key in payload
+                },
+            )
+            return {
+                "schedule_id": item.schedule_id,
+                "enabled": item.enabled,
+                "next_run_at": (
+                    item.next_run_at.isoformat() if item.next_run_at else None
+                ),
+            }
         except (KeyError, ValueError) as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
 

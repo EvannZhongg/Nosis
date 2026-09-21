@@ -6,6 +6,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
@@ -18,6 +19,7 @@ from agent_core import (
     Session,
     Workspace,
 )
+from agent_core.scheduler import OneShotTrigger, SchedulerService
 from interfaces.bridge.settings import SettingsStore
 
 try:
@@ -1293,6 +1295,38 @@ class GuiTest(unittest.TestCase):
         # Only the transcript is exposed, never the request configuration.
         self.assertNotIn("request", data)
         self.assertNotIn("private prompt", json.dumps(data))
+
+    def test_schedule_listing_includes_latest_run_and_session_availability(self) -> None:
+        scheduler = SchedulerService(
+            self.config / "schedule.jsonl",
+            runner=lambda schedule, run: None,
+        )
+        schedule = scheduler.create_schedule(
+            trigger=OneShotTrigger(datetime.now(timezone.utc)),
+            prompt="scheduled prompt",
+            workspace=str(self.root),
+            origin_session_id="origin",
+            schedule_session_id="scheduled-session",
+        )
+        run = scheduler.poll_once(datetime.now(timezone.utc))[0]
+        session = Session("scheduled-session")
+        session.begin_turn(run.turn_id)
+        session.add_item("user", schedule.action.prompt)
+        session.finish_turn("completed")
+        self.store.bind_workspace(session.session_id, self.root)
+        self.store.append_events(
+            session.session_id,
+            session.journal,
+            workspace=self.root,
+        )
+
+        with self.client() as client:
+            item = client.get("/api/schedules").json()[0]
+
+        self.assertEqual(item["schedule_id"], schedule.schedule_id)
+        self.assertTrue(item["session_available"])
+        self.assertEqual(item["latest_run"]["run_id"], run.run_id)
+        self.assertEqual(item["latest_run"]["status"], "completed")
 
     def test_rejects_a_session_id_that_escapes_the_sessions_directory(
         self,

@@ -325,6 +325,25 @@ button.tree-entry:hover { background: #edf1f7; }
 .tool-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .settings-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 18px; width: 100%; }
 .settings-toolbar p { margin: 0; color: #8d96a5; font-size: 10px; }
+.schedule-settings { display: grid; gap: 12px; }
+.schedule-list { overflow: hidden; border: 1px solid #e1e5ec; border-radius: 9px; background: #fff; box-shadow: 0 5px 18px #20385c08; }
+.schedule-row { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto auto; align-items: center; gap: 12px; min-height: 58px; padding: 10px 13px; }
+.schedule-row + .schedule-row { border-top: 1px solid #edf0f3; }
+.schedule-state { width: 7px; height: 7px; border-radius: 50%; background: #aeb5c0; box-shadow: 0 0 0 3px #aeb5c018; }
+.schedule-state.active, .schedule-state.complete { background: #72a28a; box-shadow: 0 0 0 3px #72a28a1a; }
+.schedule-state.running { background: #7184b5; box-shadow: 0 0 0 3px #7184b51a; }
+.schedule-state.failed { background: #b46b67; box-shadow: 0 0 0 3px #b46b671a; }
+.schedule-copy { display: flex; flex-direction: column; min-width: 0; gap: 3px; }
+.schedule-copy strong, .schedule-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.schedule-copy strong { color: #414b5c; font-size: 11px; font-weight: 620; }
+.schedule-copy small { color: #969fac; font-size: 9px; }
+.schedule-status { padding: 3px 7px; border-radius: 999px; background: #f0f2f5; color: #7e8795; font-size: 9px; white-space: nowrap; }
+.schedule-status.active, .schedule-status.complete { background: #edf5ef; color: #638072; }
+.schedule-status.running { background: #eef1f8; color: #60739e; }
+.schedule-status.failed { background: #faeeee; color: #a35f5b; }
+.schedule-session-button { display: inline-flex; align-items: center; gap: 5px; min-height: 29px; padding: 0 9px; border: 1px solid #dfe3ea; border-radius: 6px; background: #fff; color: #607195; font-size: 9px; font-weight: 600; }
+.schedule-session-button:hover:not(:disabled) { border-color: #aeb9cd; background: #f5f7fb; }
+.schedule-error { margin: 0; color: #a45151; font-size: 10px; }
 .settings-role + .settings-role, .routing-role { margin-top: 18px; padding-top: 18px; border-top: 1px solid #edf0f3; }
 .role-heading { margin-bottom: 13px; }
 .routing-role-name { display: flex; align-items: center; gap: 7px; margin-bottom: 11px; color: #596477; font-size: 10px; font-weight: 650; }
@@ -339,4 +358,4 @@ button.tree-entry:hover { background: #edf1f7; }
 .empty-settings span { margin-top: 5px; font-size: 10px; }
 
 @media (max-width: 800px) { .settings-shell { grid-column: 2; } .provider-layout, .detail-layout { grid-template-columns: 1fr; } .provider-catalog, .detail-list { position: static; } }
-@media (max-width: 600px) { .settings-header { padding: 13px 18px; } .settings-header-actions .secondary-button { display: none; } .settings-content { padding: 22px 14px 38px; } .settings-fields-grid, .settings-fields-grid.three-columns, .tool-grid { grid-template-columns: 1fr; } .settings-card-header { flex-direction: column; } .settings-card-header .primary-button, .settings-card-header .secondary-button { width: 100%; } }
+@media (max-width: 600px) { .settings-header { padding: 13px 18px; } .settings-header-actions .secondary-button { display: none; } .settings-content { padding: 22px 14px 38px; } .settings-fields-grid, .settings-fields-grid.three-columns, .tool-grid { grid-template-columns: 1fr; } .settings-card-header { flex-direction: column; } .settings-card-header .primary-button, .settings-card-header .secondary-button { width: 100%; } .schedule-row { grid-template-columns: 8px minmax(0, 1fr) auto; gap: 9px; } .schedule-status { display: none; } .schedule-session-button { padding: 0 7px; } }
