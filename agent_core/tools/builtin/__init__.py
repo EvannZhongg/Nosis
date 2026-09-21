@@ -11,6 +11,7 @@ from .analyze_image import AnalyzeImageTool
 from .write_file import WriteFileTool
 from .ask_user import AskUserTool
 from .update_plan import UpdatePlanTool
+from .schedule import CreateScheduledTaskTool, UpdateScheduledTaskTool, ListScheduledTasksTool
 
 
 def builtin_catalog():
@@ -37,6 +38,9 @@ def builtin_catalog():
             SubagentTool(),
             AskUserTool(),
             UpdatePlanTool(),
+            CreateScheduledTaskTool(),
+            UpdateScheduledTaskTool(),
+            ListScheduledTasksTool(),
         )
     )
 

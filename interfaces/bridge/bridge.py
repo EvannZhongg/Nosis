@@ -51,6 +51,7 @@ from agent_core import (
     vision_aware_tool_names,
     skill_aware_tool_names,
     platform_workspace_sandbox_backend,
+    SchedulerService,
 )
 from agent_core.prompting import render_system_prompt
 from agent_core.path_utils import path_for_comparison
@@ -124,6 +125,8 @@ class Bridge:
         self._execution_plane: ExecutionPlane | None = None
         self._approval: dict[str, object] | None = None
         self._question: dict[str, object] | None = None
+        self._scheduler = SchedulerService()
+        self._scheduler_thread = self._scheduler.start()
 
     def emit(self, type: str, **fields: object) -> None:
         with self._stdout_lock:
@@ -675,6 +678,7 @@ class Bridge:
                 skills=skills,
                 plan=self._plan,
                 ask_user=self.request_user_choice,
+                scheduler=self._scheduler,
             )
             agent = Agent(
                 provider=main_provider,
@@ -1129,6 +1133,7 @@ class Bridge:
     def close(self) -> None:
         self._route_shutdown(notify_commands=False)
         self._close_execution_plane()
+        self._scheduler.close()
 def _parse_attachments(value: object, workspace: Workspace) -> tuple[ImagePart, ...]:
     if value is None:
         return ()

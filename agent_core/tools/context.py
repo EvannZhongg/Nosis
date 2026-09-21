@@ -54,6 +54,7 @@ class ToolExecutionContext:
     ask_user: (
         Callable[[str, list[dict[str, JSONValue]], bool], JSONValue] | None
     ) = None
+    scheduler: object | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(

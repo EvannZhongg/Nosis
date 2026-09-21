@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bot, Boxes, ChevronDown, ChevronRight, KeyRound, MessageSquare, Plug, Plus, Settings as SettingsIcon, Sparkles, Trash2 } from "lucide-react";
+import { Bot, Boxes, CalendarClock, ChevronDown, ChevronRight, KeyRound, MessageSquare, Plug, Plus, Settings as SettingsIcon, Sparkles, Trash2 } from "lucide-react";
 import { Chat } from "./Chat";
 import { Settings, type SettingsSection } from "./Settings";
 import { Workspace } from "./Workspace";
@@ -200,6 +200,7 @@ export function App() {
     { id: "skills", label: "Skills", description: "查看可用技能", icon: Sparkles },
     { id: "plugins", label: "Plugins", description: "查看已安装扩展", icon: Boxes },
     { id: "mcp", label: "MCP", description: "查看外部工具服务", icon: Plug },
+    { id: "schedules", label: "Schedules", description: "查看和调整定时任务", icon: CalendarClock },
   ];
 
   return (

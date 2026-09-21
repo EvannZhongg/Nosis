@@ -34,6 +34,7 @@ from agent_core import (
     image_extension,
     plan_snapshot_to_dict,
     probe_image,
+    SchedulerService,
 )
 from agent_core.path_utils import path_for_comparison
 
@@ -509,6 +510,7 @@ def create_app(
 ) -> FastAPI:
     active_sessions: dict[str, ActiveSession] = {}
     active_session_lock = asyncio.Lock()
+    scheduler = SchedulerService()
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -517,6 +519,7 @@ def create_app(
             *(runtime.close() for runtime in tuple(active_sessions.values())),
             return_exceptions=True,
         )
+        scheduler.close()
 
     app = FastAPI(
         title="Nosis",
@@ -587,6 +590,19 @@ def create_app(
         try:
             return settings.snapshot()
         except (OSError, ValueError, json.JSONDecodeError) as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+    @app.get("/api/schedules")
+    def list_schedules() -> list[dict[str, object]]:
+        current = SchedulerService()
+        return [{"schedule_id": item.schedule_id, "prompt": item.action.prompt, "workspace": item.workspace, "origin_session_id": item.origin_session_id, "schedule_session_id": item.schedule_session_id, "enabled": item.enabled, "next_run_at": item.next_run_at.isoformat() if item.next_run_at else None} for item in current.schedules]
+
+    @app.put("/api/schedules/{schedule_id}")
+    def update_schedule(schedule_id: str, payload: dict[str, object] = Body(...)) -> dict[str, object]:
+        try:
+            item = scheduler.update_schedule(schedule_id, **{key: payload[key] for key in ("prompt", "enabled") if key in payload})
+            return {"schedule_id": item.schedule_id, "enabled": item.enabled, "next_run_at": item.next_run_at.isoformat() if item.next_run_at else None}
+        except (KeyError, ValueError) as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
 
     @app.put("/api/settings/providers/{provider_id}")

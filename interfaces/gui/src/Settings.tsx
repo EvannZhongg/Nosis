@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { ArrowLeft, Boxes, Check, ChevronRight, CircleAlert, KeyRound, Plus, RefreshCw, Save, ServerCog } from "lucide-react";
-import { get, put, type SettingsSnapshot } from "./api";
+import { get, put, type SettingsSnapshot, type ScheduleSummary } from "./api";
 
-export type SettingsSection = "providers" | "agent" | "skills" | "plugins" | "mcp";
+export type SettingsSection = "providers" | "agent" | "skills" | "plugins" | "mcp" | "schedules";
 
 const sectionLabels: Record<SettingsSection, string> = {
   providers: "Providers",
@@ -10,6 +10,7 @@ const sectionLabels: Record<SettingsSection, string> = {
   skills: "Skills",
   plugins: "Plugins",
   mcp: "MCP",
+  schedules: "Schedules",
 };
 
 export function Settings({ section, onClose, onChanged }: { section: SettingsSection; onClose: () => void; onChanged: () => void }) {
@@ -78,15 +79,23 @@ export function Settings({ section, onClose, onChanged }: { section: SettingsSec
     </header>
     {error && <div className="settings-error" role="alert"><CircleAlert size={15} /><span>{error}</span></div>}
     <div className="settings-layout"><main className="settings-content">
-        {!settings ? <LoadingState /> : section === "providers" ? <ProviderSettings settings={settings} selected={selected} onSelect={setSelected} saving={saving} onSave={saveProvider} onSaveRouting={saveRouting} />
-          : section === "agent" ? <AgentSettingsForm key={settings.revision} settings={settings} saving={saving} onSave={saveAgent} />
-          : section === "skills" ? <DetailCollection eyebrow="Skill library" items={settings.skills.map((item) => ({ id: item.id, title: item.name, subtitle: `${item.source} · ${item.path}`, body: item.content, status: "Available" }))} selected={selected} onSelect={setSelected} empty="没有发现 Skill。" />
-          : section === "plugins" ? <DetailCollection eyebrow="Plugin catalog" items={settings.plugins.map((item) => ({ id: item.name, title: item.name, subtitle: item.description ?? item.path, status: item.enabled ? "Enabled" : "Disabled", body: JSON.stringify({ version: item.version, capabilities: item.capabilities, components: item.components, path: item.path }, null, 2) }))} selected={selected} onSelect={setSelected} empty="没有发现 Plugin。" />
-          : <DetailCollection eyebrow="MCP registry" items={settings.mcp_servers.map((item) => ({ id: item.id, title: item.id, subtitle: `${item.transport} · ${item.source}`, status: item.enabled ? "Enabled" : "Disabled", body: JSON.stringify(item, null, 2) }))} selected={selected} onSelect={setSelected} empty={settings.agent.mcp_enabled ? "没有配置 MCP Server。" : "MCP 当前已关闭。"} />}
+        {!settings && section !== "schedules" ? <LoadingState /> : section === "schedules" ? <ScheduleSettings /> : section === "providers" ? <ProviderSettings settings={settings!} selected={selected} onSelect={setSelected} saving={saving} onSave={saveProvider} onSaveRouting={saveRouting} />
+          : section === "agent" ? <AgentSettingsForm key={settings!.revision} settings={settings!} saving={saving} onSave={saveAgent} />
+          : section === "skills" ? <DetailCollection eyebrow="Skill library" items={settings!.skills.map((item) => ({ id: item.id, title: item.name, subtitle: `${item.source} · ${item.path}`, body: item.content, status: "Available" }))} selected={selected} onSelect={setSelected} empty="没有发现 Skill。" />
+          : section === "plugins" ? <DetailCollection eyebrow="Plugin catalog" items={settings!.plugins.map((item) => ({ id: item.name, title: item.name, subtitle: item.description ?? item.path, status: item.enabled ? "Enabled" : "Disabled", body: JSON.stringify({ version: item.version, capabilities: item.capabilities, components: item.components, path: item.path }, null, 2) }))} selected={selected} onSelect={setSelected} empty="没有发现 Plugin。" />
+          : <DetailCollection eyebrow="MCP registry" items={settings!.mcp_servers.map((item) => ({ id: item.id, title: item.id, subtitle: `${item.transport} · ${item.source}`, status: item.enabled ? "Enabled" : "Disabled", body: JSON.stringify(item, null, 2) }))} selected={selected} onSelect={setSelected} empty={settings!.agent.mcp_enabled ? "没有配置 MCP Server。" : "MCP 当前已关闭。"} />}
         {settings && settings.warnings.length > 0 && <details className="settings-warnings"><summary><CircleAlert size={14} /> {settings.warnings.length} 条配置警告</summary>{settings.warnings.map((warning) => <p key={warning}>{warning}</p>)}</details>}
       </main>
     </div>
   </section>;
+}
+
+function ScheduleSettings() {
+  const [items, setItems] = useState<ScheduleSummary[]>([]);
+  const [error, setError] = useState("");
+  const refresh = () => get<ScheduleSummary[]>("/api/schedules").then(setItems).catch((reason) => setError(String(reason)));
+  useEffect(() => { void refresh(); }, []);
+  return <div><div className="settings-toolbar"><p>持久化任务计划</p><button className="secondary-button" onClick={() => void refresh()}>刷新</button></div>{error && <p>{error}</p>}{items.length === 0 ? <div className="empty-settings"><strong>暂无定时任务</strong></div> : items.map((item) => <SettingsCard key={item.schedule_id} title={item.prompt} description={`${item.workspace} · ${item.next_run_at ?? "已结束"}`}><p>{item.enabled ? "启用" : "已停用"} · Session {item.schedule_session_id}</p></SettingsCard>)}</div>;
 }
 
 function LoadingState() {

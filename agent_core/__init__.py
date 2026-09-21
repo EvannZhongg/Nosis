@@ -74,6 +74,14 @@ from .plan import (
     plan_snapshot_to_dict,
 )
 from .session_store import JsonlSessionStore
+from .scheduler import (
+    AgentTurnAction,
+    CronTrigger,
+    OneShotTrigger,
+    Schedule,
+    ScheduledRun,
+    SchedulerService,
+)
 from .skills import (
     DirectorySkillSource,
     Skill,
@@ -259,6 +267,12 @@ __all__ = [
     "WindowsSandboxBackend",
     "platform_workspace_sandbox_backend",
     "WriteFileTool",
+    "AgentTurnAction",
+    "CronTrigger",
+    "OneShotTrigger",
+    "Schedule",
+    "ScheduledRun",
+    "SchedulerService",
     "Workspace",
     "WorkspaceInstruction",
     "WorkspaceInstructions",

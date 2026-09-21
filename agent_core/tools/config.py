@@ -10,6 +10,9 @@ TOOL_NAMES = (
     "shell",
     "web_search",
     "subagent",
+    "create_scheduled_task",
+    "update_scheduled_task",
+    "list_scheduled_tasks",
 )
 
 # ``read_image``, ``analyze_image`` and ``read_skill`` are absent by design:

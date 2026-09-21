@@ -22,7 +22,10 @@
       "list_directory": true,
       "shell": true,
       "web_search": false,
-      "subagent": true
+      "subagent": true,
+      "create_scheduled_task": true,
+      "update_scheduled_task": true,
+      "list_scheduled_tasks": true
     }
   },
   "subagent_roles": {
