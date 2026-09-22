@@ -1370,6 +1370,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "exa-py" },
+    { name = "httpx" },
     { name = "litellm" },
     { name = "mcp" },
     { name = "python-dotenv" },
@@ -1389,6 +1390,7 @@ gui = [
 requires-dist = [
     { name = "exa-py", specifier = ">=2.0" },
     { name = "fastapi", marker = "extra == 'gui'", specifier = ">=0.115" },
+    { name = "httpx", specifier = ">=0.27" },
     { name = "litellm", specifier = ">=1.0" },
     { name = "mcp", specifier = ">=2.0,<3" },
     { name = "python-dotenv", specifier = ">=1.0" },

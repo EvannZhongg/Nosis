@@ -34,6 +34,7 @@ ROLE_TOOL_NAMES = (
     "list_directory",
     "shell",
     "web_search",
+    "web_fetch",
     "create_scheduled_task",
     "update_scheduled_task",
     "list_scheduled_tasks",

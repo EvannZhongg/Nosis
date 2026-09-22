@@ -23,6 +23,7 @@
       "list_directory": true,
       "shell": true,
       "web_search": false,
+      "web_fetch": true,
       "subagent": true,
       "create_scheduled_task": true,
       "update_scheduled_task": true,

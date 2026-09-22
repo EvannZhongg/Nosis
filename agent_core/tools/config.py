@@ -10,6 +10,7 @@ TOOL_NAMES = (
     "list_directory",
     "shell",
     "web_search",
+    "web_fetch",
     "subagent",
     "create_scheduled_task",
     "update_scheduled_task",

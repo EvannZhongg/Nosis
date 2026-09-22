@@ -7,6 +7,7 @@ from .read_skill import ReadSkillTool
 from .search_files import SearchFilesTool
 from .shell import ShellTool
 from .web_search import WebSearchTool
+from .web_fetch import WebFetchTool
 from .subagent import SubagentTool
 from .analyze_image import AnalyzeImageTool
 from .write_file import WriteFileTool
@@ -40,6 +41,7 @@ def builtin_catalog():
             ListDirectoryTool(),
             ShellTool(),
             WebSearchTool(),
+            WebFetchTool(),
             ReadImageTool(),
             AnalyzeImageTool(),
             ReadSkillTool(),
@@ -71,6 +73,7 @@ __all__ = [
     "UpdatePlanTool",
     "RememberTool",
     "WebSearchTool",
+    "WebFetchTool",
     "WriteFileTool",
     "builtin_catalog",
 ]

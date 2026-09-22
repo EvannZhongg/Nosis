@@ -159,6 +159,7 @@ from .tools import (
     ToolResult,
     ToolSet,
     WebSearchTool,
+    WebFetchTool,
     WriteFileTool,
     builtin_catalog,
     load_tool_config,
