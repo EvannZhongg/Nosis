@@ -5,6 +5,7 @@ LiteLLM writes diagnostics straight to stdout on failure and would
 otherwise corrupt the newline-delimited JSON stream.
 """
 
+import json
 import os
 import signal
 import sys
@@ -43,15 +44,18 @@ def main() -> None:
     except SystemExit:
         raise
     except BaseException as error:
+        message = {
+            "type": "fatal",
+            "error": {
+                "type": type(error).__name__,
+                "message": str(error),
+                "details": {},
+            },
+        }
         if bridge is not None:
-            bridge.emit(
-                "fatal",
-                error={
-                    "type": type(error).__name__,
-                    "message": str(error),
-                    "details": {},
-                },
-            )
+            bridge.emit(**message)
+        else:
+            protocol_out.write(json.dumps(message, ensure_ascii=False) + "\n")
         raise SystemExit(1)
     finally:
         if bridge is not None:
