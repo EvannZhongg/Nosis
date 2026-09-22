@@ -22,7 +22,7 @@ Agent Loop、Tool 执行和上下文管理仍属于 `agent_core`，前端与 Bri
 
 ## Plugin discovery
 
-Bridge 从 `~/.nosis/plugins/<plugin-name>/plugin.json` 发现 Plugin。首次启动时把 `defaults/plugins/` 下的内置 Plugin 复制安装到该目录，已存在的目录不覆盖。Plugin 是能力组合与分发单元，不是 Runtime 或执行接口；启用后，Bridge 将 Skill、MCP 与 Agent 组件引用分别交给已有子系统。Hook 引用为对应子系统后续适配保留：
+Bridge 从 `~/.nosis/plugins/<plugin-name>/plugin.json` 发现 Plugin。首次启动时把 `defaults/plugins/` 下的内置 Plugin 复制安装到该目录，已存在的目录不覆盖。Plugin 是能力组合与分发单元；启用后，Bridge 将 Skill、MCP 与 Agent 组件引用分别交给已有子系统：
 
 ```json
 {
@@ -30,13 +30,11 @@ Bridge 从 `~/.nosis/plugins/<plugin-name>/plugin.json` 发现 Plugin。首次�
   "version": "1.0.0",
   "enabled": true,
   "description": "Example capability package",
-  "dependencies": [],
   "capabilities": ["skills"],
   "components": {
     "skills": ["skills"],
     "mcp": [],
-    "agents": [],
-    "hooks": []
+    "agents": []
   }
 }
 ```

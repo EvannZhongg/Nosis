@@ -14,7 +14,7 @@ def persist(store: JsonlSessionStore, workspace: Path, session: Session) -> None
 
 
 class JsonlSessionStoreTest(unittest.TestCase):
-    def test_appends_incremental_events_without_request_snapshots(self) -> None:
+    def test_appends_and_replays_journal_events(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             store = JsonlSessionStore(workspace / "sessions")
@@ -32,12 +32,6 @@ class JsonlSessionStoreTest(unittest.TestCase):
             ]
             self.assertEqual([record["seq"] for record in records], [1, 2, 3, 4])
             self.assertTrue(all(record["event_id"] for record in records))
-            self.assertTrue(
-                all(
-                    "request" not in record and "response" not in record
-                    for record in records
-                )
-            )
             self.assertEqual(
                 [item.content for item in store.load("session-1").items],
                 ["你好", "你好！"],

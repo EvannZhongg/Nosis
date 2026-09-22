@@ -26,7 +26,6 @@ from agent_core import (
 from agent_core.execution import (
     MAX_COMMAND_OUTPUT_CHARS,
     CommandOutputSpool,
-    _decode_output,
     _is_msys_runtime_path,
 )
 
@@ -219,10 +218,6 @@ class HostCommandExecutorTest(unittest.TestCase):
             self.assertEqual(result.exit_code, 0)
             self.assertNotEqual(result.stdout, "")
             self.assertNotEqual(result.stderr, "")
-
-    def test_decodes_a_missing_stream_as_empty_text(self) -> None:
-        self.assertEqual(_decode_output(None), "")
-        self.assertEqual(_decode_output(b""), "")
 
 
 class SandboxedCommandExecutorTest(unittest.TestCase):

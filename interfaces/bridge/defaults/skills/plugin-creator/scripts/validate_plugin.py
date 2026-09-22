@@ -21,11 +21,10 @@ PLUGIN_FIELDS = {
     "version",
     "description",
     "enabled",
-    "dependencies",
     "capabilities",
     "components",
 }
-COMPONENT_KINDS = ("skills", "agents", "mcp", "hooks")
+COMPONENT_KINDS = ("skills", "agents", "mcp")
 ROLE_TOOL_NAMES = (
     "read_file",
     "edit_file",
@@ -96,8 +95,7 @@ def validate_plugin(plugin_root: Path) -> tuple[list[str], list[str]]:
         optional_string(manifest, field, "plugin.json", errors)
     if "enabled" in manifest and not isinstance(manifest["enabled"], bool):
         errors.append("plugin.json field `enabled` must be a boolean")
-    for field in ("dependencies", "capabilities"):
-        string_array(manifest, field, "plugin.json", errors)
+    string_array(manifest, "capabilities", "plugin.json", errors)
 
     components = manifest.get("components", {})
     if not isinstance(components, dict):

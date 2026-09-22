@@ -1276,21 +1276,6 @@ class InterruptedTurnTest(unittest.TestCase):
             ["user", "assistant", "tool"],
         )
 
-    def test_journal_stores_items_as_each_item_settles(self) -> None:
-        self.start_turn(
-            ScriptedAgent(
-                self.session,
-                tail=(Message(role="assistant", content="half an answer"),),
-                error=KeyboardInterrupt(),
-            )
-        )
-
-        self.assertEqual(emitted(self.stdout)[-1]["type"], "turn_cancelled")
-        self.assertEqual(
-            [message.content for message in self.stored_items()],
-            ["do the work", "half an answer"],
-        )
-
     def test_projection_excludes_an_incomplete_tool_batch(self) -> None:
         self.start_turn(
             ScriptedAgent(

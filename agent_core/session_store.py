@@ -348,9 +348,8 @@ def _has_session_activity(path: Path) -> bool:
                 for line in file
                 if line.strip()
             )
-    except (OSError, ValueError, json.JSONDecodeError):
-        # Preserve the previous behavior for damaged journals so they remain
-        # discoverable and can surface their load error instead of vanishing.
+    except (OSError, ValueError):
+        # Keep damaged journals discoverable so loading surfaces the error.
         return True
 
 
@@ -373,7 +372,7 @@ def _session_title(path: Path, session_id: str) -> str:
                     if isinstance(content, str) and content:
                         return content
                     return session_id
-    except (OSError, ValueError, json.JSONDecodeError):
+    except (OSError, ValueError):
         pass
     return session_id
 

@@ -61,13 +61,11 @@ class PluginLoaderTest(unittest.TestCase):
                 "example",
                 version="1.2.0",
                 description="Example package",
-                dependencies=["base"],
                 capabilities=["skills", "mcp"],
                 components={
                     "skills": ["skills"],
                     "mcp": ["mcp/server.json"],
-                    "agents": ["agents/researcher.json"],
-                    "hooks": ["hooks/on_start.py"],
+                    "agents": ["agents/researcher.md"],
                 },
             )
 
@@ -75,17 +73,12 @@ class PluginLoaderTest(unittest.TestCase):
 
         self.assertEqual(plugin.name, "example")
         self.assertEqual(plugin.version, "1.2.0")
-        self.assertEqual(plugin.dependencies, ("base",))
         self.assertEqual(plugin.capabilities, ("skills", "mcp"))
         self.assertEqual(plugin.components.skills, (plugin.root / "skills",))
         self.assertEqual(plugin.components.mcp, (plugin.root / "mcp/server.json",))
         self.assertEqual(
             plugin.components.agents,
-            (plugin.root / "agents/researcher.json",),
-        )
-        self.assertEqual(
-            plugin.components.hooks,
-            (plugin.root / "hooks/on_start.py",),
+            (plugin.root / "agents/researcher.md",),
         )
 
     def test_rejects_component_references_outside_the_plugin(self) -> None:

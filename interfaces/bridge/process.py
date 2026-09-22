@@ -21,11 +21,7 @@ def cancel_process(process: _Process) -> None:
     else:
         # The bridge is the leader of a private session/process group; signal
         # the group so provider/tool descendants unwind with it.
-        pid = getattr(process, "pid", None)
-        if pid is None:
-            process.send_signal(signal.SIGINT)
-        else:
-            try:
-                os.kill(-pid, signal.SIGINT)
-            except ProcessLookupError:
-                pass
+        try:
+            os.kill(-process.pid, signal.SIGINT)
+        except ProcessLookupError:
+            pass

@@ -210,7 +210,6 @@ class SettingsStore:
                 "skills": [str(path) for path in plugin.components.skills],
                 "mcp": [str(path) for path in plugin.components.mcp],
                 "agents": [str(path) for path in plugin.components.agents],
-                "hooks": [str(path) for path in plugin.components.hooks],
             },
         } for plugin in plugins.plugins]
 

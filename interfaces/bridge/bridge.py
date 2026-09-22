@@ -5,7 +5,6 @@ on stdin/stdout. The class is kept free of process-level setup so tests
 can drive it with plain string buffers.
 """
 
-import json
 import _thread
 from collections import deque
 from io import StringIO
@@ -192,7 +191,7 @@ class Bridge:
                         self._route_message(message)
                     if message["type"] == "shutdown":
                         return
-            except (json.JSONDecodeError, ValueError) as error:
+            except ValueError as error:
                 self._messages.put(error)
                 self._route_shutdown(notify_commands=False)
                 return
@@ -245,8 +244,6 @@ class Bridge:
         provider = message.get("provider")
         if not isinstance(provider, str) or not provider:
             raise ValueError("provider must be a non-empty string")
-        if self._config_path is None:
-            raise RuntimeError("provider configuration is not initialized")
         _, models = load_model_options(self._config_path)
         if provider not in models:
             raise ValueError(f"provider '{provider}' is not configured")
@@ -527,8 +524,7 @@ class Bridge:
             else Session()
         )
         self._workspace = workspace
-        # Runtime events are persisted as soon as they happen.  There is no
-        # Bridge-side transcript checkpoint or tool-call repair buffer.
+        # Runtime events are persisted as soon as they happen.
         self._store.bind_workspace(self._session.session_id, workspace.path)
         self._session.workspace = str(workspace.path)
         self._session.attach_journal_sink(
@@ -1177,7 +1173,7 @@ class Bridge:
         while True:
             try:
                 message = self.read_message()
-            except (json.JSONDecodeError, ValueError) as error:
+            except ValueError as error:
                 self.emit(
                     "fatal",
                     error={

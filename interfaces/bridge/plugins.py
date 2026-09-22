@@ -18,7 +18,7 @@ from agent_core.tools import ROLE_TOOL_NAMES
 
 
 _PLUGIN_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
-_COMPONENT_KINDS = ("skills", "mcp", "agents", "hooks")
+_COMPONENT_KINDS = ("skills", "mcp", "agents")
 _AGENT_FRONTMATTER = re.compile(
     r"\A---[ \t]*\r?\n(?P<metadata>.*?)\r?\n---[ \t]*(?:\r?\n|\Z)",
     re.DOTALL,
@@ -27,17 +27,11 @@ _AGENT_FRONTMATTER = re.compile(
 
 @dataclass(frozen=True)
 class PluginComponents:
-    """References declared by a plugin package.
-
-    Skill directories, MCP configurations, and Agent definitions are routed
-    to their existing Runtime subsystems. Hook references remain an extension
-    point without Runtime behavior.
-    """
+    """Skill, MCP, and Agent references routed to Runtime subsystems."""
 
     skills: tuple[Path, ...] = ()
     mcp: tuple[Path, ...] = ()
     agents: tuple[Path, ...] = ()
-    hooks: tuple[Path, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -49,7 +43,6 @@ class PluginDescriptor:
     enabled: bool = True
     version: str | None = None
     description: str | None = None
-    dependencies: tuple[str, ...] = ()
     capabilities: tuple[str, ...] = ()
     components: PluginComponents = field(default_factory=PluginComponents)
 
@@ -86,7 +79,6 @@ class PluginLoader:
                 "version",
                 "description",
                 "enabled",
-                "dependencies",
                 "capabilities",
                 "components",
             },
@@ -111,7 +103,6 @@ class PluginLoader:
             skills=_component_paths(component_data, "skills", root),
             mcp=_component_paths(component_data, "mcp", root),
             agents=_component_paths(component_data, "agents", root),
-            hooks=_component_paths(component_data, "hooks", root),
         )
         return PluginDescriptor(
             name=name,
@@ -119,7 +110,6 @@ class PluginLoader:
             enabled=enabled,
             version=_optional_string(data, "version", "plugin"),
             description=_optional_string(data, "description", "plugin"),
-            dependencies=_string_tuple(data, "dependencies", "plugin"),
             capabilities=_string_tuple(data, "capabilities", "plugin"),
             components=components,
         )

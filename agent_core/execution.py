@@ -779,25 +779,6 @@ def _kill_process_tree(process: RunningProcess) -> None:
         pass
 
 
-def _decode_output(data: bytes | None) -> str:
-    """Turn captured output bytes into text.
-
-    Programs on Windows write in the console or ANSI code page rather
-    than UTF-8, and a stream that fails to decode is reported to the
-    caller as None by subprocess.
-    """
-    if not data:
-        return ""
-
-    try:
-        return data.decode("utf-8")
-    except UnicodeDecodeError:
-        return data.decode(
-            locale.getpreferredencoding(False),
-            errors="replace",
-        )
-
-
 def _read_spooled_output(
     path: Path,
 ) -> tuple[str, CommandOutputSpool | None]:

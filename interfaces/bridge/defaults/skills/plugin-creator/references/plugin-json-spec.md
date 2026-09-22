@@ -9,7 +9,6 @@ Everything else is referenced from `components`.
   "version": "0.1.0",
   "description": "Example capability package: one skill, one sub-agent role, one MCP server",
   "enabled": true,
-  "dependencies": ["other-plugin"],
   "capabilities": ["skills", "agents", "mcp"],
   "components": {
     "skills": ["skills"],
@@ -23,17 +22,14 @@ Everything else is referenced from `components`.
 
 - `name` (string, required): Plugin identifier and the namespace prefix of every component. Must
   match `[A-Za-z0-9][A-Za-z0-9._-]*`.
-- `version` (string, optional): Free-form version string. Nosis stores it and never compares it.
-- `description` (string, optional): Non-empty string. Shown nowhere automatically; keep it useful
-  for humans reading the package.
+- `version` (string, optional): Free-form version string shown in Plugin settings.
+- `description` (string, optional): Non-empty string shown in Plugin settings.
 - `enabled` (boolean, optional, default `true`): When `false`, the plugin is still discovered but
   none of its components are routed to the Runtime.
-- `dependencies` (array of strings, optional): Names of other plugins. Recorded only; dependency
-  order and availability are not resolved by Nosis.
-- `capabilities` (array of strings, optional): Declaration of what the package provides. Recorded
-  only; it enables nothing. Keep it consistent with `components`.
+- `capabilities` (array of strings, optional): Declaration of what the package provides, shown in
+  Plugin settings. Keep it consistent with `components`.
 - `components` (object, optional): Maps a component kind to an array of paths, relative to the
-  plugin root. Keys are limited to `skills`, `mcp`, `agents`, and `hooks`.
+  plugin root. Keys are limited to `skills`, `mcp`, and `agents`.
 
 Arrays must contain unique, non-empty strings. An unknown field anywhere in the manifest makes the
 whole plugin invalid, and the plugin is then skipped at discovery with a warning instead of
@@ -121,12 +117,6 @@ Each entry is a **file** holding a server map. Keys are server names and registe
 
 MCP components are only loaded when `"mcp": {"enabled": true}` is set in `agent_config.json`.
 
-### `hooks`
-
-`hooks` entries are accepted and stored, but Nosis has no hook execution: declaring them changes no
-Runtime behavior. Do not build a plugin whose only purpose is hooks, and do not describe them to the
-user as working behavior.
-
 ## Path rules
 
 - Paths are relative to the plugin root and must resolve inside it. Absolute paths and `../` escapes
@@ -141,4 +131,4 @@ user as working behavior.
 
 `interfaces/bridge/plugins.py` is authoritative. It parses the manifest above into
 `PluginDescriptor` and routes `components` as follows: `skills` through the Skill registry,
-`agents` into sub-agent roles, `mcp` through the MCP subsystem, `hooks` nowhere.
+`agents` into sub-agent roles, `mcp` through the MCP subsystem.

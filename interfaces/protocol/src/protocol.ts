@@ -96,7 +96,7 @@ export type SettingsSnapshot = {
   };
   agent: AgentSettings;
   skills: { id: string; name: string; description: string; source: string; path: string; content: string }[];
-  plugins: { name: string; version: string | null; description: string | null; enabled: boolean; capabilities: string[]; path: string; components: Record<string, string[]> }[];
+  plugins: { name: string; version: string | null; description: string | null; enabled: boolean; capabilities: string[]; path: string; components: { skills: string[]; mcp: string[]; agents: string[] } }[];
   mcp_servers: { id: string; source: string; enabled: boolean; transport: string; command: string | null; args: string[]; cwd: string | null; url: string | null; env_names: string[]; header_names: string[]; startup_timeout_seconds: number; call_timeout_seconds: number }[];
   plugin_agents: { name: string; description: string; model: string | null; source: string }[];
   warnings: string[];

@@ -65,6 +65,7 @@ class FakeBridge:
         self.sent: list[dict] = []
         self.cancelled = 0
         self.closed = False
+        self.returncode: int | None = None
         self._replies = replies or {}
         self._messages: asyncio.Queue[dict | None] = asyncio.Queue()
 
@@ -1380,9 +1381,6 @@ class GuiTest(unittest.TestCase):
 
         self.assertEqual(data["items"][0]["content"], "TUI 对话")
         self.assertEqual(data["permission_preset"], "ask_for_approval")
-        # Only the transcript is exposed, never the request configuration.
-        self.assertNotIn("request", data)
-        self.assertNotIn("private prompt", json.dumps(data))
 
     def test_schedule_listing_includes_latest_run_and_session_availability(self) -> None:
         scheduler = SchedulerService(

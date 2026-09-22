@@ -8,8 +8,7 @@ description: Create and validate Nosis Plugin packages — one directory with a 
 A Nosis Plugin is a directory whose `plugin.json` declares the components it contributes. Bridge
 discovers plugins under `~/.nosis/plugins/` while assembling the Runtime and routes every enabled
 component into the matching subsystem, so a manifest must satisfy the contract implemented by
-`interfaces/bridge/plugins.py`. Nothing here is enforced by a marketplace: a plugin exists because
-its directory is discovered and its manifest parses.
+`interfaces/bridge/plugins.py`.
 
 ## Quick Start
 
@@ -24,7 +23,7 @@ python3 scripts/create_basic_plugin.py <plugin-name> --with-skills --with-agents
 
 The default target is `~/.nosis/plugins/<plugin-name>`; pass `--path <parent-directory>` only when
 the package belongs somewhere else, such as a source tree that is later copied into
-`~/.nosis/plugins/`. Components that are not requested are not created and not declared.
+`~/.nosis/plugins/`.
 
 2. Replace the scaffold's placeholder metadata in `<plugin-path>/plugin.json` with the real
    `description` and `version`. The scaffold is valid JSON, not finished content.
@@ -36,7 +35,6 @@ the package belongs somewhere else, such as a source tree that is later copied i
 | `skills` | A directory whose children are skill folders containing `SKILL.md` | `<plugin>:<skill>` |
 | `agents` | A Markdown file whose front matter declares the role | `<plugin>:<agent>` sub-agent role |
 | `mcp` | A JSON file mapping server names to server configs | `<plugin>:<server>` |
-| `hooks` | Declared references only; the Runtime runs no hook behavior | — |
 
 Read `references/plugin-json-spec.md` for the exact manifest, agent, MCP, and skill shapes.
 
@@ -48,8 +46,7 @@ python3 scripts/validate_plugin.py <plugin-path>
 
 ## Required Behavior
 
-- Keep the manifest at `<plugin-root>/plugin.json` with exactly that name. There is no nested
-  manifest directory.
+- Keep the manifest at `<plugin-root>/plugin.json` with exactly that name.
 - The manifest `name` is the namespace prefix of every component, so it must stay unique across
   `~/.nosis/plugins/`; a duplicate plugin name is skipped at discovery with a warning.
 - Declare only components that exist and stay inside the plugin root. Absolute paths and `../`

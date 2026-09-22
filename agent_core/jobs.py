@@ -245,10 +245,6 @@ class JobManager:
                     self._jobs.pop(update.job_id, None)
             return selected
 
-    def drain_terminal(self, turn_id: str) -> tuple[JobUpdate, ...]:
-        updates, _pending = self.drain_terminal_state(turn_id)
-        return updates
-
     def drain_terminal_state(
         self, turn_id: str
     ) -> tuple[tuple[JobUpdate, ...], bool]:

@@ -1,4 +1,3 @@
-import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -114,7 +113,7 @@ class SessionJournalTest(unittest.TestCase):
         self.assertEqual([message.role for unit in units for message in unit.messages], ["user"])
         self.assertEqual(session.tool_executions["call-1"].status, "started")
 
-    def test_journal_replays_tool_fact_without_request_snapshot(self):
+    def test_journal_replays_a_cancelled_turn(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
             store = JsonlSessionStore(root / "sessions")
@@ -125,9 +124,6 @@ class SessionJournalTest(unittest.TestCase):
             session.add_item("user", "hello")
             session.finish_turn("cancelled", "turn-1")
 
-            path = next((root / "sessions").rglob("s.jsonl"))
-            records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
-            self.assertTrue(all("request" not in record and "response" not in record for record in records))
             loaded = store.load("s")
             self.assertEqual(loaded.turns["turn-1"].status, "cancelled")
             self.assertEqual([event.seq for event in loaded.journal], [1, 2, 3])

@@ -343,7 +343,7 @@ def _media_root(
     if request.media_root is not None:
         return request.media_root
     if provider is not None:
-        return getattr(provider, "_media_root", None)
+        return provider._media_root
     return None
 
 

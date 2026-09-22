@@ -492,7 +492,7 @@ class ActiveSession:
         finally:
             unexpected_exit = not self._closed
             if unexpected_exit and (
-                self.running or getattr(self.bridge, "returncode", None) != 0
+                self.running or self.bridge.returncode != 0
             ):
                 self.phase = "failed"
             self.approval = None
@@ -596,7 +596,7 @@ def create_app(
     def get_settings() -> dict[str, object]:
         try:
             return settings.snapshot()
-        except (OSError, ValueError, json.JSONDecodeError) as error:
+        except (OSError, ValueError) as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
 
     @app.get("/api/schedules")
@@ -684,7 +684,7 @@ def create_app(
                 payload,
                 revision if isinstance(revision, str) else None,
             )
-        except (OSError, ValueError, json.JSONDecodeError) as error:
+        except (OSError, ValueError) as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
 
     @app.put("/api/settings/agent")
@@ -697,7 +697,7 @@ def create_app(
                 payload,
                 revision if isinstance(revision, str) else None,
             )
-        except (OSError, ValueError, json.JSONDecodeError) as error:
+        except (OSError, ValueError) as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
 
     @app.put("/api/settings/routing")
@@ -710,7 +710,7 @@ def create_app(
                 payload,
                 revision if isinstance(revision, str) else None,
             )
-        except (OSError, ValueError, json.JSONDecodeError) as error:
+        except (OSError, ValueError) as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
 
     @app.get("/api/active-sessions")
@@ -1003,7 +1003,7 @@ def create_app(
             )
         except WebSocketDisconnect:
             return
-        except (TypeError, ValueError, json.JSONDecodeError) as error:
+        except (TypeError, ValueError) as error:
             await websocket.send_json(
                 {
                     "type": "fatal",
