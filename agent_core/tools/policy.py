@@ -1,6 +1,5 @@
 from typing import Callable
 
-from ..execution import ExecutionScope, execution_scope_from_arguments
 from .base import ToolCall, ToolPolicy
 from .context import ToolExecutionContext
 
@@ -11,13 +10,6 @@ class ShellApprovalPolicy:
         request_permission: Callable[[str], bool],
     ) -> None:
         self._request_permission = request_permission
-
-    def execution_scope(
-        self, call: ToolCall, context: ToolExecutionContext
-    ) -> ExecutionScope | None:
-        if call.name != "shell":
-            return None
-        return execution_scope_from_arguments(call.arguments)
 
     def authorize(
         self, call: ToolCall, context: ToolExecutionContext
@@ -37,20 +29,6 @@ class CompositeToolPolicy:
     def __init__(self, *policies: ToolPolicy) -> None:
         self._policies = tuple(policies)
 
-    def execution_scope(
-        self, call: ToolCall, context: ToolExecutionContext
-    ) -> ExecutionScope | None:
-        scopes = tuple(
-            scope
-            for policy in self._policies
-            if (scope := policy.execution_scope(call, context)) is not None
-        )
-        if ExecutionScope.HOST in scopes:
-            return ExecutionScope.HOST
-        if ExecutionScope.WORKSPACE in scopes:
-            return ExecutionScope.WORKSPACE
-        return None
-
     def authorize(
         self, call: ToolCall, context: ToolExecutionContext
     ) -> bool:
@@ -68,13 +46,6 @@ class McpApprovalPolicy:
     ) -> None:
         self._request_permission = request_permission
         self._requires_approval = requires_approval
-
-    def execution_scope(
-        self, call: ToolCall, context: ToolExecutionContext
-    ) -> ExecutionScope | None:
-        if not self._requires_approval(call.name):
-            return None
-        return ExecutionScope.HOST
 
     def authorize(
         self, call: ToolCall, context: ToolExecutionContext

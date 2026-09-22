@@ -11,6 +11,8 @@ from ...scheduler import (
     parse_trigger_input,
     trigger_to_dict,
 )
+from ...execution import WORKSPACE_ACCESS_AUTHORITY
+from ...permissions import PermissionPreset
 from ...session_store import JsonlSessionStore
 
 
@@ -108,7 +110,11 @@ class CreateScheduledTaskTool(Tool):
         store.bind_workspace(schedule_session_id, context.workspace.path)
         store.set_permission_preset(
             schedule_session_id,
-            context.session.permission_preset,
+            PermissionPreset.from_authority(
+                context.session.permission_preset.authority.intersect(
+                    WORKSPACE_ACCESS_AUTHORITY
+                )
+            ),
             context.workspace.path,
         )
         provider = store.provider_for(context.session.session_id)

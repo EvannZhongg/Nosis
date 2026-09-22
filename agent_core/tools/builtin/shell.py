@@ -9,7 +9,6 @@ from ...execution import (
     CommandOutputSpool,
     ExecutionScope,
     NetworkAccess,
-    execution_scope_from_arguments,
 )
 from ..base import JSONValue, Tool, ToolDefinition, ToolOutput
 from ..context import ToolExecutionContext
@@ -40,10 +39,7 @@ class ShellTool(Tool):
     name = "shell"
 
     def available(self, context: ToolExecutionContext) -> bool:
-        return (
-            context.workspace_command_executor is not None
-            and context.host_command_executor is not None
-        )
+        return context.execution_router is not None
 
     def definition(self, context: ToolExecutionContext) -> ToolDefinition:
         supports_background = context.jobs is not None
@@ -75,9 +71,12 @@ class ShellTool(Tool):
             f"{DEFAULT_SHELL_TIMEOUT_SECONDS} seconds, with a maximum of "
             f"{MAX_FOREGROUND_SHELL_TIMEOUT_SECONDS}."
         )
-        workspace_policy = getattr(
-            context.workspace_command_executor, "policy", None
-        )
+        router = context.execution_router
+        if router is None:
+            raise RuntimeError("shell execution router is unavailable")
+        workspace_policy = router.workspace_policy
+        authority = router.authority
+        default_scope = authority.default_scope
         workspace_description = (
             "Workspace scope confines writes to the workspace; host files "
             "remain readable and network access remains available. "
@@ -86,11 +85,21 @@ class ShellTool(Tool):
             else "Workspace scope is confined to the workspace with network "
             "disabled. "
         )
+        scope_guidance = (
+            "Use explicit workspace scope to run with reduced authority. "
+            if default_scope is ExecutionScope.HOST
+            else (
+                "Request host scope only when the command must cross that "
+                "boundary. "
+                if authority.allows(ExecutionScope.HOST)
+                else "Host scope is not available to this Agent. "
+            )
+        )
         description = (
             "Execute a shell command with the workspace as the current "
-            "directory. Workspace scope is the default. "
-            f"{workspace_description}Request host scope only "
-            "when the command must cross that boundary. "
+            f"directory. {default_scope.value.title()} scope is the default. "
+            f"{workspace_description}"
+            f"{scope_guidance}"
             f"{shell_note} Every call starts a fresh shell, so directory and "
             "environment changes do not persist. The command is killed after "
             f"{DEFAULT_SHELL_TIMEOUT_SECONDS} seconds by default. "
@@ -112,13 +121,13 @@ class ShellTool(Tool):
             },
             "scope": {
                 "type": "string",
-                "enum": [scope.value for scope in ExecutionScope],
+                "enum": [scope.value for scope in authority.scopes],
                 "description": (
                     "Execution boundary. 'workspace' uses the platform's "
                     "workspace sandbox; 'host' runs with the current "
                     "user's host access and may require approval."
                 ),
-                "default": ExecutionScope.WORKSPACE.value,
+                "default": default_scope.value,
             },
         }
         if supports_background:
@@ -182,14 +191,10 @@ class ShellTool(Tool):
                 "shell accepts only 'command', 'timeout_seconds', "
                 "'background' and 'scope'"
             )
-        scope = execution_scope_from_arguments(arguments)
-        executor = (
-            context.workspace_command_executor
-            if scope is ExecutionScope.WORKSPACE
-            else context.host_command_executor
-        )
-        if executor is None:
-            raise ValueError(f"this runtime has no {scope.value} command executor")
+        route = context.execution
+        if route is None or route.scope is None or route.executor is None:
+            raise RuntimeError("shell execution was not resolved")
+        executor = route.executor
         if background:
             jobs = context.jobs
             turn_id = context.session.current_turn_id

@@ -38,6 +38,7 @@ from agent_core import (
     ToolExecutionContext,
     UserSteerAppliedEvent,
     TurnControl,
+    WORKSPACE_ACCESS_AUTHORITY,
     Workspace,
 )
 from agent_core.scheduler import (
@@ -551,15 +552,10 @@ class PermissionProtocolTest(unittest.TestCase):
                     wraps=plane.mcp.close,
                 ) as close_mcp,
                 patch.object(
-                    plane.workspace_executor,
+                    plane.execution_router,
                     "close",
-                    wraps=plane.workspace_executor.close,
-                ) as close_workspace_executor,
-                patch.object(
-                    plane.host_executor,
-                    "close",
-                    wraps=plane.host_executor.close,
-                ) as close_host_executor,
+                    wraps=plane.execution_router.close,
+                ) as close_execution_router,
             ):
                 bridge._set_provider(
                     {"type": "provider_set", "provider": "second"}
@@ -568,8 +564,7 @@ class PermissionProtocolTest(unittest.TestCase):
             self.assertIsNone(bridge._execution_plane)
             close_jobs.assert_called_once_with()
             close_mcp.assert_called_once_with()
-            close_workspace_executor.assert_called_once_with()
-            close_host_executor.assert_called_once_with()
+            close_execution_router.assert_called_once_with()
 
     def test_workspace_change_closes_the_execution_plane_once(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -592,15 +587,10 @@ class PermissionProtocolTest(unittest.TestCase):
                     wraps=plane.mcp.close,
                 ) as close_mcp,
                 patch.object(
-                    plane.workspace_executor,
+                    plane.execution_router,
                     "close",
-                    wraps=plane.workspace_executor.close,
-                ) as close_workspace_executor,
-                patch.object(
-                    plane.host_executor,
-                    "close",
-                    wraps=plane.host_executor.close,
-                ) as close_host_executor,
+                    wraps=plane.execution_router.close,
+                ) as close_execution_router,
             ):
                 bridge._set_workspace(
                     {
@@ -612,8 +602,7 @@ class PermissionProtocolTest(unittest.TestCase):
             self.assertIsNone(bridge._execution_plane)
             close_jobs.assert_called_once_with()
             close_mcp.assert_called_once_with()
-            close_workspace_executor.assert_called_once_with()
-            close_host_executor.assert_called_once_with()
+            close_execution_router.assert_called_once_with()
 
 
 class _SlowStdin:
@@ -1429,6 +1418,51 @@ class InterruptedTurnTest(unittest.TestCase):
 
 
 class ScheduledTurnTest(unittest.TestCase):
+    def test_scheduled_worker_caps_execution_authority(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            scheduler = SchedulerService(root / "schedule.jsonl")
+            captured = []
+
+            def open_session(worker: Bridge, message: object) -> None:
+                captured.append(worker._execution_authority_limit)
+                raise RuntimeError("stop after capturing worker authority")
+
+            with patch(
+                "interfaces.bridge.bridge.default_config_directory",
+                return_value=root,
+            ), patch.object(Bridge, "open_session", open_session):
+                bridge = Bridge(
+                    io.StringIO(),
+                    io.StringIO(),
+                    scheduler=scheduler,
+                    start_scheduler=False,
+                )
+                schedule = Schedule(
+                    "schedule-1",
+                    OneShotTrigger(datetime.now(timezone.utc)),
+                    AgentTurnAction("scheduled prompt"),
+                    str(root),
+                    "origin",
+                    "scheduled-session",
+                )
+                run = ScheduledRun(
+                    "run-1",
+                    schedule.schedule_id,
+                    schedule.schedule_session_id,
+                    "turn-1",
+                    datetime.now(timezone.utc),
+                )
+
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "stop after capturing worker authority",
+                ):
+                    bridge._run_scheduled_turn(schedule, run)
+                bridge.close()
+
+            self.assertEqual(captured, [WORKSPACE_ACCESS_AUTHORITY])
+
     def test_scheduled_turn_uses_normal_runtime_and_persists_session(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

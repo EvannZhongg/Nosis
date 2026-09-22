@@ -12,7 +12,10 @@ from collections import deque
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Callable, Protocol
+from typing import TYPE_CHECKING, Callable, Protocol
+
+if TYPE_CHECKING:
+    from .tools.base import ToolCall
 
 
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 60
@@ -94,18 +97,176 @@ class ExecutionScope(StrEnum):
     HOST = "host"
 
 
-def execution_scope_from_arguments(
-    arguments: dict[str, object],
-) -> ExecutionScope:
-    value = arguments.get("scope", ExecutionScope.WORKSPACE.value)
-    if not isinstance(value, str):
-        raise ValueError("execution scope must be 'workspace' or 'host'")
-    try:
-        return ExecutionScope(value)
-    except ValueError as error:
-        raise ValueError(
-            "execution scope must be 'workspace' or 'host'"
-        ) from error
+_SCOPE_RANK = {
+    ExecutionScope.WORKSPACE: 0,
+    ExecutionScope.HOST: 1,
+}
+
+
+@dataclass(frozen=True)
+class ExecutionAuthority:
+    """The execution boundary an Agent may request and use unattended."""
+
+    default_scope: ExecutionScope
+    maximum_scope: ExecutionScope
+    unattended_scope: ExecutionScope | None
+
+    def __post_init__(self) -> None:
+        if not self.allows(self.default_scope):
+            raise ValueError("default execution scope exceeds authority")
+        if (
+            self.unattended_scope is not None
+            and not self.allows(self.unattended_scope)
+        ):
+            raise ValueError("unattended execution scope exceeds authority")
+
+    def allows(self, scope: ExecutionScope) -> bool:
+        return _SCOPE_RANK[scope] <= _SCOPE_RANK[self.maximum_scope]
+
+    def allows_unattended(self, scope: ExecutionScope) -> bool:
+        return (
+            self.unattended_scope is not None
+            and _SCOPE_RANK[scope] <= _SCOPE_RANK[self.unattended_scope]
+        )
+
+    @property
+    def scopes(self) -> tuple[ExecutionScope, ...]:
+        return tuple(scope for scope in ExecutionScope if self.allows(scope))
+
+    def intersect(self, other: "ExecutionAuthority") -> "ExecutionAuthority":
+        maximum_scope = min(
+            self.maximum_scope,
+            other.maximum_scope,
+            key=_SCOPE_RANK.__getitem__,
+        )
+        default_scope = min(
+            self.default_scope,
+            other.default_scope,
+            maximum_scope,
+            key=_SCOPE_RANK.__getitem__,
+        )
+        unattended = tuple(
+            scope
+            for scope in (self.unattended_scope, other.unattended_scope)
+            if scope is not None
+        )
+        unattended_scope = (
+            min((*unattended, maximum_scope), key=_SCOPE_RANK.__getitem__)
+            if len(unattended) == 2
+            else None
+        )
+        return ExecutionAuthority(
+            default_scope=default_scope,
+            maximum_scope=maximum_scope,
+            unattended_scope=unattended_scope,
+        )
+
+
+APPROVAL_REQUIRED_AUTHORITY = ExecutionAuthority(
+    default_scope=ExecutionScope.WORKSPACE,
+    maximum_scope=ExecutionScope.HOST,
+    unattended_scope=None,
+)
+WORKSPACE_ACCESS_AUTHORITY = ExecutionAuthority(
+    default_scope=ExecutionScope.WORKSPACE,
+    maximum_scope=ExecutionScope.HOST,
+    unattended_scope=ExecutionScope.WORKSPACE,
+)
+FULL_ACCESS_AUTHORITY = ExecutionAuthority(
+    default_scope=ExecutionScope.HOST,
+    maximum_scope=ExecutionScope.HOST,
+    unattended_scope=ExecutionScope.HOST,
+)
+
+
+@dataclass(frozen=True)
+class ResolvedExecution:
+    scope: ExecutionScope | None
+    authority: ExecutionAuthority
+    executor: CommandExecutor | None = None
+
+
+AuthoritySource = ExecutionAuthority | Callable[[], ExecutionAuthority]
+
+
+class ExecutionRouter:
+    """Resolve an invocation's authority, scope, and executor once."""
+
+    def __init__(
+        self,
+        workspace_executor: CommandExecutor,
+        host_executor: CommandExecutor,
+        *,
+        authority: AuthoritySource = WORKSPACE_ACCESS_AUTHORITY,
+        host_tool: Callable[[str], bool] | None = None,
+    ) -> None:
+        self._workspace_executor = workspace_executor
+        self._host_executor = host_executor
+        self._authority = authority
+        self._host_tool = host_tool or (lambda name: False)
+
+    @property
+    def authority(self) -> ExecutionAuthority:
+        source = self._authority
+        return source() if callable(source) else source
+
+    @property
+    def workspace_policy(self) -> object | None:
+        return getattr(self._workspace_executor, "policy", None)
+
+    def intersect(self, limit: ExecutionAuthority) -> "ExecutionRouter":
+        return ExecutionRouter(
+            self._workspace_executor,
+            self._host_executor,
+            authority=lambda: self.authority.intersect(limit),
+            host_tool=self._host_tool,
+        )
+
+    def resolve(self, call: "ToolCall") -> ResolvedExecution:
+        authority = self.authority
+        if call.name == "shell":
+            scope = self._shell_scope(call.arguments, authority)
+            return ResolvedExecution(
+                scope=scope,
+                authority=authority,
+                executor=(
+                    self._workspace_executor
+                    if scope is ExecutionScope.WORKSPACE
+                    else self._host_executor
+                ),
+            )
+        scope = ExecutionScope.HOST if self._host_tool(call.name) else None
+        if scope is not None and not authority.allows(scope):
+            raise PermissionError(
+                f"execution scope '{scope.value}' exceeds authority"
+            )
+        return ResolvedExecution(scope=scope, authority=authority)
+
+    def close(self) -> None:
+        try:
+            self._workspace_executor.close()
+        finally:
+            self._host_executor.close()
+
+    @staticmethod
+    def _shell_scope(
+        arguments: dict[str, object],
+        authority: ExecutionAuthority,
+    ) -> ExecutionScope:
+        value = arguments.get("scope", authority.default_scope.value)
+        if not isinstance(value, str):
+            raise ValueError("execution scope must be 'workspace' or 'host'")
+        try:
+            scope = ExecutionScope(value)
+        except ValueError as error:
+            raise ValueError(
+                "execution scope must be 'workspace' or 'host'"
+            ) from error
+        if not authority.allows(scope):
+            raise PermissionError(
+                f"execution scope '{scope.value}' exceeds authority"
+            )
+        return scope
 
 
 class FilesystemAccess(StrEnum):

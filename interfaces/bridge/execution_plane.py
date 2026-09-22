@@ -5,8 +5,8 @@ from dataclasses import dataclass
 from agent_core import (
     Agent,
     AgentConfig,
-    CommandExecutor,
     ContextWindow,
+    ExecutionRouter,
     JobManager,
     MemoryManager,
     Workspace,
@@ -26,8 +26,7 @@ class ExecutionPlane:
     instructions: WorkspaceInstructions
     memory: MemoryManager | None
     agent: Agent
-    workspace_executor: CommandExecutor
-    host_executor: CommandExecutor
+    execution_router: ExecutionRouter
     jobs: JobManager
     mcp: McpClientManager
     context_window: ContextWindow
@@ -58,10 +57,7 @@ class ExecutionPlane:
             try:
                 self.mcp.close()
             finally:
-                try:
-                    self.workspace_executor.close()
-                finally:
-                    self.host_executor.close()
+                self.execution_router.close()
 
 
 __all__ = ["ExecutionPlane"]

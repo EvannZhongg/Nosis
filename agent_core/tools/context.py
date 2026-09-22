@@ -7,7 +7,7 @@ from ..workspace import Workspace
 from .base import JSONValue
 
 if TYPE_CHECKING:
-    from ..execution import CommandExecutor
+    from ..execution import ExecutionRouter, ResolvedExecution
     from ..llm import LLMProvider
     from ..mcp.manager import McpClientManager
     from ..plan import PlanManager
@@ -37,8 +37,8 @@ class ToolExecutionContext:
     sessions_directory: Path = field(
         default_factory=default_sessions_directory
     )
-    workspace_command_executor: "CommandExecutor | None" = None
-    host_command_executor: "CommandExecutor | None" = None
+    execution_router: "ExecutionRouter | None" = None
+    execution: "ResolvedExecution | None" = None
     max_generation_tokens: int | None = None
     # Whether the Agent's own model accepts image input.  It decides
     # which of the two image tools this Agent gets: the model either sees

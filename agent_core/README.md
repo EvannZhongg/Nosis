@@ -46,7 +46,7 @@ Runtime 由 [`interfaces/bridge`](../interfaces/bridge/README.md) 统一装配�
 
 文件 Tool 限制在当前 Workspace；Shell 与需要确认的 MCP Tool 统一经过 Session 权限控制。较大的 Tool 输出会保存为 Session Artifact，供 Agent 后续读取。
 
-Shell 用 `scope` 指定执行边界：`workspace`（默认）在沙箱内运行，`host` 以当前用户身份越过沙箱。macOS 的 Seatbelt 与 Linux 的 bubblewrap 仅暴露 Workspace、私有临时目录和最小只读系统视图，并禁用网络；Windows 的受限令牌允许读取宿主文件，但只允许写入 Workspace 与私有临时目录，暂不限制网络。Windows 的 `workspace` scope 使用 PowerShell 7，`host` scope 使用 Git Bash。权限控制按同一边界判定：`Ask for approval` 对两种 scope 都请求授权，`Workspace Access` 只对越过沙箱的 `host` 请求。
+Shell 用 `scope` 指定执行边界：`workspace` 在沙箱内运行，`host` 以当前用户身份越过沙箱。macOS 的 Seatbelt 与 Linux 的 bubblewrap 仅暴露 Workspace、私有临时目录和最小只读系统视图，并禁用网络；Windows 的受限令牌允许读取宿主文件，但只允许写入 Workspace 与私有临时目录，暂不限制网络。Windows 的 `workspace` scope 使用 PowerShell 7，`host` scope 使用 Git Bash。Session 的权限 preset 给出默认边界与授权规则：`Ask for approval` 默认 `workspace` 并对两种 scope 都请求授权，`Workspace Access` 默认 `workspace` 且只对 `host` 请求授权，`Full Access` 默认 `host` 且不请求授权，显式传入的 `scope` 始终生效。无人值守的定时任务上限为 `Workspace Access`。
 
 ### MCP 与 Skills
 

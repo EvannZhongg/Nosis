@@ -9,10 +9,13 @@ import unittest
 from pathlib import Path
 
 from agent_core import (
+    APPROVAL_REQUIRED_AUTHORITY,
     CancellationToken,
     CommandCancelled,
     CommandExecutionResult,
+    ExecutionRouter,
     FilesystemAccess,
+    FULL_ACCESS_AUTHORITY,
     HostCommandExecutor,
     MacOSSandboxBackend,
     NetworkAccess,
@@ -21,6 +24,8 @@ from agent_core import (
     SandboxedCommandExecutor,
     SandboxPolicy,
     TemporaryDirectoryMode,
+    ToolCall,
+    WORKSPACE_ACCESS_AUTHORITY,
     platform_workspace_sandbox_backend,
 )
 from agent_core.execution import (
@@ -218,6 +223,42 @@ class HostCommandExecutorTest(unittest.TestCase):
             self.assertEqual(result.exit_code, 0)
             self.assertNotEqual(result.stdout, "")
             self.assertNotEqual(result.stderr, "")
+
+
+class ExecutionAuthorityTest(unittest.TestCase):
+    def test_intersection_caps_full_access_to_workspace_access(self) -> None:
+        authority = FULL_ACCESS_AUTHORITY.intersect(
+            WORKSPACE_ACCESS_AUTHORITY
+        )
+
+        self.assertEqual(authority.default_scope.value, "workspace")
+        self.assertEqual(authority.maximum_scope.value, "host")
+        self.assertEqual(authority.unattended_scope.value, "workspace")
+
+    def test_resolved_route_keeps_its_original_executor_and_authority(self) -> None:
+        class Executor:
+            def execute(self, command, timeout_seconds=60, cancellation=None):
+                raise AssertionError("executor should not run")
+
+            def close(self):
+                pass
+
+        authority = FULL_ACCESS_AUTHORITY
+        workspace_executor = Executor()
+        host_executor = Executor()
+        router = ExecutionRouter(
+            workspace_executor,
+            host_executor,
+            authority=lambda: authority,
+        )
+
+        route = router.resolve(
+            ToolCall("call-1", "shell", {"command": "pwd"})
+        )
+        authority = APPROVAL_REQUIRED_AUTHORITY
+
+        self.assertIs(route.executor, host_executor)
+        self.assertIs(route.authority, FULL_ACCESS_AUTHORITY)
 
 
 class SandboxedCommandExecutorTest(unittest.TestCase):

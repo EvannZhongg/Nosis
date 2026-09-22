@@ -4,6 +4,7 @@ import subprocess
 import threading
 import unittest
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -12,6 +13,8 @@ from agent_core import (
     AskUserTool,
     CommandExecutionResult,
     EditFileTool,
+    ExecutionRouter,
+    FULL_ACCESS_AUTHORITY,
     JsonlSessionStore,
     ListDirectoryTool,
     ReadFileTool,
@@ -80,7 +83,14 @@ class _Bound:
         return self._tool.definition(self._context)
 
     def execute(self, arguments):
-        return self._tool.execute(arguments, self._context)
+        context = self._context
+        if context.execution_router is not None:
+            call = ToolCall("test-call", self._tool.name, arguments)
+            context = replace(
+                context,
+                execution=context.execution_router.resolve(call),
+            )
+        return self._tool.execute(arguments, context)
 
 
 def context_for(workspace, **fields):
@@ -109,7 +119,7 @@ class NeedsExecutorTool(Tool):
     name = "needs_executor"
 
     def available(self, context) -> bool:
-        return context.workspace_command_executor is not None
+        return context.execution_router is not None
 
     def definition(self, context) -> ToolDefinition:
         return ToolDefinition(
@@ -167,7 +177,9 @@ class ToolCatalogTest(unittest.TestCase):
                 ("needs_executor",),
                 context_for(
                     workspace,
-                    workspace_command_executor=UnusedExecutor(),
+                    execution_router=ExecutionRouter(
+                        UnusedExecutor(), UnusedExecutor()
+                    ),
                 ),
             )
 
@@ -422,7 +434,7 @@ class ScheduledTaskToolTest(unittest.TestCase):
                 DeleteScheduledTaskTool().execute({"schedule_id": "missing"}, context)
             with self.assertRaisesRegex(ValueError, "scheduled task not found"):
                 UpdateScheduledTaskTool().execute({"schedule_id": "missing"}, context)
-    def test_new_schedule_session_inherits_provider_and_permissions(self) -> None:
+    def test_new_schedule_session_inherits_provider_and_caps_permissions(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             workspace = Workspace(root)
@@ -459,6 +471,22 @@ class ScheduledTaskToolTest(unittest.TestCase):
             self.assertEqual(
                 store.provider_for(scheduled_session),
                 "configured",
+            )
+
+            session.permission_preset = PermissionPreset.FULL_ACCESS
+            second = CreateScheduledTaskTool().execute(
+                {
+                    "prompt": "another scheduled prompt",
+                    "trigger": {
+                        "type": "once",
+                        "at": "2099-01-02T00:00:00+00:00",
+                    },
+                },
+                context,
+            )
+            self.assertEqual(
+                store.permission_preset_for(second["schedule_session_id"]),
+                PermissionPreset.WORKSPACE_ACCESS,
             )
 
 
@@ -1751,8 +1779,7 @@ class ShellToolTest(unittest.TestCase):
         tool = _Bound(
             ShellTool(),
             _TMP_WORKSPACE,
-            workspace_command_executor=executor,
-            host_command_executor=UnusedExecutor(),
+            execution_router=ExecutionRouter(executor, UnusedExecutor()),
         )
 
         result = tool.execute({"command": "example command"})
@@ -1791,8 +1818,9 @@ class ShellToolTest(unittest.TestCase):
         tool = _Bound(
             ShellTool(),
             _TMP_WORKSPACE,
-            workspace_command_executor=workspace_executor,
-            host_command_executor=host_executor,
+            execution_router=ExecutionRouter(
+                workspace_executor, host_executor
+            ),
         )
 
         workspace_result = tool.execute({"command": "pwd"})
@@ -1802,6 +1830,45 @@ class ShellToolTest(unittest.TestCase):
         self.assertEqual(host_result["stdout"], "host")
         self.assertEqual(workspace_executor.commands, ["pwd"])
         self.assertEqual(host_executor.commands, ["pwd"])
+
+    def test_full_access_defaults_to_host_and_allows_workspace_downgrade(self) -> None:
+        class RecordingExecutor:
+            def __init__(self, name):
+                self.name = name
+                self.commands = []
+
+            def execute(self, command, timeout_seconds=60):
+                self.commands.append(command)
+                return CommandExecutionResult(command, 0, self.name, "")
+
+        workspace_executor = RecordingExecutor("workspace")
+        host_executor = RecordingExecutor("host")
+        context = context_for(_TMP_WORKSPACE)
+        context = replace(
+            context,
+            execution_router=ExecutionRouter(
+                workspace_executor,
+                host_executor,
+                authority=FULL_ACCESS_AUTHORITY,
+            ),
+        )
+        tools = ToolCatalog((ShellTool(),)).select(("shell",), context)
+
+        default_result = tools.execute(
+            ToolCall("default", "shell", {"command": "pwd"})
+        )
+        downgraded_result = tools.execute(
+            ToolCall(
+                "workspace",
+                "shell",
+                {"command": "pwd", "scope": "workspace"},
+            )
+        )
+
+        self.assertEqual(default_result.output["stdout"], "host")
+        self.assertEqual(downgraded_result.output["stdout"], "workspace")
+        self.assertEqual(host_executor.commands, ["pwd"])
+        self.assertEqual(workspace_executor.commands, ["pwd"])
 
     def test_allows_explicit_timeout_below_default(self) -> None:
         class RecordingExecutor:
@@ -1822,8 +1889,7 @@ class ShellToolTest(unittest.TestCase):
         tool = _Bound(
             ShellTool(),
             _TMP_WORKSPACE,
-            workspace_command_executor=executor,
-            host_command_executor=UnusedExecutor(),
+            execution_router=ExecutionRouter(executor, UnusedExecutor()),
         )
 
         tool.execute({"command": "pwd", "timeout_seconds": 10})
@@ -1849,8 +1915,7 @@ class ShellToolTest(unittest.TestCase):
         tool = _Bound(
             ShellTool(),
             _TMP_WORKSPACE,
-            workspace_command_executor=executor,
-            host_command_executor=UnusedExecutor(),
+            execution_router=ExecutionRouter(executor, UnusedExecutor()),
         )
 
         tool.execute({"command": "pwd", "timeout_seconds": 61})
@@ -1866,8 +1931,9 @@ class ShellToolTest(unittest.TestCase):
         tool = _Bound(
             ShellTool(),
             _TMP_WORKSPACE,
-            workspace_command_executor=UnusedExecutor(),
-            host_command_executor=UnusedExecutor(),
+            execution_router=ExecutionRouter(
+                UnusedExecutor(), UnusedExecutor()
+            ),
         )
 
         definition = tool.definition
@@ -1902,8 +1968,9 @@ class ShellToolTest(unittest.TestCase):
         context = context_for(
             _TMP_WORKSPACE,
             session=session,
-            workspace_command_executor=UnusedExecutor(),
-            host_command_executor=UnusedExecutor(),
+            execution_router=ExecutionRouter(
+                UnusedExecutor(), UnusedExecutor()
+            ),
             jobs=jobs,
         )
 
@@ -1928,8 +1995,9 @@ class ShellToolTest(unittest.TestCase):
         tool = _Bound(
             ShellTool(),
             _TMP_WORKSPACE,
-            workspace_command_executor=UnusedExecutor(),
-            host_command_executor=UnusedExecutor(),
+            execution_router=ExecutionRouter(
+                UnusedExecutor(), UnusedExecutor()
+            ),
         )
 
         with self.assertRaisesRegex(ValueError, "non-empty string"):

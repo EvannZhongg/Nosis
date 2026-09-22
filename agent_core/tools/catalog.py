@@ -1,4 +1,5 @@
 """Shared Tool Catalog and the per-Agent ToolSet selected from it."""
+from dataclasses import replace
 from typing import Iterable
 
 from .base import (
@@ -100,9 +101,15 @@ class ToolSet:
             )
 
         try:
+            context = self._context
+            if context.execution_router is not None:
+                context = replace(
+                    context,
+                    execution=context.execution_router.resolve(call),
+                )
             if self._policy is not None:
-                self._policy.authorize(call, self._context)
-            output = tool.execute(call.arguments, self._context)
+                self._policy.authorize(call, context)
+            output = tool.execute(call.arguments, context)
         except Exception as error:
             return ToolResult(
                 tool_call_id=call.id,

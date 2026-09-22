@@ -1,8 +1,9 @@
 import threading
 import unittest
+from dataclasses import replace
 
 from agent_core import (
-    ExecutionScope,
+    ExecutionRouter,
     PermissionController,
     PermissionPreset,
     Session,
@@ -14,10 +15,32 @@ from agent_core import (
 from pathlib import Path
 
 
-def context(session: Session | None = None) -> ToolExecutionContext:
-    return ToolExecutionContext(
-        Workspace(Path(__file__).parent), session or Session()
+class UnusedExecutor:
+    def execute(self, command, timeout_seconds=60, cancellation=None):
+        raise AssertionError("executor should not run")
+
+    def close(self):
+        pass
+
+
+def context(
+    session: Session | None = None,
+    call: ToolCall | None = None,
+) -> ToolExecutionContext:
+    current = session or Session()
+    router = ExecutionRouter(
+        UnusedExecutor(),
+        UnusedExecutor(),
+        authority=lambda: current.permission_preset.authority,
     )
+    result = ToolExecutionContext(
+        Workspace(Path(__file__).parent),
+        current,
+        execution_router=router,
+    )
+    if call is not None:
+        result = replace(result, execution=router.resolve(call))
+    return result
 
 
 class ShellApprovalPolicyTest(unittest.TestCase):
@@ -53,28 +76,28 @@ class ShellApprovalPolicyTest(unittest.TestCase):
 
 
 class PermissionControllerTest(unittest.TestCase):
+    def test_full_access_defaults_to_host(self) -> None:
+        self.assertEqual(
+            PermissionPreset.FULL_ACCESS.default_scope.value,
+            "host",
+        )
+
     def test_ask_for_approval_delegates_to_the_approval_policy(self) -> None:
         calls = []
 
         class RecordingPolicy:
-            def execution_scope(self, call: ToolCall, context):
-                return ExecutionScope.HOST
-
             def authorize(self, call: ToolCall, context) -> None:
                 calls.append(call)
 
         controller = PermissionController(Session("s"), RecordingPolicy())
         call = ToolCall("call-1", "shell", {"command": "pwd"})
 
-        controller.authorize(call, context())
+        controller.authorize(call, context(call=call))
 
         self.assertEqual(calls, [call])
 
     def test_records_an_approval_decision_as_a_user_anchor(self) -> None:
         class ApprovalPolicy:
-            def execution_scope(self, call: ToolCall, context):
-                return ExecutionScope.HOST
-
             def authorize(self, call: ToolCall, context) -> bool:
                 return True
 
@@ -82,10 +105,8 @@ class PermissionControllerTest(unittest.TestCase):
         session.begin_turn("turn-1")
         controller = PermissionController(session, ApprovalPolicy())
 
-        controller.authorize(
-            ToolCall("call-1", "shell", {"command": "pwd"}),
-            context(session),
-        )
+        call = ToolCall("call-1", "shell", {"command": "pwd"})
+        controller.authorize(call, context(session, call))
 
         anchor = session.user_anchors[-1]
         self.assertEqual(anchor.source, "approval_response")
@@ -94,9 +115,6 @@ class PermissionControllerTest(unittest.TestCase):
 
     def test_records_a_denied_approval_as_a_user_anchor(self) -> None:
         class DenialPolicy:
-            def execution_scope(self, call: ToolCall, context):
-                return ExecutionScope.HOST
-
             def authorize(self, call: ToolCall, context) -> bool:
                 raise PermissionError("not approved")
 
@@ -105,10 +123,8 @@ class PermissionControllerTest(unittest.TestCase):
         controller = PermissionController(session, DenialPolicy())
 
         with self.assertRaises(PermissionError):
-            controller.authorize(
-                ToolCall("call-1", "shell", {"command": "rm output"}),
-                context(session),
-            )
+            call = ToolCall("call-1", "shell", {"command": "rm output"})
+            controller.authorize(call, context(session, call))
 
         anchor = session.user_anchors[-1]
         self.assertEqual(anchor.source, "approval_response")
@@ -118,9 +134,6 @@ class PermissionControllerTest(unittest.TestCase):
         calls = []
 
         class RecordingPolicy:
-            def execution_scope(self, call: ToolCall, context):
-                return ExecutionScope.HOST
-
             def authorize(self, call: ToolCall, context) -> None:
                 calls.append(call)
 
@@ -128,9 +141,8 @@ class PermissionControllerTest(unittest.TestCase):
         controller = PermissionController(session, RecordingPolicy())
         controller.set_preset(PermissionPreset.FULL_ACCESS)
 
-        controller.authorize(
-            ToolCall("call-1", "shell", {"command": "pwd"}), context()
-        )
+        call = ToolCall("call-1", "shell", {"command": "pwd"})
+        controller.authorize(call, context(session, call))
 
         self.assertEqual(session.permission_preset, PermissionPreset.FULL_ACCESS)
         self.assertEqual(calls, [])
@@ -139,9 +151,6 @@ class PermissionControllerTest(unittest.TestCase):
         calls = []
 
         class WorkspacePolicy:
-            def execution_scope(self, call: ToolCall, context) -> ExecutionScope:
-                return ExecutionScope.WORKSPACE
-
             def authorize(self, call: ToolCall, context) -> None:
                 calls.append(call)
 
@@ -149,10 +158,8 @@ class PermissionControllerTest(unittest.TestCase):
         controller = PermissionController(session, WorkspacePolicy())
         controller.set_preset(PermissionPreset.WORKSPACE_ACCESS)
 
-        controller.authorize(
-            ToolCall("call-1", "write_file", {"path": "output.txt"}),
-            context(session),
-        )
+        call = ToolCall("call-1", "shell", {"command": "pwd"})
+        controller.authorize(call, context(session, call))
 
         self.assertEqual(calls, [])
 
@@ -165,10 +172,8 @@ class PermissionControllerTest(unittest.TestCase):
             ),
         )
 
-        controller.authorize(
-            ToolCall("call-1", "shell", {"command": "pwd"}),
-            context(),
-        )
+        call = ToolCall("call-1", "shell", {"command": "pwd"})
+        controller.authorize(call, context(call=call))
 
         self.assertEqual(requested_commands, ["pwd"])
 
@@ -182,14 +187,10 @@ class PermissionControllerTest(unittest.TestCase):
             ),
         )
         controller.set_preset(PermissionPreset.WORKSPACE_ACCESS)
-        controller.authorize(
-            ToolCall(
-                "call-1",
-                "shell",
-                {"command": "pwd", "scope": "host"},
-            ),
-            context(session),
+        call = ToolCall(
+            "call-1", "shell", {"command": "pwd", "scope": "host"}
         )
+        controller.authorize(call, context(session, call))
 
         self.assertEqual(requested_commands, ["pwd"])
         self.assertEqual(
@@ -208,14 +209,10 @@ class PermissionControllerTest(unittest.TestCase):
         )
         controller.set_preset(PermissionPreset.FULL_ACCESS)
 
-        controller.authorize(
-            ToolCall(
-                "call-1",
-                "shell",
-                {"command": "pwd", "scope": "host"},
-            ),
-            context(session),
+        call = ToolCall(
+            "call-1", "shell", {"command": "pwd", "scope": "host"}
         )
+        controller.authorize(call, context(session, call))
 
         self.assertEqual(requested_commands, [])
 
@@ -224,9 +221,6 @@ class PermissionControllerTest(unittest.TestCase):
         release = threading.Event()
 
         class BlockingPolicy:
-            def execution_scope(self, call: ToolCall, context):
-                return ExecutionScope.HOST
-
             def authorize(self, call: ToolCall, context) -> None:
                 entered.set()
                 release.wait(2)
@@ -237,9 +231,8 @@ class PermissionControllerTest(unittest.TestCase):
 
         def authorize() -> None:
             try:
-                controller.authorize(
-                    ToolCall("call-1", "shell", {"command": "pwd"}), context()
-                )
+                call = ToolCall("call-1", "shell", {"command": "pwd"})
+                controller.authorize(call, context(call=call))
             except PermissionError as error:
                 errors.append(str(error))
 

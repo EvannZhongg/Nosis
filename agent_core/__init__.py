@@ -24,11 +24,15 @@ from .config import (
 )
 from .context_manager import ContextManager, ContextWindow, ContextWindowExceededError
 from .execution import (
+    APPROVAL_REQUIRED_AUTHORITY,
     CommandCancelled,
     CommandExecutionResult,
     CommandOutputSpool,
     CommandExecutor,
+    ExecutionAuthority,
+    ExecutionRouter,
     ExecutionScope,
+    FULL_ACCESS_AUTHORITY,
     FilesystemAccess,
     HostCommandExecutor,
     LinuxSandboxBackend,
@@ -39,6 +43,8 @@ from .execution import (
     SandboxedCommandExecutor,
     SandboxPolicy,
     TemporaryDirectoryMode,
+    ResolvedExecution,
+    WORKSPACE_ACCESS_AUTHORITY,
     WindowsSandboxBackend,
     platform_workspace_sandbox_backend,
 )
@@ -183,7 +189,13 @@ __all__ = [
     "CommandCancelled",
     "CommandOutputSpool",
     "CommandExecutor",
+    "ExecutionAuthority",
+    "ExecutionRouter",
     "ExecutionScope",
+    "ResolvedExecution",
+    "APPROVAL_REQUIRED_AUTHORITY",
+    "FULL_ACCESS_AUTHORITY",
+    "WORKSPACE_ACCESS_AUTHORITY",
     "FilesystemAccess",
     "CompositeToolPolicy",
     "Content",

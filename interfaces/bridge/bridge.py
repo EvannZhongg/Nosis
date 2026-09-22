@@ -27,6 +27,9 @@ from agent_core import (
     Session,
     CompositeToolPolicy,
     DirectorySkillSource,
+    ExecutionAuthority,
+    ExecutionRouter,
+    FULL_ACCESS_AUTHORITY,
     McpConfig,
     McpApprovalPolicy,
     PermissionController,
@@ -56,6 +59,7 @@ from agent_core import (
     skill_aware_tool_names,
     platform_workspace_sandbox_backend,
     SchedulerService,
+    WORKSPACE_ACCESS_AUTHORITY,
 )
 from agent_core.prompting import render_system_prompt
 from agent_core.path_utils import path_for_comparison
@@ -102,6 +106,7 @@ class Bridge:
         scheduler: SchedulerService | None = None,
         start_scheduler: bool = True,
         interactive: bool = True,
+        execution_authority_limit: ExecutionAuthority = FULL_ACCESS_AUTHORITY,
     ) -> None:
         self._stdin = stdin
         self._stdout = stdout
@@ -119,6 +124,7 @@ class Bridge:
         self._session_opened = False
         self._interaction_ids = count(1)
         self._interactive = interactive
+        self._execution_authority_limit = execution_authority_limit
         # The interface presents one approval/question at a time even when
         # parallel tools request several interactions concurrently.
         self._interaction_lock = Lock()
@@ -636,6 +642,7 @@ class Bridge:
         jobs: JobManager | None = None
         workspace_executor: SandboxedCommandExecutor | None = None
         host_executor: HostCommandExecutor | None = None
+        execution_router: ExecutionRouter | None = None
         try:
             skills = SkillLoader().load(
                 (
@@ -685,6 +692,14 @@ class Bridge:
                 platform_workspace_sandbox_backend(),
             )
             host_executor = HostCommandExecutor(workspace.path)
+            execution_router = ExecutionRouter(
+                workspace_executor,
+                host_executor,
+                authority=lambda: self._permissions.authority.intersect(
+                    self._execution_authority_limit
+                ),
+                host_tool=mcp.requires_approval,
+            )
             jobs.set_update_callback(
                 lambda update: self.emit(
                     **event_to_message(
@@ -712,8 +727,7 @@ class Bridge:
                 workspace=workspace,
                 session=self._session,
                 sessions_directory=self._sessions_directory,
-                workspace_command_executor=workspace_executor,
-                host_command_executor=host_executor,
+                execution_router=execution_router,
                 max_generation_tokens=agent_config.max_generation_tokens,
                 vision_input=(
                     "image" in main_provider.capabilities.input_modalities
@@ -770,8 +784,7 @@ class Bridge:
                 instructions=instructions,
                 memory=memory,
                 agent=agent,
-                workspace_executor=workspace_executor,
-                host_executor=host_executor,
+                execution_router=execution_router,
                 jobs=jobs,
                 mcp=mcp,
                 context_window=agent.context_window(),
@@ -790,12 +803,15 @@ class Bridge:
                 try:
                     mcp.close()
                 finally:
-                    try:
-                        if workspace_executor is not None:
-                            workspace_executor.close()
-                    finally:
-                        if host_executor is not None:
-                            host_executor.close()
+                    if execution_router is not None:
+                        execution_router.close()
+                    else:
+                        try:
+                            if workspace_executor is not None:
+                                workspace_executor.close()
+                        finally:
+                            if host_executor is not None:
+                                host_executor.close()
             raise
         self._execution_plane = plane
         return plane
@@ -1160,6 +1176,7 @@ class Bridge:
             scheduler=self._scheduler,
             start_scheduler=False,
             interactive=False,
+            execution_authority_limit=WORKSPACE_ACCESS_AUTHORITY,
         )
         try:
             worker.open_session(

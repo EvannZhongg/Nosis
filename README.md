@@ -14,7 +14,7 @@ Bridge 以独立进程运行，是前端驱动 Agent 的唯一通道，两端用
 
 ## 能力
 
-- **本地执行，人工确认**：Session 支持 `Ask for approval`、`Workspace Access` 与 `Full Access`，选择随 Session 持久化。Shell 默认以 `workspace` scope 在沙箱内运行，`host` scope 才越过沙箱，因此 `Workspace Access` 只对 host scope 请求授权；macOS 使用 Seatbelt、Linux 使用 bubblewrap，二者仅暴露最小只读系统视图并断开网络；Windows 使用受限令牌与 ACL，允许读取宿主文件但只允许写入 Workspace，暂不限制网络。文件类 Tool 只作用于当前 Workspace。
+- **本地执行，人工确认**：Session 支持 `Ask for approval`、`Workspace Access` 与 `Full Access`，选择随 Session 持久化。每个权限模式决定 Shell 的默认执行边界与授权规则：`Ask for approval` 和 `Workspace Access` 默认在沙箱内运行，前者对两种 scope 都请求授权、后者只对越过沙箱的 `host` 请求；`Full Access` 默认直接以 `host` 运行且不再请求授权，仍可显式请求 `workspace`。macOS 使用 Seatbelt、Linux 使用 bubblewrap，二者仅暴露最小只读系统视图并断开网络；Windows 使用受限令牌与 ACL，允许读取宿主文件但只允许写入 Workspace，暂不限制网络。无人值守的定时任务最多获得 `Workspace Access`。文件类 Tool 只作用于当前 Workspace。
 - **Tool 与扩展**：内置文件读写、搜索、Shell、Web Search、图片读取、子 Agent 等 Tool；可接入 MCP Server，并可用 Skill 扩展工作流。
 - **模型路由**：主 Agent、子 Agent 与每个角色都可以单独选择 Provider（LiteLLM 支持多家模型），图片分析可另配 vision Provider。
 - **子 Agent 与计划**：按角色派发子 Agent（默认 `researcher` 只读），主 Agent 维护跨轮次的执行计划，两个前端都展示进度。

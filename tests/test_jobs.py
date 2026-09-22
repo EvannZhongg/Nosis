@@ -1,5 +1,6 @@
 import threading
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -7,6 +8,7 @@ from agent_core import (
     Agent,
     AgentConfig,
     CommandExecutionResult,
+    ExecutionRouter,
     JobManager,
     LLMProvider,
     LLMRequest,
@@ -104,8 +106,7 @@ class BackgroundJobTest(unittest.TestCase):
         context = ToolExecutionContext(
             workspace=Workspace(Path(__file__).parent),
             session=session,
-            workspace_command_executor=executor,
-            host_command_executor=executor,
+            execution_router=ExecutionRouter(executor, executor),
             jobs=jobs,
         )
         tools = ToolCatalog((ShellTool(),)).select(("shell",), context)
@@ -166,19 +167,21 @@ class BackgroundJobTest(unittest.TestCase):
         context = ToolExecutionContext(
             workspace=Workspace(Path(__file__).parent),
             session=session,
-            workspace_command_executor=ImmediateExecutor(),
-            host_command_executor=ImmediateExecutor(),
+            execution_router=ExecutionRouter(
+                ImmediateExecutor(), ImmediateExecutor()
+            ),
             jobs=jobs,
         )
         tool = ShellTool()
-
+        arguments = {
+            "command": "true",
+            "background": True,
+            "timeout_seconds": 86400,
+        }
+        call = ToolCall("call-1", "shell", arguments)
         result = tool.execute(
-            {
-                "command": "true",
-                "background": True,
-                "timeout_seconds": 86400,
-            },
-            context,
+            arguments,
+            replace(context, execution=context.execution_router.resolve(call)),
         )
         jobs.wait_for_turn("turn-1")
 
@@ -254,8 +257,7 @@ class BackgroundJobTest(unittest.TestCase):
         context = ToolExecutionContext(
             workspace=Workspace(Path(__file__).parent),
             session=session,
-            workspace_command_executor=executor,
-            host_command_executor=executor,
+            execution_router=ExecutionRouter(executor, executor),
             jobs=jobs,
         )
         agent = Agent(

@@ -5,7 +5,13 @@ from enum import StrEnum
 from threading import Lock
 from typing import TYPE_CHECKING, Callable
 
-from .execution import ExecutionScope
+from .execution import (
+    APPROVAL_REQUIRED_AUTHORITY,
+    FULL_ACCESS_AUTHORITY,
+    WORKSPACE_ACCESS_AUTHORITY,
+    ExecutionAuthority,
+    ExecutionScope,
+)
 
 if TYPE_CHECKING:
     from .session import Session
@@ -17,6 +23,25 @@ class PermissionPreset(StrEnum):
     ASK_FOR_APPROVAL = "ask_for_approval"
     WORKSPACE_ACCESS = "workspace_access"
     FULL_ACCESS = "full_access"
+
+    @property
+    def authority(self) -> ExecutionAuthority:
+        return {
+            PermissionPreset.ASK_FOR_APPROVAL: APPROVAL_REQUIRED_AUTHORITY,
+            PermissionPreset.WORKSPACE_ACCESS: WORKSPACE_ACCESS_AUTHORITY,
+            PermissionPreset.FULL_ACCESS: FULL_ACCESS_AUTHORITY,
+        }[self]
+
+    @property
+    def default_scope(self) -> ExecutionScope:
+        return self.authority.default_scope
+
+    @classmethod
+    def from_authority(cls, authority: ExecutionAuthority) -> "PermissionPreset":
+        for preset in cls:
+            if preset.authority == authority:
+                return preset
+        raise ValueError("execution authority has no permission preset")
 
 
 class PermissionController:
@@ -38,6 +63,10 @@ class PermissionController:
         with self._lock:
             return self._session.permission_preset
 
+    @property
+    def authority(self) -> ExecutionAuthority:
+        return self.preset.authority
+
     def set_preset(self, preset: PermissionPreset) -> None:
         with self._lock:
             if preset is self._session.permission_preset:
@@ -51,17 +80,10 @@ class PermissionController:
         call: "ToolCall",
         context: "ToolExecutionContext",
     ) -> None:
-        with self._lock:
-            preset = self._session.permission_preset
-        scope = self._approval_policy.execution_scope(call, context)
-        if scope is None:
+        route = context.execution
+        if route is None or route.scope is None:
             return
-        if preset is PermissionPreset.FULL_ACCESS:
-            return
-        if (
-            preset is PermissionPreset.WORKSPACE_ACCESS
-            and scope is ExecutionScope.WORKSPACE
-        ):
+        if route.authority.allows_unattended(route.scope):
             return
         try:
             consulted = self._approval_policy.authorize(call, context)
