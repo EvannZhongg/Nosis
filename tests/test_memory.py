@@ -62,7 +62,6 @@ class MemoryTest(unittest.TestCase):
                 global_max_tokens=2000,
                 workspace_max_tokens=3000,
             ),
-            self.store.load(self.workspace),
         )
 
     def test_remember_only_submits_a_candidate(self) -> None:
@@ -138,6 +137,37 @@ class MemoryTest(unittest.TestCase):
         )
         other = self.store.load(self.root / "other")
         self.assertTrue(other.workspace_memory.is_empty())
+
+    def test_consecutive_reconciliations_use_the_latest_stored_memory(self) -> None:
+        provider = ReconcilerProvider([
+            json.dumps({
+                "entries": [
+                    {"kind": "fact", "content": "First durable fact."},
+                ]
+            }),
+            json.dumps({
+                "entries": [
+                    {"kind": "fact", "content": "First durable fact."},
+                    {"kind": "fact", "content": "Second durable fact."},
+                ]
+            }),
+        ])
+        manager = self.manager(provider)
+
+        manager.remember(MemoryCandidate("fact", "global", "First fact."))
+        self.assertTrue(manager.reconcile_pending())
+        manager.remember(MemoryCandidate("fact", "global", "Second fact."))
+        self.assertTrue(manager.reconcile_pending())
+
+        second_payload = json.loads(provider.requests[1].messages[0].content)
+        self.assertEqual(
+            second_payload["current_memory"],
+            [{"kind": "fact", "content": "First durable fact."}],
+        )
+        self.assertEqual(
+            self.store.load(self.workspace).global_memory.facts,
+            ("First durable fact.", "Second durable fact."),
+        )
 
     def test_token_limits_are_only_rendered_as_prompt_guidance(self) -> None:
         provider = ReconcilerProvider([

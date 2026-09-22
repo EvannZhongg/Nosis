@@ -1964,7 +1964,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
                 "first rule", second_plane.agent._context._system_prompt
             )
 
-    def test_rebuilds_runtime_when_memory_changes_between_turns(self) -> None:
+    def test_memory_changes_are_loaded_by_the_next_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             bridge, _ = make_bridge([], root)
@@ -1983,14 +1983,23 @@ class BridgeSessionOpenTest(unittest.TestCase):
 
             second_plane = bridge._ensure_execution_plane()
 
-            self.assertIsNot(second_plane, first_plane)
-            self.assertIn(
+            self.assertIs(second_plane, first_plane)
+            self.assertNotIn(
                 "Prefer concise responses.",
                 second_plane.agent._context._system_prompt,
             )
+
+            bridge._close_execution_plane()
+            third_plane = bridge._ensure_execution_plane()
+
+            self.assertIsNot(third_plane, first_plane)
+            self.assertIn(
+                "Prefer concise responses.",
+                third_plane.agent._context._system_prompt,
+            )
             self.assertIn(
                 "current request has highest priority",
-                second_plane.agent._context._system_prompt,
+                third_plane.agent._context._system_prompt,
             )
 
     def test_rebuilds_runtime_when_the_configured_instruction_list_changes(self) -> None:

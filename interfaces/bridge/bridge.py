@@ -591,12 +591,6 @@ class Bridge:
             self._workspace,
             agent_config.workspace_instruction_files,
         )
-        store = None
-        memory_context = None
-        if agent_config.memory.enabled:
-            store = memory_store(self._config_directory)
-            store.initialize()
-            memory_context = store.load(self._workspace.path)
         plane = self._execution_plane
         if plane is not None:
             if plane.matches(
@@ -605,7 +599,6 @@ class Bridge:
                 agent_config=agent_config,
                 configuration_fingerprint=config_fingerprint,
                 instructions=instructions,
-                memory_context=memory_context,
             ):
                 return plane
             self._close_execution_plane()
@@ -613,6 +606,12 @@ class Bridge:
         self._emit_runtime_state("starting")
         config_path = self._config_path
         workspace = self._workspace
+        store = None
+        memory_context = None
+        if agent_config.memory.enabled:
+            store = memory_store(self._config_directory)
+            store.initialize()
+            memory_context = store.load(workspace.path)
         _, config = load_config_with_name(config_path, self._provider_name)
         plugins = PluginManager.discover(
             self._config_directory / "plugins"
@@ -671,7 +670,6 @@ class Bridge:
                             agent_config.memory.workspace_max_tokens
                         ),
                     ),
-                    memory_context,
                 )
 
             # One catalog of stateless Tool instances is shared by the main
@@ -770,7 +768,6 @@ class Bridge:
                 agent_config=agent_config,
                 configuration_fingerprint=config_fingerprint,
                 instructions=instructions,
-                memory_context=memory_context,
                 memory=memory,
                 agent=agent,
                 workspace_executor=workspace_executor,

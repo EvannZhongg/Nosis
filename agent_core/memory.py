@@ -7,7 +7,6 @@ import os
 import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass
-from hashlib import sha256
 from pathlib import Path
 from threading import Lock
 from typing import Literal
@@ -51,7 +50,6 @@ class MemoryDocument:
 class MemoryContext:
     global_memory: MemoryDocument
     workspace_memory: MemoryDocument
-    fingerprint: str
 
     def prompt_section(self) -> str:
         sections = [
@@ -104,18 +102,9 @@ class MemoryStore:
         global_memory = _parse_global(global_text)
         workspaces = _parse_workspaces(workspace_text)
         workspace_memory = workspaces.get(workspace_key, MemoryDocument())
-        digest = sha256()
-        for value in (
-            workspace_key,
-            _render_prompt_memory(global_memory),
-            _render_prompt_memory(workspace_memory),
-        ):
-            digest.update(value.encode("utf-8"))
-            digest.update(b"\0")
         return MemoryContext(
             global_memory=global_memory,
             workspace_memory=workspace_memory,
-            fingerprint=digest.hexdigest(),
         )
 
     def write_updates(
@@ -225,12 +214,10 @@ class MemoryManager:
         workspace: Path,
         store: MemoryStore,
         reconciler: MemoryReconciler,
-        context: MemoryContext,
     ) -> None:
         self.workspace = workspace.expanduser().resolve()
         self.store = store
         self.reconciler = reconciler
-        self.context = context
         self._pending: list[MemoryCandidate] = []
         self._lock = Lock()
 
@@ -257,6 +244,7 @@ class MemoryManager:
         if not candidates:
             return False
 
+        context = self.store.load(self.workspace)
         global_candidates = tuple(
             candidate for candidate in candidates if candidate.scope == "global"
         )
@@ -265,14 +253,14 @@ class MemoryManager:
         )
         global_memory = (
             self.reconciler.reconcile(
-                "global", self.context.global_memory, global_candidates
+                "global", context.global_memory, global_candidates
             )
             if global_candidates
             else None
         )
         workspace_memory = (
             self.reconciler.reconcile(
-                "workspace", self.context.workspace_memory, workspace_candidates
+                "workspace", context.workspace_memory, workspace_candidates
             )
             if workspace_candidates
             else None
@@ -281,7 +269,7 @@ class MemoryManager:
             self.workspace,
             global_memory=global_memory,
             workspace_memory=workspace_memory,
-            expected=self.context,
+            expected=context,
         )
         return True
 
