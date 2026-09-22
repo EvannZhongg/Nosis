@@ -93,7 +93,9 @@ GUI 默认监听 <http://127.0.0.1:8737>。
 | `~/.nosis/skills/` | Skill 目录，首次启动安装内置 Skill |
 | `~/.nosis/plugins/` | Plugin capability package；由 `plugin.json` 声明组件引用，首次启动安装内置 Plugin |
 | `~/.nosis/AGENTS.md` | 用户级全局 Workspace Instruction |
+| `~/.nosis/MEMORY.md` | 跨 Workspace 的 Global Memory |
 | `~/.nosis/.env` | 配置中 `${ENV_NAME}` 引用的密钥 |
+| `~/.nosis/sessions/<workspace-key>/MEMORY.md` | 当前 Workspace 独立的长期记忆 |
 | `~/.nosis/sessions/<workspace-key>/<session-id>/` | Session 的 Journal、权限 preset、大输出与子 Agent 记录 |
 | `<workspace>/.nosis/attachments/` | GUI 上传的图片 |
 

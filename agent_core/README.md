@@ -70,6 +70,12 @@ Session 是 append-only JSONL Journal，保存对话、执行事件和当前计�
 ~/.nosis/sessions/<workspace-key>/<session-id>/
 ```
 
+每个 Workspace 的长期记忆独立保存在同一 Workspace 目录下：
+
+```text
+~/.nosis/sessions/<workspace-key>/MEMORY.md
+```
+
 失败 Turn 将错误保存为 `{type, message, details}`。Provider 流协议错误的
 `details` 只记录定位所需的结构信息和参数摘要，不保存完整 Tool 参数。
 

@@ -13,6 +13,7 @@ from typing import Literal
 
 from .llm import LLMProvider, LLMRequest
 from .session import Message
+from .session_paths import workspace_directory, workspace_from_key
 
 
 MemoryKind = Literal["preference", "fact", "decision"]
@@ -76,37 +77,44 @@ class MemoryContext:
 
 
 class MemoryStore:
-    """Read and atomically write the two user-visible MEMORY.md files."""
+    """Read and atomically write global and workspace-scoped memory files."""
 
-    def __init__(self, global_path: Path, workspace_path: Path) -> None:
+    def __init__(self, global_path: Path, sessions_directory: Path) -> None:
         self.global_path = global_path.expanduser()
-        self.workspace_path = workspace_path.expanduser()
+        self.sessions_directory = sessions_directory.expanduser()
         self._lock = Lock()
 
-    def initialize(self) -> tuple[Path, ...]:
+    def workspace_path(self, workspace: Path) -> Path:
+        return workspace_directory(self.sessions_directory, workspace) / "MEMORY.md"
+
+    def initialize(self, workspace: Path | None = None) -> tuple[Path, ...]:
         created = []
         with self._locked_files():
             if not self.global_path.exists():
                 _atomic_write(self.global_path, _render_global(MemoryDocument()))
                 created.append(self.global_path)
-            if not self.workspace_path.exists():
-                _atomic_write(self.workspace_path, _render_workspaces({}))
-                created.append(self.workspace_path)
+            if workspace is not None:
+                path = self.workspace_path(workspace)
+                if not path.exists():
+                    _atomic_write(path, _render_workspace(MemoryDocument()))
+                    created.append(path)
         return tuple(created)
 
     def load(self, workspace: Path) -> MemoryContext:
-        workspace_key = str(workspace.expanduser().resolve())
-        global_memory, workspaces = self.load_all()
+        workspace_path = self.workspace_path(workspace)
+        with self._locked_files():
+            global_text = _read_text(self.global_path)
+            workspace_text = _read_text(workspace_path)
         return MemoryContext(
-            global_memory=global_memory,
-            workspace_memory=workspaces.get(workspace_key, MemoryDocument()),
+            global_memory=_parse_global(global_text),
+            workspace_memory=_parse_workspace(workspace_text),
         )
 
     def load_all(self) -> tuple[MemoryDocument, dict[str, MemoryDocument]]:
         with self._locked_files():
             global_text = _read_text(self.global_path)
-            workspace_text = _read_text(self.workspace_path)
-        return _parse_global(global_text), _parse_workspaces(workspace_text)
+            workspaces = self._load_workspace_files()
+        return _parse_global(global_text), workspaces
 
     def write_updates(
         self,
@@ -116,11 +124,10 @@ class MemoryStore:
         workspace_memory: MemoryDocument | None = None,
         expected: MemoryContext | None = None,
     ) -> None:
-        workspace_key = str(workspace.expanduser().resolve())
+        workspace_path = self.workspace_path(workspace)
         with self._locked_files():
             current_global = _parse_global(_read_text(self.global_path))
-            workspaces = _parse_workspaces(_read_text(self.workspace_path))
-            current_workspace = workspaces.get(workspace_key, MemoryDocument())
+            current_workspace = _parse_workspace(_read_text(workspace_path))
             if (
                 expected is not None
                 and global_memory is not None
@@ -136,11 +143,21 @@ class MemoryStore:
             if global_memory is not None:
                 _atomic_write(self.global_path, _render_global(global_memory))
             if workspace_memory is not None:
-                if workspace_memory.is_empty():
-                    workspaces.pop(workspace_key, None)
-                else:
-                    workspaces[workspace_key] = workspace_memory
-                _atomic_write(self.workspace_path, _render_workspaces(workspaces))
+                _atomic_write(workspace_path, _render_workspace(workspace_memory))
+
+    def _load_workspace_files(self) -> dict[str, MemoryDocument]:
+        if not self.sessions_directory.is_dir():
+            return {}
+        workspaces: dict[str, MemoryDocument] = {}
+        for directory in self.sessions_directory.iterdir():
+            if not directory.is_dir():
+                continue
+            path = directory / "MEMORY.md"
+            if not path.is_file():
+                continue
+            workspace = workspace_from_key(directory.name)
+            workspaces[workspace] = _parse_workspace(_read_text(path))
+        return workspaces
 
     @contextmanager
     def _locked_files(self):
@@ -329,35 +346,13 @@ def _parse_global(text: str) -> MemoryDocument:
     return _parse_document_lines(lines[1:], level=2)
 
 
-def _parse_workspaces(text: str) -> dict[str, MemoryDocument]:
+def _parse_workspace(text: str) -> MemoryDocument:
     if not text.strip():
-        return {}
+        return MemoryDocument()
     lines = text.splitlines()
     if not lines or lines[0] != "# Nosis Workspace Memory":
         raise ValueError("invalid workspace MEMORY.md header")
-    workspaces: dict[str, MemoryDocument] = {}
-    index = 1
-    while index < len(lines):
-        if not lines[index].strip():
-            index += 1
-            continue
-        prefix = "## Workspace: "
-        if not lines[index].startswith(prefix):
-            raise ValueError("invalid workspace MEMORY.md structure")
-        try:
-            workspace = json.loads(lines[index][len(prefix) :])
-        except json.JSONDecodeError as error:
-            raise ValueError("invalid workspace path in MEMORY.md") from error
-        if not isinstance(workspace, str) or not workspace:
-            raise ValueError("workspace path in MEMORY.md must be a string")
-        index += 1
-        start = index
-        while index < len(lines) and not lines[index].startswith(prefix):
-            index += 1
-        if workspace in workspaces:
-            raise ValueError(f"duplicate workspace memory section: {workspace}")
-        workspaces[workspace] = _parse_document_lines(lines[start:index], level=3)
-    return workspaces
+    return _parse_document_lines(lines[1:], level=2)
 
 
 def _parse_document_lines(lines: list[str], *, level: int) -> MemoryDocument:
@@ -390,14 +385,8 @@ def _render_global(document: MemoryDocument) -> str:
     return "# Nosis Global Memory\n\n" + _render_document(document, level=2)
 
 
-def _render_workspaces(workspaces: dict[str, MemoryDocument]) -> str:
-    sections = ["# Nosis Workspace Memory"]
-    for workspace in sorted(workspaces):
-        sections.append(
-            f"## Workspace: {json.dumps(workspace, ensure_ascii=False)}\n\n"
-            + _render_document(workspaces[workspace], level=3).rstrip()
-        )
-    return "\n\n".join(sections).rstrip() + "\n"
+def _render_workspace(document: MemoryDocument) -> str:
+    return "# Nosis Workspace Memory\n\n" + _render_document(document, level=2)
 
 
 def _render_document(document: MemoryDocument, *, level: int) -> str:

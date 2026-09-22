@@ -1362,7 +1362,7 @@ class GuiTest(unittest.TestCase):
     def test_memory_api_returns_global_and_workspace_documents(self) -> None:
         memory = MemoryStore(
             self.config / "MEMORY.md",
-            self.config / "workspaces" / "MEMORY.md",
+            self.config / "sessions",
         )
         memory.write_updates(
             self.root,

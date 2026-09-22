@@ -47,9 +47,9 @@ class MemoryTest(unittest.TestCase):
         self.workspace.mkdir()
         self.store = MemoryStore(
             self.root / "MEMORY.md",
-            self.root / "workspaces" / "MEMORY.md",
+            self.root / "sessions",
         )
-        self.store.initialize()
+        self.store.initialize(self.workspace)
 
     def manager(self, provider: LLMProvider) -> MemoryManager:
         return MemoryManager(
@@ -212,8 +212,12 @@ class MemoryTest(unittest.TestCase):
         )
         self.assertIn("# Nosis Global Memory", self.store.global_path.read_text())
         self.assertIn(
-            f"## Workspace: {json.dumps(str(self.workspace.resolve()))}",
-            self.store.workspace_path.read_text(),
+            "# Nosis Workspace Memory",
+            self.store.workspace_path(self.workspace).read_text(),
+        )
+        self.assertIn(
+            "A project decision.",
+            self.store.workspace_path(self.workspace).read_text(),
         )
 
     def test_load_all_returns_every_workspace_memory(self) -> None:
@@ -239,6 +243,27 @@ class MemoryTest(unittest.TestCase):
             workspaces[str(other.resolve())].decisions,
             ("Use SQLite.",),
         )
+
+    def test_each_workspace_uses_its_own_memory_file(self) -> None:
+        other = self.root / "other"
+        self.store.write_updates(
+            self.workspace,
+            workspace_memory=MemoryDocument(facts=("First project.",)),
+        )
+        self.store.write_updates(
+            other,
+            workspace_memory=MemoryDocument(facts=("Second project.",)),
+        )
+
+        first_path = self.store.workspace_path(self.workspace)
+        second_path = self.store.workspace_path(other)
+
+        self.assertNotEqual(first_path.parent, second_path.parent)
+        self.assertEqual(first_path.name, "MEMORY.md")
+        self.assertEqual(second_path.name, "MEMORY.md")
+        self.assertIn("First project.", first_path.read_text(encoding="utf-8"))
+        self.assertNotIn("Second project.", first_path.read_text(encoding="utf-8"))
+        self.assertIn("Second project.", second_path.read_text(encoding="utf-8"))
 
     def test_prompt_states_memory_priority(self) -> None:
         self.store.write_updates(

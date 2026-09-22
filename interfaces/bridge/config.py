@@ -46,7 +46,7 @@ def default_config_directory() -> Path:
 def memory_store(directory: Path) -> MemoryStore:
     return MemoryStore(
         directory / "MEMORY.md",
-        directory / "workspaces" / "MEMORY.md",
+        directory / "sessions",
     )
 
 

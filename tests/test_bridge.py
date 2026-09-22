@@ -2050,7 +2050,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
             first_plane = bridge._ensure_execution_plane()
             store = MemoryStore(
                 root / "MEMORY.md",
-                root / "workspaces" / "MEMORY.md",
+                root / "sessions",
             )
             store.write_updates(
                 root,

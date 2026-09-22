@@ -98,8 +98,8 @@ class ConfigTest(unittest.TestCase):
 
         self.assertEqual(store.global_path, Path("/config/MEMORY.md"))
         self.assertEqual(
-            store.workspace_path,
-            Path("/config/workspaces/MEMORY.md"),
+            store.sessions_directory,
+            Path("/config/sessions"),
         )
 
     def test_initializes_packaged_default_configs(self) -> None:
@@ -115,7 +115,6 @@ class ConfigTest(unittest.TestCase):
                     config_directory / "agent_config.json",
                     config_directory / "AGENTS.md",
                     config_directory / "MEMORY.md",
-                    config_directory / "workspaces" / "MEMORY.md",
                     config_directory / "prompts" / "Soul.md",
                     config_directory / "prompts" / "SubAgent.md",
                     config_directory / "prompts" / "Consolidator.md",
@@ -154,9 +153,7 @@ class ConfigTest(unittest.TestCase):
                 "",
             )
             self.assertTrue((config_directory / "MEMORY.md").is_file())
-            self.assertTrue(
-                (config_directory / "workspaces" / "MEMORY.md").is_file()
-            )
+            self.assertFalse((config_directory / "workspaces").exists())
             self.assertEqual(
                 agent_config["context"]["compression"]["keep_recent_units"],
                 8,
@@ -227,7 +224,6 @@ class ConfigTest(unittest.TestCase):
                 (
                     config_directory / "agent_config.json",
                     config_directory / "MEMORY.md",
-                    config_directory / "workspaces" / "MEMORY.md",
                     config_directory / "prompts" / "SubAgent.md",
                     config_directory / "prompts" / "Consolidator.md",
                     config_directory / "prompts" / "GlobalMemory.md",

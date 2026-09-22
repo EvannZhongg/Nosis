@@ -617,7 +617,7 @@ class Bridge:
         memory_context = None
         if agent_config.memory.enabled:
             store = memory_store(self._config_directory)
-            store.initialize()
+            store.initialize(workspace.path)
             memory_context = store.load(workspace.path)
         _, config = load_config_with_name(config_path, self._provider_name)
         plugins = PluginManager.discover(
