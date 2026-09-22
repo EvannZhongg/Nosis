@@ -11,6 +11,7 @@ from .base import (
 from .budget import MAX_TOOL_RESULT_CHARS
 from .builtin import (
     AnalyzeImageTool,
+    ApplyPatchTool,
     AskUserTool,
     EditFileTool,
     ListDirectoryTool,
@@ -38,6 +39,7 @@ from .policy import CompositeToolPolicy, McpApprovalPolicy, ShellApprovalPolicy
 
 __all__ = [
     "AnalyzeImageTool",
+    "ApplyPatchTool",
     "AskUserTool",
     "CompositeToolPolicy",
     "EditFileTool",

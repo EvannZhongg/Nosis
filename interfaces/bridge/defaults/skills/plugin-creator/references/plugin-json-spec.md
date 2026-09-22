@@ -76,7 +76,7 @@ Read the requested files, then report findings ordered by severity.
   `[A-Za-z0-9][A-Za-z0-9._-]*`. `description` is the text the parent model reads when it chooses
   a role, so state when the role applies, not only what it does.
 - `tools` (optional): Array of tool names, without duplicates. Omitted means every role tool.
-  Allowed values: `read_file`, `edit_file`, `write_file`, `search_files`, `list_directory`,
+  Allowed values: `read_file`, `apply_patch`, `edit_file`, `write_file`, `search_files`, `list_directory`,
   `shell`, `web_search`, `create_scheduled_task`, `update_scheduled_task`, `list_scheduled_tasks`,
   `delete_scheduled_task`.
   `subagent` is never allowed: a role cannot delegate further.

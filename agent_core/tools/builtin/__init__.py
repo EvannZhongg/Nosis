@@ -1,3 +1,4 @@
+from .apply_patch import ApplyPatchTool
 from .edit_file import EditFileTool
 from .list_directory import ListDirectoryTool
 from .read_file import ReadFileTool
@@ -32,6 +33,7 @@ def builtin_catalog():
     return ToolCatalog(
         (
             ReadFileTool(),
+            ApplyPatchTool(),
             EditFileTool(),
             WriteFileTool(),
             SearchFilesTool(),
@@ -55,6 +57,7 @@ def builtin_catalog():
 
 __all__ = [
     "AnalyzeImageTool",
+    "ApplyPatchTool",
     "AskUserTool",
     "EditFileTool",
     "DeleteScheduledTaskTool",

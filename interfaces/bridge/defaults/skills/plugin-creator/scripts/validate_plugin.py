@@ -27,6 +27,7 @@ PLUGIN_FIELDS = {
 COMPONENT_KINDS = ("skills", "agents", "mcp")
 ROLE_TOOL_NAMES = (
     "read_file",
+    "apply_patch",
     "edit_file",
     "write_file",
     "search_files",

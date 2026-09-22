@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from agent_core import (
+    ApplyPatchTool,
     AskUserTool,
     CommandExecutionResult,
     EditFileTool,
@@ -1480,8 +1481,121 @@ class EditFileToolTest(unittest.TestCase):
                 )
 
 
+class ApplyPatchToolTest(unittest.TestCase):
+    def test_adds_updates_and_deletes_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+            (workspace.path / "notes.txt").write_text(
+                "first\nold\nlast\n", encoding="utf-8"
+            )
+            (workspace.path / "obsolete.txt").write_text(
+                "remove", encoding="utf-8"
+            )
+
+            result = _Bound(ApplyPatchTool(), workspace).execute(
+                {
+                    "patch": """*** Begin Patch
+*** Update File: notes.txt
+@@
+ first
+-old
++new
+ last
+*** Add File: added.txt
++hello
++world
+*** Delete File: obsolete.txt
+*** End Patch"""
+                }
+            )
+
+            self.assertEqual(
+                result,
+                {
+                    "files": [
+                        {"path": "notes.txt", "operation": "updated"},
+                        {"path": "added.txt", "operation": "added"},
+                        {"path": "obsolete.txt", "operation": "deleted"},
+                    ]
+                },
+            )
+            self.assertEqual(
+                (workspace.path / "notes.txt").read_text(encoding="utf-8"),
+                "first\nnew\nlast\n",
+            )
+            self.assertEqual(
+                (workspace.path / "added.txt").read_text(encoding="utf-8"),
+                "hello\nworld\n",
+            )
+            self.assertFalse((workspace.path / "obsolete.txt").exists())
+
+    def test_validates_all_changes_before_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+            file_path = workspace.path / "notes.txt"
+            file_path.write_text("old\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "requires existing file"):
+                _Bound(ApplyPatchTool(), workspace).execute(
+                    {
+                        "patch": """*** Begin Patch
+*** Update File: notes.txt
+@@
+-old
++new
+*** Update File: missing.txt
+@@
+-missing
++replacement
+*** End Patch"""
+                    }
+                )
+
+            self.assertEqual(file_path.read_text(encoding="utf-8"), "old\n")
+
+    def test_rejects_ambiguous_hunk_and_workspace_escape(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+            (workspace.path / "notes.txt").write_text(
+                "same\nother\nsame\n", encoding="utf-8"
+            )
+            tool = _Bound(ApplyPatchTool(), workspace)
+
+            with self.assertRaisesRegex(ValueError, "ambiguous"):
+                tool.execute(
+                    {
+                        "patch": """*** Begin Patch
+*** Update File: notes.txt
+@@
+-same
++changed
+*** End Patch"""
+                    }
+                )
+            with self.assertRaisesRegex(ValueError, "within the workspace"):
+                tool.execute(
+                    {
+                        "patch": """*** Begin Patch
+*** Add File: ../outside.txt
++nope
+*** End Patch"""
+                    }
+                )
+
+    def test_validates_arguments_and_patch_markers(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            tool = _Bound(ApplyPatchTool(), Workspace(Path(directory)))
+
+            with self.assertRaisesRegex(ValueError, "non-empty string"):
+                tool.execute({"patch": ""})
+            with self.assertRaisesRegex(ValueError, "accepts only"):
+                tool.execute({"patch": "x", "extra": True})
+            with self.assertRaisesRegex(ValueError, "must start"):
+                tool.execute({"patch": "*** End Patch"})
+
+
 class ListDirectoryToolTest(unittest.TestCase):
-    def test_lists_immediate_entries_in_name_order(self) -> None:
+    def test_lists_immediate_entries(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Workspace(Path(directory))
             (workspace.path / "z.txt").write_text("z", encoding="utf-8")
@@ -1489,16 +1603,16 @@ class ListDirectoryToolTest(unittest.TestCase):
 
             result = _Bound(ListDirectoryTool(), workspace).execute({"path": "."})
 
-            self.assertEqual(
-                result,
-                {
-                    "path": ".",
-                    "entries": [
-                        {"name": "a", "type": "directory"},
-                        {"name": "z.txt", "type": "file"},
-                    ],
-                },
+            self.assertEqual(result["path"], ".")
+            self.assertCountEqual(
+                result["entries"],
+                [
+                    {"name": "a", "type": "directory"},
+                    {"name": "z.txt", "type": "file"},
+                ],
             )
+            self.assertFalse(result["has_more"])
+            self.assertIsNone(result["next_offset"])
 
     @unittest.skipUnless(
         SYMLINKS_AVAILABLE,
@@ -1516,16 +1630,92 @@ class ListDirectoryToolTest(unittest.TestCase):
 
             result = _Bound(ListDirectoryTool(), workspace).execute({"path": "."})
 
+            self.assertCountEqual(
+                result["entries"],
+                [
+                    {"name": "link.txt", "type": "symlink"},
+                    {"name": "z.txt", "type": "file"},
+                ],
+            )
+
+    def test_filters_recurses_and_paginates_without_consuming_all_entries(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+            nested = workspace.path / "nested"
+            nested.mkdir()
+            paths = []
+            for name in ("a.py", "b.txt", "c.py"):
+                path = workspace.path / name
+                path.write_text(name, encoding="utf-8")
+                paths.append(path)
+            child = nested / "child.py"
+            child.write_text("child", encoding="utf-8")
+            paths.append(child)
+            yielded = []
+
+            def entries(*_args):
+                for path in paths:
+                    yielded.append(path)
+                    yield path
+
+            with patch(
+                "agent_core.tools.builtin.list_directory._iter_entries",
+                side_effect=entries,
+            ):
+                result = _Bound(ListDirectoryTool(), workspace).execute(
+                    {
+                        "path": ".",
+                        "glob": "**/*.py",
+                        "recursive": True,
+                        "offset": 1,
+                        "limit": 1,
+                    }
+                )
+
             self.assertEqual(
                 result,
                 {
                     "path": ".",
-                    "entries": [
-                        {"name": "link.txt", "type": "symlink"},
-                        {"name": "z.txt", "type": "file"},
-                    ],
+                    "entries": [{"name": "c.py", "type": "file"}],
+                    "has_more": True,
+                    "next_offset": 2,
                 },
             )
+            self.assertEqual(yielded, paths)
+
+    def test_keeps_pagination_candidates_bounded_and_path_ordered(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+            paths = []
+            for name in ("a.txt", "b.txt", "c.txt", "d.txt"):
+                path = workspace.path / name
+                path.write_text(name, encoding="utf-8")
+                paths.append(path)
+            yielded = []
+
+            def entries(*_args):
+                for path in paths:
+                    yielded.append(path)
+                    yield path
+
+            with patch(
+                "agent_core.tools.builtin.list_directory._iter_entries",
+                side_effect=entries,
+            ):
+                result = _Bound(ListDirectoryTool(), workspace).execute(
+                    {"path": ".", "limit": 2}
+                )
+
+            self.assertEqual(len(result["entries"]), 2)
+            self.assertEqual(
+                [entry["name"] for entry in result["entries"]],
+                ["a.txt", "b.txt"],
+            )
+            self.assertTrue(result["has_more"])
+            self.assertEqual(result["next_offset"], 2)
+            self.assertEqual(yielded, paths)
 
     def test_rejects_file_path(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1740,26 +1930,82 @@ class SearchFilesToolTest(unittest.TestCase):
             self.assertEqual(result["scanned_files"], 0)
             self.assertEqual(result["skipped_files"], 1)
 
-    def test_stops_traversal_at_path_limit(self) -> None:
+    def test_scans_past_the_previous_path_limit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Workspace(Path(directory))
-            for index in range(3):
-                (workspace.path / f"{index}.txt").write_text(
-                    "Nosis",
-                    encoding="utf-8",
-                )
+            no_match = workspace.path / "no-match.txt"
+            no_match.write_text("nothing", encoding="utf-8")
+            match = workspace.path / "match.txt"
+            match.write_text("Nosis", encoding="utf-8")
 
             with patch(
-                "agent_core.tools.builtin.search_files."
-                "MAX_SCANNED_PATHS",
-                2,
+                "agent_core.tools.builtin.search_files._iter_files",
+                return_value=iter([no_match] * 10_000 + [match]),
             ):
                 result = _Bound(SearchFilesTool(), workspace).execute(
                     {"path": ".", "pattern": "Nosis"}
                 )
 
-            self.assertTrue(result["has_more"])
-            self.assertEqual(result["next_offset"], 2)
+            self.assertEqual(
+                [item["path"] for item in result["matches"]],
+                ["match.txt"],
+            )
+            self.assertFalse(result["has_more"])
+            self.assertEqual(result["scanned_files"], 10_001)
+
+    def test_returns_context_around_content_matches(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+            (workspace.path / "notes.txt").write_text(
+                "one\ntwo\nNosis\nfour\nfive\n",
+                encoding="utf-8",
+            )
+
+            result = _Bound(SearchFilesTool(), workspace).execute(
+                {
+                    "path": ".",
+                    "pattern": "Nosis",
+                    "context_before": 2,
+                    "context_after": 2,
+                }
+            )
+
+            self.assertEqual(
+                result["matches"],
+                [
+                    {
+                        "path": "notes.txt",
+                        "line_number": 3,
+                        "line": "Nosis",
+                        "context_before": [
+                            {"line_number": 1, "line": "one"},
+                            {"line_number": 2, "line": "two"},
+                        ],
+                        "context_after": [
+                            {"line_number": 4, "line": "four"},
+                            {"line_number": 5, "line": "five"},
+                        ],
+                    }
+                ],
+            )
+
+    def test_searches_file_paths_in_files_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+            nested = workspace.path / "nested"
+            nested.mkdir()
+            (nested / "agent.py").write_text("binary-like: \ufffd", encoding="utf-8")
+            (nested / "notes.txt").write_text("agent.py", encoding="utf-8")
+
+            result = _Bound(SearchFilesTool(), workspace).execute(
+                {
+                    "path": ".",
+                    "pattern": r"agent\.py$",
+                    "mode": "files",
+                }
+            )
+
+            self.assertEqual(result["matches"], [{"path": "nested/agent.py"}])
             self.assertEqual(result["scanned_files"], 2)
 
     def test_limits_serialized_tool_result_size(self) -> None:

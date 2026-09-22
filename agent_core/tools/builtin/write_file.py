@@ -1,6 +1,7 @@
 import errno
 import os
 import tempfile
+from pathlib import Path
 
 from ..base import JSONValue, Tool, ToolDefinition
 from ..context import ToolExecutionContext
@@ -72,27 +73,7 @@ class WriteFileTool(Tool):
             )
 
         data = content.encode("utf-8")
-        temporary_path: str | None = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode="wb",
-                dir=file_path.parent,
-                prefix=f".{file_path.name}.",
-                suffix=".tmp",
-                delete=False,
-            ) as temporary:
-                temporary_path = temporary.name
-                temporary.write(data)
-                temporary.flush()
-                os.fsync(temporary.fileno())
-            os.replace(temporary_path, file_path)
-            temporary_path = None
-        finally:
-            if temporary_path is not None:
-                try:
-                    os.unlink(temporary_path)
-                except FileNotFoundError:
-                    pass
+        write_bytes_atomic(file_path, data)
 
         return {
             "path": path_for_comparison(file_path).relative_to(
@@ -101,3 +82,27 @@ class WriteFileTool(Tool):
             "bytes_written": len(data),
             "overwritten": overwrite,
         }
+
+
+def write_bytes_atomic(path: Path, data: bytes) -> None:
+    temporary_path: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary:
+            temporary_path = temporary.name
+            temporary.write(data)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.replace(temporary_path, path)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            try:
+                os.unlink(temporary_path)
+            except FileNotFoundError:
+                pass

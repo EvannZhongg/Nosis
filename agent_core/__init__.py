@@ -128,6 +128,7 @@ from .tool_result import (
 )
 from .tools import (
     AnalyzeImageTool,
+    ApplyPatchTool,
     AskUserTool,
     CompositeToolPolicy,
     EditFileTool,
@@ -178,6 +179,7 @@ from .turn_control import TurnControl, UserSteer, UserSteeringMailbox
 
 __all__ = [
     "Agent",
+    "ApplyPatchTool",
     "AgentCancelled",
     "AgentConfig",
     "AgentEvent",

@@ -38,8 +38,10 @@ class ReadFileTool(Tool):
         return ToolDefinition(
             name=self.name,
             description=(
-                "Read a range of lines from a UTF-8 workspace file with "
-                "line numbers. Refuses files larger than 50 MiB. One call "
+                "Read a range of lines from a UTF-8 file with line numbers. "
+                "Paths are relative to the workspace root, except "
+                ".nosis/sessions/... paths, which address Runtime Session "
+                "artifacts. Refuses files larger than 50 MiB. One call "
                 "returns as much as fits in a tool result; when more "
                 "remains the status line reports the 'offset' to continue "
                 "from. Overlong lines are truncated with an explicit "
@@ -50,7 +52,10 @@ class ReadFileTool(Tool):
                 "properties": {
                     "path": {
                         "type": "string",
-                        "description": "Path relative to the workspace root.",
+                        "description": (
+                            "Path relative to the workspace root, or a "
+                            ".nosis/sessions/... Session artifact path."
+                        ),
                     },
                     "offset": {
                         "type": "integer",

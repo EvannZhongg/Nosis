@@ -339,12 +339,9 @@ class SubagentRuntimeTest(unittest.TestCase):
         )
         self.assertEqual(visible_sessions, [])
 
-    def test_saves_child_tool_results_beside_the_child_transcript(self) -> None:
+    def test_paginates_large_child_tool_results_inline(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            # list_directory sets no bound of its own, so a crowded
-            # directory is what reliably overflows the inline budget.
-            # 1200 entries clear the 32K envelope by a wide margin.
             for index in range(1200):
                 (root / f"generated_module_{index:04d}.py").write_text(
                     "x", encoding="utf-8"
@@ -373,32 +370,18 @@ class SubagentRuntimeTest(unittest.TestCase):
                 / "subagents"
             )
             transcript = next(subagents.rglob("*.jsonl"))
-            child_id = transcript.parent.name
-            artifact = transcript.parent / "call-child.txt"
             child = JsonlSessionStore(
                 subagents, group_by_workspace=False
-            ).load(child_id)
+            ).load(transcript.parent.name)
             tool_message = next(
                 item for item in child.items if item.role == "tool"
             )
-            artifact_path = (
-                f".nosis/sessions/{workspace_key(root)}/parent/subagents/"
-                f"{child_id}/call-child.txt"
-            )
-            misplaced_artifact = (
-                tool_context.sessions_directory
-                / workspace_key(root)
-                / child_id
-                / "call-child.txt"
-            )
+            output = json.loads(tool_message.content)["output"]
 
             self.assertEqual(result, "child answer")
-            self.assertTrue(artifact.is_file())
-            self.assertEqual(
-                json.loads(tool_message.content)["artifact_path"],
-                artifact_path,
-            )
-            self.assertFalse(misplaced_artifact.exists())
+            self.assertEqual(len(output["entries"]), 200)
+            self.assertTrue(output["has_more"])
+            self.assertEqual(output["next_offset"], 200)
 
     def test_role_receives_only_its_declared_tools(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

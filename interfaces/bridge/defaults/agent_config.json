@@ -16,6 +16,7 @@
   "main_agent": {
     "tools": {
       "read_file": true,
+      "apply_patch": true,
       "edit_file": true,
       "write_file": true,
       "search_files": true,
