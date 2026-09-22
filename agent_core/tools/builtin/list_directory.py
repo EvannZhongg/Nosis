@@ -1,11 +1,11 @@
 import os
 from collections.abc import Iterator
-from heapq import nsmallest
 from pathlib import Path
 
 from ...path_utils import path_for_comparison
 from ..base import JSONValue, Tool, ToolDefinition
 from ..context import ToolExecutionContext
+from ..globs import matches_path_glob
 
 
 DEFAULT_LIST_LIMIT = 200
@@ -20,9 +20,8 @@ class ListDirectoryTool(Tool):
             name=self.name,
             description=(
                 "Discover workspace entries with glob filtering, optional "
-                "recursive traversal, and stable path-ordered pagination. "
-                "Discovery uses bounded memory instead of loading a whole "
-                "large directory into a result list."
+                "recursive traversal, and pagination. Discovery streams in "
+                "filesystem order and keeps only one result page in memory."
             ),
             parameters={
                 "type": "object",
@@ -34,7 +33,10 @@ class ListDirectoryTool(Tool):
                     "glob": {
                         "type": "string",
                         "default": "*",
-                        "description": "Glob applied to paths relative to 'path'.",
+                        "description": (
+                            "Full-path glob relative to 'path'. '*' matches "
+                            "one path segment; use '**' for recursive segments."
+                        ),
                     },
                     "recursive": {
                         "type": "boolean",
@@ -71,23 +73,26 @@ class ListDirectoryTool(Tool):
         if not directory_path.is_dir():
             raise ValueError("list_directory path must be a directory")
 
-        candidates = nsmallest(
-            offset + limit + 1,
-            (
-                entry
-                for entry in _iter_entries(directory_path, recursive)
-                if _matches_glob(entry.relative_to(directory_path), glob)
-            ),
-            key=lambda entry: entry.relative_to(directory_path).as_posix(),
-        )
-        has_more = len(candidates) > offset + limit
-        entries: list[dict[str, JSONValue]] = [
-            {
-                "name": entry.relative_to(directory_path).as_posix(),
-                "type": _entry_type(entry),
-            }
-            for entry in candidates[offset : offset + limit]
-        ]
+        entries: list[dict[str, JSONValue]] = []
+        matched_entries = 0
+        has_more = False
+        for entry in _iter_entries(directory_path, recursive):
+            relative_path = entry.relative_to(directory_path)
+            if not matches_path_glob(relative_path, glob):
+                continue
+            if matched_entries < offset:
+                matched_entries += 1
+                continue
+            if len(entries) >= limit:
+                has_more = True
+                break
+            entries.append(
+                {
+                    "name": relative_path.as_posix(),
+                    "type": _entry_type(entry),
+                }
+            )
+            matched_entries += 1
 
         display_path = path_for_comparison(directory_path).relative_to(
             path_for_comparison(workspace.path)
@@ -146,18 +151,21 @@ def _iter_entries(directory_path: Path, recursive: bool) -> Iterator[Path]:
                 for item in entries:
                     entry = Path(item.path)
                     yield entry
-                    if recursive and item.is_dir(follow_symlinks=False):
+                    if (
+                        recursive
+                        and item.is_dir(follow_symlinks=False)
+                        and not _escapes_directory(entry, directory_path)
+                    ):
                         directories.append(entry)
         except OSError:
             continue
 
 
-def _matches_glob(path: Path, pattern: str) -> bool:
-    if path.match(pattern):
-        return True
-    if pattern.startswith("**/"):
-        return path.match(pattern[3:])
-    return False
+def _escapes_directory(entry: Path, root: Path) -> bool:
+    """Reject Windows junctions that resolve outside the requested tree."""
+    return not path_for_comparison(entry.resolve()).is_relative_to(
+        path_for_comparison(root)
+    )
 
 
 def _entry_type(entry: Path) -> str:

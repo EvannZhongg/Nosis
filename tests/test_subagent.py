@@ -13,13 +13,16 @@ from agent_core import (
     JsonlSessionStore,
     LLMProvider,
     LLMResponse,
+    MAX_TOOL_RESULT_CHARS,
     Session,
     SubagentRole,
     SubagentRoleRegistry,
     SubagentRuntime,
     SubagentTool,
+    Tool,
     ToolCall,
     ToolConfig,
+    ToolDefinition,
     ToolExecutionContext,
     Workspace,
     WorkspaceInstruction,
@@ -95,6 +98,46 @@ class ToolCallingProvider(StaticProvider):
         if response.content:
             on_text_delta(response.content)
         return response
+
+
+class LargeOutputProvider(StaticProvider):
+    def __init__(self) -> None:
+        super().__init__()
+        self._responses = iter(
+            (
+                LLMResponse(
+                    content=None,
+                    tool_calls=(ToolCall("call-child", "large_output", {}),),
+                ),
+                LLMResponse(content=self.answer),
+            )
+        )
+
+    def stream(
+        self,
+        request: LLMRequest,
+        on_text_delta,
+        on_reasoning_delta=None,
+    ) -> LLMResponse:
+        self.requests.append(request)
+        response = next(self._responses)
+        if response.content:
+            on_text_delta(response.content)
+        return response
+
+
+class LargeOutputTool(Tool):
+    name = "large_output"
+
+    def definition(self, context) -> ToolDefinition:
+        return ToolDefinition(
+            name=self.name,
+            description="Return output larger than the inline tool budget.",
+            parameters={"type": "object", "properties": {}},
+        )
+
+    def execute(self, arguments, context):
+        return "x" * (MAX_TOOL_RESULT_CHARS + 1)
 
 
 def role(
@@ -382,6 +425,66 @@ class SubagentRuntimeTest(unittest.TestCase):
             self.assertEqual(len(output["entries"]), 200)
             self.assertTrue(output["has_more"])
             self.assertEqual(output["next_offset"], 200)
+
+    def test_saves_child_tool_results_beside_the_child_transcript(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            parent = Session("parent")
+            provider = LargeOutputProvider()
+            child_role = role(
+                "researcher",
+                "Reads.",
+                ("large_output",),
+                provider=provider,
+            )
+            catalog = builtin_catalog().extend((LargeOutputTool(),))
+            tool_context = ToolExecutionContext(
+                workspace=Workspace(root),
+                session=parent,
+                sessions_directory=root / "sessions",
+                subagents=runtime(catalog, (child_role,)),
+            )
+
+            result = SubagentTool().execute(
+                {"role": "researcher", "task": "produce the output"},
+                tool_context,
+            )
+
+            subagents = (
+                session_directory(
+                    tool_context.sessions_directory,
+                    tool_context.workspace.path,
+                    parent.session_id,
+                )
+                / "subagents"
+            )
+            transcript = next(subagents.rglob("*.jsonl"))
+            child_id = transcript.parent.name
+            artifact = transcript.parent / "call-child.txt"
+            child = JsonlSessionStore(
+                subagents, group_by_workspace=False
+            ).load(child_id)
+            tool_message = next(
+                item for item in child.items if item.role == "tool"
+            )
+            artifact_path = (
+                f".nosis/sessions/{workspace_key(root)}/parent/subagents/"
+                f"{child_id}/call-child.txt"
+            )
+            misplaced_artifact = (
+                tool_context.sessions_directory
+                / workspace_key(root)
+                / child_id
+                / "call-child.txt"
+            )
+
+            self.assertEqual(result, "child answer")
+            self.assertTrue(artifact.is_file())
+            self.assertEqual(
+                json.loads(tool_message.content)["artifact_path"],
+                artifact_path,
+            )
+            self.assertFalse(misplaced_artifact.exists())
 
     def test_role_receives_only_its_declared_tools(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

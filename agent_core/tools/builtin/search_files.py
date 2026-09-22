@@ -7,6 +7,7 @@ from ...path_utils import path_for_comparison
 from ..base import JSONValue, Tool, ToolDefinition
 from ..budget import output_fits
 from ..context import ToolExecutionContext
+from ..globs import matches_path_glob
 
 
 DEFAULT_SEARCH_LIMIT = 200
@@ -81,7 +82,8 @@ class SearchFilesTool(Tool):
                         "type": "string",
                         "default": "**/*",
                         "description": (
-                            "Glob applied to file paths relative to 'path'."
+                            "Full-path glob relative to 'path'. '*' matches "
+                            "one path segment; use '**' for recursive segments."
                         ),
                     },
                     "offset": {
@@ -349,7 +351,7 @@ def _iter_directory_files(
         relative_path = entry.relative_to(search_root)
         try:
             if entry.is_symlink() or _escapes_search_root(entry, search_root):
-                if _matches_glob(relative_path, glob):
+                if matches_path_glob(relative_path, glob):
                     stats.skipped_files += 1
                 continue
             if entry.is_dir():
@@ -358,10 +360,10 @@ def _iter_directory_files(
                         entry, search_root, glob, stats
                     )
                 continue
-            if entry.is_file() and _matches_glob(relative_path, glob):
+            if entry.is_file() and matches_path_glob(relative_path, glob):
                 yield entry
         except OSError:
-            if _matches_glob(relative_path, glob):
+            if matches_path_glob(relative_path, glob):
                 stats.skipped_files += 1
 
 
@@ -398,17 +400,14 @@ def _content_matches(
 
 
 def _escapes_search_root(entry: Path, search_root: Path) -> bool:
+    """Reject links and Windows junctions that leave the search root.
+
+    Windows directory junctions are reparse points rather than symlinks,
+    so resolving every entry is necessary even after the symlink check.
+    """
     return not path_for_comparison(entry.resolve()).is_relative_to(
         path_for_comparison(search_root)
     )
-
-
-def _matches_glob(path: Path, pattern: str) -> bool:
-    if path.match(pattern):
-        return True
-    if pattern.startswith("**/"):
-        return path.match(pattern[3:])
-    return False
 
 
 def _result_fits(

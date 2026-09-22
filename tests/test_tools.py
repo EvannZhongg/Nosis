@@ -1593,6 +1593,81 @@ class ApplyPatchToolTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "must start"):
                 tool.execute({"patch": "*** End Patch"})
 
+    def test_preserves_crlf_and_non_newline_unicode_separators(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+            file_path = workspace.path / "notes.txt"
+            original = (
+                "first\r\nold\r\nvertical\vform\ffoo\x85bar\u2028baz\r\n"
+                "last\r\n"
+            ).encode("utf-8")
+            file_path.write_bytes(original)
+
+            _Bound(ApplyPatchTool(), workspace).execute(
+                {
+                    "patch": """*** Begin Patch
+*** Update File: notes.txt
+@@ -2,1 +2,1 @@
+-old
++new
+*** End Patch"""
+                }
+            )
+
+            self.assertEqual(
+                file_path.read_bytes(),
+                original.replace(b"old", b"new", 1),
+            )
+
+    def test_validates_numbered_hunk_header(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+            file_path = workspace.path / "notes.txt"
+            file_path.write_text("one\ntwo\n", encoding="utf-8")
+            tool = _Bound(ApplyPatchTool(), workspace)
+
+            with self.assertRaisesRegex(ValueError, "old line count"):
+                tool.execute(
+                    {
+                        "patch": """*** Begin Patch
+*** Update File: notes.txt
+@@ -1,2 +1,1 @@
+-one
++changed
+*** End Patch"""
+                    }
+                )
+            with self.assertRaisesRegex(ValueError, "invalid hunk header"):
+                tool.execute(
+                    {
+                        "patch": """*** Begin Patch
+*** Update File: notes.txt
+@@ ignored text
+-one
++changed
+*** End Patch"""
+                    }
+                )
+            self.assertEqual(file_path.read_text(encoding="utf-8"), "one\ntwo\n")
+
+    def test_allows_blank_lines_between_delete_and_end_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+            file_path = workspace.path / "notes.txt"
+            file_path.write_text("delete me", encoding="utf-8")
+
+            _Bound(ApplyPatchTool(), workspace).execute(
+                {
+                    "patch": """*** Begin Patch
+*** Delete File: notes.txt
+
+*** End Patch
+"""
+                }
+            )
+
+            self.assertFalse(file_path.exists())
+
 
 class ListDirectoryToolTest(unittest.TestCase):
     def test_lists_immediate_entries(self) -> None:
@@ -1685,7 +1760,32 @@ class ListDirectoryToolTest(unittest.TestCase):
             )
             self.assertEqual(yielded, paths)
 
-    def test_keeps_pagination_candidates_bounded_and_path_ordered(self) -> None:
+    def test_glob_matches_complete_relative_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+            nested = workspace.path / "nested"
+            nested.mkdir()
+            (workspace.path / "root.py").write_text("root", encoding="utf-8")
+            (nested / "child.py").write_text("child", encoding="utf-8")
+            tool = _Bound(ListDirectoryTool(), workspace)
+
+            shallow = tool.execute(
+                {"path": ".", "glob": "*.py", "recursive": True}
+            )
+            recursive = tool.execute(
+                {"path": ".", "glob": "**/*.py", "recursive": True}
+            )
+
+            self.assertEqual(
+                [entry["name"] for entry in shallow["entries"]],
+                ["root.py"],
+            )
+            self.assertCountEqual(
+                [entry["name"] for entry in recursive["entries"]],
+                ["nested/child.py", "root.py"],
+            )
+
+    def test_stops_after_one_lookahead_match(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Workspace(Path(directory))
             paths = []
@@ -1709,13 +1809,38 @@ class ListDirectoryToolTest(unittest.TestCase):
                 )
 
             self.assertEqual(len(result["entries"]), 2)
-            self.assertEqual(
-                [entry["name"] for entry in result["entries"]],
-                ["a.txt", "b.txt"],
-            )
             self.assertTrue(result["has_more"])
             self.assertEqual(result["next_offset"], 2)
-            self.assertEqual(yielded, paths)
+            self.assertEqual(yielded, paths[:3])
+
+    def test_large_offset_streams_without_retaining_skipped_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+            file_path = workspace.path / "entry.txt"
+            file_path.write_text("entry", encoding="utf-8")
+            yielded = 0
+
+            def entries(*_args):
+                nonlocal yielded
+                for _ in range(10_003):
+                    yielded += 1
+                    yield file_path
+
+            with patch(
+                "agent_core.tools.builtin.list_directory._iter_entries",
+                side_effect=entries,
+            ):
+                result = _Bound(ListDirectoryTool(), workspace).execute(
+                    {"path": ".", "offset": 10_001, "limit": 1}
+                )
+
+            self.assertEqual(
+                result["entries"],
+                [{"name": "entry.txt", "type": "file"}],
+            )
+            self.assertTrue(result["has_more"])
+            self.assertEqual(result["next_offset"], 10_002)
+            self.assertEqual(yielded, 10_003)
 
     def test_rejects_file_path(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2007,6 +2132,31 @@ class SearchFilesToolTest(unittest.TestCase):
 
             self.assertEqual(result["matches"], [{"path": "nested/agent.py"}])
             self.assertEqual(result["scanned_files"], 2)
+
+    def test_search_glob_matches_complete_relative_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+            nested = workspace.path / "nested"
+            nested.mkdir()
+            (workspace.path / "root.py").write_text("Nosis", encoding="utf-8")
+            (nested / "child.py").write_text("Nosis", encoding="utf-8")
+            tool = _Bound(SearchFilesTool(), workspace)
+
+            shallow = tool.execute(
+                {"path": ".", "pattern": "Nosis", "glob": "*.py"}
+            )
+            recursive = tool.execute(
+                {"path": ".", "pattern": "Nosis", "glob": "**/*.py"}
+            )
+
+            self.assertEqual(
+                [match["path"] for match in shallow["matches"]],
+                ["root.py"],
+            )
+            self.assertEqual(
+                [match["path"] for match in recursive["matches"]],
+                ["nested/child.py", "root.py"],
+            )
 
     def test_limits_serialized_tool_result_size(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
