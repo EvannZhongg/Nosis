@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import html
 import ipaddress
+import json
 import re
-import socket
 from collections.abc import Iterable
 from urllib.parse import urljoin, urlsplit
 
@@ -19,6 +19,8 @@ from ..context import ToolExecutionContext
 MAX_REDIRECTS = 5
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 REQUEST_TIMEOUT_SECONDS = 20.0
+PUBLIC_DNS_ENDPOINT = "https://cloudflare-dns.com/dns-query"
+PUBLIC_DNS_TIMEOUT_SECONDS = 5.0
 USER_AGENT = "Nosis/1.0 web_fetch"
 _RESULT_RESERVE_CHARS = 200
 _CHUNK_SIZE = 64 * 1024
@@ -90,7 +92,6 @@ def _fetch(
     with httpx.Client(
         follow_redirects=False,
         timeout=httpx.Timeout(REQUEST_TIMEOUT_SECONDS),
-        trust_env=False,
     ) as client:
         current = url
         for _ in range(MAX_REDIRECTS + 1):
@@ -143,30 +144,15 @@ def _require_public_url(url: str) -> None:
         raise ValueError("web_fetch does not accept URLs with credentials")
     try:
         host = parsed.hostname
-        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        _ = parsed.port  # Validate an explicitly supplied port.
     except ValueError as error:
         raise ValueError(f"web_fetch received an invalid URL: {url!r}") from error
     if not host:
         raise ValueError("web_fetch requires a URL with a host")
 
-    try:
-        addresses = socket.getaddrinfo(
-            host,
-            port,
-            type=socket.SOCK_STREAM,
-        )
-    except OSError as error:
-        raise ValueError(f"web_fetch could not resolve host '{host}'") from error
-    if not addresses:
-        raise ValueError(f"web_fetch could not resolve host '{host}'")
-
+    addresses = _resolve_public_addresses(host)
     for address in addresses:
-        try:
-            ip = ipaddress.ip_address(address[4][0])
-        except ValueError as error:
-            raise ValueError(
-                f"web_fetch received an invalid address for host '{host}'"
-            ) from error
+        ip = ipaddress.ip_address(address)
         mapped = getattr(ip, "ipv4_mapped", None)
         if mapped is not None:
             ip = mapped
@@ -176,6 +162,55 @@ def _require_public_url(url: str) -> None:
             raise ValueError(
                 f"web_fetch refused non-public address for host '{host}'"
             )
+
+
+def _resolve_public_addresses(host: str) -> tuple[str, ...]:
+    """Resolve through public DNS instead of the host's intercepted resolver."""
+    try:
+        literal = ipaddress.ip_address(host)
+    except ValueError:
+        literal = None
+    if literal is not None:
+        return (str(literal),)
+
+    addresses: list[str] = []
+    try:
+        with httpx.Client(
+            timeout=httpx.Timeout(PUBLIC_DNS_TIMEOUT_SECONDS),
+        ) as client:
+            for record_type in ("A", "AAAA"):
+                response = client.get(
+                    PUBLIC_DNS_ENDPOINT,
+                    params={"name": host, "type": record_type},
+                    headers={"accept": "application/dns-json"},
+                )
+                response.raise_for_status()
+                payload = response.json()
+                if not isinstance(payload, dict) or payload.get("Status") != 0:
+                    continue
+                answers = payload.get("Answer", [])
+                if not isinstance(answers, list):
+                    continue
+                for answer in answers:
+                    if not isinstance(answer, dict):
+                        continue
+                    value = answer.get("data")
+                    if not isinstance(value, str):
+                        continue
+                    try:
+                        address = ipaddress.ip_address(value)
+                    except ValueError:
+                        continue
+                    if answer.get("type") == 1 and address.version == 4:
+                        addresses.append(str(address))
+                    elif answer.get("type") == 28 and address.version == 6:
+                        addresses.append(str(address))
+    except (httpx.HTTPError, json.JSONDecodeError) as error:
+        raise ValueError(f"web_fetch could not resolve host '{host}'") from error
+
+    if not addresses:
+        raise ValueError(f"web_fetch could not resolve host '{host}'")
+    return tuple(dict.fromkeys(addresses))
 
 
 def _decode_body(body: bytes, content_type: str) -> str:
