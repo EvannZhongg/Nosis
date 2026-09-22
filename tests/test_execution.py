@@ -90,6 +90,16 @@ class HostCommandExecutorTest(unittest.TestCase):
                 "marker",
             )
 
+    @unittest.skipUnless(platform.system() == "Windows", "Windows shell test")
+    def test_host_powershell_output_is_plain_text(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            result = HostCommandExecutor(Path(directory)).execute(
+                "Get-Process | Select-Object -First 1 | Format-Table"
+            )
+
+        self.assertNotIn("\x1b[", result.stdout)
+        self.assertNotIn("\x1b[", result.stderr)
+
     def test_returns_nonzero_exit_code(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             executor = HostCommandExecutor(Path(directory))
@@ -501,6 +511,28 @@ class SandboxedCommandExecutorTest(unittest.TestCase):
         self.assertNotIn(capability_sid, acl_after)
         self.assertNotIn(capability_sid, child_acl_after)
         self.assertEqual(acl_after, acl_before)
+
+    @unittest.skipUnless(platform.system() == "Windows", "Windows ACL test")
+    def test_workspace_capability_lease_survives_another_session_close(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            first_backend = platform_workspace_sandbox_backend()
+            second_backend = platform_workspace_sandbox_backend()
+            first = SandboxedCommandExecutor(workspace, first_backend)
+            second = SandboxedCommandExecutor(workspace, second_backend)
+            try:
+                self.assertEqual(first.execute("Set-Content first.txt one").exit_code, 0)
+                self.assertEqual(second.execute("Set-Content second.txt two").exit_code, 0)
+                first.close()
+                result = second.execute("Set-Content after.txt after")
+                self.assertEqual(result.exit_code, 0)
+                self.assertEqual(
+                    (workspace / "after.txt").read_text(encoding="utf-8"),
+                    "after\n",
+                )
+            finally:
+                first.close()
+                second.close()
 
 if __name__ == "__main__":
     unittest.main()

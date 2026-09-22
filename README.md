@@ -119,7 +119,7 @@ npm test
 
 ## 说明
 
-Windows 用户需要安装 [PowerShell 7](https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-windows)。Windows 上不论权限 scope，`shell` Tool 都使用 PowerShell 7；若要运行 `.sh`，请在命令中显式调用 `bash ./scripts/build.sh`，因此仍可选装 [Git for Windows](https://git-scm.com/download/win)。
+Windows 用户需要安装 [PowerShell 7](https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-windows)。Windows 上不论权限 scope，`shell` Tool 都使用 PowerShell 7；Shell Tool 只承诺 PowerShell 方言，不承诺直接运行 POSIX `.sh` 脚本。
 
 ## 许可
 

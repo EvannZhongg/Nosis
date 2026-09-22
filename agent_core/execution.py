@@ -567,6 +567,9 @@ class HostCommandExecutor:
             working_directory=self._working_directory,
             timeout_seconds=timeout_seconds,
             cancellation=cancellation,
+            environment=(
+                _windows_host_environment() if os.name == "nt" else None
+            ),
         )
 
     def close(self) -> None:
@@ -644,28 +647,18 @@ def _sandbox_environment(private_tmp: Path) -> dict[str, str]:
 
 def _windows_sandbox_environment(private_tmp: Path) -> dict[str, str]:
     environment = _sandbox_environment(private_tmp)
-    # PowerShell otherwise emits ANSI sequences when TERM advertises a TTY.
+    return _windows_shell_environment(environment)
+
+
+def _windows_host_environment() -> dict[str, str]:
+    return _windows_shell_environment(os.environ.copy())
+
+
+def _windows_shell_environment(environment: dict[str, str]) -> dict[str, str]:
+    """Keep PowerShell output plain for both host and workspace commands."""
     environment.pop("TERM", None)
     environment["NO_COLOR"] = "1"
     return environment
-
-
-def _is_msys_runtime_path(value: str) -> bool:
-    path = os.path.normcase(os.path.normpath(value)).rstrip("\\")
-    parts = path.split("\\")
-    try:
-        git_index = max(
-            index for index, part in enumerate(parts) if part == "git"
-        )
-    except ValueError:
-        return False
-    relative = parts[git_index + 1 :]
-    return relative in (
-        ["bin"],
-        ["usr", "bin"],
-        ["mingw32", "bin"],
-        ["mingw64", "bin"],
-    )
 
 
 def _macos_ancestor_rules(*paths: Path) -> str:
@@ -867,7 +860,7 @@ def _powershell_7() -> str:
         if executable.is_file():
             return str(executable)
     raise RuntimeError(
-        "Windows workspace shell requires PowerShell 7 (pwsh.exe)"
+        "Windows shell requires PowerShell 7 (pwsh.exe)"
     )
 
 

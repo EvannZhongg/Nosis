@@ -25,8 +25,8 @@ MAX_BACKGROUND_SHELL_TIMEOUT_SECONDS = MAX_COMMAND_TIMEOUT_SECONDS
 
 WINDOWS_SHELL_NOTE = (
     "On Windows, every scope runs through PowerShell 7. Shell dialect is "
-    "independent of execution scope. To run a POSIX script, invoke it "
-    "explicitly, for example 'bash ./scripts/build.sh'."
+    "independent of execution scope. Use PowerShell syntax for commands; "
+    "running POSIX .sh scripts is outside the Windows shell contract."
 )
 POSIX_SHELL_NOTE = (
     "Commands run through /bin/sh, so use POSIX shell syntax: chain "
