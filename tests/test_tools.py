@@ -309,6 +309,48 @@ class ScheduledTaskToolTest(unittest.TestCase):
                 result["end_at"], "2099-12-31T23:59:00+08:00"
             )
 
+    def test_schedule_tools_reject_coercion_and_unknown_arguments(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            scheduler = SchedulerService(root / "schedule.jsonl")
+            context = context_for(
+                Workspace(root),
+                sessions_directory=root / "sessions",
+                scheduler=scheduler,
+            )
+            created = CreateScheduledTaskTool().execute(
+                {
+                    "prompt": "scheduled prompt",
+                    "trigger": {"type": "interval", "seconds": 60},
+                },
+                context,
+            )
+
+            with self.assertRaisesRegex(ValueError, "prompt must be"):
+                UpdateScheduledTaskTool().execute(
+                    {"schedule_id": created["schedule_id"], "prompt": " "},
+                    context,
+                )
+            with self.assertRaisesRegex(ValueError, "enabled must be"):
+                UpdateScheduledTaskTool().execute(
+                    {"schedule_id": created["schedule_id"], "enabled": 1},
+                    context,
+                )
+            with self.assertRaisesRegex(
+                ValueError, "unsupported schedule update field"
+            ):
+                UpdateScheduledTaskTool().execute(
+                    {"schedule_id": created["schedule_id"], "unknown": True},
+                    context,
+                )
+            with self.assertRaisesRegex(ValueError, "schedule_id must be"):
+                UpdateScheduledTaskTool().execute(
+                    {"schedule_id": 123, "prompt": "updated"},
+                    context,
+                )
+            with self.assertRaisesRegex(ValueError, "schedule_id must be"):
+                DeleteScheduledTaskTool().execute({"schedule_id": 123}, context)
+
     def test_list_includes_trigger_and_end_at(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

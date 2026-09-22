@@ -1416,6 +1416,37 @@ class GuiTest(unittest.TestCase):
         self.assertIn("end_at must be", response.json()["detail"])
         self.assertIsNone(scheduler.schedules[0].end_at)
 
+    def test_schedule_update_rejects_invalid_and_unknown_fields(self) -> None:
+        scheduler = SchedulerService(self.config / "schedule.jsonl")
+        schedule = scheduler.create_schedule(
+            trigger=IntervalTrigger(1200),
+            prompt="scheduled prompt",
+            workspace=str(self.root),
+            origin_session_id="origin",
+            schedule_session_id="scheduled-session",
+        )
+
+        with self.client() as client:
+            blank_prompt = client.put(
+                f"/api/schedules/{schedule.schedule_id}",
+                json={"prompt": " "},
+            )
+            coerced_enabled = client.put(
+                f"/api/schedules/{schedule.schedule_id}",
+                json={"enabled": 1},
+            )
+            unknown = client.put(
+                f"/api/schedules/{schedule.schedule_id}",
+                json={"unknown": True},
+            )
+
+        self.assertEqual(blank_prompt.status_code, 400)
+        self.assertIn("prompt must be", blank_prompt.json()["detail"])
+        self.assertEqual(coerced_enabled.status_code, 400)
+        self.assertIn("enabled must be", coerced_enabled.json()["detail"])
+        self.assertEqual(unknown.status_code, 400)
+        self.assertIn("unsupported schedule update field", unknown.json()["detail"])
+
     def test_rejects_a_session_id_that_escapes_the_sessions_directory(
         self,
     ) -> None:

@@ -35,8 +35,7 @@ from agent_core import (
     plan_snapshot_to_dict,
     probe_image,
     SchedulerService,
-    parse_end_at_input,
-    parse_trigger_input,
+    parse_schedule_update_input,
     trigger_to_dict,
 )
 from agent_core.path_utils import path_for_comparison
@@ -647,15 +646,7 @@ def create_app(
     ) -> dict[str, object]:
         try:
             current = SchedulerService(settings.directory / "schedule.jsonl")
-            changes = {
-                key: payload[key]
-                for key in ("prompt", "enabled")
-                if key in payload
-            }
-            if "trigger" in payload:
-                changes["trigger"] = parse_trigger_input(payload["trigger"])
-            if "end_at" in payload:
-                changes["end_at"] = parse_end_at_input(payload["end_at"])
+            changes = parse_schedule_update_input(payload)
             item = current.update_schedule(
                 schedule_id,
                 **changes,

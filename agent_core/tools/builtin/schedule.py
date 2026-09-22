@@ -5,6 +5,9 @@ from ..context import ToolExecutionContext
 from ...scheduler import (
     SchedulerService,
     parse_end_at_input,
+    parse_schedule_id_input,
+    parse_schedule_prompt_input,
+    parse_schedule_update_input,
     parse_trigger_input,
     trigger_to_dict,
 )
@@ -15,6 +18,14 @@ def _service(context: ToolExecutionContext) -> SchedulerService:
     if not isinstance(context.scheduler, SchedulerService):
         raise RuntimeError("scheduler is unavailable")
     return context.scheduler
+
+
+def _reject_unknown_arguments(
+    arguments: dict[str, JSONValue], allowed: set[str]
+) -> None:
+    unknown = set(arguments) - allowed
+    if unknown:
+        raise ValueError(f"unsupported argument(s): {', '.join(sorted(unknown))}")
 
 
 def _trigger_schema() -> dict[str, object]:
@@ -88,6 +99,8 @@ class CreateScheduledTaskTool(Tool):
         )
 
     def execute(self, arguments: dict[str, JSONValue], context: ToolExecutionContext):
+        _reject_unknown_arguments(arguments, {"prompt", "trigger", "end_at"})
+        prompt = parse_schedule_prompt_input(arguments.get("prompt"))
         parsed = parse_trigger_input(arguments.get("trigger"))
         end = parse_end_at_input(arguments.get("end_at"))
         schedule_session_id = str(uuid4())
@@ -105,7 +118,7 @@ class CreateScheduledTaskTool(Tool):
                 provider,
                 context.workspace.path,
             )
-        schedule = _service(context).create_schedule(trigger=parsed, prompt=str(arguments["prompt"]), workspace=str(context.workspace.path), origin_session_id=context.session.session_id, schedule_session_id=schedule_session_id, end_at=end)
+        schedule = _service(context).create_schedule(trigger=parsed, prompt=prompt, workspace=str(context.workspace.path), origin_session_id=context.session.session_id, schedule_session_id=schedule_session_id, end_at=end)
         return {"schedule_id": schedule.schedule_id, "schedule_session_id": schedule.schedule_session_id, "workspace": schedule.workspace, "next_run_at": schedule.next_run_at.isoformat() if schedule.next_run_at else None}
 
 
@@ -139,15 +152,11 @@ class UpdateScheduledTaskTool(Tool):
         )
 
     def execute(self, arguments, context):
-        changes = {k: arguments[k] for k in ("prompt", "enabled") if k in arguments}
-        if "trigger" in arguments:
-            changes["trigger"] = parse_trigger_input(arguments["trigger"])
-        if "end_at" in arguments:
-            changes["end_at"] = parse_end_at_input(arguments["end_at"])
-        try:
-            schedule = _service(context).update_schedule(str(arguments["schedule_id"]), **changes)
-        except KeyError as error:
-            raise ValueError("scheduled task not found") from error
+        schedule_id = parse_schedule_id_input(arguments.get("schedule_id"))
+        changes = parse_schedule_update_input(
+            {key: value for key, value in arguments.items() if key != "schedule_id"}
+        )
+        schedule = _service(context).update_schedule(schedule_id, **changes)
         return {
             "schedule_id": schedule.schedule_id,
             "schedule_session_id": schedule.schedule_session_id,
@@ -168,6 +177,7 @@ class ListScheduledTasksTool(Tool):
         return ToolDefinition(self.name, "List future reminders and scheduled Agent tasks.", {"type": "object", "properties": {}, "additionalProperties": False})
 
     def execute(self, arguments, context):
+        _reject_unknown_arguments(arguments, set())
         return [
             {
                 "schedule_id": s.schedule_id,
@@ -201,9 +211,7 @@ class DeleteScheduledTaskTool(Tool):
         )
 
     def execute(self, arguments, context):
-        schedule_id = str(arguments["schedule_id"])
-        try:
-            _service(context).delete_schedule(schedule_id)
-        except KeyError as error:
-            raise ValueError("scheduled task not found") from error
+        _reject_unknown_arguments(arguments, {"schedule_id"})
+        schedule_id = parse_schedule_id_input(arguments.get("schedule_id"))
+        _service(context).delete_schedule(schedule_id)
         return {"schedule_id": schedule_id, "deleted": True}

@@ -14,10 +14,90 @@ from agent_core.scheduler import (
     Schedule,
     SchedulerService,
     _schedule_to_dict,
+    parse_schedule_update_input,
 )
 
 
 class SchedulerServiceTest(unittest.TestCase):
+    def test_parse_schedule_update_input_validates_the_complete_payload(self) -> None:
+        changes = parse_schedule_update_input(
+            {
+                "prompt": "  updated prompt  ",
+                "trigger": {"type": "interval", "seconds": 60},
+                "enabled": False,
+                "end_at": "2099-12-31T23:59:00+00:00",
+            }
+        )
+
+        self.assertEqual(changes["prompt"], "updated prompt")
+        self.assertEqual(changes["trigger"], IntervalTrigger(60))
+        self.assertIs(changes["enabled"], False)
+        self.assertEqual(
+            changes["end_at"],
+            datetime(2099, 12, 31, 23, 59, tzinfo=timezone.utc),
+        )
+        with self.assertRaisesRegex(
+            ValueError, "unsupported schedule update field"
+        ):
+            parse_schedule_update_input({"unknown": True})
+
+    def test_update_rejects_unknown_changes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            service = SchedulerService(Path(directory) / "schedule.jsonl")
+            schedule = service.create_schedule(
+                trigger=IntervalTrigger(60),
+                prompt="scheduled prompt",
+                workspace=directory,
+                origin_session_id="origin",
+                schedule_session_id="scheduled-session",
+            )
+
+            with self.assertRaises(TypeError):
+                service.update_schedule(schedule.schedule_id, unknown=True)
+
+    def test_update_normalizes_prompt_and_rejects_invalid_values(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            service = SchedulerService(Path(directory) / "schedule.jsonl")
+            schedule = service.create_schedule(
+                trigger=IntervalTrigger(60),
+                prompt="scheduled prompt",
+                workspace=directory,
+                origin_session_id="origin",
+                schedule_session_id="scheduled-session",
+            )
+
+            updated = service.update_schedule(
+                schedule.schedule_id, prompt="  updated prompt  "
+            )
+            self.assertEqual(updated.action.prompt, "updated prompt")
+            with self.assertRaisesRegex(ValueError, "prompt must be"):
+                service.update_schedule(schedule.schedule_id, prompt=" ")
+            with self.assertRaisesRegex(ValueError, "enabled must be"):
+                service.update_schedule(schedule.schedule_id, enabled=1)
+            with self.assertRaisesRegex(ValueError, "schedule_id must be"):
+                service.update_schedule(123, prompt="updated")  # type: ignore[arg-type]
+
+    def test_create_normalizes_prompt_and_rejects_invalid_values(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            service = SchedulerService(Path(directory) / "schedule.jsonl")
+
+            schedule = service.create_schedule(
+                trigger=IntervalTrigger(60),
+                prompt="  scheduled prompt  ",
+                workspace=directory,
+                origin_session_id="origin",
+                schedule_session_id="scheduled-session",
+            )
+            self.assertEqual(schedule.action.prompt, "scheduled prompt")
+            with self.assertRaisesRegex(ValueError, "prompt must be"):
+                service.create_schedule(
+                    trigger=IntervalTrigger(60),
+                    prompt=" ",
+                    workspace=directory,
+                    origin_session_id="origin",
+                    schedule_session_id="other-session",
+                )
+
     def test_cron_rejects_unknown_timezone_instead_of_falling_back_to_utc(self) -> None:
         with self.assertRaisesRegex(ValueError, "unknown IANA timezone"):
             CronTrigger("0 9 * * *", "Asia/Shangai")

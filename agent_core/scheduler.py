@@ -12,7 +12,7 @@ import threading
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
-from typing import Callable, Literal
+from typing import Callable, Literal, TypedDict
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -52,6 +52,20 @@ class IntervalTrigger:
 
 
 Trigger = OneShotTrigger | CronTrigger | IntervalTrigger
+
+
+class ScheduleUpdateInput(TypedDict, total=False):
+    prompt: str
+    trigger: Trigger
+    enabled: bool
+    end_at: datetime | None
+
+
+class _Unset:
+    pass
+
+
+_UNSET = _Unset()
 
 
 @dataclass(frozen=True)
@@ -99,6 +113,24 @@ def _dt(value: datetime | None) -> str | None:
 def _require_aware(value: datetime, name: str) -> None:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError(f"{name} must include a timezone offset")
+
+
+def parse_schedule_prompt_input(value: object) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("prompt must be a non-empty string")
+    return value.strip()
+
+
+def parse_schedule_id_input(value: object) -> str:
+    if not isinstance(value, str) or not value:
+        raise ValueError("schedule_id must be a non-empty string")
+    return value
+
+
+def parse_schedule_enabled_input(value: object) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError("enabled must be a boolean")
+    return value
 
 
 def _timezone(name: str) -> tzinfo:
@@ -190,6 +222,25 @@ def parse_trigger_input(value: object) -> Trigger:
             datetime.fromisoformat(start_at) if start_at is not None else None,
         )
     raise ValueError("trigger.type must be once, cron, or interval")
+
+
+def parse_schedule_update_input(value: object) -> ScheduleUpdateInput:
+    if not isinstance(value, dict):
+        raise ValueError("schedule update must be an object")
+    unknown = set(value) - {"prompt", "trigger", "enabled", "end_at"}
+    if unknown:
+        names = ", ".join(sorted(str(name) for name in unknown))
+        raise ValueError(f"unsupported schedule update field(s): {names}")
+    changes: ScheduleUpdateInput = {}
+    if "prompt" in value:
+        changes["prompt"] = parse_schedule_prompt_input(value["prompt"])
+    if "trigger" in value:
+        changes["trigger"] = parse_trigger_input(value["trigger"])
+    if "enabled" in value:
+        changes["enabled"] = parse_schedule_enabled_input(value["enabled"])
+    if "end_at" in value:
+        changes["end_at"] = parse_end_at_input(value["end_at"])
+    return changes
 
 
 def _trigger_from_dict(value: dict[str, object]) -> Trigger:
@@ -338,8 +389,7 @@ class SchedulerService:
         self._runs = runs
 
     def create_schedule(self, *, trigger: Trigger, prompt: str, workspace: str, origin_session_id: str, schedule_session_id: str, end_at: datetime | None = None) -> Schedule:
-        if not prompt.strip():
-            raise ValueError("prompt must be non-empty")
+        normalized_prompt = parse_schedule_prompt_input(prompt)
         if end_at is not None:
             _require_aware(end_at, "schedule end_at")
         now = datetime.now(timezone.utc)
@@ -350,7 +400,7 @@ class SchedulerService:
         schedule = Schedule(
             str(uuid4()),
             trigger,
-            AgentTurnAction(prompt.strip()),
+            AgentTurnAction(normalized_prompt),
             str(Path(workspace).expanduser().resolve()),
             origin_session_id,
             schedule_session_id,
@@ -363,41 +413,52 @@ class SchedulerService:
             self._append({"op": "create", "schedule": _schedule_to_dict(schedule)})
         return schedule
 
-    def update_schedule(self, schedule_id: str, **changes: object) -> Schedule:
+    def update_schedule(
+        self,
+        schedule_id: str,
+        *,
+        prompt: str | _Unset = _UNSET,
+        trigger: Trigger | _Unset = _UNSET,
+        enabled: bool | _Unset = _UNSET,
+        end_at: datetime | None | _Unset = _UNSET,
+    ) -> Schedule:
+        schedule_id = parse_schedule_id_input(schedule_id)
         with self._lock:
             self._reload()
-            schedule = self._schedules[schedule_id]
+            schedule = self._schedules.get(schedule_id)
+            if schedule is None:
+                raise ValueError("scheduled task not found")
             action = schedule.action
-            trigger = schedule.trigger
-            enabled = schedule.enabled
-            end_at = schedule.end_at
-            if "prompt" in changes:
-                action = AgentTurnAction(str(changes["prompt"]))
-            if "trigger" in changes:
-                requested_trigger = changes["trigger"]
-                if not isinstance(requested_trigger, (OneShotTrigger, CronTrigger, IntervalTrigger)):
+            updated_trigger = schedule.trigger
+            updated_enabled = schedule.enabled
+            updated_end_at = schedule.end_at
+            if not isinstance(prompt, _Unset):
+                action = AgentTurnAction(parse_schedule_prompt_input(prompt))
+            if not isinstance(trigger, _Unset):
+                if not isinstance(trigger, (OneShotTrigger, CronTrigger, IntervalTrigger)):
                     raise ValueError("trigger must be a supported trigger")
-                trigger = requested_trigger
-            if "enabled" in changes:
-                enabled = bool(changes["enabled"])
-            if "end_at" in changes:
-                requested_end_at = changes["end_at"]
-                if requested_end_at is not None and not isinstance(requested_end_at, datetime):
+                updated_trigger = trigger
+            if not isinstance(enabled, _Unset):
+                updated_enabled = parse_schedule_enabled_input(enabled)
+            if not isinstance(end_at, _Unset):
+                if end_at is not None and not isinstance(end_at, datetime):
                     raise ValueError("end_at must be a datetime or null")
-                if requested_end_at is not None:
-                    _require_aware(requested_end_at, "schedule end_at")
-                end_at = requested_end_at  # type: ignore[assignment]
+                if end_at is not None:
+                    _require_aware(end_at, "schedule end_at")
+                updated_end_at = end_at
             now = datetime.now(timezone.utc)
-            if isinstance(trigger, IntervalTrigger):
-                next_run_at = _next_occurrence(trigger, end_at, now)
+            if isinstance(updated_trigger, IntervalTrigger):
+                next_run_at = _next_occurrence(updated_trigger, updated_end_at, now)
             else:
-                next_run_at = _next_occurrence(trigger, end_at, now - timedelta(seconds=1))
+                next_run_at = _next_occurrence(
+                    updated_trigger, updated_end_at, now - timedelta(seconds=1)
+                )
             updated = replace(
                 schedule,
                 action=action,
-                trigger=trigger,
-                enabled=enabled,
-                end_at=end_at,
+                trigger=updated_trigger,
+                enabled=updated_enabled,
+                end_at=updated_end_at,
                 next_run_at=next_run_at,
             )
             self._schedules[schedule_id] = updated
@@ -405,11 +466,12 @@ class SchedulerService:
             return updated
 
     def delete_schedule(self, schedule_id: str) -> None:
+        schedule_id = parse_schedule_id_input(schedule_id)
         with self._lock:
             self._reload()
             schedule = self._schedules.get(schedule_id)
             if schedule is None:
-                raise KeyError(schedule_id)
+                raise ValueError("scheduled task not found")
             self._schedules.pop(schedule_id)
             self._append({"op": "delete", "schedule_id": schedule_id})
 
@@ -575,4 +637,4 @@ def _cron_matches(expression: str, value: datetime) -> bool:
     return True
 
 
-__all__ = ["OneShotTrigger", "CronTrigger", "IntervalTrigger", "AgentTurnAction", "Schedule", "ScheduledRun", "SchedulerService", "parse_end_at_input", "parse_trigger_input", "trigger_to_dict"]
+__all__ = ["OneShotTrigger", "CronTrigger", "IntervalTrigger", "AgentTurnAction", "Schedule", "ScheduleUpdateInput", "ScheduledRun", "SchedulerService", "parse_end_at_input", "parse_schedule_enabled_input", "parse_schedule_id_input", "parse_schedule_prompt_input", "parse_schedule_update_input", "parse_trigger_input", "trigger_to_dict"]
