@@ -1122,6 +1122,39 @@ class GuiTest(unittest.TestCase):
             ["open_session", "user_turn"],
         )
 
+    def test_reconnecting_marks_old_snapshots_as_replay_before_current_state(self) -> None:
+        snapshot = server.runtime_state_message(
+            phase="inactive", turn_id=None, approval=None, question=None,
+            provider="first", permission_preset="ask_for_approval",
+            context_window=None, jobs=[],
+        )
+        bridge = FakeBridge(replies={"open_session": [snapshot]})
+        with self.client(bridge) as client:
+            with client.websocket_connect("/api/session") as first:
+                first.send_json({
+                    "type": "open_session", "session_id": "shared", "attachment_id": "page-1",
+                })
+                self.assertNotIn("replayed", first.receive_json())
+                first.send_json({"type": "user_turn", "turn_id": "t1", "text": "work"})
+                _wait_for(client, lambda: len(bridge.sent) == 2)
+
+            with client.websocket_connect("/api/session") as second:
+                second.send_json({
+                    "type": "open_session", "session_id": "shared", "attachment_id": "page-2",
+                    "attach_only": True,
+                })
+                replay = second.receive_json()
+                current = second.receive_json()
+                self.assertEqual(replay["phase"], "inactive")
+                self.assertTrue(replay["replayed"])
+                self.assertEqual(current["phase"], "starting")
+                self.assertEqual(current["turn_id"], "t1")
+                self.assertNotIn("replayed", current)
+                self.assertFalse(bridge.closed)
+                self.assertEqual(bridge.cancelled, 0)
+                bridge.emit({"type": "turn_completed", "turn_id": "t1", "usage": None})
+                self.assertEqual(second.receive_json()["type"], "turn_completed")
+
     def test_replays_a_detached_fatal_then_allows_a_fresh_runtime(self) -> None:
         first = FakeBridge(replies={"open_session": [{"type": "session_ready", "session_id": "s1"}]})
         second = FakeBridge(replies={"open_session": [{"type": "session_ready", "session_id": "s1"}]})

@@ -58,18 +58,20 @@ export function shouldBlockRunningAttachmentSubmit(
 
 export function composerConnectionGate({
   attaching,
+  configurationPending,
   attachmentReplaced,
   interactionActive,
   backgroundDisconnected,
 }: {
   attaching: boolean;
+  configurationPending: boolean;
   attachmentReplaced: boolean;
   interactionActive: boolean;
   backgroundDisconnected: boolean;
 }): { inputDisabled: boolean; sendDisabled: boolean } {
   return {
     inputDisabled: attachmentReplaced || interactionActive,
-    sendDisabled: attaching || attachmentReplaced || interactionActive || backgroundDisconnected,
+    sendDisabled: attaching || configurationPending || attachmentReplaced || interactionActive || backgroundDisconnected,
   };
 }
 
@@ -356,12 +358,12 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
     () => shouldShowPlan(session.plan ?? null) ? ["plan"] : [],
   );
   const [permissionPreset, setPermissionPreset] = useState<PermissionPreset>(session.permission_preset);
-  const [permissionSaving, setPermissionSaving] = useState(false);
-  const [providerSaving, setProviderSaving] = useState(false);
+  const [pendingPermissionPreset, setPendingPermissionPreset] = useState<PermissionPreset | null>(null);
+  const [pendingProvider, setPendingProvider] = useState<string | null>(null);
   const [questionDraft, setQuestionDraft] = useState("");
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [workspaceDraft, setWorkspaceDraft] = useState(session.workspace ?? "");
-  const [workspaceSaving, setWorkspaceSaving] = useState(false);
+  const [pendingWorkspace, setPendingWorkspace] = useState<string | null>(null);
   const [workspaceEditing, setWorkspaceEditing] = useState(false);
   const workspacePickerRef = useRef<HTMLDivElement | null>(null);
   const socketRef = useRef<SessionSocket | null>(null);
@@ -385,6 +387,12 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
   const runningRef = useRef(false);
   const attachmentReplacedRef = useRef(false);
   const awaitingSessionActivityRef = useRef(false);
+  const permissionSaving = pendingPermissionPreset !== null;
+  const providerSaving = pendingProvider !== null;
+  const workspaceSaving = pendingWorkspace !== null;
+  const configurationPending = permissionSaving || providerSaving || workspaceSaving;
+  const displayedProvider = pendingProvider ?? provider;
+  const displayedWorkspace = pendingWorkspace ?? workspaceDraft;
 
   useEffect(() => {
     if (session.workspace) setWorkspaceDraft(session.workspace);
@@ -436,19 +444,18 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
 
   useEffect(() => {
     if ((selected || backgroundActive) && socketRef.current === null && !attachmentReplacedRef.current) {
-      setAttaching(true);
       connect({ attachOnly: !selected });
     }
   }, [backgroundActive, provider, selected, session.session_id, session.workspace]);
 
   useEffect(() => {
-    if (selected || running || socketRef.current === null) return;
+    if (selected || running || configurationPending || socketRef.current === null) return;
     const socket = socketRef.current;
     socketRef.current = null;
     socketModelRef.current = "";
     socket.close();
     void releaseActiveSession(session.session_id, provider, attachmentId).catch(() => undefined);
-  }, [attachmentId, provider, running, selected, session.session_id]);
+  }, [attachmentId, configurationPending, provider, running, selected, session.session_id]);
 
   const showToast = useCallback((next: Extract<Feedback, { kind: "toast" }>) => {
     if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
@@ -487,7 +494,14 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
     onTurnEnd();
   }, [session.session_id, onBusyChange, onTurnEnd, showItems]);
 
+  function clearPendingSettings() {
+    setPendingPermissionPreset(null);
+    setPendingProvider(null);
+    setPendingWorkspace(null);
+  }
+
   function connect({ attachOnly = false, takeover = false }: { attachOnly?: boolean; takeover?: boolean } = {}): SessionSocket {
+    setAttaching(true);
     let socket: SessionSocket;
     socket = new SessionSocket({
       sessionId: session.session_id,
@@ -497,12 +511,25 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
       attachOnly,
       afterEvent: eventCounterRef.current,
       takeover,
+      onConfigurationRejected: (type) => {
+        if (socketRef.current !== socket) return;
+        if (type === "provider_set") setPendingProvider(null);
+        else setPendingWorkspace(null);
+        showToast({
+          kind: "toast",
+          level: "info",
+          text: "会话正在执行任务，本次模型或工作区切换未应用，请在任务结束后重试。",
+        });
+      },
       onMessage: (message) => {
         // A socket that was replaced during a model switch may still have
         // messages queued in the browser event loop. Ignore those messages
         // so stale transcript, feedback, usage, and turn callbacks cannot
         // mutate the active connection's state.
         if (socketRef.current !== socket) return;
+        if (message.type === "attachment_replaced" || message.type === "fatal") {
+          clearPendingSettings();
+        }
         if (message.type === "attachment_replaced") {
           if (toastTimeoutRef.current) {
             clearTimeout(toastTimeoutRef.current);
@@ -527,6 +554,7 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
           return;
         }
         if (message.type === "runtime_state") {
+          if (message.replayed) return;
           if (message.event_sequence !== undefined) eventCounterRef.current = message.event_sequence;
           if (toastTimeoutRef.current) {
             clearTimeout(toastTimeoutRef.current);
@@ -539,7 +567,7 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
           setAttachmentReplaced(false);
           if (message.provider) {
             socketModelRef.current = message.provider;
-            if (message.provider !== provider) onProviderChange(message.provider);
+            onProviderChange(message.provider);
           }
           const active = runtimeIsActive(message.phase);
           setRuntimePhase(message.phase);
@@ -602,18 +630,18 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
             return next;
           });
         }
-        if (message.type === "permission_changed") setPermissionSaving(false);
+        if (message.type === "permission_changed" && !message.replayed) setPendingPermissionPreset(null);
         if (message.type === "plan_updated") setPlan(message.plan);
         if (message.type === "provider_changed") {
-          setProviderSaving(false);
+          if (!message.replayed) setPendingProvider(null);
           socketModelRef.current = message.provider;
-          if (message.provider !== provider) onProviderChange(message.provider);
+          onProviderChange(message.provider);
           onContextWindowChange(null);
         }
         if (message.type === "workspace_changed") {
           setWorkspaceDraft(message.workspace);
           onWorkspaceChange?.(message.workspace);
-          setWorkspaceSaving(false);
+          if (!message.replayed) setPendingWorkspace(null);
         }
         if (awaitingSessionActivityRef.current && isTurnActivity(message)) {
           awaitingSessionActivityRef.current = false;
@@ -641,6 +669,7 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
         socketRef.current = null;
         socketModelRef.current = "";
         setAttaching(false);
+        clearPendingSettings();
         if (runningRef.current && !attachmentReplacedRef.current) {
           setReconnecting(true);
           reconnectTimeoutRef.current = setTimeout(() => {
@@ -657,7 +686,6 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
         // leave the idle UI quiet. The close callback clears the socket so
         // the next message can establish a fresh connection.
         if (socketRef.current !== socket) return;
-        setPermissionSaving(false);
         if (!runningRef.current) {
           showAlert({ kind: "alert", id: "connection", level: "error", text: "无法连接 Nosis。" });
         }
@@ -670,7 +698,6 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
 
   function takeOverAttachment() {
     if (attaching || socketRef.current !== null) return;
-    setAttaching(true);
     connect({ attachOnly: true, takeover: true });
   }
 
@@ -745,14 +772,13 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
 
   function changePermissionPreset(preset: PermissionPreset) {
     if (preset === permissionPreset) return;
-    setPermissionPreset(preset);
-    setPermissionSaving(true);
+    setPendingPermissionPreset(preset);
     const socket = socketRef.current ?? connect();
     socket.send({ type: "permission_set", preset });
   }
 
   function changeProvider(provider: string) {
-    setProviderSaving(true);
+    setPendingProvider(provider);
     const socket = socketRef.current ?? connect();
     socket.send({ type: "provider_set", provider });
   }
@@ -771,13 +797,13 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
   async function saveWorkspace(value = workspaceDraft) {
     const nextWorkspace = value.trim();
     if (!nextWorkspace || nextWorkspace === session.workspace) return;
-    setWorkspaceSaving(true);
+    setPendingWorkspace(nextWorkspace);
     try {
       const socket = socketRef.current ?? connect();
       socket.send({ type: "workspace_set", workspace: nextWorkspace });
     } catch (error) {
       showAlert({ kind: "alert", id: "workspace-update", level: "error", text: String(error) });
-      setWorkspaceSaving(false);
+      setPendingWorkspace(null);
     }
   }
 
@@ -843,11 +869,13 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
   const backgroundDisconnected = backgroundActive && socketRef.current === null;
   const composerGate = composerConnectionGate({
     attaching,
+    configurationPending,
     attachmentReplaced,
     interactionActive,
     backgroundDisconnected,
   });
-  const controlsDisabled = attaching || attachmentReplaced || backgroundDisconnected;
+  const controlsDisabled = attachmentReplaced || backgroundDisconnected;
+  const sessionRunning = running || backgroundActive;
   const runtime = useExternalStoreRuntime({
     messages,
     convertMessage: (message) => message,
@@ -865,7 +893,7 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
       remove: () => {},
     },
   });
-  const availableWorkspaces = Array.from(new Set([...workspaceOptions, workspaceDraft].filter(Boolean)));
+  const availableWorkspaces = Array.from(new Set([...workspaceOptions, displayedWorkspace].filter(Boolean)));
   const activeJobs = Object.values(jobs);
   const hasActiveJobs = activeJobs.length > 0;
   const visibleAlerts = Object.values(alerts);
@@ -902,7 +930,7 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
         <div className="messages"><ThreadPrimitive.Messages components={{ UserMessage, AssistantMessage }} /></div>
       </ThreadPrimitive.Viewport>
       <div className="composer-area">
-        {attachmentReplaced && <div className="attachment-replaced" role="status"><span>{running ? "此会话由另一个页面控制。任务仍在后台运行，可在此页面手动接管。" : "此会话由另一个页面控制，可在此页面手动接管。"}</span><button type="button" onClick={takeOverAttachment} disabled={attaching}>{attaching ? "正在接管…" : "在此页面接管"}</button></div>}
+        {attachmentReplaced && <div className="attachment-replaced" role="status"><span>此会话由另一个页面控制，可在此页面手动接管。</span><button type="button" onClick={takeOverAttachment} disabled={attaching}>{attaching ? "正在接管…" : "在此页面接管"}</button></div>}
         {!attachmentReplaced && approval && <div className="approval-card" role="region" aria-label="工具执行确认"><div className="approval-title"><ShieldCheck size={17} /> 允许执行此工具调用？</div><pre>{approval.command}</pre><div className="approval-actions"><button onClick={() => respond(false)}>拒绝</button><button className="approve-button" onClick={() => respond(true)}>允许执行</button></div></div>}
         {!attachmentReplaced && question && <div className="question-card" role="region" aria-label="需要你的选择">
           <div className="question-title"><MessageCircleQuestion size={18} /><span>{question.question}</span></div>
@@ -928,17 +956,30 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
           </div>
         </div>}
         {pendingFiles.length > 0 && <div className="attachment-list" aria-label="待发送图片">{pendingFiles.map((file, index) => <PendingAttachment key={`${file.name}-${file.lastModified}-${index}`} file={file} onRemove={() => setPendingFiles((files) => files.filter((_, itemIndex) => itemIndex !== index))} />)}</div>}
-        <ComposerPrimitive.Root className="composer" onSubmit={onComposerSubmit}><div ref={workspacePickerRef} className="workspace-picker-wrap"><button type="button" className="workspace-picker" onClick={() => setWorkspaceEditing((value) => { if (value && !workspaceDraft.trim()) setWorkspaceDraft(session.workspace ?? ""); return !value; })} disabled={controlsDisabled || running} aria-expanded={workspaceEditing}><span className="workspace-picker-icon">⌂</span><span className="workspace-picker-value">{workspaceDraft || "选择项目"}</span><ChevronDown size={14} /></button>{workspaceEditing && <div className="workspace-menu" role="menu"><div className="workspace-menu-heading">选择工作区</div>{availableWorkspaces.map((path) => <button type="button" role="menuitem" className={`workspace-option ${path === workspaceDraft ? "selected" : ""}`} key={path} onClick={() => { void saveWorkspace(path); setWorkspaceEditing(false); }} disabled={controlsDisabled || running || workspaceSaving} title={path}><span className="workspace-option-path">{path}</span></button>)}<div className="workspace-menu-divider" /><button type="button" role="menuitem" className="workspace-new-option" onClick={() => { void chooseNewWorkspace(); }} disabled={controlsDisabled || running || workspaceSaving}>＋ 新建工作区</button></div>}</div><ComposerPrimitive.Input placeholder={question ? "请先回答上方问题…" : approval ? "请先处理上方确认…" : "Ask Nosis…"} aria-label="消息" rows={2} autoFocus submitMode="none" disabled={composerGate.inputDisabled} onKeyDown={onComposerKeyDown} onCompositionStart={onCompositionStart} onCompositionEnd={onCompositionEnd} onPaste={onPaste} /><div className="composer-bottom">
-          <button type="button" className="attachment-button" aria-label="添加图片" title="添加图片" disabled={controlsDisabled || running} onClick={() => fileInputRef.current?.click()}><Paperclip size={15} /></button>
+        <ComposerPrimitive.Root className="composer" onSubmit={onComposerSubmit}>
+          <div ref={workspacePickerRef} className="workspace-picker-wrap">
+            <button type="button" className="workspace-picker" onClick={() => setWorkspaceEditing((value) => !value)} disabled={controlsDisabled || sessionRunning} aria-expanded={workspaceEditing}>
+              <span className="workspace-picker-icon">⌂</span><span className="workspace-picker-value">{displayedWorkspace || "选择项目"}</span>
+              {workspaceSaving ? <LoaderCircle size={14} className="spin" aria-label="正在切换工作区" /> : <ChevronDown size={14} />}
+            </button>
+            {workspaceEditing && <div className="workspace-menu" role="menu">
+              <div className="workspace-menu-heading">选择工作区</div>
+              {availableWorkspaces.map((path) => <button type="button" role="menuitem" className={`workspace-option ${path === displayedWorkspace ? "selected" : ""}`} key={path} onClick={() => { void saveWorkspace(path); setWorkspaceEditing(false); }} disabled={controlsDisabled || sessionRunning || workspaceSaving} title={path}><span className="workspace-option-path">{path}</span></button>)}
+              <div className="workspace-menu-divider" />
+              <button type="button" role="menuitem" className="workspace-new-option" onClick={() => { void chooseNewWorkspace(); }} disabled={controlsDisabled || sessionRunning || workspaceSaving}>＋ 新建工作区</button>
+            </div>}
+          </div>
+          <ComposerPrimitive.Input placeholder={question ? "请先回答上方问题…" : approval ? "请先处理上方确认…" : "Ask Nosis…"} aria-label="消息" rows={2} autoFocus submitMode="none" disabled={composerGate.inputDisabled} onKeyDown={onComposerKeyDown} onCompositionStart={onCompositionStart} onCompositionEnd={onCompositionEnd} onPaste={onPaste} /><div className="composer-bottom">
+          <button type="button" className="attachment-button" aria-label="添加图片" title="添加图片" disabled={controlsDisabled || sessionRunning} onClick={() => fileInputRef.current?.click()}><Paperclip size={15} /></button>
           <input ref={fileInputRef} className="attachment-input" type="file" accept="image/*" multiple onChange={(event) => { setPendingFiles((files) => [...files, ...Array.from(event.target.files ?? [])]); event.currentTarget.value = ""; }} />
-          <label className="model-selector" title={providers.find((option) => option.id === provider)?.model}>
-            <select aria-label="选择模型" value={provider} disabled={controlsDisabled || running || providerSaving} onChange={(event) => changeProvider(event.target.value)}>
+          <label className="model-selector" title={providers.find((option) => option.id === displayedProvider)?.model}>
+            <select aria-label="选择模型" value={displayedProvider} disabled={controlsDisabled || sessionRunning || providerSaving} onChange={(event) => changeProvider(event.target.value)}>
               {providers.map((option) => <option key={option.id} value={option.id}>{option.model}</option>)}
-            </select><ChevronDown size={12} />
+            </select>{providerSaving ? <LoaderCircle size={12} className="spin" aria-label="正在切换模型" /> : <ChevronDown size={12} />}
           </label>
           <label className="permission-selector" title="权限模式">
             <ShieldCheck size={13} />
-            <select aria-label="权限模式" value={permissionPreset} disabled={controlsDisabled || permissionSaving} onChange={(event) => changePermissionPreset(event.target.value as PermissionPreset)}>
+            <select aria-label="权限模式" value={pendingPermissionPreset ?? permissionPreset} disabled={controlsDisabled || permissionSaving} onChange={(event) => changePermissionPreset(event.target.value as PermissionPreset)}>
               <option value="ask_for_approval">请求批准</option>
               <option value="workspace_access">工作区访问</option>
               <option value="full_access">完全访问</option>

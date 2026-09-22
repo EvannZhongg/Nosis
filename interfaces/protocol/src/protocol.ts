@@ -280,7 +280,7 @@ export type Incoming = (
   | { type: 'turn_cancelled'; turn_id: string }
   | { type: 'turn_failed'; turn_id: string; error: RuntimeFailure }
   | { type: 'fatal'; error: RuntimeFailure }
-) & { event_sequence?: number };
+) & { event_sequence?: number; replayed?: boolean };
 
 export type Outgoing =
   | {

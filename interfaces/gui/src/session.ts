@@ -1,4 +1,4 @@
-import type { Incoming, Outgoing } from "@nosis/protocol";
+import { runtimeIsActive, type Incoming, type Outgoing, type RuntimePhase } from "@nosis/protocol";
 
 export type SessionSocketOptions = {
   sessionId: string | null;
@@ -9,6 +9,7 @@ export type SessionSocketOptions = {
   afterEvent?: number;
   takeover?: boolean;
   onMessage: (message: Incoming) => void;
+  onConfigurationRejected?: (type: "provider_set" | "workspace_set") => void;
   onClose: () => void;
   onError: () => void;
 };
@@ -27,8 +28,9 @@ export class SessionSocket {
   private socket: WebSocket;
   private queued: Sendable[] = [];
   private synchronized = false;
+  private phase: RuntimePhase = "inactive";
 
-  constructor(options: SessionSocketOptions) {
+  constructor(private readonly options: SessionSocketOptions) {
     const scheme = location.protocol === "https:" ? "wss" : "ws";
     this.socket = new WebSocket(`${scheme}://${location.host}/api/session`);
 
@@ -46,13 +48,19 @@ export class SessionSocket {
     };
     this.socket.onmessage = ({ data }) => {
       const message = JSON.parse(data as string) as Incoming;
+      if (message.type === "runtime_state" && !message.replayed) {
+        this.phase = message.phase;
+      } else if (!message.replayed && (
+        message.type === "turn_completed" || message.type === "turn_cancelled" || message.type === "turn_failed"
+      )) {
+        this.phase = "idle";
+      }
       options.onMessage(message);
-      // runtime_state is the protocol synchronization barrier. The opening
-      // snapshot must be applied before any browser command can race with it
-      // and make an optimistic local turn look idle again.
-      if (message.type === "runtime_state" && !this.synchronized) {
+      // Only the current snapshot ends attachment synchronization; historical
+      // runtime_state events can describe an earlier idle turn.
+      if (message.type === "runtime_state" && !message.replayed && !this.synchronized && this.socket.readyState === WebSocket.OPEN) {
         this.synchronized = true;
-        for (const queued of this.queued) this.write(queued);
+        for (const queued of this.queued) this.dispatch(queued);
         this.queued = [];
       }
     };
@@ -63,7 +71,7 @@ export class SessionSocket {
   /** Sends now, or after the opening runtime snapshot has been applied. */
   send(message: Sendable): void {
     if (this.socket.readyState === WebSocket.OPEN && this.synchronized) {
-      this.write(message);
+      this.dispatch(message);
     } else if (
       this.socket.readyState === WebSocket.CONNECTING
       || (this.socket.readyState === WebSocket.OPEN && !this.synchronized)
@@ -76,6 +84,18 @@ export class SessionSocket {
     this.queued = [];
     this.synchronized = false;
     this.socket.close();
+  }
+
+  private dispatch(message: Sendable): void {
+    // Configuration selected before attachment is conditional on the current
+    // snapshot, never on a replayed phase or React's next render.
+    if ((message.type === "provider_set" || message.type === "workspace_set")
+      && runtimeIsActive(this.phase)) {
+      this.options.onConfigurationRejected?.(message.type);
+      return;
+    }
+    if (message.type === "user_turn") this.phase = "starting";
+    this.write(message);
   }
 
   private write(message: object): void {

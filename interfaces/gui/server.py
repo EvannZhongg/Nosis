@@ -1087,7 +1087,9 @@ def create_app(
             if not created and replays_fatal:
                 await websocket.send_json(state)
             for message in events:
-                await websocket.send_json(message)
+                await websocket.send_json(
+                    message if created else {**message, "replayed": True}
+                )
                 fatal_delivered = message.get("type") == "fatal"
             if not created and not replays_fatal:
                 await websocket.send_json(state)

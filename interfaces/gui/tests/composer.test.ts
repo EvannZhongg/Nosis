@@ -92,6 +92,7 @@ describe("composer connection state", () => {
   it("keeps the draft editable while the opening snapshot is pending", () => {
     expect(composerConnectionGate({
       attaching: true,
+      configurationPending: false,
       attachmentReplaced: false,
       interactionActive: false,
       backgroundDisconnected: false,
@@ -101,10 +102,31 @@ describe("composer connection state", () => {
   it("disables input when another interaction owns it", () => {
     expect(composerConnectionGate({
       attaching: false,
+      configurationPending: false,
       attachmentReplaced: false,
       interactionActive: true,
       backgroundDisconnected: false,
     })).toEqual({ inputDisabled: true, sendDisabled: true });
+  });
+
+  it("keeps the draft editable but waits for settings to apply before sending", () => {
+    expect(composerConnectionGate({
+      attaching: false,
+      configurationPending: true,
+      attachmentReplaced: false,
+      interactionActive: false,
+      backgroundDisconnected: false,
+    })).toEqual({ inputDisabled: false, sendDisabled: true });
+  });
+
+  it("allows sending after the connection and settings are ready", () => {
+    expect(composerConnectionGate({
+      attaching: false,
+      configurationPending: false,
+      attachmentReplaced: false,
+      interactionActive: false,
+      backgroundDisconnected: false,
+    })).toEqual({ inputDisabled: false, sendDisabled: false });
   });
 });
 
