@@ -96,16 +96,17 @@ class MemoryStore:
 
     def load(self, workspace: Path) -> MemoryContext:
         workspace_key = str(workspace.expanduser().resolve())
+        global_memory, workspaces = self.load_all()
+        return MemoryContext(
+            global_memory=global_memory,
+            workspace_memory=workspaces.get(workspace_key, MemoryDocument()),
+        )
+
+    def load_all(self) -> tuple[MemoryDocument, dict[str, MemoryDocument]]:
         with self._locked_files():
             global_text = _read_text(self.global_path)
             workspace_text = _read_text(self.workspace_path)
-        global_memory = _parse_global(global_text)
-        workspaces = _parse_workspaces(workspace_text)
-        workspace_memory = workspaces.get(workspace_key, MemoryDocument())
-        return MemoryContext(
-            global_memory=global_memory,
-            workspace_memory=workspace_memory,
-        )
+        return _parse_global(global_text), _parse_workspaces(workspace_text)
 
     def write_updates(
         self,

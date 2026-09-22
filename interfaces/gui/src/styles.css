@@ -356,6 +356,34 @@ button.tree-entry:hover { background: #edf1f7; }
 .empty-settings { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 300px; color: #929aa8; text-align: center; }
 .empty-settings strong { margin-top: 11px; color: #596477; font-size: 15px; }
 .empty-settings span { margin-top: 5px; font-size: 10px; }
+.memory-settings { display: grid; gap: 16px; }
+.memory-scope { display: inline-flex; align-items: center; gap: 5px; color: #78859a; font-size: 9px; font-weight: 650; text-transform: uppercase; }
+.memory-document { display: grid; gap: 18px; }
+.memory-group h4 { display: flex; align-items: center; gap: 7px; margin: 0 0 8px; color: #536078; font-size: 10px; font-weight: 650; letter-spacing: .5px; text-transform: uppercase; }
+.memory-group h4 span { min-width: 18px; padding: 2px 5px; border-radius: 999px; background: #eef1f6; color: #8792a4; font-size: 8px; text-align: center; }
+.memory-group ul { display: grid; gap: 7px; margin: 0; padding: 0; list-style: none; }
+.memory-group li { position: relative; padding: 9px 11px 9px 24px; border: 1px solid #e7eaf0; border-radius: 7px; background: #fafbfc; color: #515d70; font-size: 11px; line-height: 1.55; overflow-wrap: anywhere; }
+.memory-group li::before { content: ""; position: absolute; top: 14px; left: 11px; width: 5px; height: 5px; border-radius: 50%; background: #8292b3; }
+.memory-empty { margin: 0; padding: 24px 12px; color: #929aa8; font-size: 11px; text-align: center; }
+.memory-workspace-layout { display: grid; grid-template-columns: minmax(210px, 30%) minmax(0, 1fr); gap: 18px; align-items: start; }
+.memory-workspace-picker { min-width: 0; padding: 9px; border: 1px solid #e2e6ed; border-radius: 8px; background: #f5f7fa; }
+.memory-search { display: flex; align-items: center; gap: 7px; min-height: 36px; padding: 0 9px; border: 1px solid #dfe3ea; border-radius: 6px; background: #fff; color: #98a1af; }
+.memory-search:focus-within { border-color: #9dacc9; box-shadow: 0 0 0 3px #7184b50d; }
+.memory-search input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: #343d4d; font-size: 10px; }
+.memory-match-count { padding: 9px 3px 6px; color: #9ba4b2; font-size: 8px; font-weight: 650; letter-spacing: .6px; text-transform: uppercase; }
+.memory-workspace-list { display: grid; gap: 4px; max-height: 310px; overflow-y: auto; }
+.memory-workspace-list button { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; width: 100%; padding: 8px 9px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: #687387; text-align: left; }
+.memory-workspace-list button:hover, .memory-workspace-list button.selected { border-color: #dde2ea; background: #fff; color: #40568a; }
+.memory-workspace-list strong, .memory-workspace-list small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.memory-workspace-list strong { font-size: 10px; font-weight: 620; }
+.memory-workspace-list small { grid-column: 1; color: #9ca5b3; font-size: 8px; }
+.memory-workspace-list button > span { grid-column: 2; grid-row: 1 / 3; align-self: center; min-width: 20px; padding: 2px 5px; border-radius: 999px; background: #edf1f6; color: #7c899e; font-size: 8px; text-align: center; }
+.memory-workspace-list > p, .memory-list-hint { display: block; margin: 0; padding: 12px 5px; color: #969fac; font-size: 9px; line-height: 1.5; text-align: center; }
+.memory-workspace-detail { min-width: 0; }
+.memory-workspace-heading { display: flex; flex-direction: column; gap: 4px; margin-bottom: 16px; padding-bottom: 13px; border-bottom: 1px solid #edf0f3; }
+.memory-workspace-heading strong { color: #414b5c; font-size: 13px; }
+.memory-workspace-heading span { overflow: hidden; color: #969fac; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.memory-page-error { margin: 0; }
 
-@media (max-width: 800px) { .settings-shell { grid-column: 2; } .provider-layout, .detail-layout { grid-template-columns: 1fr; } .provider-catalog, .detail-list { position: static; } }
+@media (max-width: 800px) { .settings-shell { grid-column: 2; } .provider-layout, .detail-layout, .memory-workspace-layout { grid-template-columns: 1fr; } .provider-catalog, .detail-list { position: static; } .memory-workspace-list { max-height: 220px; } }
 @media (max-width: 600px) { .settings-header { padding: 13px 18px; } .settings-header-actions .secondary-button { display: none; } .settings-content { padding: 22px 14px 38px; } .settings-fields-grid, .settings-fields-grid.three-columns, .tool-grid { grid-template-columns: 1fr; } .settings-card-header { flex-direction: column; } .settings-card-header .primary-button, .settings-card-header .secondary-button { width: 100%; } .schedule-row { grid-template-columns: 8px minmax(0, 1fr) auto; gap: 9px; } .schedule-status { display: none; } .schedule-session-button { padding: 0 7px; } }

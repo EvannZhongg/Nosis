@@ -27,6 +27,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from agent_core import (
     JsonlSessionStore,
     ListDirectoryTool,
+    MemoryDocument,
     Session,
     ToolExecutionContext,
     UnsupportedImageError,
@@ -43,6 +44,7 @@ from agent_core.path_utils import path_for_comparison
 from ..bridge.config import (
     default_config_directory,
     initialize_config_directory,
+    memory_store,
 )
 from ..bridge.process import cancel_process
 from ..bridge.protocol import attachment_replaced_message, runtime_state_message
@@ -599,6 +601,23 @@ def create_app(
         except (OSError, ValueError) as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
 
+    @app.get("/api/memory")
+    def get_memory() -> dict[str, object]:
+        try:
+            global_memory, workspaces = memory_store(settings.directory).load_all()
+        except (OSError, ValueError) as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return {
+            "global": _memory_document_to_dict(global_memory),
+            "workspaces": [
+                {
+                    "workspace": workspace_path,
+                    "memory": _memory_document_to_dict(document),
+                }
+                for workspace_path, document in sorted(workspaces.items())
+            ],
+        }
+
     @app.get("/api/schedules")
     def list_schedules() -> list[dict[str, object]]:
         current = SchedulerService(settings.directory / "schedule.jsonl")
@@ -1119,6 +1138,16 @@ def create_app(
     if STATIC_PATH.is_dir():
         app.mount("/", StaticFiles(directory=STATIC_PATH, html=True), name="gui")
     return app
+
+
+def _memory_document_to_dict(
+    document: MemoryDocument,
+) -> dict[str, list[str]]:
+    return {
+        "preferences": list(document.preferences),
+        "facts": list(document.facts),
+        "decisions": list(document.decisions),
+    }
 
 
 def _open_session_message(

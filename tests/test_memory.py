@@ -216,6 +216,30 @@ class MemoryTest(unittest.TestCase):
             self.store.workspace_path.read_text(),
         )
 
+    def test_load_all_returns_every_workspace_memory(self) -> None:
+        other = self.root / "other"
+        self.store.write_updates(
+            self.workspace,
+            global_memory=MemoryDocument(preferences=("Use Chinese.",)),
+            workspace_memory=MemoryDocument(facts=("First project.",)),
+        )
+        self.store.write_updates(
+            other,
+            workspace_memory=MemoryDocument(decisions=("Use SQLite.",)),
+        )
+
+        global_memory, workspaces = self.store.load_all()
+
+        self.assertEqual(global_memory.preferences, ("Use Chinese.",))
+        self.assertEqual(
+            workspaces[str(self.workspace.resolve())].facts,
+            ("First project.",),
+        )
+        self.assertEqual(
+            workspaces[str(other.resolve())].decisions,
+            ("Use SQLite.",),
+        )
+
     def test_prompt_states_memory_priority(self) -> None:
         self.store.write_updates(
             self.workspace,

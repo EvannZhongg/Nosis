@@ -40,6 +40,15 @@ export type ScheduleSummary = {
 };
 export type ModelOption = { id: string; model: string };
 export type ModelOptions = { default: string; models: ModelOption[] };
+export type MemoryDocument = {
+  preferences: string[];
+  facts: string[];
+  decisions: string[];
+};
+export type MemorySnapshot = {
+  global: MemoryDocument;
+  workspaces: { workspace: string; memory: MemoryDocument }[];
+};
 export type ImageAttachment = { type: "image"; path: string; mime_type: string };
 export type Directory = {
   root: string;

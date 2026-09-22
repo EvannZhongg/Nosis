@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bot, Boxes, CalendarClock, ChevronDown, ChevronRight, KeyRound, LoaderCircle, MessageSquare, Plug, Plus, Settings as SettingsIcon, Sparkles, Trash2 } from "lucide-react";
+import { Bot, Boxes, Brain, CalendarClock, ChevronDown, ChevronRight, KeyRound, LoaderCircle, MessageSquare, Plug, Plus, Settings as SettingsIcon, Sparkles, Trash2 } from "lucide-react";
 import { Chat } from "./Chat";
 import { Settings, type SettingsSection } from "./Settings";
 import { Workspace } from "./Workspace";
@@ -201,6 +201,7 @@ export function App() {
   const settingsItems: { id: SettingsSection; label: string; description: string; icon: typeof Bot }[] = [
     { id: "providers", label: "Providers", description: "模型、密钥和路由", icon: KeyRound },
     { id: "agent", label: "Agent", description: "工具和运行时设置", icon: Bot },
+    { id: "memory", label: "Memory", description: "查看长期记忆", icon: Brain },
     { id: "skills", label: "Skills", description: "查看可用技能", icon: Sparkles },
     { id: "plugins", label: "Plugins", description: "查看已安装扩展", icon: Boxes },
     { id: "mcp", label: "MCP", description: "查看外部工具服务", icon: Plug },

@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { ArrowLeft, Boxes, Check, ChevronRight, CircleAlert, KeyRound, MessageSquare, Plus, RefreshCw, Save, ServerCog } from "lucide-react";
-import { get, put, type SettingsSnapshot, type ScheduleSummary, type ScheduleTrigger } from "./api";
+import { ArrowLeft, Boxes, Check, ChevronRight, CircleAlert, FolderKanban, Globe2, KeyRound, MessageSquare, Plus, RefreshCw, Save, Search, ServerCog } from "lucide-react";
+import { get, put, type MemoryDocument, type MemorySnapshot, type SettingsSnapshot, type ScheduleSummary, type ScheduleTrigger } from "./api";
 
-export type SettingsSection = "providers" | "agent" | "skills" | "plugins" | "mcp" | "schedules";
+export type SettingsSection = "providers" | "agent" | "memory" | "skills" | "plugins" | "mcp" | "schedules";
 
 const sectionLabels: Record<SettingsSection, string> = {
   providers: "Providers",
   agent: "Agent",
+  memory: "Memory",
   skills: "Skills",
   plugins: "Plugins",
   mcp: "MCP",
@@ -19,6 +20,7 @@ export function Settings({ section, onClose, onChanged, onOpenSession }: { secti
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [scheduleRefresh, setScheduleRefresh] = useState(0);
+  const [memoryRefresh, setMemoryRefresh] = useState(0);
 
   async function refresh() {
     try {
@@ -31,7 +33,9 @@ export function Settings({ section, onClose, onChanged, onOpenSession }: { secti
     }
   }
 
-  useEffect(() => { void refresh(); }, []);
+  useEffect(() => {
+    if (section !== "memory" && section !== "schedules") void refresh();
+  }, [section]);
 
   async function saveProvider(id: string, payload: unknown) {
     setSaving(true);
@@ -76,11 +80,11 @@ export function Settings({ section, onClose, onChanged, onOpenSession }: { secti
   return <section className="settings-shell">
     <header className="settings-header">
       <h1>{sectionLabels[section]}</h1>
-      <div className="settings-header-actions"><button className="secondary-button" onClick={() => section === "schedules" ? setScheduleRefresh((value) => value + 1) : void refresh()} disabled={saving}><RefreshCw size={14} /> 刷新</button><button className="settings-back" onClick={onClose}><ArrowLeft size={14} /> 返回对话</button></div>
+      <div className="settings-header-actions"><button className="secondary-button" onClick={() => section === "schedules" ? setScheduleRefresh((value) => value + 1) : section === "memory" ? setMemoryRefresh((value) => value + 1) : void refresh()} disabled={saving}><RefreshCw size={14} /> 刷新</button><button className="settings-back" onClick={onClose}><ArrowLeft size={14} /> 返回对话</button></div>
     </header>
     {error && <div className="settings-error" role="alert"><CircleAlert size={15} /><span>{error}</span></div>}
     <div className="settings-layout"><main className="settings-content">
-        {!settings && section !== "schedules" ? <LoadingState /> : section === "schedules" ? <ScheduleSettings refreshVersion={scheduleRefresh} onOpenSession={onOpenSession} /> : section === "providers" ? <ProviderSettings settings={settings!} selected={selected} onSelect={setSelected} saving={saving} onSave={saveProvider} onSaveRouting={saveRouting} />
+        {!settings && section !== "memory" && section !== "schedules" ? <LoadingState /> : section === "schedules" ? <ScheduleSettings refreshVersion={scheduleRefresh} onOpenSession={onOpenSession} /> : section === "memory" ? <MemorySettings refreshVersion={memoryRefresh} /> : section === "providers" ? <ProviderSettings settings={settings!} selected={selected} onSelect={setSelected} saving={saving} onSave={saveProvider} onSaveRouting={saveRouting} />
           : section === "agent" ? <AgentSettingsForm key={settings!.revision} settings={settings!} saving={saving} onSave={saveAgent} />
           : section === "skills" ? <DetailCollection eyebrow="Skill library" items={settings!.skills.map((item) => ({ id: item.id, title: item.name, subtitle: `${item.source} · ${item.path}`, body: item.content, status: "Available" }))} selected={selected} onSelect={setSelected} empty="没有发现 Skill。" />
           : section === "plugins" ? <DetailCollection eyebrow="Plugin catalog" items={settings!.plugins.map((item) => ({ id: item.name, title: item.name, subtitle: item.description ?? item.path, status: item.enabled ? "Enabled" : "Disabled", body: JSON.stringify({ version: item.version, capabilities: item.capabilities, components: item.components, path: item.path }, null, 2) }))} selected={selected} onSelect={setSelected} empty="没有发现 Plugin。" />
@@ -155,6 +159,71 @@ function ScheduleSettings({ refreshVersion, onOpenSession }: { refreshVersion: n
 
 function LoadingState() {
   return <div className="settings-loading"><span className="settings-loading-mark" /><span>Loading configuration</span></div>;
+}
+
+const memoryKinds: { key: keyof MemoryDocument; label: string }[] = [
+  { key: "preferences", label: "Preferences" },
+  { key: "facts", label: "Facts" },
+  { key: "decisions", label: "Decisions" },
+];
+
+function memoryEntryCount(memory: MemoryDocument) {
+  return memory.preferences.length + memory.facts.length + memory.decisions.length;
+}
+
+function workspaceName(path: string) {
+  return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+}
+
+function MemoryDocumentView({ memory }: { memory: MemoryDocument }) {
+  if (memoryEntryCount(memory) === 0) return <p className="memory-empty">暂无记忆。</p>;
+  return <div className="memory-document">{memoryKinds.map(({ key, label }) => memory[key].length > 0 && <section key={key} className="memory-group"><h4>{label}<span>{memory[key].length}</span></h4><ul>{memory[key].map((entry, index) => <li key={`${key}:${index}`}>{entry}</li>)}</ul></section>)}</div>;
+}
+
+function MemorySettings({ refreshVersion }: { refreshVersion: number }) {
+  const [snapshot, setSnapshot] = useState<MemorySnapshot>();
+  const [selected, setSelected] = useState("");
+  const [query, setQuery] = useState("");
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    setSnapshot(undefined);
+    get<MemorySnapshot>("/api/memory").then((value) => {
+      if (cancelled) return;
+      setSnapshot(value);
+      setSelected((current) => value.workspaces.some((item) => item.workspace === current) ? current : value.workspaces[0]?.workspace ?? "");
+      setError("");
+    }).catch((reason) => { if (!cancelled) setError(String(reason)); });
+    return () => { cancelled = true; };
+  }, [refreshVersion]);
+
+  const matches = useMemo(() => {
+    if (!snapshot) return [];
+    const normalized = query.trim().toLocaleLowerCase();
+    return normalized
+      ? snapshot.workspaces.filter((item) => item.workspace.toLocaleLowerCase().includes(normalized))
+      : snapshot.workspaces;
+  }, [query, snapshot]);
+  const visible = matches.slice(0, 50);
+  const selectedMemory = visible.find((item) => item.workspace === selected) ?? visible[0];
+
+  if (error) return <div className="settings-error memory-page-error" role="alert"><CircleAlert size={15} /><span>{error}</span></div>;
+  if (!snapshot) return <LoadingState />;
+  return <div className="memory-settings">
+    <SettingsCard title="Global memory" description="用于所有 Workspace 的长期偏好和稳定事实。" action={<span className="memory-scope"><Globe2 size={13} /> Global</span>}><MemoryDocumentView memory={snapshot.global} /></SettingsCard>
+    <SettingsCard title="Workspace memory" description={`按 Workspace 隔离的长期事实与决定，共 ${snapshot.workspaces.length} 个。`} action={<span className="memory-scope"><FolderKanban size={13} /> Workspace</span>}>
+      {snapshot.workspaces.length === 0 ? <p className="memory-empty">暂无 Workspace Memory。</p> : <div className="memory-workspace-layout">
+        <aside className="memory-workspace-picker">
+          <label className="memory-search"><Search size={13} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索 Workspace 路径" /></label>
+          <div className="memory-match-count">{query ? `${matches.length} 个匹配结果` : `${snapshot.workspaces.length} 个 Workspace`}</div>
+          <div className="memory-workspace-list">{visible.map((item) => <button key={item.workspace} className={item.workspace === selectedMemory?.workspace ? "selected" : ""} title={item.workspace} onClick={() => setSelected(item.workspace)}><strong>{workspaceName(item.workspace)}</strong><small>{item.workspace}</small><span>{memoryEntryCount(item.memory)}</span></button>)}{visible.length === 0 && <p>没有匹配的 Workspace。</p>}</div>
+          {matches.length > 50 && <small className="memory-list-hint">仅显示前 50 个，请继续缩小搜索范围。</small>}
+        </aside>
+        <div className="memory-workspace-detail">{selectedMemory ? <><div className="memory-workspace-heading"><strong>{workspaceName(selectedMemory.workspace)}</strong><span title={selectedMemory.workspace}>{selectedMemory.workspace}</span></div><MemoryDocumentView memory={selectedMemory.memory} /></> : <p className="memory-empty">请选择一个 Workspace。</p>}</div>
+      </div>}
+    </SettingsCard>
+  </div>;
 }
 
 function SettingsCard({ title, description, action, children, className = "" }: { title: string; description?: string; action?: ReactNode; children: ReactNode; className?: string }) {

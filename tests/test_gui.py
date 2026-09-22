@@ -15,6 +15,8 @@ from agent_core import (
     JsonlSessionStore,
     LLMRequest,
     LLMResponse,
+    MemoryDocument,
+    MemoryStore,
     Message,
     Session,
     Workspace,
@@ -1356,6 +1358,40 @@ class GuiTest(unittest.TestCase):
         self.assertEqual(body["default_provider"], "third")
         self.assertNotIn("secret", json.dumps(body))
         self.assertIn("NOSIS_THIRD_API_KEY=secret", (self.config / ".env").read_text())
+
+    def test_memory_api_returns_global_and_workspace_documents(self) -> None:
+        memory = MemoryStore(
+            self.config / "MEMORY.md",
+            self.config / "workspaces" / "MEMORY.md",
+        )
+        memory.write_updates(
+            self.root,
+            global_memory=MemoryDocument(preferences=("Use Chinese.",)),
+            workspace_memory=MemoryDocument(
+                facts=("This workspace uses FastAPI.",),
+                decisions=("Keep Bridge as the runtime boundary.",),
+            ),
+        )
+
+        with self.client() as client:
+            response = client.get("/api/memory")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {
+            "global": {
+                "preferences": ["Use Chinese."],
+                "facts": [],
+                "decisions": [],
+            },
+            "workspaces": [{
+                "workspace": str(self.root.resolve()),
+                "memory": {
+                    "preferences": [],
+                    "facts": ["This workspace uses FastAPI."],
+                    "decisions": ["Keep Bridge as the runtime boundary."],
+                },
+            }],
+        })
 
     def test_reads_history_written_by_the_tui(self) -> None:
         self.store.bind_workspace("from-tui", self.root)
