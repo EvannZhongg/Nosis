@@ -534,5 +534,54 @@ class SandboxedCommandExecutorTest(unittest.TestCase):
                 first.close()
                 second.close()
 
+    @unittest.skipUnless(platform.system() == "Windows", "Windows ACL test")
+    def test_crashed_session_reclaims_managed_user_acl(self) -> None:
+        child = (
+            "import os\n"
+            "from pathlib import Path\n"
+            "from agent_core import (\n"
+            "    SandboxedCommandExecutor,\n"
+            "    platform_workspace_sandbox_backend,\n"
+            ")\n"
+            "workspace = Path(os.environ['CRASH_WORKSPACE'])\n"
+            "executor = SandboxedCommandExecutor(\n"
+            "    workspace, platform_workspace_sandbox_backend()\n"
+            ")\n"
+            "result = executor.execute('$null = 1')\n"
+            "if result.exit_code:\n"
+            "    raise SystemExit(result.stderr)\n"
+            "os._exit(0)\n"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            pristine = subprocess.run(
+                ["icacls", str(workspace)],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout
+            environment = os.environ.copy()
+            environment["CRASH_WORKSPACE"] = str(workspace)
+            subprocess.run(
+                [sys.executable, "-c", child],
+                check=True,
+                env=environment,
+            )
+            executor = SandboxedCommandExecutor(
+                workspace, platform_workspace_sandbox_backend()
+            )
+            try:
+                self.assertEqual(executor.execute("$null = 1").exit_code, 0)
+            finally:
+                executor.close()
+            recovered = subprocess.run(
+                ["icacls", str(workspace)],
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout
+
+        self.assertEqual(recovered, pristine)
+
 if __name__ == "__main__":
     unittest.main()

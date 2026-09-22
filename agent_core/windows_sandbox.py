@@ -783,9 +783,13 @@ class WindowsWriteRestrictedSandbox:
     ) -> None:
         key = (os.path.normcase(os.path.realpath(path)), sid_value)
         with _CapabilityMutex(self._api, key):
-            markers = self._active_capability_markers(key)
-            managed = any(self._marker_is_managed(marker) for marker in markers)
+            markers, orphaned_managed = self._active_capability_markers(key)
+            managed = orphaned_managed or any(
+                self._marker_is_managed(marker) for marker in markers
+            )
             if not markers:
+                if orphaned_managed:
+                    self._revoke_write(path, sid)
                 if cleanup_stale:
                     self._remove_stale_capability_grants(path, sid_value)
                 # The deterministic capability SID belongs to this runtime,
@@ -807,17 +811,21 @@ class WindowsWriteRestrictedSandbox:
         with _CapabilityMutex(self._api, key):
             managed = self._marker_is_managed(marker)
             marker.unlink(missing_ok=True)
-            if managed and not self._active_capability_markers(key):
+            markers, orphaned_managed = self._active_capability_markers(key)
+            if (managed or orphaned_managed) and not markers:
                 self._revoke_write(path, sid)
 
     def _capability_marker_prefix(self, key: tuple[str, str]) -> str:
         digest = hashlib.sha256("\0".join(key).encode("utf-8")).hexdigest()
         return f"{digest}-"
 
-    def _active_capability_markers(self, key: tuple[str, str]) -> list[Path]:
+    def _active_capability_markers(
+        self, key: tuple[str, str]
+    ) -> tuple[list[Path], bool]:
         _CAPABILITY_LEASE_DIRECTORY.mkdir(parents=True, exist_ok=True)
         prefix = self._capability_marker_prefix(key)
         active: list[Path] = []
+        orphaned_managed = False
         for marker in _CAPABILITY_LEASE_DIRECTORY.glob(f"{prefix}*.lease"):
             try:
                 pid = int(marker.name[len(prefix) :].split("-", 1)[0])
@@ -827,8 +835,11 @@ class WindowsWriteRestrictedSandbox:
             if self._api.process_is_running(pid):
                 active.append(marker)
             else:
+                orphaned_managed = (
+                    orphaned_managed or self._marker_is_managed(marker)
+                )
                 marker.unlink(missing_ok=True)
-        return active
+        return active, orphaned_managed
 
     def _marker_is_managed(self, marker: Path) -> bool:
         try:
