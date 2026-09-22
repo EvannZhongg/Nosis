@@ -424,7 +424,9 @@ class SubagentRuntimeTest(unittest.TestCase):
             self.assertEqual(result, "child answer")
             self.assertEqual(len(output["entries"]), 200)
             self.assertTrue(output["has_more"])
-            self.assertEqual(output["next_offset"], 200)
+            self.assertEqual(
+                output["next_cursor"], "generated_module_0199.py"
+            )
 
     def test_saves_child_tool_results_beside_the_child_transcript(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

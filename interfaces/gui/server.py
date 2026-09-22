@@ -886,11 +886,18 @@ def create_app(
         return {"workspace": selected or None}
 
     @app.get("/api/workspace")
-    def get_workspace(path: str = ".", session_id: str | None = None) -> dict[str, object]:
+    def get_workspace(
+        path: str = ".",
+        cursor: str | None = None,
+        session_id: str | None = None,
+    ) -> dict[str, object]:
         current_workspace = session_workspace(session_id)
         try:
+            arguments = {"path": path}
+            if cursor is not None:
+                arguments["cursor"] = cursor
             listing = ListDirectoryTool().execute(
-                {"path": path},
+                arguments,
                 ToolExecutionContext(
                     workspace=current_workspace,
                     session=Session(),

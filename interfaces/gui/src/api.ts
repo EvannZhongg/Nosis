@@ -55,6 +55,8 @@ export type Directory = {
   root: string;
   path: string;
   entries: { name: string; type: "directory" | "file" | "symlink" | "other" }[];
+  has_more: boolean;
+  next_cursor: string | null;
 };
 
 export async function get<T>(path: string): Promise<T> {

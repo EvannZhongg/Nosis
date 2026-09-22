@@ -6,6 +6,7 @@ function DirectoryTree({ path, version, sessionId }: { path: string; version: nu
   const [directory, setDirectory] = useState<Directory>();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [error, setError] = useState("");
+  const [loadingMore, setLoadingMore] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -22,6 +23,21 @@ function DirectoryTree({ path, version, sessionId }: { path: string; version: nu
   const entries = [...directory.entries].sort((a, b) =>
     Number(b.type === "directory") - Number(a.type === "directory") || a.name.localeCompare(b.name),
   );
+
+  const loadMore = async () => {
+    if (!directory.next_cursor || loadingMore) return;
+    setLoadingMore(true);
+    const query = `path=${encodeURIComponent(path)}&cursor=${encodeURIComponent(directory.next_cursor)}${sessionId ? `&session_id=${encodeURIComponent(sessionId)}` : ""}`;
+    try {
+      const next = await get<Directory>(`/api/workspace?${query}`);
+      setDirectory({ ...next, entries: [...directory.entries, ...next.entries] });
+      setError("");
+    } catch (error) {
+      setError(String(error));
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   return (
     <>
@@ -45,6 +61,7 @@ function DirectoryTree({ path, version, sessionId }: { path: string; version: nu
           </li>;
         })}
         {entries.length === 0 && <li className="empty-directory">空目录</li>}
+        {directory.has_more && <li><button className="tree-entry" disabled={loadingMore} onClick={() => { void loadMore(); }}>{loadingMore ? "加载中…" : "加载更多"}</button></li>}
       </ul>
     </>
   );

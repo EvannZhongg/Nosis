@@ -1,5 +1,6 @@
 import os
 from collections.abc import Iterator
+from heapq import nsmallest
 from pathlib import Path
 
 from ...path_utils import path_for_comparison
@@ -20,8 +21,9 @@ class ListDirectoryTool(Tool):
             name=self.name,
             description=(
                 "Discover workspace entries with glob filtering, optional "
-                "recursive traversal, and pagination. Discovery streams in "
-                "filesystem order and keeps only one result page in memory."
+                "recursive traversal, and stable lexicographic cursor "
+                "pagination. Each call scans the requested tree but keeps "
+                "only one result page in memory."
             ),
             parameters={
                 "type": "object",
@@ -43,11 +45,12 @@ class ListDirectoryTool(Tool):
                         "default": False,
                         "description": "Descend into subdirectories when true.",
                     },
-                    "offset": {
-                        "type": "integer",
-                        "minimum": 0,
-                        "default": 0,
-                        "description": "Number of matching entries to skip.",
+                    "cursor": {
+                        "type": "string",
+                        "description": (
+                            "Return entries whose relative path sorts after "
+                            "this value. Use next_cursor from the previous page."
+                        ),
                     },
                     "limit": {
                         "type": "integer",
@@ -67,32 +70,22 @@ class ListDirectoryTool(Tool):
         arguments: dict[str, JSONValue],
         context: ToolExecutionContext,
     ) -> JSONValue:
-        path, glob, recursive, offset, limit = _parse_arguments(arguments)
+        path, glob, recursive, cursor, limit = _parse_arguments(arguments)
         workspace = context.workspace
         directory_path = workspace.resolve_path(path)
         if not directory_path.is_dir():
             raise ValueError("list_directory path must be a directory")
 
-        entries: list[dict[str, JSONValue]] = []
-        matched_entries = 0
-        has_more = False
-        for entry in _iter_entries(directory_path, recursive):
-            relative_path = entry.relative_to(directory_path)
-            if not matches_path_glob(relative_path, glob):
-                continue
-            if matched_entries < offset:
-                matched_entries += 1
-                continue
-            if len(entries) >= limit:
-                has_more = True
-                break
-            entries.append(
-                {
-                    "name": relative_path.as_posix(),
-                    "type": _entry_type(entry),
-                }
-            )
-            matched_entries += 1
+        candidates = nsmallest(
+            limit + 1,
+            _matching_entries(directory_path, glob, recursive, cursor),
+            key=lambda candidate: candidate[0],
+        )
+        has_more = len(candidates) > limit
+        entries: list[dict[str, JSONValue]] = [
+            {"name": name, "type": _entry_type(entry)}
+            for name, entry in candidates[:limit]
+        ]
 
         display_path = path_for_comparison(directory_path).relative_to(
             path_for_comparison(workspace.path)
@@ -101,23 +94,23 @@ class ListDirectoryTool(Tool):
             "path": display_path,
             "entries": entries,
             "has_more": has_more,
-            "next_offset": offset + len(entries) if has_more else None,
+            "next_cursor": entries[-1]["name"] if has_more else None,
         }
 
 
 def _parse_arguments(
     arguments: dict[str, JSONValue],
-) -> tuple[str, str, bool, int, int]:
-    allowed = {"path", "glob", "recursive", "offset", "limit"}
+) -> tuple[str, str, bool, str | None, int]:
+    allowed = {"path", "glob", "recursive", "cursor", "limit"}
     if not set(arguments) <= allowed:
         raise ValueError(
             "list_directory accepts only 'path', 'glob', 'recursive', "
-            "'offset', and 'limit'"
+            "'cursor', and 'limit'"
         )
     path = arguments.get("path")
     glob = arguments.get("glob", "*")
     recursive = arguments.get("recursive", False)
-    offset = arguments.get("offset", 0)
+    cursor = arguments.get("cursor")
     limit = arguments.get("limit", DEFAULT_LIST_LIMIT)
     if not isinstance(path, str) or not path:
         raise ValueError("list_directory requires a non-empty string 'path'")
@@ -125,10 +118,8 @@ def _parse_arguments(
         raise ValueError("list_directory requires 'glob' to be a non-empty string")
     if not isinstance(recursive, bool):
         raise ValueError("list_directory requires 'recursive' to be a boolean")
-    if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
-        raise ValueError(
-            "list_directory requires 'offset' to be a non-negative integer"
-        )
+    if cursor is not None and (not isinstance(cursor, str) or not cursor):
+        raise ValueError("list_directory requires 'cursor' to be a non-empty string")
     if (
         isinstance(limit, bool)
         or not isinstance(limit, int)
@@ -139,7 +130,7 @@ def _parse_arguments(
             f"list_directory requires 'limit' to be between 1 and "
             f"{MAX_LIST_LIMIT}"
         )
-    return path, glob, recursive, offset, limit
+    return path, glob, recursive, cursor, limit
 
 
 def _iter_entries(directory_path: Path, recursive: bool) -> Iterator[Path]:
@@ -159,6 +150,21 @@ def _iter_entries(directory_path: Path, recursive: bool) -> Iterator[Path]:
                         directories.append(entry)
         except OSError:
             continue
+
+
+def _matching_entries(
+    directory_path: Path,
+    glob: str,
+    recursive: bool,
+    cursor: str | None,
+) -> Iterator[tuple[str, Path]]:
+    for entry in _iter_entries(directory_path, recursive):
+        relative_path = entry.relative_to(directory_path)
+        name = relative_path.as_posix()
+        if matches_path_glob(relative_path, glob) and (
+            cursor is None or name > cursor
+        ):
+            yield name, entry
 
 
 def _escapes_directory(entry: Path, root: Path) -> bool:

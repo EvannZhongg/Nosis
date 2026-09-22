@@ -1687,7 +1687,7 @@ class ListDirectoryToolTest(unittest.TestCase):
                 ],
             )
             self.assertFalse(result["has_more"])
-            self.assertIsNone(result["next_offset"])
+            self.assertIsNone(result["next_cursor"])
 
     @unittest.skipUnless(
         SYMLINKS_AVAILABLE,
@@ -1728,37 +1728,42 @@ class ListDirectoryToolTest(unittest.TestCase):
             child = nested / "child.py"
             child.write_text("child", encoding="utf-8")
             paths.append(child)
-            yielded = []
-
-            def entries(*_args):
-                for path in paths:
-                    yielded.append(path)
-                    yield path
-
             with patch(
                 "agent_core.tools.builtin.list_directory._iter_entries",
-                side_effect=entries,
+                return_value=iter(paths),
+            ):
+                first = _Bound(ListDirectoryTool(), workspace).execute(
+                    {
+                        "path": ".",
+                        "glob": "**/*.py",
+                        "recursive": True,
+                        "limit": 1,
+                    }
+                )
+            with patch(
+                "agent_core.tools.builtin.list_directory._iter_entries",
+                return_value=iter(paths),
             ):
                 result = _Bound(ListDirectoryTool(), workspace).execute(
                     {
                         "path": ".",
                         "glob": "**/*.py",
                         "recursive": True,
-                        "offset": 1,
+                        "cursor": first["next_cursor"],
                         "limit": 1,
                     }
                 )
 
+            self.assertEqual(first["entries"], [{"name": "a.py", "type": "file"}])
             self.assertEqual(
                 result,
                 {
                     "path": ".",
                     "entries": [{"name": "c.py", "type": "file"}],
                     "has_more": True,
-                    "next_offset": 2,
+                    "next_cursor": "c.py",
                 },
             )
-            self.assertEqual(yielded, paths)
 
     def test_glob_matches_complete_relative_paths(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1785,7 +1790,7 @@ class ListDirectoryToolTest(unittest.TestCase):
                 ["nested/child.py", "root.py"],
             )
 
-    def test_stops_after_one_lookahead_match(self) -> None:
+    def test_returns_stable_path_order_with_bounded_page_size(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Workspace(Path(directory))
             paths = []
@@ -1793,54 +1798,61 @@ class ListDirectoryToolTest(unittest.TestCase):
                 path = workspace.path / name
                 path.write_text(name, encoding="utf-8")
                 paths.append(path)
-            yielded = []
-
-            def entries(*_args):
-                for path in paths:
-                    yielded.append(path)
-                    yield path
-
             with patch(
                 "agent_core.tools.builtin.list_directory._iter_entries",
-                side_effect=entries,
+                return_value=iter(reversed(paths)),
             ):
                 result = _Bound(ListDirectoryTool(), workspace).execute(
                     {"path": ".", "limit": 2}
                 )
 
             self.assertEqual(len(result["entries"]), 2)
-            self.assertTrue(result["has_more"])
-            self.assertEqual(result["next_offset"], 2)
-            self.assertEqual(yielded, paths[:3])
-
-    def test_large_offset_streams_without_retaining_skipped_entries(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            workspace = Workspace(Path(directory))
-            file_path = workspace.path / "entry.txt"
-            file_path.write_text("entry", encoding="utf-8")
-            yielded = 0
-
-            def entries(*_args):
-                nonlocal yielded
-                for _ in range(10_003):
-                    yielded += 1
-                    yield file_path
-
-            with patch(
-                "agent_core.tools.builtin.list_directory._iter_entries",
-                side_effect=entries,
-            ):
-                result = _Bound(ListDirectoryTool(), workspace).execute(
-                    {"path": ".", "offset": 10_001, "limit": 1}
-                )
-
             self.assertEqual(
-                result["entries"],
-                [{"name": "entry.txt", "type": "file"}],
+                [entry["name"] for entry in result["entries"]],
+                ["a.txt", "b.txt"],
             )
             self.assertTrue(result["has_more"])
-            self.assertEqual(result["next_offset"], 10_002)
-            self.assertEqual(yielded, 10_003)
+            self.assertEqual(result["next_cursor"], "b.txt")
+
+    def test_cursor_pagination_is_stable_when_earlier_entries_change(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+            for name in ("b.txt", "c.txt", "d.txt"):
+                (workspace.path / name).write_text(name, encoding="utf-8")
+            tool = _Bound(ListDirectoryTool(), workspace)
+            first = tool.execute({"path": ".", "limit": 2})
+
+            (workspace.path / "a.txt").write_text("a", encoding="utf-8")
+            (workspace.path / "b.txt").unlink()
+            second = tool.execute(
+                {
+                    "path": ".",
+                    "cursor": first["next_cursor"],
+                    "limit": 2,
+                }
+            )
+
+            self.assertEqual(
+                [entry["name"] for entry in first["entries"]],
+                ["b.txt", "c.txt"],
+            )
+            self.assertEqual(
+                [entry["name"] for entry in second["entries"]],
+                ["d.txt"],
+            )
+            self.assertFalse(second["has_more"])
+            self.assertIsNone(second["next_cursor"])
+
+    def test_rejects_offset_and_invalid_cursor(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            tool = _Bound(ListDirectoryTool(), Workspace(Path(directory)))
+
+            with self.assertRaisesRegex(ValueError, "accepts only"):
+                tool.execute({"path": ".", "offset": 1})
+            for cursor in ("", 1, True):
+                with self.subTest(cursor=cursor):
+                    with self.assertRaisesRegex(ValueError, "cursor"):
+                        tool.execute({"path": ".", "cursor": cursor})
 
     def test_rejects_file_path(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

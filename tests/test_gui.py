@@ -1595,6 +1595,31 @@ class GuiTest(unittest.TestCase):
                     400,
                 )
 
+    def test_workspace_listing_accepts_cursor(self) -> None:
+        for name in ("a.txt", "b.txt", "c.txt"):
+            (self.root / name).write_text(name, encoding="utf-8")
+
+        with self.client() as client:
+            first = client.get(
+                "/api/workspace", params={"path": "."}
+            ).json()
+            cursor = next(
+                entry["name"]
+                for entry in first["entries"]
+                if entry["name"] == "a.txt"
+            )
+            second = client.get(
+                "/api/workspace",
+                params={"path": ".", "cursor": cursor},
+            ).json()
+
+        self.assertNotIn(
+            {"name": "a.txt", "type": "file"}, second["entries"]
+        )
+        self.assertIn(
+            {"name": "b.txt", "type": "file"}, second["entries"]
+        )
+
     @unittest.skipUnless(
         SYMLINKS_AVAILABLE,
         "creating symlinks needs Developer Mode or administrator rights "
