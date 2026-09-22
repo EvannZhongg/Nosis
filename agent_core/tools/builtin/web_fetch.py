@@ -166,6 +166,7 @@ def _require_public_url(url: str) -> None:
 
 def _resolve_public_addresses(host: str) -> tuple[str, ...]:
     """Resolve through public DNS instead of the host's intercepted resolver."""
+    # A proxy may point names at reserved fake-IP ranges; literals keep the blocklist.
     try:
         literal = ipaddress.ip_address(host)
     except ValueError:
