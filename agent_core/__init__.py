@@ -18,6 +18,7 @@ from .agent import (
 from .config import (
     AgentConfig,
     ContextCompressionConfig,
+    MemoryConfig,
     SubagentRoleConfig,
     load_agent_config,
 )
@@ -57,6 +58,14 @@ from .media import (
     estimate_image_tokens,
     image_extension,
     probe_image,
+)
+from .memory import (
+    MemoryCandidate,
+    MemoryContext,
+    MemoryDocument,
+    MemoryManager,
+    MemoryReconciler,
+    MemoryStore,
 )
 from .session import (
     Message,
@@ -122,6 +131,7 @@ from .tools import (
     ReadFileTool,
     ReadImageTool,
     ReadSkillTool,
+    RememberTool,
     SearchFilesTool,
     ShellApprovalPolicy,
     ShellTool,
@@ -205,6 +215,13 @@ __all__ = [
     "MAX_IMAGE_BYTES",
     "MAX_PLAN_STEP_OUTCOME_CHARS",
     "MAX_TOOL_RESULT_CHARS",
+    "MemoryCandidate",
+    "MemoryConfig",
+    "MemoryContext",
+    "MemoryDocument",
+    "MemoryManager",
+    "MemoryReconciler",
+    "MemoryStore",
     "MacOSSandboxBackend",
     "McpApprovalPolicy",
     "McpConfig",
@@ -226,6 +243,7 @@ __all__ = [
     "ReadFileTool",
     "ReadImageTool",
     "ReadSkillTool",
+    "RememberTool",
     "ReasoningDeltaEvent",
     "RuntimeErrorInfo",
     "SandboxBackend",

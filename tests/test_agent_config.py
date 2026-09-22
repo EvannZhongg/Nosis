@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agent_core import AgentConfig, ToolConfig, load_agent_config
+from agent_core import AgentConfig, MemoryConfig, ToolConfig, load_agent_config
 
 
 ENABLED_TOOLS = {
@@ -135,6 +135,41 @@ class AgentConfigTest(unittest.TestCase):
         )
 
         self.assertIsNone(config.max_generation_tokens)
+
+    def test_loads_memory_config(self) -> None:
+        config = self.load(
+            {
+                "memory": {
+                    "enabled": False,
+                    "global_max_tokens": 1200,
+                    "workspace_max_tokens": 2400,
+                },
+                "main_agent": {"tools": ENABLED_TOOLS},
+            }
+        )
+
+        self.assertEqual(config.memory, MemoryConfig(False, 1200, 2400))
+
+    def test_defaults_memory_config(self) -> None:
+        config = self.load({"main_agent": {"tools": ENABLED_TOOLS}})
+
+        self.assertEqual(config.memory, MemoryConfig())
+
+    def test_rejects_invalid_memory_config(self) -> None:
+        for memory in (
+            {"enabled": "yes"},
+            {"global_max_tokens": 0},
+            {"workspace_max_tokens": True},
+            {"unexpected": 1},
+        ):
+            with self.subTest(memory=memory):
+                with self.assertRaises(ValueError):
+                    self.load(
+                        {
+                            "memory": memory,
+                            "main_agent": {"tools": ENABLED_TOOLS},
+                        }
+                    )
 
     def test_rejects_invalid_generation_limit(self) -> None:
         for value in (0, True, "100"):

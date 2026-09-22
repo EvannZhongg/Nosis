@@ -78,6 +78,7 @@ export type AgentSettings = {
   workspace_instruction_files: string[];
   tools: Record<string, boolean>;
   context: { compression: { enabled: boolean; trigger_ratio: number | null; keep_recent_units: number } };
+  memory: { enabled: boolean; global_max_tokens: number; workspace_max_tokens: number };
   subagent_roles: Record<string, { enabled: boolean; description: string; tools: Record<string, boolean> }>;
   mcp_enabled: boolean;
 };

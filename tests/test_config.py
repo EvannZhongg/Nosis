@@ -104,9 +104,13 @@ class ConfigTest(unittest.TestCase):
                     config_directory / "provider_config.json",
                     config_directory / "agent_config.json",
                     config_directory / "AGENTS.md",
+                    config_directory / "MEMORY.md",
+                    config_directory / "workspaces" / "MEMORY.md",
                     config_directory / "prompts" / "Soul.md",
                     config_directory / "prompts" / "SubAgent.md",
                     config_directory / "prompts" / "Consolidator.md",
+                    config_directory / "prompts" / "GlobalMemory.md",
+                    config_directory / "prompts" / "WorkspaceMemory.md",
                     config_directory / "skills" / "plugin-creator",
                     config_directory / "skills" / "skill-creator",
                     config_directory / "plugins" / "playwright",
@@ -139,6 +143,10 @@ class ConfigTest(unittest.TestCase):
                 (config_directory / "AGENTS.md").read_text(encoding="utf-8"),
                 "",
             )
+            self.assertTrue((config_directory / "MEMORY.md").is_file())
+            self.assertTrue(
+                (config_directory / "workspaces" / "MEMORY.md").is_file()
+            )
             self.assertEqual(
                 agent_config["context"]["compression"]["keep_recent_units"],
                 8,
@@ -149,6 +157,8 @@ class ConfigTest(unittest.TestCase):
             self.assertIn("I am Nosis", prompts.system)
             self.assertIn("{{role}}", prompts.subagent)
             self.assertIn("compact replacement checkpoint", prompts.consolidator)
+            self.assertIn("global long-term memory", prompts.global_memory)
+            self.assertIn("currently bound workspace", prompts.workspace_memory)
             skill_directory = config_directory / "skills" / "skill-creator"
             self.assertTrue((skill_directory / "SKILL.md").is_file())
             self.assertTrue((skill_directory / "license.txt").is_file())
@@ -206,8 +216,12 @@ class ConfigTest(unittest.TestCase):
                 created,
                 (
                     config_directory / "agent_config.json",
+                    config_directory / "MEMORY.md",
+                    config_directory / "workspaces" / "MEMORY.md",
                     config_directory / "prompts" / "SubAgent.md",
                     config_directory / "prompts" / "Consolidator.md",
+                    config_directory / "prompts" / "GlobalMemory.md",
+                    config_directory / "prompts" / "WorkspaceMemory.md",
                     config_directory / "skills" / "plugin-creator",
                 ),
             )
@@ -238,7 +252,10 @@ class ConfigTest(unittest.TestCase):
                 (defaults / filename).write_text("{}", encoding="utf-8")
             prompts = defaults / "prompts_template"
             prompts.mkdir()
-            for filename in ("Soul.md", "SubAgent.md", "Consolidator.md"):
+            for filename in (
+                "Soul.md", "SubAgent.md", "Consolidator.md",
+                "GlobalMemory.md", "WorkspaceMemory.md",
+            ):
                 (prompts / filename).write_text(filename, encoding="utf-8")
             (defaults / "plugins").mkdir()
 
@@ -278,7 +295,10 @@ class ConfigTest(unittest.TestCase):
                 (defaults / filename).write_text("{}", encoding="utf-8")
             prompts = defaults / "prompts_template"
             prompts.mkdir()
-            for filename in ("Soul.md", "SubAgent.md", "Consolidator.md"):
+            for filename in (
+                "Soul.md", "SubAgent.md", "Consolidator.md",
+                "GlobalMemory.md", "WorkspaceMemory.md",
+            ):
                 (prompts / filename).write_text(filename, encoding="utf-8")
             (defaults / "skills").mkdir()
 
@@ -317,7 +337,10 @@ class ConfigTest(unittest.TestCase):
                 (defaults / filename).write_text("{}", encoding="utf-8")
             prompts = defaults / "prompts_template"
             prompts.mkdir()
-            for filename in ("Soul.md", "SubAgent.md", "Consolidator.md"):
+            for filename in (
+                "Soul.md", "SubAgent.md", "Consolidator.md",
+                "GlobalMemory.md", "WorkspaceMemory.md",
+            ):
                 (prompts / filename).write_text(filename, encoding="utf-8")
             (defaults / "plugins").mkdir()
 

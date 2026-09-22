@@ -22,6 +22,9 @@ from agent_core import (
     JsonlSessionStore,
     JobManager,
     JobStatusEvent,
+    MemoryManager,
+    MemoryReconciler,
+    MemoryStore,
     Session,
     CompositeToolPolicy,
     DirectorySkillSource,
@@ -588,6 +591,15 @@ class Bridge:
             self._workspace,
             agent_config.workspace_instruction_files,
         )
+        memory_store = None
+        memory_context = None
+        if agent_config.memory.enabled:
+            memory_store = MemoryStore(
+                self._config_directory / "MEMORY.md",
+                self._config_directory / "workspaces" / "MEMORY.md",
+            )
+            memory_store.initialize()
+            memory_context = memory_store.load(self._workspace.path)
         plane = self._execution_plane
         if plane is not None:
             if plane.matches(
@@ -596,6 +608,7 @@ class Bridge:
                 agent_config=agent_config,
                 configuration_fingerprint=config_fingerprint,
                 instructions=instructions,
+                memory_context=memory_context,
             ):
                 return plane
             self._close_execution_plane()
@@ -645,6 +658,24 @@ class Bridge:
             )
             vision_provider = self._provider_for(
                 load_vision_config(config_path), workspace
+            )
+            memory = (
+                MemoryManager(
+                    workspace.path,
+                    memory_store,
+                    MemoryReconciler(
+                        main_provider,
+                        global_prompt=prompts.global_memory,
+                        workspace_prompt=prompts.workspace_memory,
+                        global_max_tokens=agent_config.memory.global_max_tokens,
+                        workspace_max_tokens=(
+                            agent_config.memory.workspace_max_tokens
+                        ),
+                    ),
+                    memory_context,
+                )
+                if memory_store is not None and memory_context is not None
+                else None
             )
 
             # One catalog of stateless Tool instances is shared by the main
@@ -703,6 +734,7 @@ class Bridge:
                     self.request_user_choice if self._interactive else None
                 ),
                 scheduler=self._scheduler,
+                memory=memory,
             )
             agent = Agent(
                 provider=main_provider,
@@ -712,6 +744,7 @@ class Bridge:
                     workspace,
                     skills,
                     instructions=instructions,
+                    memory=memory_context if memory is not None else None,
                 ),
                 consolidator_prompt=prompts.consolidator,
                 config=agent_config,
@@ -728,6 +761,7 @@ class Bridge:
                         "ask_user",
                         "update_plan",
                         *mcp.tool_names,
+                        *(("remember",) if memory is not None else ()),
                     ),
                     context,
                     policy=self._permissions,
@@ -740,6 +774,8 @@ class Bridge:
                 agent_config=agent_config,
                 configuration_fingerprint=config_fingerprint,
                 instructions=instructions,
+                memory_context=memory_context,
+                memory=memory,
                 agent=agent,
                 workspace_executor=workspace_executor,
                 host_executor=host_executor,
@@ -1049,6 +1085,9 @@ class Bridge:
             control.steer(steer_id, text)
         if cancelled:
             control.cancel()
+        memory = plane.memory
+        if memory is not None:
+            memory.begin_turn()
         try:
             attachments = _parse_attachments(
                 message.get("attachments"), self._workspace
@@ -1066,6 +1105,8 @@ class Bridge:
                 **kwargs,
             )
         except KeyboardInterrupt:
+            if memory is not None:
+                memory.discard_pending()
             self.emit(
                 "turn_cancelled",
                 turn_id=self._turn_id,
@@ -1073,6 +1114,8 @@ class Bridge:
             self._turn_id = None
             return
         except Cancelled:
+            if memory is not None:
+                memory.discard_pending()
             self.emit(
                 "turn_cancelled",
                 turn_id=self._turn_id,
@@ -1080,6 +1123,8 @@ class Bridge:
             self._turn_id = None
             return
         except Exception as error:
+            if memory is not None:
+                memory.discard_pending()
             self.emit(
                 "turn_failed",
                 turn_id=self._turn_id,
@@ -1093,6 +1138,14 @@ class Bridge:
                     self._turn_control = None
                 shutdown_requested = self._shutdown_requested
 
+        if memory is not None:
+            try:
+                memory.reconcile_pending()
+            except Exception as error:
+                plane.runtime_warnings = (
+                    *plane.runtime_warnings,
+                    f"Long-term memory update failed: {error}",
+                )
         if shutdown_requested:
             return
         self.emit(

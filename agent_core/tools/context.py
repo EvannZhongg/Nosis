@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from ..subagent import SubagentRuntime
     from ..jobs import JobManager
     from ..jobs import CancellationToken
+    from ..memory import MemoryManager
 
 
 @dataclass(frozen=True)
@@ -55,6 +56,7 @@ class ToolExecutionContext:
         Callable[[str, list[dict[str, JSONValue]], bool], JSONValue] | None
     ) = None
     scheduler: object | None = None
+    memory: "MemoryManager | None" = None
 
     def __post_init__(self) -> None:
         object.__setattr__(

@@ -256,7 +256,7 @@ describe('App', () => {
           { id: 'second', model: 'test/second', url: null, max_context_tokens: null, credential: { source: 'none', env_name: null, configured: false } },
         ],
         routing: { main_agent: 'test', vision_provider: null, subagent: null, subagent_vision_provider: null, roles: {} },
-        agent: { max_same_tool_calls: 5, output_reserve_tokens: 100, max_generation_tokens: null, workspace_instruction_files: ['AGENTS.md'], tools: {}, context: { compression: { enabled: true, trigger_ratio: null, keep_recent_units: 4 } }, subagent_roles: {}, mcp_enabled: false },
+        agent: { max_same_tool_calls: 5, output_reserve_tokens: 100, max_generation_tokens: null, workspace_instruction_files: ['AGENTS.md'], tools: {}, context: { compression: { enabled: true, trigger_ratio: null, keep_recent_units: 4 } }, memory: { enabled: true, global_max_tokens: 2000, workspace_max_tokens: 3000 }, subagent_roles: {}, mcp_enabled: false },
         skills: [], plugins: [], mcp_servers: [], plugin_agents: [], warnings: [],
       },
     });
@@ -279,7 +279,7 @@ describe('App', () => {
         revision: 'r1', config_directory: '/config', default_provider: 'test',
         providers: [{ id: 'test', model: 'test/model', url: null, max_context_tokens: null, credential: { source: 'none', env_name: null, configured: false } }],
         routing: { main_agent: 'test', vision_provider: null, subagent: null, subagent_vision_provider: null, roles: {} },
-        agent: { max_same_tool_calls: 5, output_reserve_tokens: 100, max_generation_tokens: null, workspace_instruction_files: ['AGENTS.md'], tools: {}, context: { compression: { enabled: true, trigger_ratio: null, keep_recent_units: 4 } }, subagent_roles: {}, mcp_enabled: false },
+        agent: { max_same_tool_calls: 5, output_reserve_tokens: 100, max_generation_tokens: null, workspace_instruction_files: ['AGENTS.md'], tools: {}, context: { compression: { enabled: true, trigger_ratio: null, keep_recent_units: 4 } }, memory: { enabled: true, global_max_tokens: 2000, workspace_max_tokens: 3000 }, subagent_roles: {}, mcp_enabled: false },
         skills: [], plugins: [], mcp_servers: [], plugin_agents: [], warnings: [],
       },
     });

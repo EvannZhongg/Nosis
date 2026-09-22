@@ -253,6 +253,11 @@ class SettingsStore:
                         "keep_recent_units": agent_config.context.keep_recent_units,
                     }
                 },
+                "memory": {
+                    "enabled": agent_config.memory.enabled,
+                    "global_max_tokens": agent_config.memory.global_max_tokens,
+                    "workspace_max_tokens": agent_config.memory.workspace_max_tokens,
+                },
                 "subagent_roles": {
                     name: {
                         "enabled": role.enabled,
@@ -421,7 +426,7 @@ class SettingsStore:
             raise ValueError("agent settings must be an object")
         allowed = {
             "max_same_tool_calls", "output_reserve_tokens", "max_generation_tokens",
-            "workspace_instruction_files", "tools", "context", "subagent_roles", "mcp_enabled",
+            "workspace_instruction_files", "tools", "context", "memory", "subagent_roles", "mcp_enabled",
         }
         unknown = set(payload) - allowed
         if unknown:
@@ -429,7 +434,7 @@ class SettingsStore:
         document = _read_json(self.agent_path)
         for field in (
             "max_same_tool_calls", "output_reserve_tokens", "max_generation_tokens",
-            "workspace_instruction_files", "context", "subagent_roles",
+            "workspace_instruction_files", "context", "memory", "subagent_roles",
         ):
             if field in payload:
                 document[field] = payload[field]
@@ -508,7 +513,7 @@ class SettingsStore:
     def _validate_agent_document(self, document: dict[str, object]) -> None:
         unknown = set(document) - {
             "max_same_tool_calls", "output_reserve_tokens", "max_generation_tokens",
-            "workspace_instruction_files", "context", "main_agent", "subagent_roles", "mcp",
+            "workspace_instruction_files", "context", "memory", "main_agent", "subagent_roles", "mcp",
         }
         if unknown:
             raise ValueError(f"unknown agent configuration field(s): {', '.join(sorted(unknown))}")

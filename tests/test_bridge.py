@@ -7,6 +7,7 @@ import time
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Callable
 from unittest.mock import patch
 
@@ -20,6 +21,8 @@ from agent_core import (
     JobHandle,
     JobStatusEvent,
     Message,
+    MemoryDocument,
+    MemoryStore,
     PermissionPreset,
     PlanManager,
     PlanSnapshot,
@@ -1059,6 +1062,8 @@ def open_session_message(
             "Role {{role}}: {{role_description}} in {{workspace}}"
         ),
         "Consolidator.md": "Consolidate the conversation.",
+        "GlobalMemory.md": "Reconcile global memory as JSON.",
+        "WorkspaceMemory.md": "Reconcile workspace memory as JSON.",
     }.items():
         path = prompts / filename
         if not path.exists():
@@ -1159,6 +1164,40 @@ class FailingAgent:
         raise ValueError("provider refused the request")
 
 
+class SuccessfulAgent:
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def run(
+        self,
+        user_input: str,
+        on_event: object = None,
+        attachments: object = (),
+        turn_id: str | None = None,
+        turn_control: TurnControl | None = None,
+    ) -> object:
+        self._session.begin_turn(turn_id)
+        self._session.add_item("user", user_input)
+        self._session.add_item("assistant", "done")
+        self._session.finish_turn("completed", turn_id)
+        return SimpleNamespace(response=SimpleNamespace(usage=None))
+
+
+class MemorySpy:
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def begin_turn(self) -> None:
+        self.calls.append("begin")
+
+    def discard_pending(self) -> None:
+        self.calls.append("discard")
+
+    def reconcile_pending(self) -> bool:
+        self.calls.append("reconcile")
+        return True
+
+
 class InterruptedTurnTest(unittest.TestCase):
     """A turn keeps the transcript it produced before it ended early."""
 
@@ -1188,19 +1227,43 @@ class InterruptedTurnTest(unittest.TestCase):
         return self.store.load(self.session_id).items
 
     def test_stores_a_cancelled_turn(self) -> None:
-        self.start_turn(
-            ScriptedAgent(
-                self.session,
-                tail=(Message(role="assistant", content="half an answer"),),
-                error=KeyboardInterrupt(),
-            )
+        plane = self.bridge._ensure_execution_plane()
+        memory = MemorySpy()
+        plane.memory = memory
+        plane.agent = ScriptedAgent(
+            self.session,
+            tail=(Message(role="assistant", content="half an answer"),),
+            error=KeyboardInterrupt(),
         )
+        self.bridge.run_turn({"turn_id": "t1", "text": "do the work"})
 
         self.assertEqual(emitted(self.stdout)[-1]["type"], "turn_cancelled")
+        self.assertEqual(memory.calls, ["begin", "discard"])
         self.assertEqual(
             [message.content for message in self.stored_items()],
             ["do the work", "half an answer"],
         )
+
+    def test_reconciles_memory_only_after_a_successful_turn(self) -> None:
+        plane = self.bridge._ensure_execution_plane()
+        memory = MemorySpy()
+        plane.memory = memory
+        plane.agent = SuccessfulAgent(self.session)
+
+        self.bridge.run_turn({"turn_id": "t1", "text": "remember this"})
+
+        self.assertEqual(memory.calls, ["begin", "reconcile"])
+        self.assertEqual(emitted(self.stdout)[-1]["type"], "turn_completed")
+
+    def test_discards_memory_candidates_when_a_turn_fails(self) -> None:
+        plane = self.bridge._ensure_execution_plane()
+        memory = MemorySpy()
+        plane.memory = memory
+        plane.agent = FailingAgent(self.session)
+
+        self.bridge.run_turn({"turn_id": "t1", "text": "do the work"})
+
+        self.assertEqual(memory.calls, ["begin", "discard"])
 
     def test_stores_a_failed_turn(self) -> None:
         self.start_turn(
@@ -1398,6 +1461,7 @@ class ScheduledTurnTest(unittest.TestCase):
                     {
                         "agent": ScheduledAgent(bridge._session),
                         "jobs": type("Jobs", (), {"snapshot": lambda self: []})(),
+                        "memory": None,
                         "runtime_warnings": (),
                     },
                 )()
@@ -1820,7 +1884,8 @@ class BridgeSessionOpenTest(unittest.TestCase):
 
             prompt = plane.agent._context._system_prompt
 
-        self.assertEqual(prompt, f"Custom prompt for {root.resolve()}")
+        self.assertTrue(prompt.startswith(f"Custom prompt for {root.resolve()}"))
+        self.assertIn("## Long-term Memory", prompt)
 
     def test_injects_global_and_workspace_instructions_without_persisting_them(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1897,6 +1962,35 @@ class BridgeSessionOpenTest(unittest.TestCase):
             )
             self.assertNotIn(
                 "first rule", second_plane.agent._context._system_prompt
+            )
+
+    def test_rebuilds_runtime_when_memory_changes_between_turns(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bridge, _ = make_bridge([], root)
+            bridge.open_session(open_session_message(root))
+            first_plane = bridge._ensure_execution_plane()
+            store = MemoryStore(
+                root / "MEMORY.md",
+                root / "workspaces" / "MEMORY.md",
+            )
+            store.write_updates(
+                root,
+                global_memory=MemoryDocument(
+                    preferences=("Prefer concise responses.",)
+                ),
+            )
+
+            second_plane = bridge._ensure_execution_plane()
+
+            self.assertIsNot(second_plane, first_plane)
+            self.assertIn(
+                "Prefer concise responses.",
+                second_plane.agent._context._system_prompt,
+            )
+            self.assertIn(
+                "current request has highest priority",
+                second_plane.agent._context._system_prompt,
             )
 
     def test_rebuilds_runtime_when_the_configured_instruction_list_changes(self) -> None:
@@ -2187,7 +2281,7 @@ class SubagentRoleStartTest(unittest.TestCase):
 
             self.assertEqual(
                 [definition.name for definition in plane.agent._tools.definitions],
-                ["ask_user", "update_plan"],
+                ["ask_user", "update_plan", "remember"],
             )
 
     def test_runtime_tools_are_registered_only_for_the_main_agent(self) -> None:
@@ -2230,6 +2324,7 @@ class SubagentRoleStartTest(unittest.TestCase):
             self.assertIn("update_plan", main_names)
             self.assertNotIn("ask_user", role_names)
             self.assertNotIn("update_plan", role_names)
+            self.assertNotIn("remember", role_names)
 
 
 class PluginAgentStartTest(unittest.TestCase):

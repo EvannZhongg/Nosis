@@ -40,6 +40,11 @@
       }
     }
   },
+  "memory": {
+    "enabled": true,
+    "global_max_tokens": 2000,
+    "workspace_max_tokens": 3000
+  },
   "mcp": {
     "enabled": true,
     "servers": {}

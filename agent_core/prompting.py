@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING
 from agent_core.workspace import Workspace
 
 if TYPE_CHECKING:
+    from agent_core.memory import MemoryContext
     from agent_core.skills import SkillRegistry
     from agent_core.subagent import SubagentRole
     from agent_core.workspace_instructions import WorkspaceInstructions
@@ -14,9 +15,10 @@ def render_system_prompt(
     skills: "SkillRegistry | None" = None,
     *,
     instructions: "WorkspaceInstructions | None" = None,
+    memory: "MemoryContext | None" = None,
 ) -> str:
     prompt = template.replace("{{workspace}}", str(workspace.path)).strip()
-    return _with_runtime_context(prompt, instructions, skills)
+    return _with_runtime_context(prompt, instructions, skills, memory)
 
 
 def render_subagent_prompt(
@@ -35,13 +37,14 @@ def render_subagent_prompt(
     )
     if role.instructions:
         prompt = f"{prompt}\n\n## Role Instructions\n{role.instructions.strip()}"
-    return _with_runtime_context(prompt, instructions, skills)
+    return _with_runtime_context(prompt, instructions, skills, None)
 
 
 def _with_runtime_context(
     prompt: str,
     instructions: "WorkspaceInstructions | None",
     skills: "SkillRegistry | None",
+    memory: "MemoryContext | None",
 ) -> str:
     sections = [prompt]
     instruction_section = _instruction_section(instructions)
@@ -50,6 +53,9 @@ def _with_runtime_context(
     skill_section = skills.prompt_section() if skills else ""
     if skill_section:
         sections.append(skill_section)
+    memory_section = memory.prompt_section() if memory else ""
+    if memory_section:
+        sections.append(memory_section)
     return "\n\n".join(sections)
 
 

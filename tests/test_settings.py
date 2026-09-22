@@ -45,6 +45,11 @@ class SettingsStoreTest(unittest.TestCase):
         self.assertEqual(snapshot["providers"][0]["credential"], {
             "source": "env", "env_name": "FIRST_KEY", "configured": True,
         })
+        self.assertEqual(snapshot["agent"]["memory"], {
+            "enabled": True,
+            "global_max_tokens": 2000,
+            "workspace_max_tokens": 3000,
+        })
 
     def test_provider_save_is_validated_and_writes_secret_to_dotenv(self) -> None:
         snapshot = self.store.save_provider("second", {

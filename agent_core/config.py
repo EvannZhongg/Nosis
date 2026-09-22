@@ -13,6 +13,13 @@ class ContextCompressionConfig:
 
 
 @dataclass(frozen=True)
+class MemoryConfig:
+    enabled: bool = True
+    global_max_tokens: int = 2000
+    workspace_max_tokens: int = 3000
+
+
+@dataclass(frozen=True)
 class SubagentRoleConfig:
     """A sub-agent role: what it is for, and which tools it may use.
 
@@ -35,6 +42,7 @@ class AgentConfig:
         default_factory=ContextCompressionConfig
     )
     mcp: McpConfig = field(default_factory=McpConfig)
+    memory: MemoryConfig = field(default_factory=MemoryConfig)
     subagent_roles: dict[str, SubagentRoleConfig] = field(
         default_factory=dict
     )
@@ -63,6 +71,7 @@ def load_agent_config(path: Path) -> AgentConfig:
     subagent_roles = _subagent_roles(data.get("subagent_roles"))
     context = _context_config(data.get("context"))
     mcp = load_mcp_config(data.get("mcp"))
+    memory = _memory_config(data.get("memory"))
 
     return AgentConfig(
         max_same_tool_calls=max_same_tool_calls,
@@ -73,6 +82,7 @@ def load_agent_config(path: Path) -> AgentConfig:
         subagent_roles=subagent_roles,
         context=context,
         mcp=mcp,
+        memory=memory,
     )
 
 
@@ -181,17 +191,37 @@ def _context_config(value: object) -> ContextCompressionConfig:
     if not isinstance(enabled, bool):
         raise ValueError("config field 'context.compression.enabled' must be a boolean")
     trigger = _optional_ratio(compression, "trigger_ratio")
-    keep_recent_units = compression.get("keep_recent_units", 6)
-    if (
-        isinstance(keep_recent_units, bool)
-        or not isinstance(keep_recent_units, int)
-        or keep_recent_units < 1
-    ):
-        raise ValueError(
-            "config field 'context.compression.keep_recent_units' must be "
-            "a positive integer"
-        )
+    keep_recent_units = _positive_integer_with_default(
+        compression, "keep_recent_units", 6, prefix="context.compression"
+    )
     return ContextCompressionConfig(enabled, trigger, keep_recent_units)
+
+
+def _memory_config(value: object) -> MemoryConfig:
+    if value is None:
+        return MemoryConfig()
+    if not isinstance(value, dict):
+        raise ValueError("config field 'memory' must be an object")
+    unknown = set(value) - {
+        "enabled",
+        "global_max_tokens",
+        "workspace_max_tokens",
+    }
+    if unknown:
+        fields = ", ".join(sorted(unknown))
+        raise ValueError(f"unknown field(s) in 'memory': {fields}")
+    enabled = value.get("enabled", True)
+    if not isinstance(enabled, bool):
+        raise ValueError("config field 'memory.enabled' must be a boolean")
+    return MemoryConfig(
+        enabled=enabled,
+        global_max_tokens=_positive_integer_with_default(
+            value, "global_max_tokens", 2000, prefix="memory"
+        ),
+        workspace_max_tokens=_positive_integer_with_default(
+            value, "workspace_max_tokens", 3000, prefix="memory"
+        ),
+    )
 
 
 def _optional_ratio(data: dict[str, object], field: str) -> float | None:
@@ -222,5 +252,20 @@ def _optional_positive_integer(
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise ValueError(
             f"config field '{field}' must be a positive integer or null"
+        )
+    return value
+
+
+def _positive_integer_with_default(
+    data: dict[str, object],
+    field: str,
+    default: int,
+    *,
+    prefix: str,
+) -> int:
+    value = data.get(field, default)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValueError(
+            f"config field '{prefix}.{field}' must be a positive integer"
         )
     return value

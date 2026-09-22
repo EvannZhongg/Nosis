@@ -165,6 +165,7 @@ class SubagentRuntime:
             subagents=None,
             jobs=None,
             plan=None,
+            memory=None,
             cancellation=cancellation,
         )
         child = Agent(

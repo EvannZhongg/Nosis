@@ -8,6 +8,8 @@ from agent_core import (
     CommandExecutor,
     ContextWindow,
     JobManager,
+    MemoryContext,
+    MemoryManager,
     Workspace,
     WorkspaceInstructions,
 )
@@ -23,6 +25,8 @@ class ExecutionPlane:
     agent_config: AgentConfig
     configuration_fingerprint: str
     instructions: WorkspaceInstructions
+    memory_context: MemoryContext | None
+    memory: MemoryManager | None
     agent: Agent
     workspace_executor: CommandExecutor
     host_executor: CommandExecutor
@@ -39,6 +43,7 @@ class ExecutionPlane:
         agent_config: AgentConfig,
         configuration_fingerprint: str,
         instructions: WorkspaceInstructions,
+        memory_context: MemoryContext | None,
     ) -> bool:
         return (
             self.workspace == workspace
@@ -47,6 +52,16 @@ class ExecutionPlane:
             and self.configuration_fingerprint
             == configuration_fingerprint
             and self.instructions.fingerprint == instructions.fingerprint
+            and (
+                self.memory_context.fingerprint
+                if self.memory_context is not None
+                else None
+            )
+            == (
+                memory_context.fingerprint
+                if memory_context is not None
+                else None
+            )
         )
 
     def close(self) -> None:

@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
 
+from agent_core.memory import MemoryStore
 from agent_core.providers import LiteLLMProvider
 
 
@@ -16,6 +17,8 @@ PROMPT_FILENAMES = (
     "Soul.md",
     "SubAgent.md",
     "Consolidator.md",
+    "GlobalMemory.md",
+    "WorkspaceMemory.md",
 )
 
 
@@ -32,6 +35,8 @@ class PromptTemplates:
     system: str
     subagent: str
     consolidator: str
+    global_memory: str
+    workspace_memory: str
 
 
 def default_config_directory() -> Path:
@@ -56,6 +61,13 @@ def initialize_config_directory(directory: Path) -> tuple[Path, ...]:
     if not instructions_path.exists():
         instructions_path.touch()
         created.append(instructions_path)
+
+    created.extend(
+        MemoryStore(
+            directory / "MEMORY.md",
+            directory / "workspaces" / "MEMORY.md",
+        ).initialize()
+    )
 
     prompts_directory = directory / "prompts"
     prompts_directory.mkdir(exist_ok=True)
@@ -136,6 +148,12 @@ def load_prompt_templates(directory: Path) -> PromptTemplates:
         subagent=(directory / "SubAgent.md").read_text(encoding="utf-8").strip(),
         consolidator=(
             (directory / "Consolidator.md").read_text(encoding="utf-8").strip()
+        ),
+        global_memory=(
+            (directory / "GlobalMemory.md").read_text(encoding="utf-8").strip()
+        ),
+        workspace_memory=(
+            (directory / "WorkspaceMemory.md").read_text(encoding="utf-8").strip()
         ),
     )
 
