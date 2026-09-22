@@ -124,6 +124,9 @@ class MemoryTest(unittest.TestCase):
         self.assertEqual(global_payload["scope"], "global")
         self.assertEqual(len(global_payload["candidates"]), 2)
         self.assertEqual(workspace_payload["scope"], "workspace")
+        self.assertNotIn("max_tokens", global_payload)
+        self.assertIsNone(provider.requests[0].max_generation_tokens)
+        self.assertIsNone(provider.requests[1].max_generation_tokens)
         context = self.store.load(self.workspace)
         self.assertEqual(
             context.global_memory.preferences,
@@ -135,6 +138,33 @@ class MemoryTest(unittest.TestCase):
         )
         other = self.store.load(self.root / "other")
         self.assertTrue(other.workspace_memory.is_empty())
+
+    def test_token_limits_are_only_rendered_as_prompt_guidance(self) -> None:
+        provider = ReconcilerProvider([
+            json.dumps({
+                "entries": [
+                    {"kind": "fact", "content": "A durable fact."},
+                ]
+            })
+        ])
+        reconciler = MemoryReconciler(
+            provider,
+            global_prompt="Keep this around {{global_max_tokens}} tokens.",
+            workspace_prompt=(
+                "Keep this around {{workspace_max_tokens}} tokens."
+            ),
+            global_max_tokens=12,
+            workspace_max_tokens=34,
+        )
+
+        reconciler.reconcile(
+            "global",
+            MemoryDocument(),
+            (MemoryCandidate("fact", "global", "Remember this."),),
+        )
+
+        self.assertIn("around 12 tokens", provider.requests[0].system_prompt)
+        self.assertIsNone(provider.requests[0].max_generation_tokens)
 
     def test_store_round_trips_stable_markdown(self) -> None:
         self.store.write_updates(

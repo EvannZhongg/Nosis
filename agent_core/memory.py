@@ -12,7 +12,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Literal
 
-from .llm import LLMProvider, LLMRequest, with_generation_limit
+from .llm import LLMProvider, LLMRequest
 from .session import Message
 
 
@@ -178,12 +178,12 @@ class MemoryReconciler:
     ) -> None:
         self._provider = provider
         self._prompts = {
-            "global": global_prompt,
-            "workspace": workspace_prompt,
-        }
-        self._limits = {
-            "global": global_max_tokens,
-            "workspace": workspace_max_tokens,
+            "global": global_prompt.replace(
+                "{{global_max_tokens}}", str(global_max_tokens)
+            ),
+            "workspace": workspace_prompt.replace(
+                "{{workspace_max_tokens}}", str(workspace_max_tokens)
+            ),
         }
 
     def reconcile(
@@ -196,38 +196,25 @@ class MemoryReconciler:
             return current
         payload = {
             "scope": scope,
-            "max_tokens": self._limits[scope],
             "current_memory": _document_to_json(current),
             "candidates": [
                 {"kind": candidate.kind, "content": candidate.content}
                 for candidate in candidates
             ],
         }
-        request = with_generation_limit(
-            LLMRequest(
-                system_prompt=self._prompts[scope],
-                messages=(
-                    Message(
-                        role="user",
-                        content=json.dumps(payload, ensure_ascii=False),
-                    ),
+        request = LLMRequest(
+            system_prompt=self._prompts[scope],
+            messages=(
+                Message(
+                    role="user",
+                    content=json.dumps(payload, ensure_ascii=False),
                 ),
             ),
-            self._provider,
-            self._limits[scope],
         )
         response = self._provider.stream(request, lambda _text: None)
         if response.content is None or response.tool_calls:
             raise ValueError("memory reconciler must return JSON content only")
-        document = _document_from_json(response.content)
-        rendered = _render_prompt_memory(document)
-        count_request = LLMRequest(
-            system_prompt="",
-            messages=(Message(role="user", content=rendered),),
-        )
-        if self._provider.count_input_tokens(count_request) > self._limits[scope]:
-            raise ValueError(f"{scope} memory exceeds its configured token limit")
-        return document
+        return _document_from_json(response.content)
 
 
 class MemoryManager:

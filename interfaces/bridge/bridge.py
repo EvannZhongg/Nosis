@@ -24,7 +24,6 @@ from agent_core import (
     JobStatusEvent,
     MemoryManager,
     MemoryReconciler,
-    MemoryStore,
     Session,
     CompositeToolPolicy,
     DirectorySkillSource,
@@ -71,6 +70,7 @@ from .config import (
     load_model_options,
     load_prompt_templates,
     load_vision_config,
+    memory_store,
 )
 from .execution_plane import ExecutionPlane
 from .instructions import load_workspace_instructions
@@ -591,15 +591,12 @@ class Bridge:
             self._workspace,
             agent_config.workspace_instruction_files,
         )
-        memory_store = None
+        store = None
         memory_context = None
         if agent_config.memory.enabled:
-            memory_store = MemoryStore(
-                self._config_directory / "MEMORY.md",
-                self._config_directory / "workspaces" / "MEMORY.md",
-            )
-            memory_store.initialize()
-            memory_context = memory_store.load(self._workspace.path)
+            store = memory_store(self._config_directory)
+            store.initialize()
+            memory_context = store.load(self._workspace.path)
         plane = self._execution_plane
         if plane is not None:
             if plane.matches(
@@ -659,10 +656,12 @@ class Bridge:
             vision_provider = self._provider_for(
                 load_vision_config(config_path), workspace
             )
-            memory = (
-                MemoryManager(
+            memory = None
+            if memory_context is not None:
+                assert store is not None
+                memory = MemoryManager(
                     workspace.path,
-                    memory_store,
+                    store,
                     MemoryReconciler(
                         main_provider,
                         global_prompt=prompts.global_memory,
@@ -674,9 +673,6 @@ class Bridge:
                     ),
                     memory_context,
                 )
-                if memory_store is not None and memory_context is not None
-                else None
-            )
 
             # One catalog of stateless Tool instances is shared by the main
             # Agent and by every sub-agent role.
@@ -744,7 +740,7 @@ class Bridge:
                     workspace,
                     skills,
                     instructions=instructions,
-                    memory=memory_context if memory is not None else None,
+                    memory=memory_context,
                 ),
                 consolidator_prompt=prompts.consolidator,
                 config=agent_config,

@@ -12,5 +12,5 @@ Rules:
 - Prefer the newest explicit information when candidates conflict with old memory.
 - Retain stable project facts and decisions; ignore transient task state, guesses, and secrets.
 - Never mention or select a filesystem path or another workspace.
-- Keep each entry on one line and keep the complete result within the supplied max_tokens budget.
+- Keep each entry on one line and keep the complete result around {{workspace_max_tokens}} tokens or fewer.
 - Do not move global information into workspace memory.

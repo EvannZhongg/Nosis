@@ -15,6 +15,7 @@ from interfaces.bridge.config import (
     load_model_options,
     load_prompt_templates,
     load_vision_config,
+    memory_store,
 )
 from interfaces.bridge.plugins import PluginManager
 
@@ -91,6 +92,15 @@ class ConfigTest(unittest.TestCase):
                 default_config_directory(),
                 Path("/home/test/.nosis"),
             )
+
+    def test_memory_paths_are_derived_in_one_place(self) -> None:
+        store = memory_store(Path("/config"))
+
+        self.assertEqual(store.global_path, Path("/config/MEMORY.md"))
+        self.assertEqual(
+            store.workspace_path,
+            Path("/config/workspaces/MEMORY.md"),
+        )
 
     def test_initializes_packaged_default_configs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

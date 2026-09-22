@@ -11,5 +11,5 @@ Rules:
 - Merge duplicates and closely overlapping entries.
 - Prefer the newest explicit information when candidates conflict with old memory.
 - Ignore transient requests, guesses, secrets, and details that are not useful across future sessions.
-- Keep each entry on one line and keep the complete result within the supplied max_tokens budget.
+- Keep each entry on one line and keep the complete result around {{global_max_tokens}} tokens or fewer.
 - Do not move workspace-specific information into global memory.

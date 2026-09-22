@@ -43,6 +43,13 @@ def default_config_directory() -> Path:
     return Path.home() / ".nosis"
 
 
+def memory_store(directory: Path) -> MemoryStore:
+    return MemoryStore(
+        directory / "MEMORY.md",
+        directory / "workspaces" / "MEMORY.md",
+    )
+
+
 def initialize_config_directory(directory: Path) -> tuple[Path, ...]:
     created = []
     directory.mkdir(parents=True, exist_ok=True)
@@ -62,12 +69,7 @@ def initialize_config_directory(directory: Path) -> tuple[Path, ...]:
         instructions_path.touch()
         created.append(instructions_path)
 
-    created.extend(
-        MemoryStore(
-            directory / "MEMORY.md",
-            directory / "workspaces" / "MEMORY.md",
-        ).initialize()
-    )
+    created.extend(memory_store(directory).initialize())
 
     prompts_directory = directory / "prompts"
     prompts_directory.mkdir(exist_ok=True)
