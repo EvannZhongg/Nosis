@@ -435,9 +435,9 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
   }, [attachmentId, provider, session.session_id]);
 
   useEffect(() => {
-    if ((selected || backgroundActive) && socketRef.current === null) {
+    if ((selected || backgroundActive) && socketRef.current === null && !attachmentReplacedRef.current) {
       setAttaching(true);
-      connect({ attachOnly: !selected, takeover: true });
+      connect({ attachOnly: !selected });
     }
   }, [backgroundActive, provider, selected, session.session_id, session.workspace]);
 
@@ -487,7 +487,7 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
     onTurnEnd();
   }, [session.session_id, onBusyChange, onTurnEnd, showItems]);
 
-  function connect({ attachOnly = false, takeover = true }: { attachOnly?: boolean; takeover?: boolean } = {}): SessionSocket {
+  function connect({ attachOnly = false, takeover = false }: { attachOnly?: boolean; takeover?: boolean } = {}): SessionSocket {
     let socket: SessionSocket;
     socket = new SessionSocket({
       sessionId: session.session_id,
@@ -902,7 +902,7 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
         <div className="messages"><ThreadPrimitive.Messages components={{ UserMessage, AssistantMessage }} /></div>
       </ThreadPrimitive.Viewport>
       <div className="composer-area">
-        {attachmentReplaced && <div className="attachment-replaced" role="status"><span>{running ? "此会话已在另一个页面接管。任务仍在后台运行，本页已暂停实时更新。" : "此会话已在另一个页面接管，本页已暂停实时更新。"}</span><button type="button" onClick={takeOverAttachment} disabled={attaching}>{attaching ? "正在接管…" : "在此页面接管"}</button></div>}
+        {attachmentReplaced && <div className="attachment-replaced" role="status"><span>{running ? "此会话由另一个页面控制。任务仍在后台运行，可在此页面手动接管。" : "此会话由另一个页面控制，可在此页面手动接管。"}</span><button type="button" onClick={takeOverAttachment} disabled={attaching}>{attaching ? "正在接管…" : "在此页面接管"}</button></div>}
         {!attachmentReplaced && approval && <div className="approval-card" role="region" aria-label="工具执行确认"><div className="approval-title"><ShieldCheck size={17} /> 允许执行此工具调用？</div><pre>{approval.command}</pre><div className="approval-actions"><button onClick={() => respond(false)}>拒绝</button><button className="approve-button" onClick={() => respond(true)}>允许执行</button></div></div>}
         {!attachmentReplaced && question && <div className="question-card" role="region" aria-label="需要你的选择">
           <div className="question-title"><MessageCircleQuestion size={18} /><span>{question.question}</span></div>

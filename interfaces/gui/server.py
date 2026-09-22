@@ -241,7 +241,9 @@ class ActiveSession:
                     self._attachment_id is not None
                     and self._attachment_id != attachment_id
                 )
-                if replacing and (not takeover or claimed):
+                if replacing and (
+                    claimed or (not takeover and self._subscriber is not None)
+                ):
                     return None
                 self._attachment_id = attachment_id
                 claimed = True
@@ -533,6 +535,7 @@ def create_app(
         current_workspace: Workspace,
         *,
         attach_only: bool,
+        attachment_id: str,
     ) -> tuple[ActiveSession | None, bool]:
         session_id = str(opening_message["session_id"])
         async with active_session_lock:
@@ -547,7 +550,12 @@ def create_app(
                     current.provider == selected_provider
                     and current.workspace == selected_workspace
                 )
-                if attach_only or current.running or same_configuration:
+                if (
+                    attach_only
+                    or current.running
+                    or same_configuration
+                    or not current.owns_attachment(attachment_id)
+                ):
                     return current, False
                 active_sessions.pop(session_id, None)
                 await current.close()
@@ -1043,6 +1051,7 @@ def create_app(
             opening_message,
             current_workspace,
             attach_only=attach_only,
+            attachment_id=attachment_id,
         )
         if runtime is None:
             await websocket.send_json(
