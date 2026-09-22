@@ -22,12 +22,22 @@ def _service(context: ToolExecutionContext) -> SchedulerService:
     return context.scheduler
 
 
-def _authority(context: ToolExecutionContext) -> ExecutionAuthority:
-    if context.execution is not None:
-        return context.execution.authority
-    if context.execution_router is not None:
-        return context.execution_router.authority
-    return context.session.permission_preset.authority
+def _definition_authority(
+    context: ToolExecutionContext,
+) -> ExecutionAuthority:
+    router = context.execution_router
+    if router is None:
+        raise RuntimeError("scheduled task execution router is unavailable")
+    return router.authority
+
+
+def _execution_authority(
+    context: ToolExecutionContext,
+) -> ExecutionAuthority:
+    execution = context.execution
+    if execution is None:
+        raise RuntimeError("scheduled task execution was not resolved")
+    return execution.authority
 
 
 def _reject_unknown_arguments(
@@ -82,10 +92,13 @@ class CreateScheduledTaskTool(Tool):
     name = "create_scheduled_task"
 
     def available(self, context):
-        return isinstance(context.scheduler, SchedulerService)
+        return (
+            isinstance(context.scheduler, SchedulerService)
+            and context.execution_router is not None
+        )
 
     def definition(self, context):
-        authority = _authority(context)
+        authority = _definition_authority(context)
         execution_scopes = [ExecutionScope.WORKSPACE.value]
         if authority.allows_unattended(ExecutionScope.HOST):
             execution_scopes.append(ExecutionScope.HOST.value)
@@ -133,7 +146,7 @@ class CreateScheduledTaskTool(Tool):
             raise ValueError(
                 "execution_scope must be 'workspace' or 'host'"
             ) from error
-        authority = _authority(context)
+        authority = _execution_authority(context)
         if (
             execution_scope is ExecutionScope.HOST
             and not authority.allows_unattended(ExecutionScope.HOST)

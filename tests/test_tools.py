@@ -103,6 +103,31 @@ def context_for(workspace, **fields):
     )
 
 
+def scheduled_context_for(workspace, **fields):
+    session = fields.pop("session", None) or Session()
+    router = fields.pop("execution_router", None) or ExecutionRouter(
+        UnusedExecutor(),
+        UnusedExecutor(),
+        authority=lambda: session.permission_preset.authority,
+    )
+    return context_for(
+        workspace,
+        session=session,
+        execution_router=router,
+        **fields,
+    )
+
+
+def execute_scheduled(arguments, context):
+    router = context.execution_router
+    assert router is not None
+    call = ToolCall("test-call", "create_scheduled_task", arguments)
+    return CreateScheduledTaskTool().execute(
+        arguments,
+        replace(context, execution=router.resolve(call)),
+    )
+
+
 class FailingTool(Tool):
     name = "failing"
 
@@ -219,7 +244,7 @@ class ScheduledTaskToolTest(unittest.TestCase):
     def test_create_schema_declares_trigger_properties_without_one_of(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             definition = CreateScheduledTaskTool().definition(
-                context_for(Workspace(Path(directory)))
+                scheduled_context_for(Workspace(Path(directory)))
             )
 
         trigger_schema = definition.parameters["properties"]["trigger"]
@@ -247,7 +272,7 @@ class ScheduledTaskToolTest(unittest.TestCase):
             session = Session("origin")
             session.permission_preset = PermissionPreset.FULL_ACCESS
             scheduler = SchedulerService(root / "schedule.jsonl")
-            context = context_for(
+            context = scheduled_context_for(
                 workspace,
                 session=session,
                 sessions_directory=sessions_directory,
@@ -260,7 +285,7 @@ class ScheduledTaskToolTest(unittest.TestCase):
                 ["execution_scope"]["enum"],
                 ["workspace", "host"],
             )
-            result = tool.execute(
+            result = execute_scheduled(
                 {
                     "prompt": "host scheduled prompt",
                     "trigger": {
@@ -286,7 +311,7 @@ class ScheduledTaskToolTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             scheduler = SchedulerService(root / "schedule.jsonl")
-            context = context_for(
+            context = scheduled_context_for(
                 Workspace(root),
                 sessions_directory=root / "sessions",
                 scheduler=scheduler,
@@ -296,7 +321,7 @@ class ScheduledTaskToolTest(unittest.TestCase):
                 PermissionError,
                 "host scheduled tasks require Full Access",
             ):
-                CreateScheduledTaskTool().execute(
+                execute_scheduled(
                     {
                         "prompt": "host scheduled prompt",
                         "trigger": {
@@ -316,7 +341,7 @@ class ScheduledTaskToolTest(unittest.TestCase):
             session = Session("origin")
             session.permission_preset = PermissionPreset.FULL_ACCESS
             scheduler = SchedulerService(root / "schedule.jsonl")
-            context = context_for(
+            context = scheduled_context_for(
                 Workspace(root),
                 session=session,
                 sessions_directory=root / "sessions",
@@ -337,7 +362,7 @@ class ScheduledTaskToolTest(unittest.TestCase):
                 PermissionError,
                 "host scheduled tasks require Full Access",
             ):
-                CreateScheduledTaskTool().execute(
+                execute_scheduled(
                     {
                         "prompt": "host scheduled prompt",
                         "trigger": {
@@ -353,12 +378,12 @@ class ScheduledTaskToolTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             scheduler = SchedulerService(root / "schedule.jsonl")
-            context = context_for(
+            context = scheduled_context_for(
                 Workspace(root),
                 sessions_directory=root / "sessions",
                 scheduler=scheduler,
             )
-            created = CreateScheduledTaskTool().execute(
+            created = execute_scheduled(
                 {
                     "prompt": "scheduled prompt",
                     "trigger": {"type": "once", "at": "2099-01-01T00:00:00+00:00"},
@@ -381,12 +406,12 @@ class ScheduledTaskToolTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             scheduler = SchedulerService(root / "schedule.jsonl")
-            context = context_for(
+            context = scheduled_context_for(
                 Workspace(root),
                 sessions_directory=root / "sessions",
                 scheduler=scheduler,
             )
-            CreateScheduledTaskTool().execute(
+            execute_scheduled(
                 {
                     "prompt": "scheduled prompt",
                     "trigger": {"type": "interval", "seconds": 90},
@@ -400,12 +425,12 @@ class ScheduledTaskToolTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             scheduler = SchedulerService(root / "schedule.jsonl")
-            context = context_for(
+            context = scheduled_context_for(
                 Workspace(root),
                 sessions_directory=root / "sessions",
                 scheduler=scheduler,
             )
-            created = CreateScheduledTaskTool().execute(
+            created = execute_scheduled(
                 {
                     "prompt": "scheduled prompt",
                     "trigger": {"type": "interval", "seconds": 1200},
@@ -442,12 +467,12 @@ class ScheduledTaskToolTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             scheduler = SchedulerService(root / "schedule.jsonl")
-            context = context_for(
+            context = scheduled_context_for(
                 Workspace(root),
                 sessions_directory=root / "sessions",
                 scheduler=scheduler,
             )
-            created = CreateScheduledTaskTool().execute(
+            created = execute_scheduled(
                 {
                     "prompt": "scheduled prompt",
                     "trigger": {"type": "interval", "seconds": 60},
@@ -484,12 +509,12 @@ class ScheduledTaskToolTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             scheduler = SchedulerService(root / "schedule.jsonl")
-            context = context_for(
+            context = scheduled_context_for(
                 Workspace(root),
                 sessions_directory=root / "sessions",
                 scheduler=scheduler,
             )
-            CreateScheduledTaskTool().execute(
+            execute_scheduled(
                 {
                     "prompt": "scheduled prompt",
                     "trigger": {"type": "interval", "seconds": 1200},
@@ -508,19 +533,19 @@ class ScheduledTaskToolTest(unittest.TestCase):
 
     def test_missing_trigger_fields_return_retryable_messages(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            context = context_for(
+            context = scheduled_context_for(
                 Workspace(Path(directory)),
                 scheduler=SchedulerService(Path(directory) / "schedule.jsonl"),
             )
             tool = CreateScheduledTaskTool()
             with self.assertRaisesRegex(ValueError, "once trigger requires 'at'"):
-                tool.execute({"prompt": "p", "trigger": {"type": "once"}}, context)
+                execute_scheduled({"prompt": "p", "trigger": {"type": "once"}}, context)
             with self.assertRaisesRegex(ValueError, "cron trigger requires 'expression'"):
-                tool.execute({"prompt": "p", "trigger": {"type": "cron"}}, context)
+                execute_scheduled({"prompt": "p", "trigger": {"type": "cron"}}, context)
             with self.assertRaisesRegex(ValueError, "Retry with seconds"):
-                tool.execute({"prompt": "p", "trigger": {"type": "interval"}}, context)
+                execute_scheduled({"prompt": "p", "trigger": {"type": "interval"}}, context)
             with self.assertRaisesRegex(ValueError, "start_at must be"):
-                tool.execute(
+                execute_scheduled(
                     {
                         "prompt": "p",
                         "trigger": {
@@ -532,7 +557,7 @@ class ScheduledTaskToolTest(unittest.TestCase):
                     context,
                 )
             with self.assertRaisesRegex(ValueError, "end_at must be"):
-                tool.execute(
+                execute_scheduled(
                     {
                         "prompt": "p",
                         "trigger": {"type": "interval", "seconds": 60},
@@ -543,7 +568,7 @@ class ScheduledTaskToolTest(unittest.TestCase):
 
     def test_delete_missing_schedule_reports_not_found(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            context = context_for(
+            context = scheduled_context_for(
                 Workspace(Path(directory)),
                 scheduler=SchedulerService(Path(directory) / "schedule.jsonl"),
             )
@@ -562,14 +587,14 @@ class ScheduledTaskToolTest(unittest.TestCase):
             store.bind_workspace(session.session_id, workspace.path)
             store.set_provider(session.session_id, "configured", workspace.path)
             scheduler = SchedulerService(root / "schedule.jsonl")
-            context = context_for(
+            context = scheduled_context_for(
                 workspace,
                 session=session,
                 sessions_directory=sessions_directory,
                 scheduler=scheduler,
             )
 
-            result = CreateScheduledTaskTool().execute(
+            result = execute_scheduled(
                 {
                     "prompt": "scheduled prompt",
                     "trigger": {
@@ -591,7 +616,7 @@ class ScheduledTaskToolTest(unittest.TestCase):
             )
 
             session.permission_preset = PermissionPreset.FULL_ACCESS
-            second = CreateScheduledTaskTool().execute(
+            second = execute_scheduled(
                 {
                     "prompt": "another scheduled prompt",
                     "trigger": {
