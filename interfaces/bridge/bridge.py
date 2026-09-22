@@ -59,7 +59,6 @@ from agent_core import (
     vision_aware_tool_names,
     skill_aware_tool_names,
     platform_workspace_sandbox_backend,
-    platform_shell_launcher,
     SchedulerService,
     WORKSPACE_ONLY_AUTHORITY,
 )
@@ -693,10 +692,7 @@ class Bridge:
                 workspace.path,
                 platform_workspace_sandbox_backend(),
             )
-            host_executor = HostCommandExecutor(
-                workspace.path,
-                shell_launcher=platform_shell_launcher,
-            )
+            host_executor = HostCommandExecutor(workspace.path)
             execution_router = ExecutionRouter(
                 workspace_executor,
                 host_executor,

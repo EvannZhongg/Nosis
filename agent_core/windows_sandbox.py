@@ -788,7 +788,11 @@ class WindowsWriteRestrictedSandbox:
             if not markers:
                 if cleanup_stale:
                     self._remove_stale_capability_grants(path, sid_value)
-                managed = self._grant_write(path, sid)
+                # The deterministic capability SID belongs to this runtime,
+                # even when a previous unclean shutdown left its ACE behind.
+                # Ordinary user-SID ACEs are different: preserve an existing
+                # user grant instead of claiming ownership of it.
+                managed = self._grant_write(path, sid) or cleanup_stale
             marker = self._new_capability_marker(key, managed)
         self._capability_leases.append((path, sid_value, sid, marker))
 
