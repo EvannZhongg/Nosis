@@ -14,14 +14,20 @@ export type Session = {
   plan?: PlanSnapshot | null;
 };
 export type WorkspaceSessions = { workspace: string; sessions: SessionSummary[] };
+export type ScheduleTrigger =
+  | { type: "once"; at: string }
+  | { type: "interval"; seconds: number; start_at?: string | null }
+  | { type: "cron"; expression: string; timezone: string };
 export type ScheduleSummary = {
   schedule_id: string;
   prompt: string;
+  trigger: ScheduleTrigger;
   workspace: string;
   origin_session_id: string;
   schedule_session_id: string;
   session_available: boolean;
   enabled: boolean;
+  end_at?: string | null;
   next_run_at?: string | null;
   latest_run?: {
     run_id: string;

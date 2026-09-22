@@ -82,6 +82,9 @@ from .scheduler import (
     Schedule,
     ScheduledRun,
     SchedulerService,
+    parse_end_at_input,
+    parse_trigger_input,
+    trigger_to_dict,
 )
 from .skills import (
     DirectorySkillSource,
@@ -273,6 +276,9 @@ __all__ = [
     "IntervalTrigger",
     "OneShotTrigger",
     "Schedule",
+    "parse_end_at_input",
+    "parse_trigger_input",
+    "trigger_to_dict",
     "ScheduledRun",
     "SchedulerService",
     "Workspace",

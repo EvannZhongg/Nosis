@@ -19,7 +19,7 @@ from agent_core import (
     Session,
     Workspace,
 )
-from agent_core.scheduler import OneShotTrigger, SchedulerService
+from agent_core.scheduler import IntervalTrigger, OneShotTrigger, SchedulerService
 from interfaces.bridge.settings import SettingsStore
 
 try:
@@ -1324,9 +1324,97 @@ class GuiTest(unittest.TestCase):
             item = client.get("/api/schedules").json()[0]
 
         self.assertEqual(item["schedule_id"], schedule.schedule_id)
+        self.assertEqual(
+            item["trigger"],
+            {"type": "once", "at": schedule.trigger.at.isoformat()},
+        )
+        self.assertIsNone(item["end_at"])
         self.assertTrue(item["session_available"])
         self.assertEqual(item["latest_run"]["run_id"], run.run_id)
         self.assertEqual(item["latest_run"]["status"], "completed")
+
+    def test_schedule_update_accepts_trigger_and_end_at(self) -> None:
+        scheduler = SchedulerService(self.config / "schedule.jsonl")
+        schedule = scheduler.create_schedule(
+            trigger=IntervalTrigger(1200),
+            prompt="scheduled prompt",
+            workspace=str(self.root),
+            origin_session_id="origin",
+            schedule_session_id="scheduled-session",
+        )
+
+        with self.client() as client:
+            response = client.put(
+                f"/api/schedules/{schedule.schedule_id}",
+                json={
+                    "trigger": {
+                        "type": "cron",
+                        "expression": "0 10 * * *",
+                        "timezone": "Asia/Shanghai",
+                    },
+                    "end_at": "2099-12-31T23:59:00+08:00",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["schedule_id"], schedule.schedule_id)
+        self.assertEqual(body["schedule_session_id"], "scheduled-session")
+        self.assertEqual(
+            body["trigger"],
+            {
+                "type": "cron",
+                "expression": "0 10 * * *",
+                "timezone": "Asia/Shanghai",
+            },
+        )
+        self.assertEqual(body["end_at"], "2099-12-31T23:59:00+08:00")
+
+    def test_schedule_update_rejects_invalid_trigger_input(self) -> None:
+        scheduler = SchedulerService(self.config / "schedule.jsonl")
+        schedule = scheduler.create_schedule(
+            trigger=IntervalTrigger(1200),
+            prompt="scheduled prompt",
+            workspace=str(self.root),
+            origin_session_id="origin",
+            schedule_session_id="scheduled-session",
+        )
+
+        with self.client() as client:
+            response = client.put(
+                f"/api/schedules/{schedule.schedule_id}",
+                json={
+                    "trigger": {
+                        "type": "interval",
+                        "seconds": 60,
+                        "start_at": 123,
+                    }
+                },
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("start_at must be", response.json()["detail"])
+        self.assertEqual(scheduler.schedules[0].trigger, IntervalTrigger(1200))
+
+    def test_schedule_update_rejects_invalid_end_at_input(self) -> None:
+        scheduler = SchedulerService(self.config / "schedule.jsonl")
+        schedule = scheduler.create_schedule(
+            trigger=IntervalTrigger(1200),
+            prompt="scheduled prompt",
+            workspace=str(self.root),
+            origin_session_id="origin",
+            schedule_session_id="scheduled-session",
+        )
+
+        with self.client() as client:
+            response = client.put(
+                f"/api/schedules/{schedule.schedule_id}",
+                json={"end_at": 123},
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("end_at must be", response.json()["detail"])
+        self.assertIsNone(scheduler.schedules[0].end_at)
 
     def test_rejects_a_session_id_that_escapes_the_sessions_directory(
         self,

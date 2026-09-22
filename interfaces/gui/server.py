@@ -35,6 +35,9 @@ from agent_core import (
     plan_snapshot_to_dict,
     probe_image,
     SchedulerService,
+    parse_end_at_input,
+    parse_trigger_input,
+    trigger_to_dict,
 )
 from agent_core.path_utils import path_for_comparison
 
@@ -601,11 +604,13 @@ def create_app(
             {
                 "schedule_id": item.schedule_id,
                 "prompt": item.action.prompt,
+                "trigger": trigger_to_dict(item.trigger),
                 "workspace": item.workspace,
                 "origin_session_id": item.origin_session_id,
                 "schedule_session_id": item.schedule_session_id,
                 "session_available": store.has_journal(item.schedule_session_id),
                 "enabled": item.enabled,
+                "end_at": item.end_at.isoformat() if item.end_at else None,
                 "next_run_at": (
                     item.next_run_at.isoformat() if item.next_run_at else None
                 ),
@@ -642,17 +647,25 @@ def create_app(
     ) -> dict[str, object]:
         try:
             current = SchedulerService(settings.directory / "schedule.jsonl")
+            changes = {
+                key: payload[key]
+                for key in ("prompt", "enabled")
+                if key in payload
+            }
+            if "trigger" in payload:
+                changes["trigger"] = parse_trigger_input(payload["trigger"])
+            if "end_at" in payload:
+                changes["end_at"] = parse_end_at_input(payload["end_at"])
             item = current.update_schedule(
                 schedule_id,
-                **{
-                    key: payload[key]
-                    for key in ("prompt", "enabled")
-                    if key in payload
-                },
+                **changes,
             )
             return {
                 "schedule_id": item.schedule_id,
+                "schedule_session_id": item.schedule_session_id,
+                "trigger": trigger_to_dict(item.trigger),
                 "enabled": item.enabled,
+                "end_at": item.end_at.isoformat() if item.end_at else None,
                 "next_run_at": (
                     item.next_run_at.isoformat() if item.next_run_at else None
                 ),

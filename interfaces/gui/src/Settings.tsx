@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { ArrowLeft, Boxes, Check, ChevronRight, CircleAlert, KeyRound, MessageSquare, Plus, RefreshCw, Save, ServerCog } from "lucide-react";
-import { get, put, type SettingsSnapshot, type ScheduleSummary } from "./api";
+import { get, put, type SettingsSnapshot, type ScheduleSummary, type ScheduleTrigger } from "./api";
 
 export type SettingsSection = "providers" | "agent" | "skills" | "plugins" | "mcp" | "schedules";
 
@@ -101,6 +101,24 @@ function formatScheduleTime(value?: string | null) {
   }).format(new Date(value));
 }
 
+function formatInterval(seconds: number) {
+  if (seconds % 86400 === 0) return `${seconds / 86400} 天`;
+  if (seconds % 3600 === 0) return `${seconds / 3600} 小时`;
+  if (seconds % 60 === 0) return `${seconds / 60} 分钟`;
+  return `${seconds} 秒`;
+}
+
+function formatScheduleTrigger(trigger: ScheduleTrigger) {
+  if (trigger.type === "once") {
+    return `一次性 · ${formatScheduleTime(trigger.at)}`;
+  }
+  if (trigger.type === "interval") {
+    const start = formatScheduleTime(trigger.start_at);
+    return `每 ${formatInterval(trigger.seconds)}${start ? ` · 起始 ${start}` : ""}`;
+  }
+  return `Cron ${trigger.expression} · ${trigger.timezone}`;
+}
+
 function scheduleStatus(item: ScheduleSummary) {
   const status = item.latest_run?.status;
   if (status === "running") return item.session_available
@@ -124,9 +142,10 @@ function ScheduleSettings({ refreshVersion, onOpenSession }: { refreshVersion: n
     {items.length === 0 ? <div className="empty-settings"><strong>暂无定时任务</strong></div> : <div className="schedule-list">{items.map((item) => {
       const status = scheduleStatus(item);
       const time = formatScheduleTime(item.next_run_at ?? item.latest_run?.scheduled_for);
+      const end = formatScheduleTime(item.end_at);
       return <section className="schedule-row" key={item.schedule_id}>
         <span className={`schedule-state ${status.tone}`} aria-hidden="true" />
-        <div className="schedule-copy"><strong title={item.prompt}>{item.prompt}</strong><small title={item.workspace}>{item.workspace}{time ? ` · ${item.next_run_at ? "下次" : "最近"} ${time}` : ""}</small></div>
+        <div className="schedule-copy"><strong title={item.prompt}>{item.prompt}</strong><small title={item.workspace}>{formatScheduleTrigger(item.trigger)} · {item.workspace}{time ? ` · ${item.next_run_at ? "下次" : "最近"} ${time}` : ""}{end ? ` · 截止 ${end}` : ""}</small></div>
         <span className={`schedule-status ${status.tone}`} title={item.latest_run?.error ?? undefined}>{status.label}</span>
         <button className="schedule-session-button" disabled={!item.session_available} title={item.session_available ? `打开 Session ${item.schedule_session_id}` : "本次执行尚未生成会话记录"} onClick={() => onOpenSession(item.schedule_session_id)}><MessageSquare size={13} />{item.session_available ? "会话" : "无记录"}</button>
       </section>;

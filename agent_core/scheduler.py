@@ -120,12 +120,76 @@ def _parse_dt(value: object) -> datetime | None:
     return parsed
 
 
-def _trigger_to_dict(trigger: Trigger) -> dict[str, object]:
+def trigger_to_dict(trigger: Trigger) -> dict[str, object]:
     if isinstance(trigger, OneShotTrigger):
         return {"type": "once", "at": _dt(trigger.at)}
     if isinstance(trigger, CronTrigger):
         return {"type": "cron", "expression": trigger.expression, "timezone": trigger.timezone}
     return {"type": "interval", "seconds": trigger.seconds, "start_at": _dt(trigger.start_at)}
+
+
+def parse_end_at_input(value: object) -> datetime | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value:
+        raise ValueError("end_at must be an ISO-8601 string or null")
+    parsed = datetime.fromisoformat(value)
+    _require_aware(parsed, "schedule end_at")
+    return parsed
+
+
+def parse_trigger_input(value: object) -> Trigger:
+    if not isinstance(value, dict):
+        raise ValueError("trigger must be an object")
+    kind = value.get("type")
+    if kind == "once":
+        unknown = set(value) - {"type", "at"}
+        if unknown:
+            raise ValueError(
+                f"once trigger has unsupported field(s): {', '.join(sorted(unknown))}"
+            )
+        at = value.get("at")
+        if not isinstance(at, str) or not at:
+            raise ValueError(
+                'Error: once trigger requires \'at\'. Retry with at="<ISO-8601 with UTC offset>".'
+            )
+        return OneShotTrigger(datetime.fromisoformat(at))
+    if kind == "cron":
+        unknown = set(value) - {"type", "expression", "timezone"}
+        if unknown:
+            raise ValueError(
+                f"cron trigger has unsupported field(s): {', '.join(sorted(unknown))}"
+            )
+        expression = value.get("expression")
+        if not isinstance(expression, str) or not expression:
+            raise ValueError(
+                'Error: cron trigger requires \'expression\'. Retry with expression="<five-field cron>".'
+            )
+        timezone_name = value.get("timezone", "UTC")
+        if not isinstance(timezone_name, str) or not timezone_name:
+            raise ValueError("cron trigger timezone must be an IANA timezone name")
+        return CronTrigger(expression, timezone_name)
+    if kind == "interval":
+        unknown = set(value) - {"type", "seconds", "start_at"}
+        if unknown:
+            raise ValueError(
+                f"interval trigger has unsupported field(s): {', '.join(sorted(unknown))}"
+            )
+        seconds = value.get("seconds")
+        if isinstance(seconds, bool) or not isinstance(seconds, int) or seconds < 1:
+            raise ValueError(
+                "Error: interval trigger requires positive integer 'seconds'. Retry with seconds=<positive integer>."
+            )
+        start_at = value.get("start_at")
+        if start_at is not None and (not isinstance(start_at, str) or not start_at):
+            raise ValueError(
+                "interval trigger start_at must be an ISO-8601 string or null"
+            )
+        return IntervalTrigger(
+            seconds,
+            datetime.fromisoformat(start_at) if start_at is not None else None,
+        )
+    raise ValueError("trigger.type must be once, cron, or interval")
 
 
 def _trigger_from_dict(value: dict[str, object]) -> Trigger:
@@ -146,7 +210,7 @@ def _trigger_from_dict(value: dict[str, object]) -> Trigger:
 def _schedule_to_dict(schedule: Schedule) -> dict[str, object]:
     return {
         **asdict(schedule),
-        "trigger": _trigger_to_dict(schedule.trigger),
+        "trigger": trigger_to_dict(schedule.trigger),
         "action": asdict(schedule.action),
         "created_at": _dt(schedule.created_at),
         "end_at": _dt(schedule.end_at),
@@ -511,4 +575,4 @@ def _cron_matches(expression: str, value: datetime) -> bool:
     return True
 
 
-__all__ = ["OneShotTrigger", "CronTrigger", "IntervalTrigger", "AgentTurnAction", "Schedule", "ScheduledRun", "SchedulerService"]
+__all__ = ["OneShotTrigger", "CronTrigger", "IntervalTrigger", "AgentTurnAction", "Schedule", "ScheduledRun", "SchedulerService", "parse_end_at_input", "parse_trigger_input", "trigger_to_dict"]

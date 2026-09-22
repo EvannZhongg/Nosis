@@ -29,10 +29,11 @@ from agent_core import (
     builtin_catalog,
 )
 from agent_core.permissions import PermissionPreset
-from agent_core.scheduler import IntervalTrigger, SchedulerService
+from agent_core.scheduler import CronTrigger, IntervalTrigger, SchedulerService
 from agent_core.tools.builtin.schedule import (
     CreateScheduledTaskTool,
     DeleteScheduledTaskTool,
+    ListScheduledTasksTool,
     UpdateScheduledTaskTool,
 )
 from agent_core.tools.budget import MAX_TOOL_RESULT_CHARS
@@ -266,6 +267,74 @@ class ScheduledTaskToolTest(unittest.TestCase):
             self.assertIsInstance(scheduler.schedules[0].trigger, IntervalTrigger)
             self.assertEqual(scheduler.schedules[0].trigger.seconds, 90)
 
+    def test_update_trigger_and_end_at_preserves_schedule_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            scheduler = SchedulerService(root / "schedule.jsonl")
+            context = context_for(
+                Workspace(root),
+                sessions_directory=root / "sessions",
+                scheduler=scheduler,
+            )
+            created = CreateScheduledTaskTool().execute(
+                {
+                    "prompt": "scheduled prompt",
+                    "trigger": {"type": "interval", "seconds": 1200},
+                },
+                context,
+            )
+
+            result = UpdateScheduledTaskTool().execute(
+                {
+                    "schedule_id": created["schedule_id"],
+                    "trigger": {
+                        "type": "cron",
+                        "expression": "0 10 * * *",
+                        "timezone": "Asia/Shanghai",
+                    },
+                    "end_at": "2099-12-31T23:59:00+08:00",
+                },
+                context,
+            )
+
+            schedule = scheduler.schedules[0]
+            self.assertEqual(result["schedule_id"], created["schedule_id"])
+            self.assertEqual(
+                result["schedule_session_id"], created["schedule_session_id"]
+            )
+            self.assertIsInstance(schedule.trigger, CronTrigger)
+            self.assertEqual(schedule.trigger.expression, "0 10 * * *")
+            self.assertEqual(schedule.trigger.timezone, "Asia/Shanghai")
+            self.assertEqual(
+                result["end_at"], "2099-12-31T23:59:00+08:00"
+            )
+
+    def test_list_includes_trigger_and_end_at(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            scheduler = SchedulerService(root / "schedule.jsonl")
+            context = context_for(
+                Workspace(root),
+                sessions_directory=root / "sessions",
+                scheduler=scheduler,
+            )
+            CreateScheduledTaskTool().execute(
+                {
+                    "prompt": "scheduled prompt",
+                    "trigger": {"type": "interval", "seconds": 1200},
+                    "end_at": "2099-12-31T23:59:00+00:00",
+                },
+                context,
+            )
+
+            item = ListScheduledTasksTool().execute({}, context)[0]
+
+            self.assertEqual(
+                item["trigger"],
+                {"type": "interval", "seconds": 1200, "start_at": None},
+            )
+            self.assertEqual(item["end_at"], "2099-12-31T23:59:00+00:00")
+
     def test_missing_trigger_fields_return_retryable_messages(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             context = context_for(
@@ -277,6 +346,29 @@ class ScheduledTaskToolTest(unittest.TestCase):
                 tool.execute({"prompt": "p", "trigger": {"type": "once"}}, context)
             with self.assertRaisesRegex(ValueError, "cron trigger requires 'expression'"):
                 tool.execute({"prompt": "p", "trigger": {"type": "cron"}}, context)
+            with self.assertRaisesRegex(ValueError, "Retry with seconds"):
+                tool.execute({"prompt": "p", "trigger": {"type": "interval"}}, context)
+            with self.assertRaisesRegex(ValueError, "start_at must be"):
+                tool.execute(
+                    {
+                        "prompt": "p",
+                        "trigger": {
+                            "type": "interval",
+                            "seconds": 60,
+                            "start_at": 123,
+                        },
+                    },
+                    context,
+                )
+            with self.assertRaisesRegex(ValueError, "end_at must be"):
+                tool.execute(
+                    {
+                        "prompt": "p",
+                        "trigger": {"type": "interval", "seconds": 60},
+                        "end_at": 123,
+                    },
+                    context,
+                )
 
     def test_delete_missing_schedule_reports_not_found(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
