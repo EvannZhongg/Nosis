@@ -172,6 +172,11 @@ WORKSPACE_ACCESS_AUTHORITY = ExecutionAuthority(
     maximum_scope=ExecutionScope.HOST,
     unattended_scope=ExecutionScope.WORKSPACE,
 )
+WORKSPACE_ONLY_AUTHORITY = ExecutionAuthority(
+    default_scope=ExecutionScope.WORKSPACE,
+    maximum_scope=ExecutionScope.WORKSPACE,
+    unattended_scope=ExecutionScope.WORKSPACE,
+)
 FULL_ACCESS_AUTHORITY = ExecutionAuthority(
     default_scope=ExecutionScope.HOST,
     maximum_scope=ExecutionScope.HOST,
@@ -213,14 +218,6 @@ class ExecutionRouter:
     @property
     def workspace_policy(self) -> object | None:
         return getattr(self._workspace_executor, "policy", None)
-
-    def intersect(self, limit: ExecutionAuthority) -> "ExecutionRouter":
-        return ExecutionRouter(
-            self._workspace_executor,
-            self._host_executor,
-            authority=lambda: self.authority.intersect(limit),
-            host_tool=self._host_tool,
-        )
 
     def resolve(self, call: "ToolCall") -> ResolvedExecution:
         authority = self.authority

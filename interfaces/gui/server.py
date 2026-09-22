@@ -632,6 +632,7 @@ def create_app(
                 "prompt": item.action.prompt,
                 "trigger": trigger_to_dict(item.trigger),
                 "workspace": item.workspace,
+                "execution_scope": item.execution_scope.value,
                 "origin_session_id": item.origin_session_id,
                 "schedule_session_id": item.schedule_session_id,
                 "session_available": store.has_journal(item.schedule_session_id),
@@ -682,6 +683,7 @@ def create_app(
                 "schedule_id": item.schedule_id,
                 "schedule_session_id": item.schedule_session_id,
                 "trigger": trigger_to_dict(item.trigger),
+                "execution_scope": item.execution_scope.value,
                 "enabled": item.enabled,
                 "end_at": item.end_at.isoformat() if item.end_at else None,
                 "next_run_at": (

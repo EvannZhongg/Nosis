@@ -149,7 +149,7 @@ function ScheduleSettings({ refreshVersion, onOpenSession }: { refreshVersion: n
       const end = formatScheduleTime(item.end_at);
       return <section className="schedule-row" key={item.schedule_id}>
         <span className={`schedule-state ${status.tone}`} aria-hidden="true" />
-        <div className="schedule-copy"><strong title={item.prompt}>{item.prompt}</strong><small title={item.workspace}>{formatScheduleTrigger(item.trigger)} · {item.workspace}{time ? ` · ${item.next_run_at ? "下次" : "最近"} ${time}` : ""}{end ? ` · 截止 ${end}` : ""}</small></div>
+        <div className="schedule-copy"><strong title={item.prompt}>{item.prompt}</strong><small title={item.workspace}>{formatScheduleTrigger(item.trigger)} · {item.execution_scope === "host" ? "Host" : "Workspace"} · {item.workspace}{time ? ` · ${item.next_run_at ? "下次" : "最近"} ${time}` : ""}{end ? ` · 截止 ${end}` : ""}</small></div>
         <span className={`schedule-status ${status.tone}`} title={item.latest_run?.error ?? undefined}>{status.label}</span>
         <button className="schedule-session-button" disabled={!item.session_available} title={item.session_available ? `打开 Session ${item.schedule_session_id}` : "本次执行尚未生成会话记录"} onClick={() => onOpenSession(item.schedule_session_id)}><MessageSquare size={13} />{item.session_available ? "会话" : "无记录"}</button>
       </section>;

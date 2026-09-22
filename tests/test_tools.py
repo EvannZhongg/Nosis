@@ -14,6 +14,7 @@ from agent_core import (
     CommandExecutionResult,
     EditFileTool,
     ExecutionRouter,
+    ExecutionScope,
     FULL_ACCESS_AUTHORITY,
     JsonlSessionStore,
     ListDirectoryTool,
@@ -27,6 +28,7 @@ from agent_core import (
     ToolDefinition,
     ToolExecutionContext,
     ToolResult,
+    WORKSPACE_ONLY_AUTHORITY,
     WebSearchTool,
     Workspace,
     builtin_catalog,
@@ -231,6 +233,121 @@ class ScheduledTaskToolTest(unittest.TestCase):
             trigger_schema["properties"]["at"]["pattern"],
             "(?:Z|[+-][0-9]{2}:[0-9]{2})$",
         )
+        self.assertEqual(
+            definition.parameters["properties"]["execution_scope"]["enum"],
+            ["workspace"],
+        )
+
+    def test_full_access_may_create_an_unattended_host_schedule(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = Workspace(root)
+            sessions_directory = root / "sessions"
+            store = JsonlSessionStore(sessions_directory)
+            session = Session("origin")
+            session.permission_preset = PermissionPreset.FULL_ACCESS
+            scheduler = SchedulerService(root / "schedule.jsonl")
+            context = context_for(
+                workspace,
+                session=session,
+                sessions_directory=sessions_directory,
+                scheduler=scheduler,
+            )
+            tool = CreateScheduledTaskTool()
+
+            self.assertEqual(
+                tool.definition(context).parameters["properties"]
+                ["execution_scope"]["enum"],
+                ["workspace", "host"],
+            )
+            result = tool.execute(
+                {
+                    "prompt": "host scheduled prompt",
+                    "trigger": {
+                        "type": "once",
+                        "at": "2099-01-01T00:00:00+00:00",
+                    },
+                    "execution_scope": "host",
+                },
+                context,
+            )
+
+            self.assertEqual(result["execution_scope"], "host")
+            self.assertIs(
+                scheduler.schedules[0].execution_scope,
+                ExecutionScope.HOST,
+            )
+            self.assertEqual(
+                store.permission_preset_for(result["schedule_session_id"]),
+                PermissionPreset.FULL_ACCESS,
+            )
+
+    def test_non_full_access_cannot_create_a_host_schedule(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            scheduler = SchedulerService(root / "schedule.jsonl")
+            context = context_for(
+                Workspace(root),
+                sessions_directory=root / "sessions",
+                scheduler=scheduler,
+            )
+
+            with self.assertRaisesRegex(
+                PermissionError,
+                "host scheduled tasks require Full Access",
+            ):
+                CreateScheduledTaskTool().execute(
+                    {
+                        "prompt": "host scheduled prompt",
+                        "trigger": {
+                            "type": "once",
+                            "at": "2099-01-01T00:00:00+00:00",
+                        },
+                        "execution_scope": "host",
+                    },
+                    context,
+                )
+
+            self.assertEqual(scheduler.schedules, [])
+
+    def test_runtime_authority_caps_a_full_access_session(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            session = Session("origin")
+            session.permission_preset = PermissionPreset.FULL_ACCESS
+            scheduler = SchedulerService(root / "schedule.jsonl")
+            context = context_for(
+                Workspace(root),
+                session=session,
+                sessions_directory=root / "sessions",
+                scheduler=scheduler,
+                execution_router=ExecutionRouter(
+                    UnusedExecutor(),
+                    UnusedExecutor(),
+                    authority=WORKSPACE_ONLY_AUTHORITY,
+                ),
+            )
+
+            self.assertEqual(
+                CreateScheduledTaskTool().definition(context).parameters
+                ["properties"]["execution_scope"]["enum"],
+                ["workspace"],
+            )
+            with self.assertRaisesRegex(
+                PermissionError,
+                "host scheduled tasks require Full Access",
+            ):
+                CreateScheduledTaskTool().execute(
+                    {
+                        "prompt": "host scheduled prompt",
+                        "trigger": {
+                            "type": "once",
+                            "at": "2099-01-01T00:00:00+00:00",
+                        },
+                        "execution_scope": "host",
+                    },
+                    context,
+                )
 
     def test_delete_schedule_is_model_callable(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

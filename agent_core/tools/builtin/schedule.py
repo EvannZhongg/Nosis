@@ -11,7 +11,7 @@ from ...scheduler import (
     parse_trigger_input,
     trigger_to_dict,
 )
-from ...execution import WORKSPACE_ACCESS_AUTHORITY
+from ...execution import ExecutionAuthority, ExecutionScope
 from ...permissions import PermissionPreset
 from ...session_store import JsonlSessionStore
 
@@ -20,6 +20,14 @@ def _service(context: ToolExecutionContext) -> SchedulerService:
     if not isinstance(context.scheduler, SchedulerService):
         raise RuntimeError("scheduler is unavailable")
     return context.scheduler
+
+
+def _authority(context: ToolExecutionContext) -> ExecutionAuthority:
+    if context.execution is not None:
+        return context.execution.authority
+    if context.execution_router is not None:
+        return context.execution_router.authority
+    return context.session.permission_preset.authority
 
 
 def _reject_unknown_arguments(
@@ -77,6 +85,10 @@ class CreateScheduledTaskTool(Tool):
         return isinstance(context.scheduler, SchedulerService)
 
     def definition(self, context):
+        authority = _authority(context)
+        execution_scopes = [ExecutionScope.WORKSPACE.value]
+        if authority.allows_unattended(ExecutionScope.HOST):
+            execution_scopes.append(ExecutionScope.HOST.value)
         return ToolDefinition(
             self.name,
             "Create a durable future reminder or scheduled Agent task. Supports one-time and recurring plans.",
@@ -94,6 +106,12 @@ class CreateScheduledTaskTool(Tool):
                         "pattern": "(?:Z|[+-][0-9]{2}:[0-9]{2})$",
                         "description": "Optional end time for recurring plans, with an explicit UTC offset.",
                     },
+                    "execution_scope": {
+                        "type": "string",
+                        "enum": execution_scopes,
+                        "default": ExecutionScope.WORKSPACE.value,
+                        "description": "Execution boundary for unattended runs. Workspace is the default. Host requires current unattended host authority.",
+                    },
                 },
                 "required": ["prompt", "trigger"],
                 "additionalProperties": False,
@@ -101,20 +119,36 @@ class CreateScheduledTaskTool(Tool):
         )
 
     def execute(self, arguments: dict[str, JSONValue], context: ToolExecutionContext):
-        _reject_unknown_arguments(arguments, {"prompt", "trigger", "end_at"})
+        _reject_unknown_arguments(
+            arguments, {"prompt", "trigger", "end_at", "execution_scope"}
+        )
         prompt = parse_schedule_prompt_input(arguments.get("prompt"))
         parsed = parse_trigger_input(arguments.get("trigger"))
         end = parse_end_at_input(arguments.get("end_at"))
+        try:
+            execution_scope = ExecutionScope(
+                arguments.get("execution_scope", ExecutionScope.WORKSPACE.value)
+            )
+        except (TypeError, ValueError) as error:
+            raise ValueError(
+                "execution_scope must be 'workspace' or 'host'"
+            ) from error
+        authority = _authority(context)
+        if (
+            execution_scope is ExecutionScope.HOST
+            and not authority.allows_unattended(ExecutionScope.HOST)
+        ):
+            raise PermissionError(
+                "host scheduled tasks require Full Access"
+            )
         schedule_session_id = str(uuid4())
         store = JsonlSessionStore(context.sessions_directory)
         store.bind_workspace(schedule_session_id, context.workspace.path)
         store.set_permission_preset(
             schedule_session_id,
-            PermissionPreset.from_authority(
-                context.session.permission_preset.authority.intersect(
-                    WORKSPACE_ACCESS_AUTHORITY
-                )
-            ),
+            PermissionPreset.FULL_ACCESS
+            if execution_scope is ExecutionScope.HOST
+            else PermissionPreset.WORKSPACE_ACCESS,
             context.workspace.path,
         )
         provider = store.provider_for(context.session.session_id)
@@ -124,8 +158,8 @@ class CreateScheduledTaskTool(Tool):
                 provider,
                 context.workspace.path,
             )
-        schedule = _service(context).create_schedule(trigger=parsed, prompt=prompt, workspace=str(context.workspace.path), origin_session_id=context.session.session_id, schedule_session_id=schedule_session_id, end_at=end)
-        return {"schedule_id": schedule.schedule_id, "schedule_session_id": schedule.schedule_session_id, "workspace": schedule.workspace, "next_run_at": schedule.next_run_at.isoformat() if schedule.next_run_at else None}
+        schedule = _service(context).create_schedule(trigger=parsed, prompt=prompt, workspace=str(context.workspace.path), origin_session_id=context.session.session_id, schedule_session_id=schedule_session_id, execution_scope=execution_scope, end_at=end)
+        return {"schedule_id": schedule.schedule_id, "schedule_session_id": schedule.schedule_session_id, "workspace": schedule.workspace, "execution_scope": schedule.execution_scope.value, "next_run_at": schedule.next_run_at.isoformat() if schedule.next_run_at else None}
 
 
 class UpdateScheduledTaskTool(Tool):
@@ -167,6 +201,7 @@ class UpdateScheduledTaskTool(Tool):
             "schedule_id": schedule.schedule_id,
             "schedule_session_id": schedule.schedule_session_id,
             "trigger": trigger_to_dict(schedule.trigger),
+            "execution_scope": schedule.execution_scope.value,
             "enabled": schedule.enabled,
             "end_at": schedule.end_at.isoformat() if schedule.end_at else None,
             "next_run_at": schedule.next_run_at.isoformat() if schedule.next_run_at else None,
@@ -190,6 +225,7 @@ class ListScheduledTasksTool(Tool):
                 "prompt": s.action.prompt,
                 "trigger": trigger_to_dict(s.trigger),
                 "workspace": s.workspace,
+                "execution_scope": s.execution_scope.value,
                 "enabled": s.enabled,
                 "end_at": s.end_at.isoformat() if s.end_at else None,
                 "next_run_at": s.next_run_at.isoformat() if s.next_run_at else None,

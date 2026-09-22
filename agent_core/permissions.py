@@ -36,13 +36,6 @@ class PermissionPreset(StrEnum):
     def default_scope(self) -> ExecutionScope:
         return self.authority.default_scope
 
-    @classmethod
-    def from_authority(cls, authority: ExecutionAuthority) -> "PermissionPreset":
-        for preset in cls:
-            if preset.authority == authority:
-                return preset
-        raise ValueError("execution authority has no permission preset")
-
 
 class PermissionController:
     """Own the mutable permission preset for one Runtime and Session."""

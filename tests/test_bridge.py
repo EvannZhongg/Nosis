@@ -17,6 +17,7 @@ from agent_core import (
     AssistantMessageEvent,
     ContextWindow,
     ContextWindowEvent,
+    ExecutionScope,
     JsonlSessionStore,
     JobHandle,
     JobStatusEvent,
@@ -38,7 +39,8 @@ from agent_core import (
     ToolExecutionContext,
     UserSteerAppliedEvent,
     TurnControl,
-    WORKSPACE_ACCESS_AUTHORITY,
+    FULL_ACCESS_AUTHORITY,
+    WORKSPACE_ONLY_AUTHORITY,
     Workspace,
 )
 from agent_core.scheduler import (
@@ -361,12 +363,23 @@ def make_bridge(
     stdin = io.StringIO("".join(f"{line}\n" for line in lines))
     stdout = io.StringIO()
     if config_directory is None:
-        return Bridge(stdin, stdout, start_scheduler=False), stdout
+        return isolated_bridge(stdin, stdout), stdout
     with patch(
         "interfaces.bridge.bridge.default_config_directory",
         return_value=config_directory,
     ):
         return Bridge(stdin, stdout, start_scheduler=False), stdout
+
+
+def isolated_bridge(stdin, stdout: io.StringIO) -> Bridge:
+    with tempfile.TemporaryDirectory() as directory:
+        scheduler = SchedulerService(Path(directory) / "schedule.jsonl")
+        return Bridge(
+            stdin,
+            stdout,
+            scheduler=scheduler,
+            start_scheduler=False,
+        )
 
 
 def emitted(stdout: io.StringIO) -> list[dict]:
@@ -763,7 +776,7 @@ class BridgeApprovalTest(unittest.TestCase):
             for index in range(1, approvals + 1)
         ]
         stdout = io.StringIO()
-        bridge = Bridge(_SlowStdin(responses), stdout, start_scheduler=False)
+        bridge = isolated_bridge(_SlowStdin(responses), stdout)
         results: list[bool] = []
         lock = threading.Lock()
         barrier = threading.Barrier(approvals, timeout=5)
@@ -803,7 +816,7 @@ class BridgeApprovalTest(unittest.TestCase):
             ]
         )
         stdout = io.StringIO()
-        bridge = Bridge(stdin, stdout, start_scheduler=False)
+        bridge = isolated_bridge(stdin, stdout)
         control = TurnControl()
         bridge._turn_id = "t1"
         bridge._turn_control = control
@@ -1418,7 +1431,7 @@ class InterruptedTurnTest(unittest.TestCase):
 
 
 class ScheduledTurnTest(unittest.TestCase):
-    def test_scheduled_worker_caps_execution_authority(self) -> None:
+    def test_scheduled_worker_uses_persisted_execution_scope(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             scheduler = SchedulerService(root / "schedule.jsonl")
@@ -1438,30 +1451,35 @@ class ScheduledTurnTest(unittest.TestCase):
                     scheduler=scheduler,
                     start_scheduler=False,
                 )
-                schedule = Schedule(
-                    "schedule-1",
-                    OneShotTrigger(datetime.now(timezone.utc)),
-                    AgentTurnAction("scheduled prompt"),
-                    str(root),
-                    "origin",
-                    "scheduled-session",
-                )
-                run = ScheduledRun(
-                    "run-1",
-                    schedule.schedule_id,
-                    schedule.schedule_session_id,
-                    "turn-1",
-                    datetime.now(timezone.utc),
-                )
+                for scope in (ExecutionScope.WORKSPACE, ExecutionScope.HOST):
+                    schedule = Schedule(
+                        f"schedule-{scope.value}",
+                        OneShotTrigger(datetime.now(timezone.utc)),
+                        AgentTurnAction("scheduled prompt"),
+                        str(root),
+                        "origin",
+                        f"scheduled-session-{scope.value}",
+                        scope,
+                    )
+                    run = ScheduledRun(
+                        f"run-{scope.value}",
+                        schedule.schedule_id,
+                        schedule.schedule_session_id,
+                        f"turn-{scope.value}",
+                        datetime.now(timezone.utc),
+                    )
 
-                with self.assertRaisesRegex(
-                    RuntimeError,
-                    "stop after capturing worker authority",
-                ):
-                    bridge._run_scheduled_turn(schedule, run)
+                    with self.assertRaisesRegex(
+                        RuntimeError,
+                        "stop after capturing worker authority",
+                    ):
+                        bridge._run_scheduled_turn(schedule, run)
                 bridge.close()
 
-            self.assertEqual(captured, [WORKSPACE_ACCESS_AUTHORITY])
+            self.assertEqual(
+                captured,
+                [WORKSPACE_ONLY_AUTHORITY, FULL_ACCESS_AUTHORITY],
+            )
 
     def test_scheduled_turn_uses_normal_runtime_and_persists_session(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1510,33 +1528,46 @@ class ScheduledTurnTest(unittest.TestCase):
                     scheduler=scheduler,
                     start_scheduler=False,
                 )
-                schedule = Schedule(
-                    "schedule-1",
-                    OneShotTrigger(datetime.now(timezone.utc)),
-                    AgentTurnAction("scheduled prompt"),
-                    str(root),
-                    "origin",
-                    "scheduled-session",
+                cases = (
+                    (
+                        ExecutionScope.WORKSPACE,
+                        PermissionPreset.WORKSPACE_ACCESS,
+                    ),
+                    (ExecutionScope.HOST, PermissionPreset.FULL_ACCESS),
                 )
-                run = ScheduledRun(
-                    "run-1",
-                    schedule.schedule_id,
-                    schedule.schedule_session_id,
-                    "turn-1",
-                    datetime.now(timezone.utc),
-                )
+                for scope, _ in cases:
+                    schedule = Schedule(
+                        f"schedule-{scope.value}",
+                        OneShotTrigger(datetime.now(timezone.utc)),
+                        AgentTurnAction(f"scheduled prompt {scope.value}"),
+                        str(root),
+                        "origin",
+                        f"scheduled-session-{scope.value}",
+                        scope,
+                    )
+                    run = ScheduledRun(
+                        f"run-{scope.value}",
+                        schedule.schedule_id,
+                        schedule.schedule_session_id,
+                        f"turn-{scope.value}",
+                        datetime.now(timezone.utc),
+                    )
 
-                bridge._run_scheduled_turn(schedule, run)
+                    bridge._run_scheduled_turn(schedule, run)
                 bridge.close()
 
-            stored = JsonlSessionStore(root / "sessions").load(
-                "scheduled-session"
-            )
-            self.assertEqual(
-                [item.content for item in stored.items],
-                ["scheduled prompt", "scheduled answer"],
-            )
-            self.assertEqual(stored.turns["turn-1"].status, "completed")
+            store = JsonlSessionStore(root / "sessions")
+            for scope, preset in cases:
+                stored = store.load(f"scheduled-session-{scope.value}")
+                self.assertEqual(
+                    [item.content for item in stored.items],
+                    [f"scheduled prompt {scope.value}", "scheduled answer"],
+                )
+                self.assertEqual(
+                    stored.turns[f"turn-{scope.value}"].status,
+                    "completed",
+                )
+                self.assertEqual(stored.permission_preset, preset)
 
 
 class BridgeSessionOpenTest(unittest.TestCase):

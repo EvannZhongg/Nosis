@@ -45,6 +45,7 @@ from .execution import (
     TemporaryDirectoryMode,
     ResolvedExecution,
     WORKSPACE_ACCESS_AUTHORITY,
+    WORKSPACE_ONLY_AUTHORITY,
     WindowsSandboxBackend,
     platform_workspace_sandbox_backend,
 )
@@ -196,6 +197,7 @@ __all__ = [
     "APPROVAL_REQUIRED_AUTHORITY",
     "FULL_ACCESS_AUTHORITY",
     "WORKSPACE_ACCESS_AUTHORITY",
+    "WORKSPACE_ONLY_AUTHORITY",
     "FilesystemAccess",
     "CompositeToolPolicy",
     "Content",

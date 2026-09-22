@@ -29,6 +29,7 @@ from agent_core import (
     DirectorySkillSource,
     ExecutionAuthority,
     ExecutionRouter,
+    ExecutionScope,
     FULL_ACCESS_AUTHORITY,
     McpConfig,
     McpApprovalPolicy,
@@ -59,7 +60,7 @@ from agent_core import (
     skill_aware_tool_names,
     platform_workspace_sandbox_backend,
     SchedulerService,
-    WORKSPACE_ACCESS_AUTHORITY,
+    WORKSPACE_ONLY_AUTHORITY,
 )
 from agent_core.prompting import render_system_prompt
 from agent_core.path_utils import path_for_comparison
@@ -1176,7 +1177,11 @@ class Bridge:
             scheduler=self._scheduler,
             start_scheduler=False,
             interactive=False,
-            execution_authority_limit=WORKSPACE_ACCESS_AUTHORITY,
+            execution_authority_limit=(
+                FULL_ACCESS_AUTHORITY
+                if schedule.execution_scope is ExecutionScope.HOST
+                else WORKSPACE_ONLY_AUTHORITY
+            ),
         )
         try:
             worker.open_session(
@@ -1186,6 +1191,13 @@ class Bridge:
                     "session_id": run.session_id,
                     "provider": None,
                 }
+            )
+            if worker._permissions is None:
+                raise RuntimeError("scheduled session permissions are unavailable")
+            worker._permissions.set_preset(
+                PermissionPreset.FULL_ACCESS
+                if schedule.execution_scope is ExecutionScope.HOST
+                else PermissionPreset.WORKSPACE_ACCESS
             )
             worker._ensure_execution_plane()
             worker.run_turn(

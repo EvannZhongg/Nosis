@@ -10,7 +10,6 @@ from typing import Iterable
 
 from .config import AgentConfig
 from .content import ImagePart
-from .execution import ExecutionAuthority, FULL_ACCESS_AUTHORITY
 from .llm import LLMProvider
 from .prompting import render_subagent_prompt
 from .session import Session
@@ -74,7 +73,6 @@ class SubagentRole:
     provider: LLMProvider
     instructions: str = ""
     vision_provider: LLMProvider | None = None
-    authority: ExecutionAuthority = FULL_ACCESS_AUTHORITY
 
 
 class SubagentRoleRegistry:
@@ -169,11 +167,6 @@ class SubagentRuntime:
             plan=None,
             memory=None,
             cancellation=cancellation,
-            execution_router=(
-                parent.execution_router.intersect(role.authority)
-                if parent.execution_router is not None
-                else None
-            ),
             execution=None,
         )
         child = Agent(

@@ -1446,6 +1446,7 @@ class GuiTest(unittest.TestCase):
             item = client.get("/api/schedules").json()[0]
 
         self.assertEqual(item["schedule_id"], schedule.schedule_id)
+        self.assertEqual(item["execution_scope"], "workspace")
         self.assertEqual(
             item["trigger"],
             {"type": "once", "at": schedule.trigger.at.isoformat()},

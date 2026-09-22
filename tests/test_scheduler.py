@@ -6,6 +6,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfoNotFoundError
 
+from agent_core import ExecutionScope
+
 from agent_core.scheduler import (
     AgentTurnAction,
     CronTrigger,
@@ -13,12 +15,32 @@ from agent_core.scheduler import (
     OneShotTrigger,
     Schedule,
     SchedulerService,
+    _schedule_from_dict,
     _schedule_to_dict,
     parse_schedule_update_input,
 )
 
 
 class SchedulerServiceTest(unittest.TestCase):
+    def test_schedule_record_requires_execution_scope(self) -> None:
+        with self.assertRaises(KeyError):
+            _schedule_from_dict(
+                {
+                    "schedule_id": "schedule",
+                    "trigger": {
+                        "type": "once",
+                        "at": "2099-01-01T00:00:00+00:00",
+                    },
+                    "action": {
+                        "type": "agent_turn",
+                        "prompt": "scheduled prompt",
+                    },
+                    "workspace": "/workspace",
+                    "origin_session_id": "origin",
+                    "schedule_session_id": "scheduled-session",
+                }
+            )
+
     def test_parse_schedule_update_input_validates_the_complete_payload(self) -> None:
         changes = parse_schedule_update_input(
             {
@@ -50,6 +72,7 @@ class SchedulerServiceTest(unittest.TestCase):
                 workspace=directory,
                 origin_session_id="origin",
                 schedule_session_id="scheduled-session",
+                execution_scope=ExecutionScope.WORKSPACE,
             )
 
             with self.assertRaises(TypeError):
@@ -64,6 +87,7 @@ class SchedulerServiceTest(unittest.TestCase):
                 workspace=directory,
                 origin_session_id="origin",
                 schedule_session_id="scheduled-session",
+                execution_scope=ExecutionScope.WORKSPACE,
             )
 
             updated = service.update_schedule(
@@ -87,6 +111,7 @@ class SchedulerServiceTest(unittest.TestCase):
                 workspace=directory,
                 origin_session_id="origin",
                 schedule_session_id="scheduled-session",
+                execution_scope=ExecutionScope.WORKSPACE,
             )
             self.assertEqual(schedule.action.prompt, "scheduled prompt")
             with self.assertRaisesRegex(ValueError, "prompt must be"):
@@ -130,6 +155,7 @@ class SchedulerServiceTest(unittest.TestCase):
                 workspace=directory,
                 origin_session_id="origin",
                 schedule_session_id="scheduled-session",
+                execution_scope=ExecutionScope.WORKSPACE,
             )
             after = datetime(2099, 1, 1, 12, 1, tzinfo=timezone.utc)
             self.assertEqual(
@@ -171,6 +197,7 @@ class SchedulerServiceTest(unittest.TestCase):
                 workspace=directory,
                 origin_session_id="origin",
                 schedule_session_id="scheduled-session",
+                execution_scope=ExecutionScope.WORKSPACE,
             )
             schedule.next_run_at = start
             service._append({"op": "update", "schedule": _schedule_to_dict(schedule)})
@@ -191,6 +218,7 @@ class SchedulerServiceTest(unittest.TestCase):
                 workspace=directory,
                 origin_session_id="origin",
                 schedule_session_id="scheduled-session",
+                execution_scope=ExecutionScope.WORKSPACE,
             )
 
             self.assertEqual(

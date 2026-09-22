@@ -23,6 +23,7 @@ export type ScheduleSummary = {
   prompt: string;
   trigger: ScheduleTrigger;
   workspace: string;
+  execution_scope: "workspace" | "host";
   origin_session_id: string;
   schedule_session_id: string;
   session_available: boolean;
