@@ -1,7 +1,6 @@
 import locale
 import os
 import platform
-import secrets
 import shutil
 import signal
 import subprocess
@@ -332,10 +331,10 @@ class WindowsSandboxBackend(SandboxBackend):
 
         workspace = working_directory.resolve()
         if self._temporary_directory is None:
-            self._temporary_directory = workspace / (
-                ".nosis-sandbox-tmp-" + secrets.token_hex(8)
+            # Keep command output and private state outside the repository.
+            self._temporary_directory = Path(
+                tempfile.mkdtemp(prefix="nosis-sandbox-tmp-")
             )
-            self._temporary_directory.mkdir()
         private_tmp = self._temporary_directory.resolve()
         if self._sandbox is None:
             self._sandbox = WindowsWriteRestrictedSandbox(
@@ -480,6 +479,9 @@ def _sandbox_environment(private_tmp: Path) -> dict[str, str]:
 
 def _windows_sandbox_environment(private_tmp: Path) -> dict[str, str]:
     environment = _sandbox_environment(private_tmp)
+    # PowerShell otherwise emits ANSI sequences when TERM advertises a TTY.
+    environment.pop("TERM", None)
+    environment["NO_COLOR"] = "1"
     environment["PATH"] = os.pathsep.join(
         entry
         for entry in environment.get("PATH", "").split(os.pathsep)

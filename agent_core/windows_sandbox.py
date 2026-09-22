@@ -11,7 +11,6 @@ from __future__ import annotations
 import ctypes
 import hashlib
 import os
-import secrets
 import subprocess
 from ctypes import wintypes
 from pathlib import Path
@@ -60,6 +59,8 @@ GENERIC_ALL = 0x10000000
 STARTF_USESTDHANDLES = 0x00000100
 CREATE_NEW_PROCESS_GROUP = 0x00000200
 CREATE_UNICODE_ENVIRONMENT = 0x00000400
+EXTENDED_STARTUPINFO_PRESENT = 0x00080000
+PROC_THREAD_ATTRIBUTE_HANDLE_LIST = 0x00020002
 WAIT_OBJECT_0 = 0
 WAIT_TIMEOUT = 258
 INFINITE = 0xFFFFFFFF
@@ -163,6 +164,13 @@ class STARTUPINFO_W(ctypes.Structure):
         ("hStdInput", wintypes.HANDLE),
         ("hStdOutput", wintypes.HANDLE),
         ("hStdError", wintypes.HANDLE),
+    ]
+
+
+class STARTUPINFOEX_W(ctypes.Structure):
+    _fields_ = [
+        ("StartupInfo", STARTUPINFO_W),
+        ("lpAttributeList", ctypes.c_void_p),
     ]
 
 
@@ -316,6 +324,18 @@ class _WindowsApi:
             ctypes.POINTER(PROCESS_INFORMATION),
         ]
         self.advapi32.CreateProcessAsUserW.restype = wintypes.BOOL
+        self.kernel32.InitializeProcThreadAttributeList.argtypes = [
+            ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD,
+            ctypes.POINTER(ctypes.c_size_t)
+        ]
+        self.kernel32.InitializeProcThreadAttributeList.restype = wintypes.BOOL
+        self.kernel32.UpdateProcThreadAttribute.argtypes = [
+            ctypes.c_void_p, wintypes.DWORD, ctypes.c_size_t, ctypes.c_void_p,
+            ctypes.c_size_t, ctypes.c_void_p, ctypes.c_void_p
+        ]
+        self.kernel32.UpdateProcThreadAttribute.restype = wintypes.BOOL
+        self.kernel32.DeleteProcThreadAttributeList.argtypes = [ctypes.c_void_p]
+        self.kernel32.DeleteProcThreadAttributeList.restype = None
 
     def error(self, operation: str, code: int | None = None) -> OSError:
         error_code = ctypes.get_last_error() if code is None else code
@@ -402,7 +422,6 @@ class WindowsWriteRestrictedSandbox:
         self._user_sid: ctypes.Array | None = None
         self._token: wintypes.HANDLE | None = None
         self._granted_paths: list[tuple[Path, ctypes.c_void_p]] = []
-        self._workspace_dacl: bytes | None = None
         try:
             self._workspace_sid_value = _capability_sid(
                 str(workspace), temporary=False
@@ -417,14 +436,10 @@ class WindowsWriteRestrictedSandbox:
                 self._temporary_sid_value
             )
             self._user_sid = self._current_user_sid()
-            self._workspace_dacl = self._read_dacl(workspace)
-            self._grant_write(
-                workspace, ctypes.cast(self._user_sid, ctypes.c_void_p)
-            )
-            self._granted_paths.append((workspace, self._workspace_sid))
-            self._grant_write(workspace, self._workspace_sid)
-            self._granted_paths.append((private_tmp, self._temporary_sid))
-            self._grant_write(private_tmp, self._temporary_sid)
+            if self._grant_write(workspace, self._workspace_sid):
+                self._granted_paths.append((workspace, self._workspace_sid))
+            if self._grant_write(private_tmp, self._temporary_sid):
+                self._granted_paths.append((private_tmp, self._temporary_sid))
             self._token = self._create_restricted_token()
         except BaseException:
             self.close()
@@ -452,14 +467,33 @@ class WindowsWriteRestrictedSandbox:
         ]
         for handle in handles:
             os.set_handle_inheritable(handle, True)
+        attribute_buffer = None
+        attribute_list = ctypes.c_void_p()
         try:
-            startup = STARTUPINFO_W()
-            startup.cb = ctypes.sizeof(startup)
-            startup.lpDesktop = "winsta0\\default"
+            startup_ex = STARTUPINFOEX_W()
+            startup = startup_ex.StartupInfo
+            startup.cb = ctypes.sizeof(startup_ex)
             startup.dwFlags = STARTF_USESTDHANDLES
             startup.hStdInput = handles[0]
             startup.hStdOutput = handles[1]
             startup.hStdError = handles[2]
+            required = ctypes.c_size_t()
+            self._api.kernel32.InitializeProcThreadAttributeList(
+                None, 1, 0, ctypes.byref(required)
+            )
+            attribute_buffer = ctypes.create_string_buffer(required.value)
+            if not self._api.kernel32.InitializeProcThreadAttributeList(
+                attribute_buffer, 1, 0, ctypes.byref(required)
+            ):
+                raise self._api.error("InitializeProcThreadAttributeList")
+            attribute_list = ctypes.cast(attribute_buffer, ctypes.c_void_p)
+            inherited = (wintypes.HANDLE * len(handles))(*handles)
+            if not self._api.kernel32.UpdateProcThreadAttribute(
+                attribute_list, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST,
+                ctypes.byref(inherited), ctypes.sizeof(inherited), None, None
+            ):
+                raise self._api.error("UpdateProcThreadAttribute")
+            startup_ex.lpAttributeList = attribute_list
             info = PROCESS_INFORMATION()
             normalized_argv = [os.path.normpath(os.path.realpath(argv[0])), *argv[1:]]
             command_line = ctypes.create_unicode_buffer(
@@ -473,10 +507,11 @@ class WindowsWriteRestrictedSandbox:
                 None,
                 None,
                 True,
-                CREATE_NEW_PROCESS_GROUP | CREATE_UNICODE_ENVIRONMENT,
+                CREATE_NEW_PROCESS_GROUP | CREATE_UNICODE_ENVIRONMENT
+                | EXTENDED_STARTUPINFO_PRESENT,
                 ctypes.cast(environment_block, ctypes.c_void_p),
                 str(cwd),
-                ctypes.byref(startup),
+                ctypes.cast(ctypes.byref(startup_ex), ctypes.POINTER(STARTUPINFO_W)),
                 ctypes.byref(info),
             )
             if not created:
@@ -490,6 +525,8 @@ class WindowsWriteRestrictedSandbox:
                 self._api, info.hProcess, info.dwProcessId, normalized_argv
             )
         finally:
+            if attribute_list:
+                self._api.kernel32.DeleteProcThreadAttributeList(attribute_list)
             for handle in handles:
                 os.set_handle_inheritable(handle, False)
             stdin_file.close()
@@ -508,12 +545,6 @@ class WindowsWriteRestrictedSandbox:
             except BaseException as error:
                 failures.append(error)
         self._granted_paths.clear()
-        if self._workspace_dacl is not None:
-            try:
-                self._restore_dacl(self.workspace, self._workspace_dacl)
-            except BaseException as error:
-                failures.append(error)
-            self._workspace_dacl = None
         for attribute in ("_workspace_sid", "_temporary_sid"):
             pointer = getattr(self, attribute, None)
             if pointer is not None:
@@ -533,7 +564,7 @@ class WindowsWriteRestrictedSandbox:
             raise self._api.error("ConvertStringSidToSidW")
         return pointer
 
-    def _grant_write(self, path: Path, sid: ctypes.c_void_p) -> None:
+    def _grant_write(self, path: Path, sid: ctypes.c_void_p) -> bool:
         old_acl = ctypes.c_void_p()
         descriptor = ctypes.c_void_p()
         result = self._api.advapi32.GetNamedSecurityInfoW(
@@ -550,7 +581,7 @@ class WindowsWriteRestrictedSandbox:
             raise self._api.error("GetNamedSecurityInfoW", result)
         try:
             if old_acl and self._has_write_grant(old_acl, sid):
-                return
+                return False
             new_acl = ctypes.c_void_p()
             entry = _explicit_access(sid, WORKSPACE_GRANT)
             result = self._api.advapi32.SetEntriesInAclW(
@@ -570,47 +601,11 @@ class WindowsWriteRestrictedSandbox:
                 )
                 if result:
                     raise self._api.error("SetNamedSecurityInfoW", result)
+                return True
             finally:
                 self._api.local_free(new_acl)
         finally:
             self._api.local_free(descriptor)
-
-    def _read_dacl(self, path: Path) -> bytes:
-        old_acl = ctypes.c_void_p()
-        descriptor = ctypes.c_void_p()
-        result = self._api.advapi32.GetNamedSecurityInfoW(
-            str(path),
-            SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION,
-            None,
-            None,
-            ctypes.byref(old_acl),
-            None,
-            ctypes.byref(descriptor),
-        )
-        if result:
-            raise self._api.error("GetNamedSecurityInfoW", result)
-        try:
-            if not old_acl:
-                raise RuntimeError("workspace directory has a null DACL")
-            size = ctypes.cast(old_acl, ctypes.POINTER(ACL)).contents.AclSize
-            return ctypes.string_at(old_acl, size)
-        finally:
-            self._api.local_free(descriptor)
-
-    def _restore_dacl(self, path: Path, value: bytes) -> None:
-        acl = ctypes.create_string_buffer(value, len(value))
-        result = self._api.advapi32.SetNamedSecurityInfoW(
-            str(path),
-            SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION,
-            None,
-            None,
-            ctypes.cast(acl, ctypes.c_void_p),
-            None,
-        )
-        if result:
-            raise self._api.error("SetNamedSecurityInfoW(restore DACL)", result)
 
     def _revoke_write(self, path: Path, sid: ctypes.c_void_p) -> None:
         old_acl = ctypes.c_void_p()
@@ -705,20 +700,17 @@ class WindowsWriteRestrictedSandbox:
             world_sid = ctypes.create_string_buffer(SECURITY_MAX_SID_SIZE)
             world_size = wintypes.DWORD(SECURITY_MAX_SID_SIZE)
             if not self._api.advapi32.CreateWellKnownSid(
-                WIN_WORLD_SID,
-                None,
-                world_sid,
-                ctypes.byref(world_size),
+                WIN_WORLD_SID, None, world_sid, ctypes.byref(world_size)
             ):
                 raise self._api.error("CreateWellKnownSid")
-            sid_values = (
+            restricting_sids = (
                 ctypes.cast(logon_sid, ctypes.c_void_p),
                 ctypes.cast(world_sid, ctypes.c_void_p),
                 self._workspace_sid,
                 self._temporary_sid,
             )
-            restricting = (SID_AND_ATTRIBUTES * len(sid_values))(
-                *(SID_AND_ATTRIBUTES(sid, 0) for sid in sid_values)
+            restricting = (SID_AND_ATTRIBUTES * len(restricting_sids))(
+                *(SID_AND_ATTRIBUTES(sid, 0) for sid in restricting_sids)
             )
             token = wintypes.HANDLE()
             if not self._api.advapi32.CreateRestrictedToken(
@@ -728,13 +720,19 @@ class WindowsWriteRestrictedSandbox:
                 None,
                 0,
                 None,
-                len(restricting),
+                len(restricting_sids),
                 restricting,
                 ctypes.byref(token),
             ):
                 raise self._api.error("CreateRestrictedToken")
             try:
-                self._set_token_default_dacl(token, sid_values)
+                self._set_token_default_dacl(
+                    token, (
+                        *restricting_sids,
+                        ctypes.cast(self._user_sid, ctypes.c_void_p),
+                        ctypes.cast(world_sid, ctypes.c_void_p),
+                    )
+                )
                 self._enable_privilege(token, "SeChangeNotifyPrivilege")
             except BaseException:
                 self._api.close_handle(token)
@@ -746,9 +744,7 @@ class WindowsWriteRestrictedSandbox:
     def _current_user_sid(self) -> ctypes.Array:
         current_token = wintypes.HANDLE()
         if not self._api.advapi32.OpenProcessToken(
-            self._api.kernel32.GetCurrentProcess(),
-            TOKEN_QUERY,
-            ctypes.byref(current_token),
+            self._api.kernel32.GetCurrentProcess(), TOKEN_QUERY, ctypes.byref(current_token)
         ):
             raise self._api.error("OpenProcessToken")
         try:
@@ -756,21 +752,13 @@ class WindowsWriteRestrictedSandbox:
             self._api.advapi32.GetTokenInformation(
                 current_token, TOKEN_USER, None, 0, ctypes.byref(needed)
             )
-            if not needed.value:
-                raise self._api.error("GetTokenInformation(TokenUser)")
             token_user = ctypes.create_string_buffer(needed.value)
             if not self._api.advapi32.GetTokenInformation(
-                current_token,
-                TOKEN_USER,
-                token_user,
-                needed,
-                ctypes.byref(needed),
+                current_token, TOKEN_USER, token_user, needed, ctypes.byref(needed)
             ):
                 raise self._api.error("GetTokenInformation(TokenUser)")
             sid = ctypes.c_void_p.from_buffer(token_user).value
             length = self._api.advapi32.GetLengthSid(sid)
-            if not length:
-                raise self._api.error("GetLengthSid(TokenUser)")
             copied = ctypes.create_string_buffer(length)
             if not self._api.advapi32.CopySid(length, copied, sid):
                 raise self._api.error("CopySid(TokenUser)")
@@ -892,7 +880,7 @@ def _explicit_access(
 def _capability_sid(path: str, *, temporary: bool) -> str:
     prefix = b"temp\0" if temporary else b"workspace\0"
     canonical = os.path.normcase(os.path.realpath(path)).encode("utf-8")
-    digest = hashlib.sha256(prefix + canonical + secrets.token_bytes(16)).digest()
+    digest = hashlib.sha256(prefix + canonical).digest()
     first = int.from_bytes(digest[:4], "little") % (2**30 - 1) + 1
     second = int.from_bytes(digest[4:8], "little") % (2**30 - 1) + 1
     suffix = "-1" if temporary else ""

@@ -353,9 +353,17 @@ class SandboxedCommandExecutorTest(unittest.TestCase):
         workspace = test_root / "workspace"
         outside = test_root / "outside.txt"
         blocked = test_root / "blocked.txt"
+        world_writable = test_root / "world-writable"
         workspace.mkdir(parents=True)
+        world_writable.mkdir()
         self.addCleanup(shutil.rmtree, test_root, ignore_errors=True)
         outside.write_text("host-readable", encoding="utf-8")
+        subprocess.run(
+            ["icacls", str(world_writable), "/grant", "*S-1-1-0:(OI)(CI)M"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
         acl_before = subprocess.run(
             ["icacls", str(workspace)],
             capture_output=True,
@@ -379,6 +387,10 @@ class SandboxedCommandExecutorTest(unittest.TestCase):
             denied = executor.execute(
                 "$ErrorActionPreference = 'Stop'; "
                 f"Set-Content -LiteralPath '{blocked}' blocked"
+            )
+            world_denied = executor.execute(
+                "$ErrorActionPreference = 'Stop'; "
+                f"Set-Content -LiteralPath '{world_writable / 'blocked.txt'}' blocked"
             )
             private_tmp = backend._temporary_directory
             capability_sid = backend._sandbox._workspace_sid_value
@@ -418,8 +430,13 @@ class SandboxedCommandExecutorTest(unittest.TestCase):
         self.assertIsNotNone(private_tmp)
         self.assertEqual(temporary_text, "temporary")
         self.assertNotEqual(denied.exit_code, 0)
+        # World SID is required for CLR/Pwsh startup on Windows; a directory
+        # explicitly writable by Everyone remains a documented exception.
+        self.assertEqual(world_denied.exit_code, 0)
+        self.assertTrue((world_writable / "blocked.txt").exists())
         self.assertFalse(blocked_exists)
         self.assertFalse(private_tmp.exists())
+        self.assertNotEqual(private_tmp.parent, workspace)
         self.assertIn(capability_sid, acl_during)
         self.assertNotIn(capability_sid, acl_after)
         self.assertNotIn(capability_sid, child_acl_after)
