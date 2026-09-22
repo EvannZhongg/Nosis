@@ -691,6 +691,7 @@ class Bridge:
             workspace_executor = SandboxedCommandExecutor(
                 workspace.path,
                 platform_workspace_sandbox_backend(),
+                excluded_environment_names=self._environment.loaded_names,
             )
             host_executor = HostCommandExecutor(workspace.path)
             execution_router = ExecutionRouter(

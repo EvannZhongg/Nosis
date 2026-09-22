@@ -8,6 +8,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from agent_core import (
     APPROVAL_REQUIRED_AUTHORITY,
@@ -29,7 +30,11 @@ from agent_core import (
     WORKSPACE_ACCESS_AUTHORITY,
     platform_workspace_sandbox_backend,
 )
-from agent_core.execution import MAX_COMMAND_OUTPUT_CHARS, CommandOutputSpool
+from agent_core.execution import (
+    MAX_COMMAND_OUTPUT_CHARS,
+    CommandOutputSpool,
+    _sandbox_environment,
+)
 
 
 def _python_script_command(working_directory: Path, script: str) -> str:
@@ -296,6 +301,22 @@ class ExecutionAuthorityTest(unittest.TestCase):
 
 
 class SandboxedCommandExecutorTest(unittest.TestCase):
+    def test_sandbox_environment_excludes_only_named_variables(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "NOSIS_PROVIDER_KEY": "control-plane-secret",
+                "USER_API_KEY": "developer-value",
+            },
+            clear=True,
+        ):
+            environment = _sandbox_environment(
+                Path("/private/tmp"), {"NOSIS_PROVIDER_KEY"}
+            )
+
+        self.assertNotIn("NOSIS_PROVIDER_KEY", environment)
+        self.assertEqual(environment["USER_API_KEY"], "developer-value")
+
     @unittest.skipUnless(platform.system() == "Darwin", "macOS Seatbelt test")
     def test_macos_profile_limits_process_interaction_to_same_sandbox(self) -> None:
         profile = MacOSSandboxBackend._PROFILE
@@ -322,6 +343,7 @@ class SandboxedCommandExecutorTest(unittest.TestCase):
                 policy,
                 timeout_seconds,
                 cancellation=None,
+                excluded_environment_names=(),
             ):
                 self.calls.append(
                     (

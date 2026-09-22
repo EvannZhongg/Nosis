@@ -12,7 +12,7 @@ from collections import deque
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Protocol
+from typing import TYPE_CHECKING, Callable, Collection, Protocol
 
 if TYPE_CHECKING:
     from .tools.base import ToolCall
@@ -316,6 +316,7 @@ class SandboxBackend(ABC):
         policy: SandboxPolicy,
         timeout_seconds: int,
         cancellation: "CancellationSignal | None" = None,
+        excluded_environment_names: Collection[str] = (),
     ) -> CommandExecutionResult:
         raise NotImplementedError
 
@@ -343,6 +344,7 @@ class LinuxSandboxBackend(SandboxBackend):
         policy: SandboxPolicy,
         timeout_seconds: int,
         cancellation: "CancellationSignal | None" = None,
+        excluded_environment_names: Collection[str] = (),
     ) -> CommandExecutionResult:
         _require_workspace_policy(policy, self.default_policy)
         executable = shutil.which("bwrap")
@@ -377,7 +379,9 @@ class LinuxSandboxBackend(SandboxBackend):
             working_directory=workspace,
             timeout_seconds=timeout_seconds,
             cancellation=cancellation,
-            environment=_sandbox_environment(Path("/tmp")),
+            environment=_sandbox_environment(
+                Path("/tmp"), excluded_environment_names
+            ),
             spool_directory=private_tmp,
         )
 
@@ -428,6 +432,7 @@ class MacOSSandboxBackend(SandboxBackend):
         policy: SandboxPolicy,
         timeout_seconds: int,
         cancellation: "CancellationSignal | None" = None,
+        excluded_environment_names: Collection[str] = (),
     ) -> CommandExecutionResult:
         _require_workspace_policy(policy, self.default_policy)
         workspace = working_directory.resolve()
@@ -452,7 +457,9 @@ class MacOSSandboxBackend(SandboxBackend):
             working_directory=workspace,
             timeout_seconds=timeout_seconds,
             cancellation=cancellation,
-            environment=_sandbox_environment(private_tmp),
+            environment=_sandbox_environment(
+                private_tmp, excluded_environment_names
+            ),
             spool_directory=private_tmp,
             reports_sandbox_entry_failure=True,
         )
@@ -482,6 +489,7 @@ class WindowsSandboxBackend(SandboxBackend):
         policy: SandboxPolicy,
         timeout_seconds: int,
         cancellation: "CancellationSignal | None" = None,
+        excluded_environment_names: Collection[str] = (),
     ) -> CommandExecutionResult:
         _require_workspace_policy(policy, self.default_policy)
         if os.name != "nt":
@@ -510,7 +518,9 @@ class WindowsSandboxBackend(SandboxBackend):
             working_directory=workspace,
             timeout_seconds=timeout_seconds,
             cancellation=cancellation,
-            environment=_windows_sandbox_environment(private_tmp),
+            environment=_windows_sandbox_environment(
+                private_tmp, excluded_environment_names
+            ),
             spool_directory=private_tmp,
             process_launcher=self._sandbox.start,
         )
@@ -584,10 +594,14 @@ class SandboxedCommandExecutor:
         working_directory: Path,
         backend: SandboxBackend,
         policy: SandboxPolicy | None = None,
+        excluded_environment_names: Collection[str] = (),
     ) -> None:
         self._working_directory = working_directory
         self._backend = backend
         self._policy = policy or backend.default_policy
+        self._excluded_environment_names = frozenset(
+            excluded_environment_names
+        )
 
     @property
     def policy(self) -> SandboxPolicy:
@@ -605,6 +619,7 @@ class SandboxedCommandExecutor:
             policy=self._policy,
             timeout_seconds=timeout_seconds,
             cancellation=cancellation,
+            excluded_environment_names=self._excluded_environment_names,
         )
 
     def close(self) -> None:
@@ -632,8 +647,13 @@ def _require_workspace_policy(
         )
 
 
-def _sandbox_environment(private_tmp: Path) -> dict[str, str]:
+def _sandbox_environment(
+    private_tmp: Path,
+    excluded_environment_names: Collection[str] = (),
+) -> dict[str, str]:
     environment = os.environ.copy()
+    for name in excluded_environment_names:
+        environment.pop(name, None)
     environment.update(
         {
             "HOME": str(private_tmp),
@@ -645,8 +665,13 @@ def _sandbox_environment(private_tmp: Path) -> dict[str, str]:
     return environment
 
 
-def _windows_sandbox_environment(private_tmp: Path) -> dict[str, str]:
-    environment = _sandbox_environment(private_tmp)
+def _windows_sandbox_environment(
+    private_tmp: Path,
+    excluded_environment_names: Collection[str] = (),
+) -> dict[str, str]:
+    environment = _sandbox_environment(
+        private_tmp, excluded_environment_names
+    )
     return _windows_shell_environment(environment)
 
 

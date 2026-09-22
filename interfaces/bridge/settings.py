@@ -118,6 +118,11 @@ class EnvironmentReloader:
             os.environ[name] = value
         self._loaded = set(values)
 
+    @property
+    def loaded_names(self) -> frozenset[str]:
+        """Names currently injected from the managed dotenv file."""
+        return frozenset(self._loaded)
+
 
 class SettingsStore:
     def __init__(
