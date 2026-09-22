@@ -1,3 +1,4 @@
+import os
 import sys
 import platform
 import shutil
@@ -28,11 +29,7 @@ from agent_core import (
     WORKSPACE_ACCESS_AUTHORITY,
     platform_workspace_sandbox_backend,
 )
-from agent_core.execution import (
-    MAX_COMMAND_OUTPUT_CHARS,
-    CommandOutputSpool,
-    _is_msys_runtime_path,
-)
+from agent_core.execution import MAX_COMMAND_OUTPUT_CHARS, CommandOutputSpool
 
 
 def _python_script_command(working_directory: Path, script: str) -> str:
@@ -42,22 +39,44 @@ def _python_script_command(working_directory: Path, script: str) -> str:
     differs between shells.
     """
     (working_directory / "command.py").write_text(script, encoding="utf-8")
+    if os.name == "nt":
+        return f'& "{sys.executable}" command.py'
     return f'"{sys.executable}" command.py'
 
 
 class HostCommandExecutorTest(unittest.TestCase):
-    # Commands below use POSIX syntax on purpose: the shell is /bin/sh on
-    # macOS and Linux, and Git Bash on Windows.
+    # Shell syntax follows the platform launcher selected by the executor.
+    def test_uses_the_injected_shell_launcher(self) -> None:
+        calls = []
+
+        def launcher(command: str, working_directory: Path) -> list[str]:
+            calls.append((command, working_directory))
+            return [sys.executable, "-c", "print('launcher')"]
+
+        with tempfile.TemporaryDirectory() as directory:
+            working_directory = Path(directory)
+            result = HostCommandExecutor(
+                working_directory,
+                shell_launcher=launcher,
+            ).execute("ignored")
+
+        self.assertEqual(result.stdout.strip(), "launcher")
+        self.assertEqual(calls, [("ignored", working_directory)])
+
     def test_executes_command_in_working_directory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             working_directory = Path(directory)
             executor = HostCommandExecutor(working_directory)
 
-            result = executor.execute(
-                "printf 'hello'; "
-                "printf 'warning' >&2; "
+            command = (
+                "[Console]::Write('hello'); "
+                "[Console]::Error.Write('warning'); "
+                "Set-Content -NoNewline -Path command-output.txt -Value marker"
+                if os.name == "nt"
+                else "printf 'hello'; printf 'warning' >&2; "
                 "printf 'marker' > command-output.txt"
             )
+            result = executor.execute(command)
 
             self.assertEqual(result.exit_code, 0)
             self.assertEqual(result.stdout, "hello")
@@ -75,7 +94,12 @@ class HostCommandExecutorTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             executor = HostCommandExecutor(Path(directory))
 
-            result = executor.execute("printf 'failed' >&2; exit 7")
+            command = (
+                "[Console]::Error.Write('failed'); exit 7"
+                if os.name == "nt"
+                else "printf 'failed' >&2; exit 7"
+            )
+            result = executor.execute(command)
 
             self.assertEqual(result.exit_code, 7)
             self.assertEqual(result.stdout, "")
@@ -477,19 +501,6 @@ class SandboxedCommandExecutorTest(unittest.TestCase):
         self.assertNotIn(capability_sid, acl_after)
         self.assertNotIn(capability_sid, child_acl_after)
         self.assertEqual(acl_after, acl_before)
-
-    @unittest.skipUnless(platform.system() == "Windows", "Windows PATH test")
-    def test_windows_workspace_hides_msys_runtime_but_keeps_git(self) -> None:
-        self.assertTrue(
-            _is_msys_runtime_path(r"C:\Program Files\Git\usr\bin")
-        )
-        self.assertTrue(
-            _is_msys_runtime_path(r"C:\Program Files\Git\bin")
-        )
-        self.assertFalse(
-            _is_msys_runtime_path(r"C:\Program Files\Git\cmd")
-        )
-
 
 if __name__ == "__main__":
     unittest.main()

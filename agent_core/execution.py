@@ -90,6 +90,7 @@ class RunningProcess(Protocol):
 
 
 ProcessLauncher = Callable[..., RunningProcess]
+ShellLauncher = Callable[[str, Path], list[str]]
 
 
 class ExecutionScope(StrEnum):
@@ -465,7 +466,8 @@ class WindowsSandboxBackend(SandboxBackend):
 
     Windows keeps the caller's readable host view.  The restricted token
     adds write capabilities only for the workspace and a private temporary
-    directory.  Network access is not confined by this lightweight backend.
+    directory. Paths already writable by Everyone remain writable. Network
+    access is not confined by this reduced-capability backend.
     """
 
     def __init__(self) -> None:
@@ -503,7 +505,7 @@ class WindowsSandboxBackend(SandboxBackend):
                 "a Windows sandbox backend cannot be shared across workspaces"
             )
         return _execute_process(
-            _windows_powershell_argv(command, workspace),
+            platform_shell_launcher(command, workspace),
             command=command,
             working_directory=workspace,
             timeout_seconds=timeout_seconds,
@@ -545,8 +547,13 @@ class HostCommandExecutor:
     process confinement.  Its working directory is only the command's cwd.
     """
 
-    def __init__(self, working_directory: Path) -> None:
+    def __init__(
+        self,
+        working_directory: Path,
+        shell_launcher: ShellLauncher | None = None,
+    ) -> None:
         self._working_directory = working_directory
+        self._shell_launcher = shell_launcher or platform_shell_launcher
 
     def execute(
         self,
@@ -555,7 +562,7 @@ class HostCommandExecutor:
         cancellation: CancellationSignal | None = None,
     ) -> CommandExecutionResult:
         return _execute_process(
-            _shell_argv(command),
+            self._shell_launcher(command, self._working_directory),
             command=command,
             working_directory=self._working_directory,
             timeout_seconds=timeout_seconds,
@@ -640,11 +647,6 @@ def _windows_sandbox_environment(private_tmp: Path) -> dict[str, str]:
     # PowerShell otherwise emits ANSI sequences when TERM advertises a TTY.
     environment.pop("TERM", None)
     environment["NO_COLOR"] = "1"
-    environment["PATH"] = os.pathsep.join(
-        entry
-        for entry in environment.get("PATH", "").split(os.pathsep)
-        if not _is_msys_runtime_path(entry)
-    )
     return environment
 
 
@@ -827,15 +829,10 @@ def _execute_process(
     )
 
 
-def _shell_argv(command: str) -> list[str]:
-    """Build the argv that runs *command* in a POSIX shell.
-
-    macOS and Linux provide one at /bin/sh. Windows does not, so Git
-    Bash is used there to keep command syntax identical everywhere.
-    """
+def platform_shell_launcher(command: str, working_directory: Path) -> list[str]:
+    """Build the platform shell argv; execution scope never selects it."""
     if os.name == "nt":
-        return [_git_bash(), "--noprofile", "--norc", "-c", command]
-
+        return _windows_powershell_argv(command, working_directory)
     return ["/bin/sh", "-c", command]
 
 
@@ -874,55 +871,17 @@ def _powershell_7() -> str:
     )
 
 
-def _git_bash() -> str:
-    """Locate the Git Bash shipped with Git for Windows.
-
-    The bash.exe in System32 launches WSL, which runs in a different
-    filesystem and cannot see the workspace.
-    """
-    candidates = [shutil.which("bash")]
-    program_files = os.environ.get("ProgramFiles")
-    local_app_data = os.environ.get("LOCALAPPDATA")
-    if program_files:
-        git_root = Path(program_files) / "Git"
-        candidates += [
-            str(git_root / "bin" / "bash.exe"),
-            str(git_root / "usr" / "bin" / "bash.exe"),
-        ]
-    if local_app_data:
-        candidates.append(
-            str(Path(local_app_data, "Programs", "Git", "bin", "bash.exe"))
-        )
-
-    for candidate in candidates:
-        if (
-            candidate is not None
-            and Path(candidate).is_file()
-            and not _is_wsl_bash(candidate)
-        ):
-            return candidate
-
-    raise RuntimeError(
-        "shell requires Git Bash on Windows; install Git for Windows from "
-        "https://git-scm.com/download/win"
-    )
-
-
-def _is_wsl_bash(path: str) -> bool:
-    """Report whether *path* is the WSL launcher in System32."""
-    system_root = os.environ.get("SystemRoot", r"C:\Windows")
-    wsl_launcher = Path(system_root) / "System32" / "bash.exe"
-    return os.path.normcase(str(Path(path).resolve())) == os.path.normcase(
-        str(wsl_launcher.resolve())
-    )
-
-
 def _kill_process_tree(process: RunningProcess) -> None:
-    """Kill the command together with the processes it started.
-
-    os.killpg is POSIX-only, and on Windows killing the shell alone
-    leaves the children it spawned holding the output pipes open.
-    """
+    """Kill a command tree using its native lifecycle container when present."""
+    terminate_tree = getattr(process, "terminate_tree", None)
+    if callable(terminate_tree):
+        try:
+            terminate_tree()
+            return
+        except OSError:
+            # A process may have exited and released its job between polling
+            # and cancellation.  Keep the platform fallback for that race.
+            pass
     if os.name == "nt":
         subprocess.run(
             ["taskkill", "/F", "/T", "/PID", str(process.pid)],

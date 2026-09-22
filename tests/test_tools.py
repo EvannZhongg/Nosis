@@ -2502,7 +2502,7 @@ class ShellToolTest(unittest.TestCase):
         self.assertNotIn("background", serialized_schema)
         self.assertNotIn("86400", serialized_schema)
         self.assertIn(
-            "Git Bash" if os.name == "nt" else "/bin/sh",
+            "PowerShell 7" if os.name == "nt" else "/bin/sh",
             definition.description,
         )
 

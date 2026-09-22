@@ -24,10 +24,9 @@ MAX_BACKGROUND_SHELL_TIMEOUT_SECONDS = MAX_COMMAND_TIMEOUT_SECONDS
 
 
 WINDOWS_SHELL_NOTE = (
-    "On Windows, workspace scope runs through PowerShell 7 and host scope "
-    "runs through Git Bash. Use PowerShell syntax for workspace commands "
-    "and POSIX shell syntax for host commands. Git's MSYS tools such as "
-    "bash, grep, sed and printf are unavailable in workspace scope."
+    "On Windows, every scope runs through PowerShell 7. Shell dialect is "
+    "independent of execution scope. To run a POSIX script, invoke it "
+    "explicitly, for example 'bash ./scripts/build.sh'."
 )
 POSIX_SHELL_NOTE = (
     "Commands run through /bin/sh, so use POSIX shell syntax: chain "
@@ -78,8 +77,11 @@ class ShellTool(Tool):
         authority = router.authority
         default_scope = authority.default_scope
         workspace_description = (
-            "Workspace scope confines writes to the workspace; host files "
-            "remain readable and network access remains available. "
+            "Workspace scope primarily grants writes to the workspace and "
+            "private temporary directory; host files remain readable and "
+            "network access remains available. On Windows, the restricted "
+            "token is a best-effort write boundary: locations already "
+            "writable by Everyone are an exception. "
             if getattr(workspace_policy, "network", None)
             is NetworkAccess.ALLOW
             else "Workspace scope is confined to the workspace with network "

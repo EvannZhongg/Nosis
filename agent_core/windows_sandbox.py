@@ -1,9 +1,10 @@
 """Windows write-restricted process confinement.
 
-The backend uses a restricted primary token whose restricting SID list
-contains capabilities granted only on the workspace and a private temporary
-directory.  Windows therefore intersects write access with those grants while
-retaining the caller's normal read access.
+The backend uses a restricted primary token whose restricting SID list grants
+write capabilities to the workspace and a private temporary directory. It
+retains the caller's normal host read access and network access. A path already
+writable by Everyone also remains writable; RestrictedToken is therefore a
+reduced-authority backend, not a complete filesystem or network sandbox.
 """
 
 from __future__ import annotations
@@ -58,12 +59,15 @@ GENERIC_ALL = 0x10000000
 
 STARTF_USESTDHANDLES = 0x00000100
 CREATE_NEW_PROCESS_GROUP = 0x00000200
+CREATE_SUSPENDED = 0x00000004
 CREATE_UNICODE_ENVIRONMENT = 0x00000400
 EXTENDED_STARTUPINFO_PRESENT = 0x00080000
 PROC_THREAD_ATTRIBUTE_HANDLE_LIST = 0x00020002
 WAIT_OBJECT_0 = 0
 WAIT_TIMEOUT = 258
 INFINITE = 0xFFFFFFFF
+JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+JobObjectExtendedLimitInformation = 9
 
 
 class SID_AND_ATTRIBUTES(ctypes.Structure):
@@ -183,6 +187,35 @@ class PROCESS_INFORMATION(ctypes.Structure):
     ]
 
 
+class JOBOBJECT_BASIC_LIMIT_INFORMATION(ctypes.Structure):
+    _fields_ = [
+        ("PerProcessUserTimeLimit", ctypes.c_longlong),
+        ("PerJobUserTimeLimit", ctypes.c_longlong),
+        ("LimitFlags", wintypes.DWORD),
+        ("MinimumWorkingSetSize", ctypes.c_size_t),
+        ("MaximumWorkingSetSize", ctypes.c_size_t),
+        ("ActiveProcessLimit", wintypes.DWORD),
+        ("Affinity", ctypes.c_size_t),
+        ("PriorityClass", wintypes.DWORD),
+        ("SchedulingClass", wintypes.DWORD),
+    ]
+
+
+class IO_COUNTERS(ctypes.Structure):
+    _fields_ = [("values", ctypes.c_ulonglong * 6)]
+
+
+class JOBOBJECT_EXTENDED_LIMIT_INFORMATION(ctypes.Structure):
+    _fields_ = [
+        ("BasicLimitInformation", JOBOBJECT_BASIC_LIMIT_INFORMATION),
+        ("IoInfo", IO_COUNTERS),
+        ("ProcessMemoryLimit", ctypes.c_size_t),
+        ("JobMemoryLimit", ctypes.c_size_t),
+        ("PeakProcessMemoryUsed", ctypes.c_size_t),
+        ("PeakJobMemoryUsed", ctypes.c_size_t),
+    ]
+
+
 class _WindowsApi:
     def __init__(self) -> None:
         if os.name != "nt":
@@ -205,6 +238,27 @@ class _WindowsApi:
             ctypes.POINTER(wintypes.DWORD),
         ]
         self.kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+        self.kernel32.CreateJobObjectW.argtypes = [
+            ctypes.c_void_p, wintypes.LPCWSTR
+        ]
+        self.kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+        self.kernel32.SetInformationJobObject.argtypes = [
+            wintypes.HANDLE,
+            ctypes.c_int,
+            ctypes.c_void_p,
+            wintypes.DWORD,
+        ]
+        self.kernel32.SetInformationJobObject.restype = wintypes.BOOL
+        self.kernel32.AssignProcessToJobObject.argtypes = [
+            wintypes.HANDLE, wintypes.HANDLE
+        ]
+        self.kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+        self.kernel32.TerminateJobObject.argtypes = [
+            wintypes.HANDLE, wintypes.UINT
+        ]
+        self.kernel32.TerminateJobObject.restype = wintypes.BOOL
+        self.kernel32.ResumeThread.argtypes = [wintypes.HANDLE]
+        self.kernel32.ResumeThread.restype = wintypes.DWORD
 
         self.advapi32.OpenProcessToken.argtypes = [
             wintypes.HANDLE,
@@ -353,6 +407,50 @@ class _WindowsApi:
             raise self.error("LocalFree")
 
 
+class _WindowsJob:
+    """A kill-on-close Job Object containing one command process tree."""
+
+    def __init__(self, api: _WindowsApi) -> None:
+        self._api = api
+        self._handle = api.kernel32.CreateJobObjectW(None, None)
+        if not self._handle:
+            raise api.error("CreateJobObjectW")
+        limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+        limits.BasicLimitInformation.LimitFlags = (
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+        )
+        try:
+            if not api.kernel32.SetInformationJobObject(
+                self._handle,
+                JobObjectExtendedLimitInformation,
+                ctypes.byref(limits),
+                ctypes.sizeof(limits),
+            ):
+                raise api.error("SetInformationJobObject")
+        except BaseException:
+            api.close_handle(self._handle)
+            self._handle = None
+            raise
+
+    def assign(self, process: wintypes.HANDLE) -> None:
+        if not self._api.kernel32.AssignProcessToJobObject(
+            self._handle, process
+        ):
+            raise self._api.error("AssignProcessToJobObject")
+
+    def terminate(self) -> None:
+        if self._handle and not self._api.kernel32.TerminateJobObject(
+            self._handle, 1
+        ):
+            raise self._api.error("TerminateJobObject")
+
+    def close(self) -> None:
+        if self._handle is not None:
+            handle = self._handle
+            self._handle = None
+            self._api.close_handle(handle)
+
+
 class _WindowsProcess:
     def __init__(
         self,
@@ -360,11 +458,13 @@ class _WindowsProcess:
         handle: wintypes.HANDLE,
         pid: int,
         argv: list[str],
+        job: "_WindowsJob",
     ) -> None:
         self._api = api
         self._handle = handle
         self.pid = pid
         self.args = argv
+        self._job = job
         self.returncode: int | None = None
 
     def poll(self) -> int | None:
@@ -403,15 +503,25 @@ class _WindowsProcess:
         self.returncode = exit_code.value
         self._api.close_handle(self._handle)
         self._handle = None
+        self._job.close()
         return self.returncode
+
+    def terminate_tree(self) -> None:
+        self._job.terminate()
 
     def __del__(self) -> None:
         if getattr(self, "_handle", None):
             self._api.kernel32.CloseHandle(self._handle)
+        job = getattr(self, "_job", None)
+        if job is not None:
+            try:
+                job.close()
+            except OSError:
+                pass
 
 
 class WindowsWriteRestrictedSandbox:
-    """Own one workspace's ACL capabilities and restricted token."""
+    """Own one workspace's ACL capabilities, token, and command jobs."""
 
     def __init__(self, workspace: Path, private_tmp: Path) -> None:
         self.workspace = workspace
@@ -436,10 +546,19 @@ class WindowsWriteRestrictedSandbox:
                 self._temporary_sid_value
             )
             self._user_sid = self._current_user_sid()
-            if self._grant_write(workspace, self._workspace_sid):
-                self._granted_paths.append((workspace, self._workspace_sid))
-            if self._grant_write(private_tmp, self._temporary_sid):
-                self._granted_paths.append((private_tmp, self._temporary_sid))
+            user_sid = ctypes.cast(self._user_sid, ctypes.c_void_p)
+            for path, capability_sid in (
+                (workspace, self._workspace_sid),
+                (private_tmp, self._temporary_sid),
+            ):
+                if self._grant_write(path, capability_sid):
+                    self._granted_paths.append((path, capability_sid))
+                # A WRITE_RESTRICTED token must satisfy both its normal user
+                # SID and a restricting SID.  Temporary directories can be
+                # created without an inherited user ACE, so install both
+                # sides of the capability and revoke them together.
+                if self._grant_write(path, user_sid):
+                    self._granted_paths.append((path, user_sid))
             self._token = self._create_restricted_token()
         except BaseException:
             self.close()
@@ -500,29 +619,44 @@ class WindowsWriteRestrictedSandbox:
                 subprocess.list2cmdline(normalized_argv)
             )
             environment_block = _environment_block(environment or os.environ)
-            created = self._api.advapi32.CreateProcessAsUserW(
-                self._token,
-                None,
-                command_line,
-                None,
-                None,
-                True,
-                CREATE_NEW_PROCESS_GROUP | CREATE_UNICODE_ENVIRONMENT
-                | EXTENDED_STARTUPINFO_PRESENT,
-                ctypes.cast(environment_block, ctypes.c_void_p),
-                str(cwd),
-                ctypes.cast(ctypes.byref(startup_ex), ctypes.POINTER(STARTUPINFO_W)),
-                ctypes.byref(info),
-            )
-            if not created:
-                raise self._api.error("CreateProcessAsUserW")
+            job = _WindowsJob(self._api)
             try:
+                created = self._api.advapi32.CreateProcessAsUserW(
+                    self._token,
+                    None,
+                    command_line,
+                    None,
+                    None,
+                    True,
+                    CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED
+                    | CREATE_UNICODE_ENVIRONMENT
+                    | EXTENDED_STARTUPINFO_PRESENT,
+                    ctypes.cast(environment_block, ctypes.c_void_p),
+                    str(cwd),
+                    ctypes.cast(
+                        ctypes.byref(startup_ex),
+                        ctypes.POINTER(STARTUPINFO_W),
+                    ),
+                    ctypes.byref(info),
+                )
+                if not created:
+                    raise self._api.error("CreateProcessAsUserW")
+                job.assign(info.hProcess)
+                if self._api.kernel32.ResumeThread(info.hThread) == 0xFFFFFFFF:
+                    raise self._api.error("ResumeThread")
                 self._api.close_handle(info.hThread)
             except BaseException:
-                self._api.close_handle(info.hProcess)
+                if info.hProcess:
+                    job.terminate()
+                job.close()
+                if info.hThread:
+                    self._api.close_handle(info.hThread)
+                if info.hProcess:
+                    self._api.close_handle(info.hProcess)
                 raise
             return _WindowsProcess(
-                self._api, info.hProcess, info.dwProcessId, normalized_argv
+                self._api, info.hProcess, info.dwProcessId, normalized_argv,
+                job
             )
         finally:
             if attribute_list:
