@@ -1,10 +1,12 @@
 import io
 import json
+import shutil
 import sys
 import tempfile
 import threading
 import time
 import unittest
+import weakref
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -372,14 +374,16 @@ def make_bridge(
 
 
 def isolated_bridge(stdin, stdout: io.StringIO) -> Bridge:
-    with tempfile.TemporaryDirectory() as directory:
-        scheduler = SchedulerService(Path(directory) / "schedule.jsonl")
-        return Bridge(
-            stdin,
-            stdout,
-            scheduler=scheduler,
-            start_scheduler=False,
-        )
+    directory = tempfile.mkdtemp(prefix="nosis-bridge-test-")
+    scheduler = SchedulerService(Path(directory) / "schedule.jsonl")
+    bridge = Bridge(
+        stdin,
+        stdout,
+        scheduler=scheduler,
+        start_scheduler=False,
+    )
+    weakref.finalize(bridge, shutil.rmtree, directory, ignore_errors=True)
+    return bridge
 
 
 def emitted(stdout: io.StringIO) -> list[dict]:
@@ -388,6 +392,15 @@ def emitted(stdout: io.StringIO) -> list[dict]:
         for line in stdout.getvalue().splitlines()
         if line.strip()
     ]
+
+
+class IsolatedBridgeTest(unittest.TestCase):
+    def test_scheduler_directory_survives_helper_return(self) -> None:
+        bridge = isolated_bridge(io.StringIO(), io.StringIO())
+        try:
+            self.assertTrue(bridge._scheduler.path.parent.is_dir())
+        finally:
+            bridge.close()
 
 
 class PermissionProtocolTest(unittest.TestCase):
