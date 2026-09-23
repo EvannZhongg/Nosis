@@ -119,6 +119,14 @@ python -m pip install -e ".[gui]"
 python -m unittest discover -s tests -v
 ```
 
+Linux 沙箱边界测试使用真实 bubblewrap（另需 `/usr/bin/python3`），不依赖外网：
+
+```bash
+python -m unittest discover -s tests -p test_linux_sandbox.py -v
+```
+
+未安装 bwrap 或运行环境禁止必要 namespace 时，integration test 会明确 skip；skip 不代表边界验证通过，应在允许 user namespace 的 Linux 主机上运行。namespace 受限时还会检查 backend 返回原始失败诊断且命令未执行。
+
 前端测试和类型检查：
 
 ```bash

@@ -350,14 +350,25 @@ class LinuxSandboxBackend(SandboxBackend):
         executable = shutil.which("bwrap")
         if executable is None:
             raise RuntimeError(
-                "workspace shell requires bubblewrap (bwrap) on Linux"
+                "workspace shell requires bubblewrap (bwrap) on Linux; "
+                "install bwrap and enable unprivileged user namespaces"
             )
         workspace = working_directory.resolve()
         private_tmp = self._temporary_directory.resolve()
         argv = [
             executable,
             "--die-with-parent",
-            "--unshare-all",
+            # Bubblewrap always creates a mount namespace. These additional
+            # namespaces are required: failure must never weaken isolation.
+            "--unshare-user",
+            "--unshare-pid",
+            "--unshare-net",
+            "--unshare-ipc",
+            "--unshare-uts",
+            # Cgroup isolation is optional, as with bwrap's --unshare-all.
+            "--unshare-cgroup-try",
+            "--cap-drop",
+            "ALL",
             "--new-session",
             "--tmpfs",
             "/",
@@ -373,6 +384,8 @@ class LinuxSandboxBackend(SandboxBackend):
         _append_linux_parent_directories(argv, workspace)
         argv.extend(("--bind", str(workspace), str(workspace)))
         argv.extend(("--chdir", str(workspace), "/bin/sh", "-c", command))
+        # Preserve bwrap's nonzero status and setup diagnostic on failure;
+        # never retry the command outside the sandbox.
         return _execute_process(
             argv,
             command=command,

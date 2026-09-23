@@ -61,6 +61,10 @@ Runtime 由 [`interfaces/bridge`](../interfaces/bridge/README.md) 统一装配�
 
 Shell 用 `scope` 指定执行边界：`workspace` 在沙箱内运行，`host` 以当前用户身份越过沙箱。macOS 的 Seatbelt 与 Linux 的 bubblewrap 仅暴露 Workspace、私有临时目录和最小只读系统视图，并禁用网络；Windows 的 RestrictedToken backend 保留宿主文件读取权限、允许网络，并主要把写权限授予 Workspace 与私有临时目录；已对 Everyone 开放写入的位置属于明确例外。Shell 方言只由操作系统决定：Windows 两种 scope 都使用 PowerShell 7；Shell Tool 只承诺 PowerShell 方言，不承诺直接运行 POSIX `.sh` 脚本。Session 的权限 preset 给出默认边界与授权规则：`Ask for approval` 默认 `workspace` 并对两种 scope 都请求授权，`Workspace Access` 默认 `workspace` 且只对 `host` 请求授权，`Full Access` 默认 `host` 且不请求授权，显式传入的 `scope` 始终生效。无人值守的定时任务上限为 `Workspace Access`。
 
+Linux 的默认 backend 是 bubblewrap，必须允许创建 user、pid、net、ipc、uts namespace；mount namespace 由 bwrap 自动创建，cgroup namespace 沿用 bwrap 的可用时隔离行为。命令使用 `--cap-drop ALL` 和 bwrap 的 `NoNewPrivs` 约束。不存在 bwrap 时明确报错，namespace 初始化失败时保留 bwrap 的非零退出码和原始诊断，不回退到宿主执行。当前不使用 `--disable-userns`（bwrap 0.4 不提供此选项），不声明禁止嵌套 user namespace；capability 测试验证 effective、permitted、inheritable、ambient 集合清零，不要求 bounding set 清零。
+
+Linux 只读挂载 `/usr`、`/bin`、`/sbin`、`/lib`、`/lib64` 中存在的路径，读写挂载 Workspace；`/proc` 属于私有 PID namespace，`/tmp` 是每次命令新建的 tmpfs，`HOME` 与临时目录环境变量均指向 `/tmp`。Workspace 的祖先目录只是新建的私有目录，同名文件写入不会影响宿主。用户 Home 不会因为 `PATH` 中存在 `~/.local/bin`、pyenv 或其他用户工具路径而自动挂载；此类工具可能不可用。
+
 ### MCP 与 Skills
 
 MCP 在 `agent_config.json` 的 `mcp.servers` 中配置，支持 `stdio` 和 `streamable_http`；`mcp.enabled` 是 standalone 与 Plugin MCP 共用的全局开关。Plugin 可声明 `.mcp.json` server map，由 Bridge 加 namespace 后合并进同一个 `McpClientManager`。远程 Tool 可分别限制是否暴露以及是否需要人工确认。
