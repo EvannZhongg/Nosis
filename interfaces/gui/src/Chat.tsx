@@ -7,7 +7,7 @@ import {
 import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
 import { AlertTriangle, ArrowUp, Check, ChevronDown, ChevronRight, LoaderCircle, MessageCircleQuestion, Paperclip, ShieldCheck, Square, Terminal, X } from "lucide-react";
 import remarkGfm from "remark-gfm";
-import { get, releaseActiveSession, selectWorkspace, sessionUrl, uploadAttachments, type ImageAttachment, type ModelOption, type Session } from "./api";
+import { createScratchWorkspace, get, releaseActiveSession, selectWorkspace, sessionUrl, uploadAttachments, type ImageAttachment, type ModelOption, type Session } from "./api";
 import { SessionSocket } from "./session";
 import { applyMessage, isTurnActivity, toMessages, TURN_PROCESS_GROUP, turnProcessPartIndexes, type Feedback, type TranscriptItem } from "./transcript";
 import { runtimeIsActive, type ContextWindow, type Incoming, type PermissionPreset, type PlanSnapshot, type RuntimePhase, type UserQuestion } from "@nosis/protocol";
@@ -818,6 +818,16 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
     }
   }
 
+  async function chooseScratchWorkspace() {
+    try {
+      const selected = await createScratchWorkspace(session.session_id);
+      setWorkspaceEditing(false);
+      await saveWorkspace(selected);
+    } catch (error) {
+      showAlert({ kind: "alert", id: "scratch-workspace", level: "error", text: String(error) });
+    }
+  }
+
   /**
    * Browsers expose pasted screenshots/images through clipboardData.items,
    * rather than the textarea's value.  Capture those files and feed them
@@ -967,6 +977,7 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
               {availableWorkspaces.map((path) => <button type="button" role="menuitem" className={`workspace-option ${path === displayedWorkspace ? "selected" : ""}`} key={path} onClick={() => { void saveWorkspace(path); setWorkspaceEditing(false); }} disabled={controlsDisabled || sessionRunning || workspaceSaving} title={path}><span className="workspace-option-path">{path}</span></button>)}
               <div className="workspace-menu-divider" />
               <button type="button" role="menuitem" className="workspace-new-option" onClick={() => { void chooseNewWorkspace(); }} disabled={controlsDisabled || sessionRunning || workspaceSaving}>＋ 新建工作区</button>
+              <button type="button" role="menuitem" className="workspace-new-option" onClick={() => { void chooseScratchWorkspace(); }} disabled={controlsDisabled || sessionRunning || workspaceSaving}>＋ 临时工作区</button>
             </div>}
           </div>
           <ComposerPrimitive.Input placeholder={question ? "请先回答上方问题…" : approval ? "请先处理上方确认…" : "Ask Nosis…"} aria-label="消息" rows={2} autoFocus submitMode="none" disabled={composerGate.inputDisabled} onKeyDown={onComposerKeyDown} onCompositionStart={onCompositionStart} onCompositionEnd={onCompositionEnd} onPaste={onPaste} /><div className="composer-bottom">

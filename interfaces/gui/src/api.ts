@@ -13,7 +13,7 @@ export type Session = {
   event_sequence?: number;
   plan?: PlanSnapshot | null;
 };
-export type WorkspaceSessions = { workspace: string; sessions: SessionSummary[] };
+export type WorkspaceSessions = { workspace: string; scratch?: boolean; sessions: SessionSummary[] };
 export type ScheduleTrigger =
   | { type: "once"; at: string }
   | { type: "interval"; seconds: number; start_at?: string | null }
@@ -121,6 +121,19 @@ export async function selectWorkspace(): Promise<string | null> {
     throw new Error(error.detail ?? `选择工作区失败 (${response.status})`);
   }
   return (await response.json() as { workspace: string | null }).workspace;
+}
+
+export async function createScratchWorkspace(sessionId: string): Promise<string> {
+  const response = await fetch("/api/workspaces/scratch", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId }),
+  });
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail ?? `临时工作区创建失败 (${response.status})`);
+  }
+  return (await response.json() as { workspace: string }).workspace;
 }
 
 export async function uploadAttachments(files: File[], sessionId?: string): Promise<ImageAttachment[]> {

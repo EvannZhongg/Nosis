@@ -19,6 +19,7 @@ AGENT = {
     "max_same_tool_calls": 5,
     "output_reserve_tokens": 100,
     "max_generation_tokens": None,
+    "scratch_workspace_root": "~/.nosis/workspaces/scratch",
     "workspace_instruction_files": ["AGENTS.md"],
     "context": {"compression": {"enabled": True, "trigger_ratio": None, "keep_recent_units": 4}},
     "main_agent": {"tools": {"read_file": True}},
@@ -50,7 +51,6 @@ class SettingsStoreTest(unittest.TestCase):
             "global_max_tokens": 2000,
             "workspace_max_tokens": 3000,
         })
-
     def test_provider_save_is_validated_and_writes_secret_to_dotenv(self) -> None:
         snapshot = self.store.save_provider("second", {
             "model": "openai/second",
@@ -70,6 +70,15 @@ class SettingsStoreTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.store.save_agent({"max_same_tool_calls": 0})
         self.assertEqual((self.root / "agent_config.json").read_text(), before)
+
+    def test_agent_update_preserves_scratch_workspace_root(self) -> None:
+        self.store.save_agent({"max_same_tool_calls": 6})
+
+        document = json.loads((self.root / "agent_config.json").read_text())
+        self.assertEqual(
+            document["scratch_workspace_root"],
+            "~/.nosis/workspaces/scratch",
+        )
 
     def test_rejects_a_stale_revision(self) -> None:
         revision = configuration_fingerprint(self.root)

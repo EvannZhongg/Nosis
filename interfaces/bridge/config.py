@@ -43,6 +43,24 @@ def default_config_directory() -> Path:
     return Path.home() / ".nosis"
 
 
+def load_scratch_workspace_root(path: Path) -> Path:
+    with path.open(encoding="utf-8") as file:
+        document = json.load(file)
+    if not isinstance(document, dict):
+        raise ValueError(f"configuration must be a JSON object: {path}")
+    value = document.get("scratch_workspace_root")
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(
+            "config field 'scratch_workspace_root' must be a non-empty path"
+        )
+    root = Path(value.strip()).expanduser()
+    if not root.is_absolute():
+        raise ValueError(
+            "config field 'scratch_workspace_root' must be an absolute path"
+        )
+    return root.resolve()
+
+
 def memory_store(directory: Path) -> MemoryStore:
     return MemoryStore(
         directory / "MEMORY.md",

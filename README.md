@@ -64,6 +64,12 @@ cd ~/projects/my-project
 nosis
 ```
 
+不绑定已有项目时，可以创建一个持久保留的独立临时工作区：
+
+```bash
+nosis --temporary
+```
+
 启动 GUI：
 
 ```bash
@@ -88,13 +94,14 @@ GUI 默认监听 <http://127.0.0.1:8737>。
 | 路径 | 内容 |
 | --- | --- |
 | `~/.nosis/provider_config.json` | Provider、模型与角色对应关系 |
-| `~/.nosis/agent_config.json` | Tool、子 Agent、MCP 与上下文压缩 |
+| `~/.nosis/agent_config.json` | Tool、子 Agent、MCP、上下文压缩与 Scratch Workspace 根路径 |
 | `~/.nosis/prompts/` | 主 Agent、子 Agent 与上下文压缩的 Prompt 模板 |
 | `~/.nosis/skills/` | Skill 目录，首次启动安装内置 Skill |
 | `~/.nosis/plugins/` | Plugin capability package；由 `plugin.json` 声明组件引用，首次启动安装内置 Plugin |
 | `~/.nosis/AGENTS.md` | 用户级全局 Workspace Instruction |
 | `~/.nosis/MEMORY.md` | 跨 Workspace 的 Global Memory |
 | `~/.nosis/.env` | 配置中 `${ENV_NAME}` 引用的密钥 |
+| `~/.nosis/workspaces/scratch/<workspace-id>/` | Nosis 创建并持久保留的临时工作区；根路径由 `scratch_workspace_root` 配置 |
 | `~/.nosis/sessions/<workspace-key>/MEMORY.md` | 当前 Workspace 独立的长期记忆 |
 | `~/.nosis/sessions/<workspace-key>/<session-id>/` | Session 的 Journal、权限 preset、大输出与子 Agent 记录 |
 | `<workspace>/.nosis/attachments/` | GUI 上传的图片 |

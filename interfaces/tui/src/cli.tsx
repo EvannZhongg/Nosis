@@ -11,6 +11,7 @@ const USAGE = `Usage: nosis [options]
 
 Options:
   --workspace <path>      Workspace directory (default: current directory)
+  --temporary             Use a persistent Nosis-managed scratch workspace
   -h, --help              Show this message
 `;
 

@@ -14,6 +14,7 @@ from interfaces.bridge.config import (
     load_config,
     load_model_options,
     load_prompt_templates,
+    load_scratch_workspace_root,
     load_vision_config,
     memory_store,
 )
@@ -102,6 +103,19 @@ class ConfigTest(unittest.TestCase):
             Path("/config/sessions"),
         )
 
+    def test_loads_and_expands_scratch_workspace_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "agent_config.json"
+            path.write_text(
+                json.dumps({"scratch_workspace_root": "~/scratch"}),
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                load_scratch_workspace_root(path),
+                Path("~/scratch").expanduser().resolve(),
+            )
+
     def test_initializes_packaged_default_configs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config_directory = Path(directory) / "nosis"
@@ -142,6 +156,10 @@ class ConfigTest(unittest.TestCase):
                 },
             )
             self.assertEqual(agent_config["max_same_tool_calls"], 5)
+            self.assertEqual(
+                agent_config["scratch_workspace_root"],
+                "~/.nosis/workspaces/scratch",
+            )
             # The built-in MCP plugin only loads while MCP is switched on.
             self.assertTrue(agent_config["mcp"]["enabled"])
             self.assertEqual(

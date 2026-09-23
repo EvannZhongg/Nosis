@@ -44,7 +44,12 @@ from agent_core.path_utils import path_for_comparison
 from ..bridge.config import (
     default_config_directory,
     initialize_config_directory,
+    load_scratch_workspace_root,
     memory_store,
+)
+from ..bridge.managed_workspaces import (
+    create_scratch_workspace,
+    is_scratch_workspace,
 )
 from ..bridge.process import cancel_process
 from ..bridge.protocol import attachment_replaced_message, runtime_state_message
@@ -761,7 +766,21 @@ def create_app(
 
     @app.get("/api/sessions")
     def list_sessions() -> list[dict[str, object]]:
-        return store.list_sessions()
+        scratch_root = load_scratch_workspace_root(settings.agent_path)
+        return [
+            {
+                **group,
+                **(
+                    {"scratch": True}
+                    if is_scratch_workspace(
+                        scratch_root,
+                        str(group["workspace"]),
+                    )
+                    else {}
+                ),
+            }
+            for group in store.list_sessions()
+        ]
 
     @app.get("/api/sessions/{session_id}")
     async def get_session(session_id: str) -> object:
@@ -884,6 +903,22 @@ def create_app(
         except Exception as error:
             raise HTTPException(status_code=500, detail=f"无法打开文件夹选择器：{error}") from error
         return {"workspace": selected or None}
+
+    @app.post("/api/workspaces/scratch")
+    def create_scratch(payload: object = Body(...)) -> dict[str, str]:
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=400, detail="请求必须是对象。")
+        session_id = payload.get("session_id")
+        if not isinstance(session_id, str) or not session_id:
+            raise HTTPException(status_code=400, detail="session_id 不能为空。")
+        try:
+            scratch = create_scratch_workspace(
+                load_scratch_workspace_root(settings.agent_path),
+                session_id,
+            )
+        except (OSError, ValueError) as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return {"workspace": str(scratch.path)}
 
     @app.get("/api/workspace")
     def get_workspace(

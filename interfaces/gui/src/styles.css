@@ -14,8 +14,11 @@ svg { flex-shrink: 0; }
 .sessions-panel { display: flex; flex-direction: column; padding: 0 16px; border-right: 1px solid #e5e7ec; background: #f6f7f9; min-height: 0; }
 .brand { height: 81px; display: flex; align-items: center; gap: 10px; padding: 0 9px; font-size: 23px; font-weight: 650; letter-spacing: -.8px; }
 .brand-dot { color: #7a8ac4; }
+.new-chat-actions { display: grid; gap: 6px; }
 .new-chat { display: flex; align-items: center; gap: 9px; padding: 11px 13px; border: 1px solid #dfe3ea; border-radius: 7px; background: white; font-size: 13px; font-weight: 550; box-shadow: 0 1px 2px #17274605; }
 .new-chat:hover { background: #fdfdff; border-color: #b9c1d3; }
+.scratch-chat { display: flex; align-items: center; gap: 9px; padding: 8px 13px; border: 0; border-radius: 7px; background: transparent; color: #7b8494; font-size: 12px; text-align: left; }
+.scratch-chat:hover { background: #eceef3; color: #526486; }
 .section-label { margin: 31px 10px 12px; font-size: 11px; color: #9399a6; letter-spacing: .5px; }
 .session-list { flex: 1; overflow-y: auto; }
 .session-row { display: flex; align-items: center; margin-bottom: 4px; border-radius: 6px; }

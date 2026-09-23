@@ -1111,6 +1111,9 @@ def open_session_message(
             else {
                 "max_same_tool_calls": 5,
                 "output_reserve_tokens": 100,
+                "scratch_workspace_root": str(
+                    directory / "scratch"
+                ),
                 "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
                 "main_agent": {"tools": {name: False for name in TOOL_NAMES}},
             }

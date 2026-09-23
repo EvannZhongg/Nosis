@@ -4,7 +4,7 @@ import { Chat } from "./Chat";
 import { Settings, type SettingsSection } from "./Settings";
 import { Workspace } from "./Workspace";
 import { runtimeIsActive, type ContextWindow, type RuntimePhase } from "@nosis/protocol";
-import { deleteSession, get, sessionUrl, type ModelOption, type ModelOptions, type Session, type WorkspaceSessions } from "./api";
+import { createScratchWorkspace, deleteSession, get, sessionUrl, type ModelOption, type ModelOptions, type Session, type WorkspaceSessions } from "./api";
 
 type ActiveSession = Session & { provider: string | null; phase: RuntimePhase };
 const SELECTED_SESSION_KEY = "nosis.selectedSessionId";
@@ -36,6 +36,7 @@ export function App() {
   const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<Set<string>>(new Set());
   const [settingsSection, setSettingsSection] = useState<SettingsSection | null>(null);
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
+  const [creatingScratch, setCreatingScratch] = useState(false);
   const settingsMenuRef = useRef<HTMLDivElement>(null);
 
   const refreshSessions = useCallback(async () => {
@@ -169,6 +170,23 @@ export function App() {
     setError("");
   }
 
+  async function createScratchChat() {
+    const fresh = newSession();
+    setCreatingScratch(true);
+    setError("");
+    try {
+      fresh.workspace = await createScratchWorkspace(fresh.session_id);
+      setChatSessions((all) => [...all, fresh]);
+      setSelectedSessionId(fresh.session_id);
+      setSettingsSection(null);
+      setSettingsMenuOpen(false);
+    } catch (error) {
+      setError(String(error));
+    } finally {
+      setCreatingScratch(false);
+    }
+  }
+
   async function removeSession(id: string) {
     if (busyBySession[id] || !window.confirm("确定删除这个会话吗？此操作无法撤销。")) return;
     setLoadingSessionId(id);
@@ -212,7 +230,10 @@ export function App() {
     <div className="app-shell">
       <aside className="sessions-panel" aria-label="Sessions">
         <div className="brand"><span>Nosis<span className="brand-dot">.</span></span></div>
-        <button className="new-chat" onClick={() => createNewChat()}><Plus size={17} /> New chat</button>
+        <div className="new-chat-actions">
+          <button className="new-chat" onClick={() => createNewChat()}><Plus size={17} /> New chat</button>
+          <button className="scratch-chat" disabled={creatingScratch} onClick={() => void createScratchChat()}>{creatingScratch ? <LoaderCircle size={15} className="spin" /> : <Plus size={15} />} Temporary</button>
+        </div>
         <div className="section-label">Projects</div>
         <nav className="session-list">
           {sessionGroups.map((group) => {
@@ -223,7 +244,7 @@ export function App() {
                   const next = new Set(previous);
                   if (collapsed) next.delete(group.workspace); else next.add(group.workspace);
                   return next;
-                })}><span className="workspace-chevron">{collapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}</span><span className="workspace-group-name">{group.workspace.split(/[\\/]/).pop() || group.workspace}</span><small>{group.workspace}</small></button>
+                })}><span className="workspace-chevron">{collapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}</span><span className="workspace-group-name">{group.scratch ? `Temporary · ${(group.workspace.split(/[\\/]/).pop() || "workspace").slice(0, 8)}` : group.workspace.split(/[\\/]/).pop() || group.workspace}</span><small>{group.workspace}</small></button>
                 <button className="workspace-new-session" aria-label={`在 ${group.workspace} 中新建会话`} title="在此工作区新建会话" onClick={() => createNewChat(group.workspace)}><Plus size={14} /></button>
               </div>
               {!collapsed && group.sessions.map((item) => <div className={`session-row ${item.session_id === selectedSessionId ? "selected" : ""}`} key={item.session_id}><button className="session-button" title={item.title} disabled={loadingSessionId === item.session_id} onClick={() => void selectSession(item.session_id)}>{busyBySession[item.session_id] ? <LoaderCircle size={15} className="spin" role="img" aria-label="正在执行任务" /> : <MessageSquare size={15} />}<span>{item.title}</span></button><button className="delete-session" aria-label={`删除会话 ${item.title}`} title="删除会话" disabled={loadingSessionId === item.session_id || Boolean(busyBySession[item.session_id])} onClick={(event) => { event.stopPropagation(); void removeSession(item.session_id); }}><Trash2 size={14} /></button></div>)}
