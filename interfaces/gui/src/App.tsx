@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bot, Boxes, Brain, CalendarClock, ChevronDown, ChevronRight, KeyRound, LoaderCircle, MessageSquare, Plug, Plus, Settings as SettingsIcon, Sparkles, Trash2 } from "lucide-react";
+import { Bot, Boxes, Brain, CalendarClock, ChevronDown, ChevronRight, KeyRound, LoaderCircle, MessageSquare, PanelLeftClose, Plug, Plus, Settings as SettingsIcon, Sparkles, Trash2 } from "lucide-react";
 import { Chat } from "./Chat";
 import { Settings, type SettingsSection } from "./Settings";
 import { Workspace } from "./Workspace";
@@ -37,6 +37,8 @@ export function App() {
   const [settingsSection, setSettingsSection] = useState<SettingsSection | null>(null);
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
   const [creatingScratch, setCreatingScratch] = useState(false);
+  const [sessionsCollapsed, setSessionsCollapsed] = useState(false);
+  const [workspaceCollapsed, setWorkspaceCollapsed] = useState(false);
   const settingsMenuRef = useRef<HTMLDivElement>(null);
 
   const refreshSessions = useCallback(async () => {
@@ -225,40 +227,50 @@ export function App() {
     { id: "mcp", label: "MCP", description: "查看外部工具服务", icon: Plug },
     { id: "schedules", label: "Schedules", description: "查看和调整定时任务", icon: CalendarClock },
   ];
+  const settingsPopover = settingsMenuOpen && <div className="settings-popover" role="menu">
+    <div className="settings-popover-label">Settings</div>
+    {settingsItems.map((item) => { const Icon = item.icon; return <button type="button" role="menuitem" key={item.id} onClick={() => { setSettingsSection(item.id); setSettingsMenuOpen(false); }}><Icon size={15} /><span><strong>{item.label}</strong><small>{item.description}</small></span><ChevronRight size={13} /></button>; })}
+  </div>;
 
   return (
-    <div className="app-shell">
-      <aside className="sessions-panel" aria-label="Sessions">
-        <div className="brand"><span>Nosis<span className="brand-dot">.</span></span></div>
-        <div className="new-chat-actions">
-          <button className="new-chat" onClick={() => createNewChat()}><Plus size={17} /> New chat</button>
-          <button className="scratch-chat" disabled={creatingScratch} onClick={() => void createScratchChat()}>{creatingScratch ? <LoaderCircle size={15} className="spin" /> : <Plus size={15} />} Temporary</button>
-        </div>
-        <div className="section-label">Projects</div>
-        <nav className="session-list">
-          {sessionGroups.map((group) => {
-            const collapsed = collapsedWorkspaces.has(group.workspace);
-            return <section className="workspace-group" key={group.workspace}>
-              <div className="workspace-group-header">
-                <button className="workspace-group-title" title={group.workspace} aria-expanded={!collapsed} onClick={() => setCollapsedWorkspaces((previous) => {
-                  const next = new Set(previous);
-                  if (collapsed) next.delete(group.workspace); else next.add(group.workspace);
-                  return next;
-                })}><span className="workspace-chevron">{collapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}</span><span className="workspace-group-name">{group.scratch ? `Temporary · ${(group.workspace.split(/[\\/]/).pop() || "workspace").slice(0, 8)}` : group.workspace.split(/[\\/]/).pop() || group.workspace}</span><small>{group.workspace}</small></button>
-                <button className="workspace-new-session" aria-label={`在 ${group.workspace} 中新建会话`} title="在此工作区新建会话" onClick={() => createNewChat(group.workspace)}><Plus size={14} /></button>
-              </div>
-              {!collapsed && group.sessions.map((item) => <div className={`session-row ${item.session_id === selectedSessionId ? "selected" : ""}`} key={item.session_id}><button className="session-button" title={item.title} disabled={loadingSessionId === item.session_id} onClick={() => void selectSession(item.session_id)}>{busyBySession[item.session_id] ? <LoaderCircle size={15} className="spin" role="img" aria-label="正在执行任务" /> : <MessageSquare size={15} />}<span>{item.title}</span></button><button className="delete-session" aria-label={`删除会话 ${item.title}`} title="删除会话" disabled={loadingSessionId === item.session_id || Boolean(busyBySession[item.session_id])} onClick={(event) => { event.stopPropagation(); void removeSession(item.session_id); }}><Trash2 size={14} /></button></div>)}
-            </section>;
-          })}
-          {sessionGroups.length === 0 && <p className="session-empty">从一段对话开始。</p>}
-        </nav>
-        <div className="settings-menu-wrap" ref={settingsMenuRef}>
-          {settingsMenuOpen && <div className="settings-popover" role="menu">
-            <div className="settings-popover-label">Settings</div>
-            {settingsItems.map((item) => { const Icon = item.icon; return <button type="button" role="menuitem" key={item.id} onClick={() => { setSettingsSection(item.id); setSettingsMenuOpen(false); }}><Icon size={15} /><span><strong>{item.label}</strong><small>{item.description}</small></span><ChevronRight size={13} /></button>; })}
-          </div>}
-          <button className={`sidebar-footer ${settingsSection ? "selected" : ""}`} aria-expanded={settingsMenuOpen} onClick={() => setSettingsMenuOpen((open) => !open)}><SettingsIcon size={14} /> Settings<ChevronDown size={12} /></button>
-        </div>
+    <div className={`app-shell ${sessionsCollapsed ? "sessions-collapsed" : ""} ${workspaceCollapsed ? "workspace-collapsed" : ""}`}>
+      <aside className={`sessions-panel ${sessionsCollapsed ? "collapsed" : ""}`} aria-label="Sessions">
+        {sessionsCollapsed ? <>
+          <button className="sidebar-rail-logo" aria-label="展开会话栏" title="展开会话栏" onClick={() => setSessionsCollapsed(false)}><img src="/nosis-avatar-128.png" alt="" /></button>
+          <button className="sidebar-rail-button" aria-label="新建会话" title="New chat" onClick={() => createNewChat()}><Plus size={19} /></button>
+          <div className="settings-menu-wrap rail" ref={settingsMenuRef}>
+            {settingsPopover}
+            <button className={`sidebar-rail-button ${settingsSection ? "selected" : ""}`} aria-label="设置" title="Settings" aria-expanded={settingsMenuOpen} onClick={() => setSettingsMenuOpen((open) => !open)}><SettingsIcon size={17} /></button>
+          </div>
+        </> : <>
+          <div className="brand"><span>Nosis<span className="brand-dot">.</span></span><button className="sidebar-collapse-button" aria-label="收起会话栏" title="收起会话栏" onClick={() => { setSessionsCollapsed(true); setSettingsMenuOpen(false); }}><PanelLeftClose size={17} /></button></div>
+          <div className="new-chat-actions">
+            <button className="new-chat" onClick={() => createNewChat()}><Plus size={17} /> New chat</button>
+            <button className="scratch-chat" disabled={creatingScratch} onClick={() => void createScratchChat()}>{creatingScratch ? <LoaderCircle size={15} className="spin" /> : <Plus size={15} />} Temporary</button>
+          </div>
+          <div className="section-label">Projects</div>
+          <nav className="session-list">
+            {sessionGroups.map((group) => {
+              const collapsed = collapsedWorkspaces.has(group.workspace);
+              return <section className="workspace-group" key={group.workspace}>
+                <div className="workspace-group-header">
+                  <button className="workspace-group-title" title={group.workspace} aria-expanded={!collapsed} onClick={() => setCollapsedWorkspaces((previous) => {
+                    const next = new Set(previous);
+                    if (collapsed) next.delete(group.workspace); else next.add(group.workspace);
+                    return next;
+                  })}><span className="workspace-chevron">{collapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}</span><span className="workspace-group-name">{group.scratch ? `Temporary · ${(group.workspace.split(/[\\/]/).pop() || "workspace").slice(0, 8)}` : group.workspace.split(/[\\/]/).pop() || group.workspace}</span><small>{group.workspace}</small></button>
+                  <button className="workspace-new-session" aria-label={`在 ${group.workspace} 中新建会话`} title="在此工作区新建会话" onClick={() => createNewChat(group.workspace)}><Plus size={14} /></button>
+                </div>
+                {!collapsed && group.sessions.map((item) => <div className={`session-row ${item.session_id === selectedSessionId ? "selected" : ""}`} key={item.session_id}><button className="session-button" title={item.title} disabled={loadingSessionId === item.session_id} onClick={() => void selectSession(item.session_id)}>{busyBySession[item.session_id] ? <LoaderCircle size={15} className="spin" role="img" aria-label="正在执行任务" /> : <MessageSquare size={15} />}<span>{item.title}</span></button><button className="delete-session" aria-label={`删除会话 ${item.title}`} title="删除会话" disabled={loadingSessionId === item.session_id || Boolean(busyBySession[item.session_id])} onClick={(event) => { event.stopPropagation(); void removeSession(item.session_id); }}><Trash2 size={14} /></button></div>)}
+              </section>;
+            })}
+            {sessionGroups.length === 0 && <p className="session-empty">从一段对话开始。</p>}
+          </nav>
+          <div className="settings-menu-wrap" ref={settingsMenuRef}>
+            {settingsPopover}
+            <button className={`sidebar-footer ${settingsSection ? "selected" : ""}`} aria-expanded={settingsMenuOpen} onClick={() => setSettingsMenuOpen((open) => !open)}><SettingsIcon size={14} /> Settings<ChevronDown size={12} /></button>
+          </div>
+        </>}
       </aside>
 
       {settingsSection && <Settings section={settingsSection} onClose={() => { setSettingsSection(null); void refreshSessions(); }} onChanged={refreshModels} onOpenSession={(sessionId) => void selectSession(sessionId)} />}
@@ -280,7 +292,7 @@ export function App() {
           }} /></div>;
         })}
       </main>
-      {!settingsSection && selectedSession && <Workspace version={workspaceVersion} sessionId={selectedSession.session_id} />}
+      {!settingsSection && selectedSession && <Workspace version={workspaceVersion} sessionId={selectedSession.session_id} collapsed={workspaceCollapsed} onCollapsedChange={setWorkspaceCollapsed} />}
     </div>
   );
 }

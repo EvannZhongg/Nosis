@@ -10,10 +10,21 @@ button { color: inherit; }
 button, textarea { -webkit-tap-highlight-color: transparent; }
 button:focus-visible, summary:focus-visible { outline: 2px solid #697ed6; outline-offset: 3px; }
 svg { flex-shrink: 0; }
-.app-shell { display: grid; grid-template-columns: 224px minmax(340px, 1fr) 260px; height: 100dvh; overflow: hidden; }
+.app-shell { --sessions-width: 224px; --workspace-width: 260px; display: grid; grid-template-columns: var(--sessions-width) minmax(340px, 1fr) var(--workspace-width); height: 100dvh; overflow: hidden; transition: grid-template-columns .18s ease; }
+.app-shell.sessions-collapsed { --sessions-width: 56px; }
+.app-shell.workspace-collapsed { --workspace-width: 52px; }
 .sessions-panel { display: flex; flex-direction: column; padding: 0 16px; border-right: 1px solid #e5e7ec; background: #f6f7f9; min-height: 0; }
-.brand { height: 81px; display: flex; align-items: center; gap: 10px; padding: 0 9px; font-size: 23px; font-weight: 650; letter-spacing: -.8px; }
+.sessions-panel.collapsed { align-items: center; padding: 0 7px; }
+.brand { height: 48px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 3px 0 9px; font-size: 23px; font-weight: 650; letter-spacing: -.8px; }
 .brand-dot { color: #7a8ac4; }
+.sidebar-collapse-button, .sidebar-rail-button, .sidebar-rail-logo { display: grid; place-items: center; border: 0; border-radius: 7px; background: transparent; color: #8893a7; }
+.sidebar-collapse-button { width: 31px; height: 31px; opacity: .55; transition: opacity .15s ease, background .15s ease, color .15s ease; }
+.brand:hover .sidebar-collapse-button, .sidebar-collapse-button:focus-visible { opacity: 1; }
+.sidebar-collapse-button:hover, .sidebar-rail-button:hover, .sidebar-rail-logo:hover { background: #e8ebf1; color: #53688f; }
+.sidebar-rail-logo { width: 42px; height: 42px; margin-top: 3px; padding: 7px; }
+.sidebar-rail-logo img { display: block; width: 28px; height: 28px; object-fit: contain; }
+.sidebar-rail-button { width: 40px; height: 40px; margin-top: 6px; }
+.sidebar-rail-button.selected { background: #e9edf6; color: #40568a; }
 .new-chat-actions { display: grid; gap: 6px; }
 .new-chat { display: flex; align-items: center; gap: 9px; padding: 11px 13px; border: 1px solid #dfe3ea; border-radius: 7px; background: white; font-size: 13px; font-weight: 550; box-shadow: 0 1px 2px #17274605; }
 .new-chat:hover { background: #fdfdff; border-color: #b9c1d3; }
@@ -237,8 +248,15 @@ pre { overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-famil
 .attachment-replaced { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #6f7b90; background: #f4f6fa; border-radius: 6px; padding: 10px 14px; margin: 8px 0 12px; font-size: 12px; }
 .attachment-replaced button { flex: none; border: 1px solid #d5dbe5; border-radius: 5px; background: #fff; color: #5f6f88; padding: 6px 10px; font-size: 11px; cursor: pointer; }
 .attachment-replaced button:disabled { opacity: .6; cursor: default; }
-.workspace-panel { display: flex; flex-direction: column; min-height: 0; background: #fafbfc; border-left: 1px solid #e7eaf0; }
+.workspace-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: #fafbfc; border-left: 1px solid #e7eaf0; }
+.workspace-panel.collapsed { align-items: center; }
+.workspace-content { display: flex; flex: 1; flex-direction: column; width: 100%; min-width: 0; min-height: 0; }
+.workspace-panel.collapsed .workspace-content { visibility: hidden; pointer-events: none; }
+.workspace-rail-button { display: none; place-items: center; width: 40px; height: 40px; margin-top: 5px; border: 0; border-radius: 7px; background: transparent; color: #8895aa; }
+.workspace-panel.collapsed .workspace-rail-button { display: grid; }
+.workspace-rail-button:hover { background: #edf0f5; color: #53688f; }
 .workspace-header { padding: 0 19px; font-size: 12px; font-weight: 550; color: #647084; }
+.workspace-header-actions { display: flex; align-items: center; gap: 2px; }
 .icon-button { border: 0; background: transparent; color: #a0a9b9; padding: 6px; border-radius: 4px; display: grid; place-items: center; }
 .icon-button:hover { background: #edf0f5; color: #607195; }
 .workspace-files { flex: 1; overflow: auto; padding: 18px 13px; }
@@ -254,13 +272,16 @@ button.tree-entry:hover { background: #edf1f7; }
 .tree-error, .tree-loading, .empty-directory { font-size: 11px; padding: 5px; color: #9ca5b3; overflow-wrap: anywhere; }
 .tree-error { color: #ab6666; }
 .workspace-footer { margin: 0 18px; height: 54px; display: flex; gap: 7px; align-items: center; border-top: 1px solid #ebedf2; font-size: 10px; color: #a1aab8; }
-@media (max-width: 1080px) { .app-shell { grid-template-columns: 190px minmax(320px, 1fr) 210px; } .messages { padding: 25px 22px; } .composer-area { padding-left: 22px; padding-right: 22px; } }
-@media (max-width: 800px) { .app-shell { grid-template-columns: 165px minmax(0, 1fr); } .workspace-panel { display: none; } .sessions-panel { padding: 0 10px; } .chat-header { padding: 0 18px; } }
-@media (max-width: 520px) { .app-shell { grid-template-columns: 110px minmax(0, 1fr); } .brand { font-size: 20px; padding: 0 3px; } .new-chat { padding: 9px 6px; gap: 5px; font-size: 11px; } .section-label { margin: 25px 3px 10px; } .session-button { padding: 10px 4px; gap: 5px; font-size: 11px; } .sidebar-footer { font-size: 8px; padding: 0; } .messages { padding: 22px 14px; } .assistant-content { padding-left: 0; } .composer-area { padding: 5px 12px 0; } .status-label { display: none; } .welcome { padding: 25px 12px; } .welcome h1 { font-size: 19px; } }
-@media (prefers-reduced-motion: reduce) { .spin, .context-window { animation: none; } .thread-viewport { scroll-behavior: auto; } }
+@media (max-width: 1080px) { .app-shell { --sessions-width: 190px; --workspace-width: 210px; grid-template-columns: var(--sessions-width) minmax(320px, 1fr) var(--workspace-width); } .app-shell.sessions-collapsed { --sessions-width: 56px; } .app-shell.workspace-collapsed { --workspace-width: 52px; } .messages { padding: 25px 22px; } .composer-area { padding-left: 22px; padding-right: 22px; } }
+@media (max-width: 800px) { .app-shell { --sessions-width: 165px; --workspace-width: 190px; grid-template-columns: var(--sessions-width) minmax(0, 1fr) var(--workspace-width); } .app-shell.sessions-collapsed { --sessions-width: 56px; } .app-shell.workspace-collapsed { --workspace-width: 52px; } .sessions-panel:not(.collapsed) { padding: 0 10px; } .chat-header { padding: 0 18px; } }
+@media (max-width: 520px) { .app-shell { --sessions-width: 110px; --workspace-width: 150px; grid-template-columns: var(--sessions-width) minmax(0, 1fr) var(--workspace-width); } .app-shell.sessions-collapsed { --sessions-width: 56px; } .app-shell.workspace-collapsed { --workspace-width: 52px; } .brand { font-size: 20px; padding: 0 3px; } .new-chat { padding: 9px 6px; gap: 5px; font-size: 11px; } .section-label { margin: 25px 3px 10px; } .session-button { padding: 10px 4px; gap: 5px; font-size: 11px; } .sidebar-footer { font-size: 8px; padding: 0; } .messages { padding: 22px 14px; } .assistant-content { padding-left: 0; } .composer-area { padding: 5px 12px 0; } .status-label { display: none; } .welcome { padding: 25px 12px; } .welcome h1 { font-size: 19px; } }
+@media (prefers-reduced-motion: reduce) { .app-shell { transition: none; } .spin, .context-window { animation: none; } .thread-viewport { scroll-behavior: auto; } }
 @media (max-width: 1080px) { .model-selector { max-width: calc(100% - 42px); } }
 
 .settings-menu-wrap { position: relative; margin-top: auto; }
+.settings-menu-wrap.rail { width: 40px; }
+.settings-menu-wrap.rail .sidebar-rail-button { margin: 0 0 7px; }
+.settings-menu-wrap.rail .settings-popover { left: calc(100% + 9px); right: auto; bottom: 7px; width: 220px; }
 .settings-menu-wrap .sidebar-footer { width: 100%; border: 0; background: transparent; cursor: pointer; text-align: left; }
 .settings-menu-wrap .sidebar-footer > svg:last-child { margin-left: auto; transition: transform .15s ease; }
 .settings-menu-wrap .sidebar-footer[aria-expanded="true"] > svg:last-child { transform: rotate(180deg); }

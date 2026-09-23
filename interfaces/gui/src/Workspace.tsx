@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ChevronDown, ChevronRight, File, Folder, FolderOpen, RefreshCw } from "lucide-react";
+import { ChevronDown, ChevronRight, File, Folder, FolderOpen, PanelRightClose, RefreshCw } from "lucide-react";
 import { get, type Directory } from "./api";
 
 function DirectoryTree({ path, version, sessionId }: { path: string; version: number; sessionId?: string }) {
@@ -67,11 +67,14 @@ function DirectoryTree({ path, version, sessionId }: { path: string; version: nu
   );
 }
 
-export function Workspace({ version, sessionId }: { version: number; sessionId?: string }) {
+export function Workspace({ version, sessionId, collapsed, onCollapsedChange }: { version: number; sessionId?: string; collapsed: boolean; onCollapsedChange: (collapsed: boolean) => void }) {
   const [refresh, setRefresh] = useState(0);
-  return <aside className="workspace-panel" aria-label="Workspace">
-    <header className="workspace-header"><span>Workspace</span><button className="icon-button" aria-label="刷新目录" onClick={() => setRefresh((value) => value + 1)}><RefreshCw size={14} /></button></header>
-    <div className="workspace-files"><DirectoryTree path="." version={version + refresh} sessionId={sessionId} /></div>
-    <div className="workspace-footer"><Folder size={13} /> 项目文件</div>
+  return <aside className={`workspace-panel ${collapsed ? "collapsed" : ""}`} aria-label="Workspace">
+    <button className="workspace-rail-button" aria-label="展开工作区" title="展开工作区" onClick={() => onCollapsedChange(false)}><Folder size={19} /></button>
+    <div className="workspace-content">
+      <header className="workspace-header"><span>Workspace</span><div className="workspace-header-actions"><button className="icon-button" aria-label="刷新目录" title="刷新目录" onClick={() => setRefresh((value) => value + 1)}><RefreshCw size={14} /></button><button className="icon-button" aria-label="收起工作区" title="收起工作区" onClick={() => onCollapsedChange(true)}><PanelRightClose size={15} /></button></div></header>
+      <div className="workspace-files"><DirectoryTree path="." version={version + refresh} sessionId={sessionId} /></div>
+      <div className="workspace-footer"><Folder size={13} /> 项目文件</div>
+    </div>
   </aside>;
 }
