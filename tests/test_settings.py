@@ -19,6 +19,7 @@ AGENT = {
     "max_same_tool_calls": 5,
     "output_reserve_tokens": 100,
     "max_generation_tokens": None,
+    "provider": {"request_timeout_seconds": 300, "max_retries": 2},
     "scratch_workspace_root": "~/.nosis/workspaces/scratch",
     "workspace_instruction_files": ["AGENTS.md"],
     "context": {"compression": {"enabled": True, "trigger_ratio": None, "keep_recent_units": 4}},
@@ -78,6 +79,10 @@ class SettingsStoreTest(unittest.TestCase):
         self.assertEqual(
             document["scratch_workspace_root"],
             "~/.nosis/workspaces/scratch",
+        )
+        self.assertEqual(
+            document["provider"],
+            {"request_timeout_seconds": 300, "max_retries": 2},
         )
 
     def test_agent_update_reports_missing_scratch_workspace_root(self) -> None:

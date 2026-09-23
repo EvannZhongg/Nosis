@@ -1168,19 +1168,22 @@ def open_session_message(
         ),
         encoding="utf-8",
     )
+    resolved_agent_config = {
+        "provider": {
+            "request_timeout_seconds": 300,
+            "max_retries": 2,
+        },
+        **(agent_config if agent_config is not None else {
+            "max_same_tool_calls": 5,
+            "output_reserve_tokens": 100,
+            "scratch_workspace_root": str(directory / "scratch"),
+            "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
+            "main_agent": {"tools": {name: False for name in TOOL_NAMES}},
+        }),
+    }
     (directory / "agent_config.json").write_text(
         json.dumps(
-            agent_config
-            if agent_config is not None
-            else {
-                "max_same_tool_calls": 5,
-                "output_reserve_tokens": 100,
-                "scratch_workspace_root": str(
-                    directory / "scratch"
-                ),
-                "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
-                "main_agent": {"tools": {name: False for name in TOOL_NAMES}},
-            }
+            resolved_agent_config
         ),
         encoding="utf-8",
     )
@@ -1694,6 +1697,74 @@ class BridgeSessionOpenTest(unittest.TestCase):
                 ["session_ready", "runtime_state"],
             )
             self.assertEqual(emitted(stdout)[-1]["phase"], "inactive")
+
+    def test_applies_provider_request_policy_to_all_chat_providers(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bridge, _ = make_bridge([], root)
+            bridge.open_session(
+                open_session_message(
+                    root,
+                    agent_config={
+                        "max_same_tool_calls": 5,
+                        "output_reserve_tokens": 100,
+                        "provider": {
+                            "request_timeout_seconds": 45,
+                            "max_retries": 4,
+                        },
+                        "scratch_workspace_root": str(root / "scratch"),
+                        "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
+                        "main_agent": {"tools": {"subagent": True}},
+                        "subagent_roles": {
+                            "researcher": {
+                                "description": "Reads.",
+                                "tools": {},
+                            }
+                        },
+                    },
+                    provider_config={
+                        "main_agent": {
+                            "provider": "first",
+                            "vision_provider": "second",
+                        },
+                        "subagent": {"provider": ""},
+                        "providers": {
+                            "first": {
+                                "model": "openai/first",
+                                "max_context_tokens": 1000,
+                            },
+                            "second": {
+                                "model": "openai/second",
+                                "max_context_tokens": 1000,
+                            },
+                        },
+                    },
+                )
+            )
+
+            with patch.object(
+                LiteLLMProvider,
+                "capabilities_for_model",
+                classmethod(
+                    lambda cls, model, base_url=None: ProviderCapabilities(
+                        frozenset({"text", "image"})
+                    )
+                ),
+            ):
+                plane = bridge._ensure_execution_plane()
+            main_provider = plane.agent._provider
+            vision_provider = plane.agent._tools._context.vision_provider
+            subagents = plane.agent._tools._context.subagents
+            assert vision_provider is not None
+            assert subagents is not None
+            role_provider = subagents.roles.get("researcher").provider
+
+        self.assertEqual(main_provider._request_timeout_seconds, 45)
+        self.assertEqual(main_provider._max_retries, 4)
+        self.assertEqual(vision_provider._request_timeout_seconds, 45)
+        self.assertEqual(vision_provider._max_retries, 4)
+        self.assertEqual(role_provider._request_timeout_seconds, 45)
+        self.assertEqual(role_provider._max_retries, 4)
 
     def test_opening_a_session_does_not_require_the_provider_key(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -205,6 +205,10 @@ class ConfigTest(unittest.TestCase):
             )
             self.assertEqual(agent_config["max_same_tool_calls"], 5)
             self.assertEqual(
+                agent_config["provider"],
+                {"request_timeout_seconds": 300, "max_retries": 2},
+            )
+            self.assertEqual(
                 agent_config["scratch_workspace_root"],
                 "~/.nosis/workspaces/scratch",
             )

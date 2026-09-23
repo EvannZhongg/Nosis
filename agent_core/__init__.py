@@ -19,6 +19,7 @@ from .config import (
     AgentConfig,
     ContextCompressionConfig,
     MemoryConfig,
+    ProviderRequestConfig,
     SubagentRoleConfig,
     load_agent_config,
 )
@@ -272,6 +273,7 @@ __all__ = [
     "PlanStep",
     "PlanStepStatus",
     "ProviderCapabilities",
+    "ProviderRequestConfig",
     "ProviderProtocolError",
     "ProcessIsolation",
     "ReadFileTool",

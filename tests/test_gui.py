@@ -289,6 +289,7 @@ class GuiTest(unittest.TestCase):
             "max_same_tool_calls": 5,
             "output_reserve_tokens": 100,
             "max_generation_tokens": None,
+            "provider": {"request_timeout_seconds": 300, "max_retries": 2},
             "scratch_workspace_root": str(self.root / "scratch"),
             "workspace_instruction_files": ["AGENTS.md"],
             "context": {"compression": {"enabled": True, "trigger_ratio": None, "keep_recent_units": 4}},

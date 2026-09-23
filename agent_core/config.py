@@ -20,6 +20,12 @@ class MemoryConfig:
 
 
 @dataclass(frozen=True)
+class ProviderRequestConfig:
+    request_timeout_seconds: int = 300
+    max_retries: int = 2
+
+
+@dataclass(frozen=True)
 class SubagentRoleConfig:
     """A sub-agent role: what it is for, and which tools it may use.
 
@@ -38,6 +44,7 @@ class AgentConfig:
     tools: ToolConfig
     workspace_instruction_files: tuple[str, ...]
     max_generation_tokens: int | None = None
+    provider: ProviderRequestConfig = field(default_factory=ProviderRequestConfig)
     context: ContextCompressionConfig = field(
         default_factory=ContextCompressionConfig
     )
@@ -64,6 +71,7 @@ def load_agent_config(path: Path) -> AgentConfig:
         data,
         "max_generation_tokens",
     )
+    provider = _provider_config(data.get("provider"))
     workspace_instruction_files = _workspace_instruction_files(
         data.get("workspace_instruction_files")
     )
@@ -79,10 +87,36 @@ def load_agent_config(path: Path) -> AgentConfig:
         tools=tools,
         workspace_instruction_files=workspace_instruction_files,
         max_generation_tokens=max_generation_tokens,
+        provider=provider,
         subagent_roles=subagent_roles,
         context=context,
         mcp=mcp,
         memory=memory,
+    )
+
+
+def _provider_config(value: object) -> ProviderRequestConfig:
+    if value is None:
+        return ProviderRequestConfig()
+    if not isinstance(value, dict):
+        raise ValueError("config field 'provider' must be an object")
+    unknown = set(value) - {"request_timeout_seconds", "max_retries"}
+    if unknown:
+        fields = ", ".join(sorted(unknown))
+        raise ValueError(f"unknown field(s) in 'provider': {fields}")
+    return ProviderRequestConfig(
+        request_timeout_seconds=_positive_integer_with_default(
+            value,
+            "request_timeout_seconds",
+            300,
+            prefix="provider",
+        ),
+        max_retries=_non_negative_integer_with_default(
+            value,
+            "max_retries",
+            2,
+            prefix="provider",
+        ),
     )
 
 
@@ -267,5 +301,20 @@ def _positive_integer_with_default(
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise ValueError(
             f"config field '{prefix}.{field}' must be a positive integer"
+        )
+    return value
+
+
+def _non_negative_integer_with_default(
+    data: dict[str, object],
+    field: str,
+    default: int,
+    *,
+    prefix: str,
+) -> int:
+    value = data.get(field, default)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(
+            f"config field '{prefix}.{field}' must be a non-negative integer"
         )
     return value

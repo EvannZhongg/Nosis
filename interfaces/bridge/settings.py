@@ -563,7 +563,7 @@ class SettingsStore:
     def _validate_agent_document(self, document: dict[str, object]) -> None:
         unknown = set(document) - {
             "max_same_tool_calls", "output_reserve_tokens", "max_generation_tokens",
-            "scratch_workspace_root", "workspace_instruction_files", "context", "memory", "main_agent", "subagent_roles", "mcp",
+            "provider", "scratch_workspace_root", "workspace_instruction_files", "context", "memory", "main_agent", "subagent_roles", "mcp",
         }
         if unknown:
             raise ValueError(f"unknown agent configuration field(s): {', '.join(sorted(unknown))}")

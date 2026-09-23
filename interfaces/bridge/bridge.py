@@ -663,6 +663,10 @@ class Bridge:
                 api_key=config.key,
                 max_context_tokens=config.max_context_tokens,
                 media_root=workspace.path,
+                request_timeout_seconds=(
+                    agent_config.provider.request_timeout_seconds
+                ),
+                max_retries=agent_config.provider.max_retries,
             )
             image_generator = None
             if agent_config.tools.is_enabled("generate_image"):
@@ -680,7 +684,7 @@ class Bridge:
                     default_image_size=image_config.default_image_size,
                 )
             vision_provider = self._provider_for(
-                load_vision_config(config_path), workspace
+                load_vision_config(config_path), workspace, agent_config
             )
             memory = None
             if memory_context is not None:
@@ -970,6 +974,7 @@ class Bridge:
         self,
         config,
         workspace: Workspace,
+        agent_config,
     ) -> LiteLLMProvider | None:
         if config is None:
             return None
@@ -979,6 +984,10 @@ class Bridge:
             api_key=config.key,
             max_context_tokens=config.max_context_tokens,
             media_root=workspace.path,
+            request_timeout_seconds=(
+                agent_config.provider.request_timeout_seconds
+            ),
+            max_retries=agent_config.provider.max_retries,
         )
 
     def _subagent_runtime(
@@ -1015,9 +1024,12 @@ class Bridge:
                 provider=self._provider_for(
                     load_config_with_name(config_path, role=name)[1],
                     workspace,
+                    agent_config,
                 ),
                 vision_provider=self._provider_for(
-                    load_vision_config(config_path, role=name), workspace
+                    load_vision_config(config_path, role=name),
+                    workspace,
+                    agent_config,
                 ),
             )
             for name, role in agent_config.subagent_roles.items()
@@ -1046,10 +1058,13 @@ class Bridge:
                         if agent.tools is None
                         else agent.tools
                     ),
-                    provider=self._provider_for(provider_config, workspace),
+                    provider=self._provider_for(
+                        provider_config, workspace, agent_config
+                    ),
                     vision_provider=self._provider_for(
                         load_vision_config(config_path, role=agent.name),
                         workspace,
+                        agent_config,
                     ),
                 )
             )

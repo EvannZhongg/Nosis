@@ -49,6 +49,8 @@ Runtime 由 [`interfaces/bridge`](../interfaces/bridge/README.md) 统一装配�
 }
 ```
 
+模型请求的超时与自动重试由 `agent_config.json` 的 `provider.request_timeout_seconds` 和 `provider.max_retries` 统一配置，并应用于主 Agent、视觉模型和子 Agent。`max_retries` 表示首次请求失败后的额外尝试次数。
+
 ## Runtime 能力
 
 ### Tool

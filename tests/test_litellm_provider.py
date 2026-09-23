@@ -375,6 +375,8 @@ class LiteLLMProviderTest(unittest.TestCase):
             base_url="https://example.com/v1",
             api_key="secret",
             max_context_tokens=1000,
+            request_timeout_seconds=45,
+            max_retries=4,
         )
 
         request = LLMRequest(
@@ -416,6 +418,8 @@ class LiteLLMProviderTest(unittest.TestCase):
                 {"role": "user", "content": "hello"},
             ],
             stream=True,
+            timeout=45,
+            max_retries=4,
             stream_options={"include_usage": True},
             max_completion_tokens=100,
         )
@@ -561,6 +565,8 @@ class LiteLLMProviderTest(unittest.TestCase):
                 },
             ],
             stream=True,
+            timeout=300,
+            max_retries=2,
             stream_options={"include_usage": True},
             tools=[
                 {

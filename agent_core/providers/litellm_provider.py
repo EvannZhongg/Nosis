@@ -37,11 +37,27 @@ class LiteLLMProvider(LLMProvider):
         api_key: str | None = None,
         max_context_tokens: int | None = None,
         media_root: Path | None = None,
+        request_timeout_seconds: int = 300,
+        max_retries: int = 2,
     ) -> None:
         self._model = model
         self._base_url = base_url
         self._api_key = api_key
         self._media_root = media_root.expanduser().resolve() if media_root is not None else None
+        if (
+            isinstance(request_timeout_seconds, bool)
+            or not isinstance(request_timeout_seconds, int)
+            or request_timeout_seconds < 1
+        ):
+            raise ValueError("request_timeout_seconds must be a positive integer")
+        if (
+            isinstance(max_retries, bool)
+            or not isinstance(max_retries, int)
+            or max_retries < 0
+        ):
+            raise ValueError("max_retries must be a non-negative integer")
+        self._request_timeout_seconds = request_timeout_seconds
+        self._max_retries = max_retries
         self._model_info: dict[str, object] | None = None
         self._model_info_loaded = False
         if max_context_tokens is not None:
@@ -184,6 +200,8 @@ class LiteLLMProvider(LLMProvider):
             api_key=self._api_key,
             messages=_request_messages(request, self),
             stream=True,
+            timeout=self._request_timeout_seconds,
+            max_retries=self._max_retries,
             # Streamed responses omit usage unless it is requested
             # explicitly; it arrives in a final usage-only chunk.
             stream_options={"include_usage": True},

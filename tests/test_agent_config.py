@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agent_core import AgentConfig, MemoryConfig, ToolConfig, load_agent_config
+from agent_core import AgentConfig, MemoryConfig, ProviderRequestConfig, ToolConfig, load_agent_config
 
 
 ENABLED_TOOLS = {
@@ -28,6 +28,10 @@ class AgentConfigTest(unittest.TestCase):
             {
                 "max_same_tool_calls": 5,
                 "output_reserve_tokens": 100,
+                "provider": {
+                    "request_timeout_seconds": 300,
+                    "max_retries": 2,
+                },
                 "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
                 **fields,
             }
@@ -78,6 +82,10 @@ class AgentConfigTest(unittest.TestCase):
                 {
                     "max_same_tool_calls": 5,
                     "output_reserve_tokens": 100,
+                    "provider": {
+                        "request_timeout_seconds": 300,
+                        "max_retries": 2,
+                    },
                     "main_agent": {"tools": ENABLED_TOOLS},
                 }
             )
@@ -128,6 +136,55 @@ class AgentConfigTest(unittest.TestCase):
         )
 
         self.assertEqual(config.max_generation_tokens, 50)
+
+    def test_loads_provider_request_policy(self) -> None:
+        config = self.load(
+            {
+                "provider": {
+                    "request_timeout_seconds": 45,
+                    "max_retries": 4,
+                },
+                "main_agent": {"tools": ENABLED_TOOLS},
+            }
+        )
+
+        self.assertEqual(config.provider, ProviderRequestConfig(45, 4))
+
+    def test_defaults_provider_request_policy(self) -> None:
+        cases = (
+            (None, ProviderRequestConfig(300, 2)),
+            ({}, ProviderRequestConfig(300, 2)),
+            ({"request_timeout_seconds": 45}, ProviderRequestConfig(45, 2)),
+            ({"max_retries": 4}, ProviderRequestConfig(300, 4)),
+        )
+        for provider, expected in cases:
+            with self.subTest(provider=provider):
+                payload = {
+                    "max_same_tool_calls": 5,
+                    "output_reserve_tokens": 100,
+                    "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
+                    "main_agent": {"tools": ENABLED_TOOLS},
+                }
+                if provider is not None:
+                    payload["provider"] = provider
+                self.assertEqual(self.load_json(payload).provider, expected)
+
+    def test_rejects_invalid_provider_request_policy(self) -> None:
+        for provider in (
+            {"request_timeout_seconds": 0, "max_retries": 2},
+            {"request_timeout_seconds": True, "max_retries": 2},
+            {"request_timeout_seconds": 300, "max_retries": -1},
+            {"request_timeout_seconds": 300, "max_retries": True},
+            {"request_timeout_seconds": 300, "max_retries": 2, "extra": 1},
+        ):
+            with self.subTest(provider=provider):
+                with self.assertRaises(ValueError):
+                    self.load(
+                        {
+                            "provider": provider,
+                            "main_agent": {"tools": ENABLED_TOOLS},
+                        }
+                    )
 
     def test_defaults_generation_limit_to_none(self) -> None:
         config = self.load(
@@ -239,6 +296,10 @@ class AgentConfigTest(unittest.TestCase):
                 {
                     "max_same_tool_calls": 5,
                     "output_reserve_tokens": 100,
+                    "provider": {
+                        "request_timeout_seconds": 300,
+                        "max_retries": 2,
+                    },
                     "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
                 }
             )
@@ -311,6 +372,10 @@ class SubagentRoleConfigTest(unittest.TestCase):
                     {
                         "max_same_tool_calls": 5,
                         "output_reserve_tokens": 100,
+                        "provider": {
+                            "request_timeout_seconds": 300,
+                            "max_retries": 2,
+                        },
                         "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
                         "main_agent": {"tools": ENABLED_TOOLS},
                         "subagent_roles": roles,
