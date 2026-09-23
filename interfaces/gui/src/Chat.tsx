@@ -2,12 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent,
 import {
   AssistantRuntimeProvider, ComposerPrimitive, MessagePartPrimitive, MessagePrimitive,
   ThreadPrimitive, useAuiState, useExternalStoreRuntime,
-  type AppendMessage, type PartState, type ReasoningMessagePartProps, type ToolCallMessagePartProps,
+  type AppendMessage, type FileMessagePartProps, type PartState, type ReasoningMessagePartProps, type ToolCallMessagePartProps,
 } from "@assistant-ui/react";
 import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
-import { AlertTriangle, ArrowUp, Check, ChevronDown, ChevronRight, LoaderCircle, MessageCircleQuestion, Paperclip, ShieldCheck, Square, Terminal, X } from "lucide-react";
+import { AlertTriangle, ArrowUp, Check, ChevronDown, ChevronRight, FileText, LoaderCircle, MessageCircleQuestion, Paperclip, ShieldCheck, Square, Terminal, X } from "lucide-react";
 import remarkGfm from "remark-gfm";
-import { createScratchWorkspace, get, releaseActiveSession, selectWorkspace, sessionUrl, uploadAttachments, type ImageAttachment, type ModelOption, type Session } from "./api";
+import { createScratchWorkspace, get, releaseActiveSession, selectWorkspace, sessionUrl, uploadAttachments, type ModelOption, type Session, type UserAttachment } from "./api";
 import { SessionSocket } from "./session";
 import { applyMessage, isTurnActivity, toMessages, TURN_PROCESS_GROUP, turnProcessPartIndexes, type Feedback, type TranscriptItem } from "./transcript";
 import { runtimeIsActive, type ContextWindow, type Incoming, type PermissionPreset, type PlanSnapshot, type RuntimePhase, type UserQuestion } from "@nosis/protocol";
@@ -203,8 +203,15 @@ function PlanStatus({ plan, open, disabled, onOpenChange }: {
 function UserMessage() {
   return <MessagePrimitive.Root className="user-turn">
     <MessageTimestamp className="turn-timestamp" />
-    <div className="user-message"><MessagePrimitive.Parts /></div>
+    <div className="user-message"><MessagePrimitive.Parts components={{ File: FileAttachmentPart }} /></div>
   </MessagePrimitive.Root>;
+}
+
+function FileAttachmentPart({ data, filename, mimeType }: FileMessagePartProps) {
+  return <a className="message-file" href={data} download={filename} title={mimeType}>
+    <FileText size={18} />
+    <span>{filename || "附件"}</span>
+  </a>;
 }
 
 function MessageTimestamp({ className = "" }: { className?: string } = {}) {
@@ -277,12 +284,23 @@ function AssistantMessage() {
 
 function PendingAttachment({ file, onRemove }: { file: File; onRemove: () => void }) {
   const [url, setUrl] = useState("");
+  const image = file.type.startsWith("image/");
   useEffect(() => {
+    if (!image) return;
     const next = URL.createObjectURL(file);
     setUrl(next);
     return () => URL.revokeObjectURL(next);
-  }, [file]);
-  return <span className="attachment-chip"><img src={url} alt={file.name} /><span>{file.name}</span><button type="button" aria-label={`移除 ${file.name}`} onClick={onRemove}><X size={12} /></button></span>;
+  }, [file, image]);
+  return <span className={`attachment-chip ${image ? "image" : "file"}`}>
+    {image ? <img src={url} alt={file.name} /> : <><FileText size={20} /><span><strong>{file.name}</strong><small>{formatFileSize(file.size)}</small></span></>}
+    <button type="button" aria-label={`移除 ${file.name}`} onClick={onRemove}><X size={12} /></button>
+  </span>;
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function formatTokens(value: number): string {
@@ -707,7 +725,7 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
     if (runningRef.current) {
       const turnId = activeTurnIdRef.current;
       if (pendingFiles.length > 0) {
-        showToast({ kind: "toast", level: "info", text: "任务运行中不能发送图片；待发送内容已保留，请停止或等待当前任务结束。" });
+        showToast({ kind: "toast", level: "info", text: "任务运行中不能发送附件；待发送内容已保留，请停止或等待当前任务结束。" });
         return;
       }
       if (!turnId) return;
@@ -723,7 +741,7 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
     }
     const startsSession = !itemsRef.current.some((item) => item.role === "user" && item.origin !== "tool_media");
 
-    let attachments: ImageAttachment[] = [];
+    let attachments: UserAttachment[] = [];
     if (pendingFiles.length) {
       try {
       attachments = await uploadAttachments(pendingFiles, session.session_id);
@@ -829,15 +847,15 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
   }
 
   /**
-   * Browsers expose pasted screenshots/images through clipboardData.items,
-   * rather than the textarea's value.  Capture those files and feed them
+   * Browsers expose pasted files through clipboardData.items rather than the
+   * textarea's value. Capture those files and feed them
    * through the same pending-attachment queue used by the paperclip picker.
    * Keep normal text paste untouched; only suppress the browser default when
-   * the clipboard contains an image and no textual payload.
+   * the clipboard contains files and no textual payload.
    */
   function onPaste(event: ClipboardEvent<HTMLTextAreaElement>) {
     const files = Array.from(event.clipboardData.items)
-      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .filter((item) => item.kind === "file")
       .map((item) => item.getAsFile())
       .filter((file): file is File => file !== null);
     if (files.length === 0) return;
@@ -854,10 +872,10 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
 
   function onComposerSubmit(event: FormEvent<HTMLFormElement>) {
     if (!shouldBlockRunningAttachmentSubmit(runningRef.current, pendingFiles.length)) return;
-    // Stop assistant-ui before it clears the draft; images cannot be steered
+    // Stop assistant-ui before it clears the draft; attachments cannot be steered
     // into an already running turn, so the whole pending message stays intact.
     event.preventDefault();
-    showToast({ kind: "toast", level: "info", text: "任务运行中不能发送图片；待发送内容已保留，请停止或等待当前任务结束。" });
+    showToast({ kind: "toast", level: "info", text: "任务运行中不能发送附件；待发送内容已保留，请停止或等待当前任务结束。" });
   }
 
   function onCompositionStart() {
@@ -965,7 +983,7 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
             {running && !interactionActive && <button className="stop-button" aria-label="停止执行" onClick={() => { const turnId = activeTurnIdRef.current; if (turnId) socketRef.current?.send({ type: "cancel", turn_id: turnId }); }}><Square size={11} /> 停止</button>}
           </div>
         </div>}
-        {pendingFiles.length > 0 && <div className="attachment-list" aria-label="待发送图片">{pendingFiles.map((file, index) => <PendingAttachment key={`${file.name}-${file.lastModified}-${index}`} file={file} onRemove={() => setPendingFiles((files) => files.filter((_, itemIndex) => itemIndex !== index))} />)}</div>}
+        {pendingFiles.length > 0 && <div className="attachment-list" aria-label="待发送附件">{pendingFiles.map((file, index) => <PendingAttachment key={`${file.name}-${file.lastModified}-${index}`} file={file} onRemove={() => setPendingFiles((files) => files.filter((_, itemIndex) => itemIndex !== index))} />)}</div>}
         <ComposerPrimitive.Root className="composer" onSubmit={onComposerSubmit}>
           <div ref={workspacePickerRef} className="workspace-picker-wrap">
             <button type="button" className="workspace-picker" onClick={() => setWorkspaceEditing((value) => !value)} disabled={controlsDisabled || sessionRunning} aria-expanded={workspaceEditing}>
@@ -981,8 +999,8 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
             </div>}
           </div>
           <ComposerPrimitive.Input placeholder={question ? "请先回答上方问题…" : approval ? "请先处理上方确认…" : "Ask Nosis…"} aria-label="消息" rows={2} autoFocus submitMode="none" disabled={composerGate.inputDisabled} onKeyDown={onComposerKeyDown} onCompositionStart={onCompositionStart} onCompositionEnd={onCompositionEnd} onPaste={onPaste} /><div className="composer-bottom">
-          <button type="button" className="attachment-button" aria-label="添加图片" title="添加图片" disabled={controlsDisabled || sessionRunning} onClick={() => fileInputRef.current?.click()}><Paperclip size={15} /></button>
-          <input ref={fileInputRef} className="attachment-input" type="file" accept="image/*" multiple onChange={(event) => { setPendingFiles((files) => [...files, ...Array.from(event.target.files ?? [])]); event.currentTarget.value = ""; }} />
+          <button type="button" className="attachment-button" aria-label="添加附件" title="添加附件" disabled={controlsDisabled || sessionRunning} onClick={() => fileInputRef.current?.click()}><Paperclip size={15} /></button>
+          <input ref={fileInputRef} className="attachment-input" type="file" multiple onChange={(event) => { setPendingFiles((files) => [...files, ...Array.from(event.target.files ?? [])]); event.currentTarget.value = ""; }} />
           <label className="model-selector" title={providers.find((option) => option.id === displayedProvider)?.model}>
             <select aria-label="选择模型" value={displayedProvider} disabled={controlsDisabled || sessionRunning || providerSaving} onChange={(event) => changeProvider(event.target.value)}>
               {providers.map((option) => <option key={option.id} value={option.id}>{option.model}</option>)}

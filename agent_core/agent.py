@@ -13,7 +13,7 @@ from .llm import (
     with_generation_limit,
 )
 from .session import Message, Session, ToolExecutionStatus
-from .content import ImagePart
+from .content import AttachmentPart, ImagePart
 from .errors import ProviderProtocolError, runtime_error_info
 from .tool_result import ToolResultNormalizer
 from .tools import ToolCall, ToolExecutionContext, ToolResult, ToolSet
@@ -189,7 +189,7 @@ class Agent:
         self,
         user_input: str,
         on_event: Callable[[AgentEvent], None] | None = None,
-        attachments: tuple[ImagePart, ...] = (),
+        attachments: tuple[AttachmentPart, ...] = (),
         turn_id: str | None = None,
         turn_control: TurnControl | None = None,
     ) -> AgentRunResult:
@@ -235,7 +235,7 @@ class Agent:
         self,
         user_input: str,
         on_event: Callable[[AgentEvent], None] | None = None,
-        attachments: tuple[ImagePart, ...] = (),
+        attachments: tuple[AttachmentPart, ...] = (),
         turn_id: str | None = None,
         turn_control: TurnControl | None = None,
     ) -> AgentRunResult:

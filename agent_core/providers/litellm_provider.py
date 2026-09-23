@@ -14,7 +14,7 @@ from agent_core.llm import (
     ProviderCapabilities,
     TokenUsage,
 )
-from agent_core.content import ImagePart, TextPart
+from agent_core.content import FilePart, ImagePart, TextPart
 from agent_core.media import (
     UnsupportedImageError,
     encode_data_url,
@@ -445,6 +445,8 @@ def _content_to_provider_format(
         return None
     if all(isinstance(part, TextPart) for part in parts):
         return "".join(part.text for part in parts)
+    files = [part for part in parts if isinstance(part, FilePart)]
+    file_notice = _attached_files_notice(files)
     if not include_images:
         # This model cannot see an image, so the attachment is named rather
         # than sent. Naming the tool it does not have would only invite a
@@ -457,7 +459,12 @@ def _content_to_provider_format(
             else "Attached images (this model cannot read them):"
         )
         listed = "\n".join(f"- {path}" for path in paths)
-        return f"{text}\n\n{heading}\n{listed}"
+        sections = [text] if text else []
+        if paths:
+            sections.append(f"{heading}\n{listed}")
+        if file_notice:
+            sections.append(file_notice)
+        return "\n\n".join(sections)
     rendered: list[dict[str, object]] = []
     for part in parts:
         if isinstance(part, TextPart):
@@ -490,7 +497,29 @@ def _content_to_provider_format(
                     },
                 }
             )
+    if file_notice:
+        rendered.append({"type": "text", "text": file_notice})
     return rendered
+
+
+def _attached_files_notice(files: list[FilePart]) -> str:
+    if not files:
+        return ""
+    lines = [
+        "Attached files are available at these workspace-relative paths. "
+        "Use the available tools to inspect or process them as appropriate:"
+    ]
+    for part in files:
+        lines.append(
+            "- filename="
+            + json.dumps(part.filename, ensure_ascii=False)
+            + ", path="
+            + json.dumps(part.path, ensure_ascii=False)
+            + ", mime_type="
+            + json.dumps(part.mime_type, ensure_ascii=False)
+            + f", size_bytes={part.size_bytes}"
+        )
+    return "\n".join(lines)
 
 
 def _resolve_media_path(path: str, media_root: Path | None) -> Path:

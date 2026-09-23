@@ -58,7 +58,14 @@ from .errors import (
 )
 from .jobs import CancellationToken, JobCancelled, JobHandle, JobManager, JobUpdate
 from .llm import LLMProvider, LLMRequest, LLMResponse, TokenUsage, ProviderCapabilities
-from .content import Content, ContentPart, TextPart, ImagePart
+from .content import (
+    AttachmentPart,
+    Content,
+    ContentPart,
+    FilePart,
+    ImagePart,
+    TextPart,
+)
 from .media import (
     ImageInfo,
     MAX_IMAGE_BYTES,
@@ -207,6 +214,7 @@ __all__ = [
     "CompositeToolPolicy",
     "Content",
     "ContentPart",
+    "AttachmentPart",
     "ContextWindow",
     "ContextWindowEvent",
     "ContextCompressionConfig",
@@ -217,6 +225,7 @@ __all__ = [
     "EditFileTool",
     "ImageInfo",
     "ImagePart",
+    "FilePart",
     "HostCommandExecutor",
     "platform_shell_launcher",
     "JobCancelled",

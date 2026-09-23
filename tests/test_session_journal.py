@@ -3,6 +3,7 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from agent_core import (
+    FilePart,
     ImagePart,
     JsonlSessionStore,
     Message,
@@ -12,9 +13,44 @@ from agent_core import (
     ToolCall,
 )
 from agent_core.projection import project_context_units
+from agent_core.content import historical_content
 
 
 class SessionJournalTest(unittest.TestCase):
+    def test_file_attachment_is_journaled_and_replayed(self):
+        session = Session("s")
+        attachment = FilePart(
+            path=".nosis/attachments/report.pdf",
+            filename="report.pdf",
+            mime_type="application/pdf",
+            size_bytes=123,
+        )
+        session.begin_turn("turn-1")
+        session.add_item("user", "summarize", attachments=(attachment,))
+
+        replayed = Session("s")
+        for event in session.journal:
+            replayed.journal.append(event)
+            replayed.apply_event(event)
+
+        self.assertEqual(replayed.items[0].parts[1], attachment)
+        self.assertEqual(
+            session.journal[-1].payload["message"]["content"][1],
+            {
+                "type": "file",
+                "path": ".nosis/attachments/report.pdf",
+                "filename": "report.pdf",
+                "mime_type": "application/pdf",
+                "size_bytes": 123,
+            },
+        )
+        self.assertEqual(
+            historical_content(replayed.items[0].content),
+            "summarize\nAttached files:\n"
+            "- report.pdf (.nosis/attachments/report.pdf, application/pdf, "
+            "123 bytes)",
+        )
+
     def test_turn_failure_is_structured_and_replayed(self):
         session = Session("s")
         session.begin_turn("turn-1")

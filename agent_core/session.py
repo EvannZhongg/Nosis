@@ -5,7 +5,7 @@ from typing import Callable, Literal
 from threading import Lock
 from uuid import uuid4
 
-from .content import Content, ImagePart, TextPart, content_parts
+from .content import AttachmentPart, Content, FilePart, ImagePart, TextPart, content_parts
 from .errors import (
     RuntimeErrorInfo,
     runtime_error_from_dict,
@@ -536,7 +536,7 @@ class Session:
         tool_calls: tuple[ToolCall, ...] = (),
         tool_call_id: str | None = None,
         reasoning: str | None = None,
-        attachments: tuple[ImagePart, ...] = (),
+        attachments: tuple[AttachmentPart, ...] = (),
         origin: MessageOrigin = "conversation",
         user_source: UserAnchorSource = "user_input",
     ) -> None:
@@ -624,8 +624,19 @@ def message_from_dict(data: dict[str, object]) -> Message:
             elif part.get("type") == "image":
                 parts.append(
                     ImagePart(
-                        str(part.get("path", "")),
-                        str(part.get("mime_type", "image/png")),
+                        path=str(part["path"]),
+                        mime_type=str(part["mime_type"]),
+                        filename=str(part["filename"]),
+                        size_bytes=int(part["size_bytes"]),
+                    )
+                )
+            elif part.get("type") == "file":
+                parts.append(
+                    FilePart(
+                        path=str(part["path"]),
+                        filename=str(part["filename"]),
+                        mime_type=str(part["mime_type"]),
+                        size_bytes=int(part["size_bytes"]),
                     )
                 )
             else:
@@ -663,16 +674,21 @@ def _content_to_dict(message: Message) -> object:
         return None
     if all(isinstance(part, TextPart) for part in parts):
         return "".join(part.text for part in parts)
-    return [
-        {"type": "text", "text": part.text}
-        if isinstance(part, TextPart)
-        else {
-            "type": "image",
-            "path": part.path,
-            "mime_type": part.mime_type,
-        }
-        for part in parts
-    ]
+    result: list[dict[str, object]] = []
+    for part in parts:
+        if isinstance(part, TextPart):
+            result.append({"type": "text", "text": part.text})
+        else:
+            result.append(
+                {
+                    "type": part.type,
+                    "path": part.path,
+                    "filename": part.filename,
+                    "mime_type": part.mime_type,
+                    "size_bytes": part.size_bytes,
+                }
+            )
+    return result
 
 
 def _format_utc(value: datetime) -> str:

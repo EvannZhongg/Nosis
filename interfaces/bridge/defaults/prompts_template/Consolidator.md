@@ -47,6 +47,7 @@ When space is limited, prioritize user corrections and preferences, then solutio
 - Merge related facts into the smallest self-contained statement that preserves the information needed later.
 - The checkpoint should not grow unless newly qualifying information cannot be merged into or replace existing facts.
 - Prefer fewer complete facts over detailed narration. Do not preserve discussion history, intermediate attempts, or rationale unless it changes future actions.
+- Preserve useful `Attached files` entries, especially their exact paths and filenames, when they remain relevant to unfinished work.
 
 ## Output
 

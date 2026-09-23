@@ -1,6 +1,6 @@
 import type { ThreadMessageLike } from "@assistant-ui/react";
 import type { ContextWindow, Incoming, PermissionPreset, UserQuestion } from "@nosis/protocol";
-import { attachmentUrl, type SessionItem } from "./api";
+import { attachmentDownloadUrl, attachmentUrl, type SessionItem } from "./api";
 
 /** A transcript item, plus the streaming state the live turn needs. */
 export type TranscriptItem = SessionItem & { streaming?: boolean };
@@ -305,7 +305,18 @@ function itemParts(
   if (Array.isArray(item.content)) {
     for (const part of item.content) {
       if (part.type === "text") parts.push({ type: "text", text: part.text });
-      else parts.push({ type: "image", image: attachmentUrl(part.path, sessionId) } as unknown as Part);
+      else if (part.type === "image") parts.push({
+        type: "image",
+        image: attachmentUrl(part.path, sessionId),
+        filename: part.filename,
+      } as unknown as Part);
+      else parts.push({
+        type: "file",
+        data: attachmentDownloadUrl(part.path, part.filename, sessionId),
+        filename: part.filename,
+        mimeType: part.mime_type,
+        sourceType: "url",
+      } as unknown as Part);
     }
   }
   for (const call of item.tool_calls ?? []) {

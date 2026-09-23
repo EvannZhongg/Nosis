@@ -106,7 +106,14 @@ class ReadImageToolTest(unittest.TestCase):
 
         self.assertEqual(
             result.attachments,
-            (ImagePart(path="shot.png", mime_type="image/png"),),
+            (
+                ImagePart(
+                    path="shot.png",
+                    mime_type="image/png",
+                    filename="shot.png",
+                    size_bytes=(self.root / "shot.png").stat().st_size,
+                ),
+            ),
         )
         self.assertEqual(result.output["images"][0]["width"], 40)
         self.assertEqual(result.output["images"][0]["height"], 20)
@@ -243,7 +250,14 @@ class ToolMediaInjectionTest(unittest.TestCase):
         self.assertEqual(media[0].role, "user")
         self.assertEqual(
             [part for part in media[0].parts if isinstance(part, ImagePart)],
-            [ImagePart(path="a.png", mime_type="image/png")],
+            [
+                ImagePart(
+                    path="a.png",
+                    mime_type="image/png",
+                    filename="a.png",
+                    size_bytes=(self.root / "a.png").stat().st_size,
+                )
+            ],
         )
 
     def test_the_media_message_follows_every_tool_result(self) -> None:

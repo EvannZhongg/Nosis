@@ -9,7 +9,7 @@ from dataclasses import dataclass, replace
 from typing import Iterable
 
 from .config import AgentConfig
-from .content import ImagePart
+from .content import AttachmentPart, ImagePart
 from .llm import LLMProvider
 from .prompting import render_subagent_prompt
 from .session import Session
@@ -232,8 +232,8 @@ class SubagentRuntime:
         )
 
 
-def _latest_attachments(session: Session) -> tuple[ImagePart, ...]:
-    """Return the images the parent was last shown by the user.
+def _latest_attachments(session: Session) -> tuple[AttachmentPart, ...]:
+    """Return the attachments the parent was last shown by the user.
 
     Only what the person actually attached is inherited. A message the
     runtime synthesized to carry a tool's images belongs to the parent's
@@ -244,6 +244,6 @@ def _latest_attachments(session: Session) -> tuple[ImagePart, ...]:
     for item in reversed(session.items):
         if item.is_user_authored:
             return tuple(
-                part for part in item.parts if isinstance(part, ImagePart)
+                part for part in item.parts if isinstance(part, AttachmentPart)
             )
     return ()

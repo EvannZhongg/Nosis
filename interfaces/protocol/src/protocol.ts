@@ -15,7 +15,23 @@ export type ToolCall = {
   arguments: { readonly [key: string]: JSONValue };
 };
 
-export type ImageAttachment = { type: 'image'; path: string; mime_type: string };
+export type ImageAttachment = {
+  type: 'image';
+  path: string;
+  filename: string;
+  mime_type: string;
+  size_bytes: number;
+};
+
+export type FileAttachment = {
+  type: 'file';
+  path: string;
+  filename: string;
+  mime_type: string;
+  size_bytes: number;
+};
+
+export type UserAttachment = ImageAttachment | FileAttachment;
 
 export type ProtocolError = {
   type: string;
@@ -125,7 +141,8 @@ export type SessionSummary = {
 
 export type SessionContentPart =
   | { type: 'text'; text: string }
-  | { type: 'image'; path: string; mime_type: string };
+  | ImageAttachment
+  | FileAttachment;
 
 /**
  * One stored conversation item, as the Session journal holds it.
@@ -295,7 +312,7 @@ export type Outgoing =
       // Omitted to use the provider selected in the configuration file.
       provider?: string;
     }
-  | { type: 'user_turn'; turn_id: string; text: string; attachments?: ImageAttachment[] }
+  | { type: 'user_turn'; turn_id: string; text: string; attachments?: UserAttachment[] }
   | { type: 'user_steer'; turn_id: string; steer_id: string; text: string }
   | { type: 'approval_response'; request_id: string; approved: boolean }
   | { type: 'permission_set'; preset: PermissionPreset }

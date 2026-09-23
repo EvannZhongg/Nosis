@@ -47,7 +47,10 @@ from agent_core import (
     TurnControl,
     Workspace,
     WorkspaceInstructions,
+    AttachmentPart,
+    FilePart,
     ImagePart,
+    UnsupportedImageError,
     Schedule,
     ScheduledRun,
     builtin_catalog,
@@ -1301,29 +1304,54 @@ class Bridge:
         self._close_execution_plane()
         if self._owns_scheduler:
             self._scheduler.close()
-def _parse_attachments(value: object, workspace: Workspace) -> tuple[ImagePart, ...]:
+def _parse_attachments(
+    value: object,
+    workspace: Workspace,
+) -> tuple[AttachmentPart, ...]:
     if value is None:
         return ()
     if not isinstance(value, list):
         raise ValueError("user_turn.attachments must be an array")
     result = []
     for item in value:
-        if not isinstance(item, dict) or item.get("type") != "image":
-            raise ValueError("attachments must contain image objects")
+        if not isinstance(item, dict) or item.get("type") not in {"image", "file"}:
+            raise ValueError("attachments must contain image or file objects")
         path = item.get("path")
         if not isinstance(path, str) or not path:
-            raise ValueError("image attachment path must be a non-empty string")
+            raise ValueError("attachment path must be a non-empty string")
         resolved = workspace.resolve_path(path)
-        # The media type is taken from the file rather than the client's
-        # claim: a provider handed the wrong one rejects the request, and
-        # the size limit belongs on every route into the context.
-        info = probe_image(resolved)
-        result.append(
-            ImagePart(
-                path=path_for_comparison(resolved).relative_to(
-                    path_for_comparison(workspace.path)
-                ).as_posix(),
-                mime_type=info.mime_type,
+        if not resolved.is_file():
+            raise ValueError(f"attachment does not exist: {path}")
+        filename = item.get("filename")
+        mime_type = item.get("mime_type")
+        if not isinstance(filename, str) or not filename:
+            raise ValueError("attachment filename must be a non-empty string")
+        if not isinstance(mime_type, str) or not mime_type:
+            raise ValueError("attachment mime_type must be a non-empty string")
+        stored_path = path_for_comparison(resolved).relative_to(
+            path_for_comparison(workspace.path)
+        ).as_posix()
+        try:
+            image_info = probe_image(resolved, max_bytes=None)
+        except UnsupportedImageError:
+            image_info = None
+        if image_info is not None:
+            info = probe_image(resolved)
+            result.append(
+                ImagePart(
+                    path=stored_path,
+                    mime_type=info.mime_type,
+                    filename=filename,
+                    size_bytes=info.size_bytes,
+                )
             )
-        )
+        else:
+            result.append(
+                FilePart(
+                    path=stored_path,
+                    filename=filename,
+                    mime_type=mime_type,
+                    size_bytes=resolved.stat().st_size,
+                )
+            )
     return tuple(result)

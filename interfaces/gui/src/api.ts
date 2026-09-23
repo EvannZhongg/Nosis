@@ -1,4 +1,4 @@
-import type { ContextWindow, PermissionPreset, PlanSnapshot, SessionItem, SessionSummary } from "@nosis/protocol";
+import type { ContextWindow, PermissionPreset, PlanSnapshot, SessionItem, SessionSummary, UserAttachment } from "@nosis/protocol";
 import type { SettingsSnapshot } from "@nosis/protocol";
 
 export type { SessionItem, SessionSummary };
@@ -50,7 +50,7 @@ export type MemorySnapshot = {
   global: MemoryDocument;
   workspaces: { workspace: string; memory: MemoryDocument }[];
 };
-export type ImageAttachment = { type: "image"; path: string; mime_type: string };
+export type { UserAttachment };
 export type Directory = {
   root: string;
   path: string;
@@ -136,7 +136,7 @@ export async function createScratchWorkspace(sessionId: string): Promise<string>
   return (await response.json() as { workspace: string }).workspace;
 }
 
-export async function uploadAttachments(files: File[], sessionId?: string): Promise<ImageAttachment[]> {
+export async function uploadAttachments(files: File[], sessionId?: string): Promise<UserAttachment[]> {
   const body = new FormData();
   for (const file of files) body.append("files", file, file.name);
   const query = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : "";
@@ -145,7 +145,7 @@ export async function uploadAttachments(files: File[], sessionId?: string): Prom
     const error = await response.json();
     throw new Error(error.detail ?? `上传失败 (${response.status})`);
   }
-  const data = await response.json() as { attachments: ImageAttachment[] };
+  const data = await response.json() as { attachments: UserAttachment[] };
   return data.attachments;
 }
 
@@ -163,4 +163,13 @@ export function attachmentUrl(path: string, sessionId?: string): string {
     return `/api/workspace-image${query}${separator}path=${encodeURIComponent(path)}`;
   }
   return path;
+}
+
+export function attachmentDownloadUrl(path: string, filename: string, sessionId?: string): string {
+  const query = new URLSearchParams();
+  if (sessionId) query.set("session_id", sessionId);
+  query.set("download_name", filename);
+  const prefix = ".nosis/attachments/";
+  if (!path.startsWith(prefix)) return path;
+  return `/api/attachments/${encodeURIComponent(path.slice(prefix.length))}?${query}`;
 }

@@ -480,6 +480,35 @@ describe("toMessages", () => {
     }[];
   }
 
+  it("renders a stored file attachment as a downloadable file part", () => {
+    const messages = toMessages([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "summarize this" },
+          {
+            type: "file",
+            path: ".nosis/attachments/report.pdf",
+            filename: "report.pdf",
+            mime_type: "application/pdf",
+            size_bytes: 123,
+          },
+        ],
+      },
+    ], "session-1");
+
+    expect(messages[0].content).toEqual([
+      { type: "text", text: "summarize this" },
+      {
+        type: "file",
+        data: "/api/attachments/report.pdf?session_id=session-1&download_name=report.pdf",
+        filename: "report.pdf",
+        mimeType: "application/pdf",
+        sourceType: "url",
+      },
+    ]);
+  });
+
   it("renders stored reasoning before the answer of the same item", () => {
     const messages = toMessages([
       { role: "assistant", content: null, reasoning: "weighing the options", tool_calls: [TOOL_CALL] },

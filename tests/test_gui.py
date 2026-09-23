@@ -1868,25 +1868,42 @@ class GuiTest(unittest.TestCase):
             ).json()
 
         attachment = data["attachments"][0]
+        self.assertEqual(attachment["type"], "image")
         self.assertEqual(attachment["mime_type"], "image/jpeg")
+        self.assertEqual(attachment["filename"], "photo.png")
+        self.assertGreater(attachment["size_bytes"], 0)
         self.assertTrue(attachment["path"].endswith(".jpg"))
         self.assertTrue(
             (self.root / attachment["path"]).is_file(),
             attachment["path"],
         )
 
-    def test_upload_rejects_a_file_that_is_not_an_image(self) -> None:
+    def test_upload_accepts_an_arbitrary_file(self) -> None:
         with self.client() as client:
             response = client.post(
                 "/api/attachments",
-                files=[("files", ("notes.png", b"Hello Nosis", "image/png"))],
+                files=[
+                    (
+                        "files",
+                        ("archive.custom", b"Hello Nosis", "application/x-custom"),
+                    )
+                ],
             )
 
-        self.assertEqual(response.status_code, 415)
+        self.assertEqual(response.status_code, 200)
+        attachment = response.json()["attachments"][0]
         self.assertEqual(
-            list((self.root / ".nosis" / "attachments").iterdir()),
-            [],
+            attachment,
+            {
+                "type": "file",
+                "path": attachment["path"],
+                "filename": "archive.custom",
+                "mime_type": "application/x-custom",
+                "size_bytes": 11,
+            },
         )
+        self.assertTrue(attachment["path"].endswith(".custom"))
+        self.assertEqual((self.root / attachment["path"]).read_bytes(), b"Hello Nosis")
 
     def test_rejects_foreign_origins_and_hosts(self) -> None:
         with self.client(FakeBridge()) as client:

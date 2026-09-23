@@ -10,7 +10,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
-from agent_core.content import ImagePart, TextPart
+from agent_core.content import FilePart, ImagePart, TextPart
 from agent_core.session import Message, Session
 from agent_core.session_store import JsonlSessionStore
 from agent_core.subagent import _latest_attachments
@@ -69,6 +69,17 @@ class ToolMediaInheritanceTest(unittest.TestCase):
         self.assertEqual(
             _latest_attachments(session), (ImagePart(path="new.png"),)
         )
+
+    def test_a_file_attachment_is_inherited_by_the_child(self) -> None:
+        attachment = FilePart(
+            path=".nosis/attachments/report.pdf",
+            filename="report.pdf",
+            mime_type="application/pdf",
+            size_bytes=123,
+        )
+        session = self.session_with(self.user_message(attachment))
+
+        self.assertEqual(_latest_attachments(session), (attachment,))
 
 
 class ToolMediaPersistenceTest(unittest.TestCase):

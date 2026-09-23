@@ -74,4 +74,9 @@ def resolve_image(
         ).as_posix()
     except ValueError:
         stored = str(resolved)
-    return ImagePart(path=stored, mime_type=info.mime_type), info
+    return ImagePart(
+        path=stored,
+        mime_type=info.mime_type,
+        filename=resolved.name,
+        size_bytes=info.size_bytes,
+    ), info

@@ -945,43 +945,53 @@ def create_app(
         files: list[UploadFile] = File(...),
         session_id: str | None = None,
     ) -> dict[str, object]:
-        """Persist browser images as workspace-relative attachment paths."""
+        """Persist browser files as workspace-relative attachment paths."""
         current_workspace = session_workspace(session_id)
         attachment_root = (current_workspace.path / ".nosis" / "attachments").resolve()
         attachment_root.mkdir(parents=True, exist_ok=True)
         attachments = []
         for upload in files:
-            # The bytes decide the type, not the media type the browser
-            # declared: the same probe used on the way into the model's
-            # context is what accepts the file here, and the extension it
-            # reports is what the stored copy is named after.
             path = attachment_root / uuid4().hex
             try:
                 with path.open("wb") as target:
                     shutil.copyfileobj(upload.file, target)
-                # No size limit: a large image is still worth showing, and
-                # the 5 MiB ceiling belongs to the model-bound route, which
-                # rejects it with a message naming the actual size.
-                info = probe_image(path, max_bytes=None)
-            except UnsupportedImageError as error:
-                path.unlink(missing_ok=True)
-                raise HTTPException(
-                    status_code=415, detail="只能上传图片附件。"
-                ) from error
             except OSError as error:
                 path.unlink(missing_ok=True)
                 raise HTTPException(status_code=500, detail=str(error)) from error
-            named = path.with_name(path.name + image_extension(info.mime_type))
+            filename = Path(upload.filename or "attachment").name
+            try:
+                info = probe_image(path, max_bytes=None)
+            except UnsupportedImageError:
+                info = None
+            suffix = (
+                image_extension(info.mime_type)
+                if info is not None
+                else Path(filename).suffix
+            )
+            named = path.with_name(path.name + suffix)
             path.replace(named)
+            mime_type = (
+                info.mime_type
+                if info is not None
+                else mimetypes.guess_type(filename)[0]
+                or upload.content_type
+                or "application/octet-stream"
+            )
             attachments.append({
-                "type": "image",
+                "type": "image" if info is not None else "file",
                 "path": f".nosis/attachments/{named.name}",
-                "mime_type": info.mime_type,
+                "filename": filename,
+                "mime_type": mime_type,
+                "size_bytes": named.stat().st_size,
             })
         return {"attachments": attachments}
 
     @app.get("/api/attachments/{filename}")
-    def get_attachment(filename: str, session_id: str | None = None) -> FileResponse:
+    def get_attachment(
+        filename: str,
+        session_id: str | None = None,
+        download_name: str | None = None,
+    ) -> FileResponse:
         attachment_root = (session_workspace(session_id).path / ".nosis" / "attachments").resolve()
         path = (attachment_root / filename).resolve()
         try:
@@ -992,7 +1002,15 @@ def create_app(
             raise HTTPException(status_code=404, detail="附件不存在。") from error
         if not path.is_file():
             raise HTTPException(status_code=404, detail="附件不存在。")
-        return FileResponse(path, media_type=mimetypes.guess_type(path.name)[0])
+        try:
+            info = probe_image(path, max_bytes=None)
+        except UnsupportedImageError:
+            return FileResponse(
+                path,
+                media_type="application/octet-stream",
+                filename=Path(download_name or filename).name,
+            )
+        return FileResponse(path, media_type=info.mime_type)
 
     @app.get("/api/workspace-image")
     def get_workspace_image(

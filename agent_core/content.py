@@ -1,8 +1,8 @@
-"""Provider-neutral multimodal message parts.
+"""Provider-neutral message parts.
 
-Images are represented by a workspace path until a provider request is
-constructed.  This keeps session logs small and avoids persisting encoded
-media in the runtime protocol.
+Attachments are represented by workspace paths until a provider request is
+constructed. This keeps session logs small and leaves file interpretation to
+the Agent and its Tools.
 """
 
 from dataclasses import dataclass, field
@@ -19,10 +19,22 @@ class TextPart:
 class ImagePart:
     path: str = ""
     mime_type: str = "image/png"
+    filename: str = ""
+    size_bytes: int = 0
     type: Literal["image"] = field(default="image", init=False)
 
 
-ContentPart: TypeAlias = TextPart | ImagePart
+@dataclass(frozen=True)
+class FilePart:
+    path: str = ""
+    filename: str = ""
+    mime_type: str = "application/octet-stream"
+    size_bytes: int = 0
+    type: Literal["file"] = field(default="file", init=False)
+
+
+AttachmentPart: TypeAlias = ImagePart | FilePart
+ContentPart: TypeAlias = TextPart | AttachmentPart
 Content: TypeAlias = str | tuple[ContentPart, ...] | None
 
 
@@ -48,10 +60,22 @@ def historical_content(content: Content) -> str | None:
     Media is intentionally omitted: historical context must not cause the
     same image bytes to be uploaded again on every model call.
     """
+    parts = content_parts(content)
     text = text_content(content)
-    has_image = any(isinstance(part, ImagePart) for part in content_parts(content))
+    has_image = any(isinstance(part, ImagePart) for part in parts)
+    files = [part for part in parts if isinstance(part, FilePart)]
+    sections = [text] if text else []
     if text and has_image:
-        return f"{text}\n[Image attachment omitted from historical context]"
-    if has_image:
-        return "[Image attachment omitted from historical context]"
-    return text
+        sections.append("[Image attachment omitted from historical context]")
+    elif has_image:
+        sections.append("[Image attachment omitted from historical context]")
+    if files:
+        sections.append(
+            "Attached files:\n"
+            + "\n".join(
+                f"- {part.filename} ({part.path}, {part.mime_type}, "
+                f"{part.size_bytes} bytes)"
+                for part in files
+            )
+        )
+    return "\n".join(sections) or None

@@ -298,6 +298,8 @@ def event_to_message(
                     "type": "image",
                     "path": part.path,
                     "mime_type": part.mime_type,
+                    "filename": part.filename,
+                    "size_bytes": part.size_bytes,
                 }
                 for part in event.attachments
             ],

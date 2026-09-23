@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agent_core import (
+    FilePart,
     ImagePart,
     LLMRequest,
     ProviderCapabilities,
@@ -49,6 +50,44 @@ USAGE = type(
 
 
 class LiteLLMProviderTest(unittest.TestCase):
+    def test_describes_attached_files_as_workspace_paths(self) -> None:
+        from agent_core.providers.litellm_provider import (
+            _content_to_provider_format,
+        )
+
+        content = _content_to_provider_format(
+            Message(
+                role="user",
+                content=(
+                    TextPart(text="summarize this"),
+                    FilePart(
+                        path=".nosis/attachments/report.pdf",
+                        filename="Q3 report.pdf",
+                        mime_type="application/pdf",
+                        size_bytes=12345,
+                    ),
+                ),
+            )
+        )
+
+        self.assertEqual(
+            content,
+            [
+                {"type": "text", "text": "summarize this"},
+                {
+                    "type": "text",
+                    "text": (
+                        "Attached files are available at these workspace-relative "
+                        "paths. Use the available tools to inspect or process them "
+                        "as appropriate:\n"
+                        '- filename="Q3 report.pdf", '
+                        'path=".nosis/attachments/report.pdf", '
+                        'mime_type="application/pdf", size_bytes=12345'
+                    ),
+                },
+            ],
+        )
+
     @patch("agent_core.providers.litellm_provider.completion")
     def test_stream_yields_to_a_main_thread_interrupt_while_waiting(
         self,

@@ -57,7 +57,7 @@ from agent_core.projection import project_context_units
 from agent_core.providers import LiteLLMProvider
 from agent_core.subagent import vision_aware_tool_names
 from agent_core.tools.config import ROLE_TOOL_NAMES, TOOL_NAMES
-from interfaces.bridge.bridge import Bridge, Cancelled
+from interfaces.bridge.bridge import Bridge, Cancelled, _parse_attachments
 from interfaces.bridge.execution_plane import ExecutionPlane
 from interfaces.bridge.protocol import (
     attachment_replaced_message,
@@ -79,6 +79,70 @@ class ExecutionPlaneTest(unittest.TestCase):
     def test_uses_identity_equality_and_hashing(self) -> None:
         self.assertIs(ExecutionPlane.__eq__, object.__eq__)
         self.assertIs(ExecutionPlane.__hash__, object.__hash__)
+
+
+class AttachmentParsingTest(unittest.TestCase):
+    def test_parses_an_arbitrary_file_from_its_actual_workspace_state(self) -> None:
+        from agent_core import FilePart
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / ".nosis" / "attachments" / "data.bin"
+            path.parent.mkdir(parents=True)
+            path.write_bytes(b"binary data")
+
+            attachments = _parse_attachments(
+                [
+                    {
+                        "type": "file",
+                        "path": ".nosis/attachments/data.bin",
+                        "filename": "source.xlsx",
+                        "mime_type": "application/vnd.ms-excel",
+                        "size_bytes": 1,
+                    }
+                ],
+                Workspace(root),
+            )
+
+        self.assertEqual(
+            attachments,
+            (
+                FilePart(
+                    path=".nosis/attachments/data.bin",
+                    filename="source.xlsx",
+                    mime_type="application/vnd.ms-excel",
+                    size_bytes=11,
+                ),
+            ),
+        )
+
+    def test_image_bytes_override_a_file_type_claim(self) -> None:
+        from agent_core import ImagePart
+        from tests.test_media import png_bytes
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / ".nosis" / "attachments" / "upload.bin"
+            path.parent.mkdir(parents=True)
+            path.write_bytes(png_bytes(4, 3))
+
+            attachments = _parse_attachments(
+                [
+                    {
+                        "type": "file",
+                        "path": ".nosis/attachments/upload.bin",
+                        "filename": "diagram.bin",
+                        "mime_type": "application/octet-stream",
+                        "size_bytes": 1,
+                    }
+                ],
+                Workspace(root),
+            )
+
+        self.assertEqual(attachments[0].type, "image")
+        self.assertIsInstance(attachments[0], ImagePart)
+        self.assertEqual(attachments[0].mime_type, "image/png")
+        self.assertEqual(attachments[0].filename, "diagram.bin")
 
 
 class ProtocolTest(unittest.TestCase):
