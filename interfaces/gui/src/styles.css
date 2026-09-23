@@ -31,6 +31,7 @@ svg { flex-shrink: 0; }
 .scratch-chat { display: flex; align-items: center; gap: 9px; padding: 8px 13px; border: 0; border-radius: 7px; background: transparent; color: #7b8494; font-size: 12px; text-align: left; }
 .scratch-chat:hover { background: #eceef3; color: #526486; }
 .section-label { margin: 31px 10px 12px; font-size: 11px; color: #9399a6; letter-spacing: .5px; }
+.chat-section-label { margin-top: 24px; }
 .session-list { flex: 1; overflow-y: auto; }
 .session-row { display: flex; align-items: center; margin-bottom: 4px; border-radius: 6px; }
 .session-button { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; width: 100%; padding: 11px 10px; border: 0; border-radius: 6px; background: transparent; color: #737b8b; text-align: left; font-size: 12px; }
@@ -51,6 +52,7 @@ svg { flex-shrink: 0; }
 .workspace-new-session { display: grid; place-items: center; width: 26px; height: 26px; margin-right: 2px; border: 0; border-radius: 5px; background: transparent; color: #9aa4b5; }
 .workspace-new-session:hover { background: #dfe3eb; color: #526486; }
 .workspace-group-title small { display: none; }
+.chat-session-group { padding-bottom: 14px; }
 .session-empty { font-size: 12px; margin: 16px 10px; color: #999fab; }
 .sidebar-footer { display: flex; align-items: center; gap: 8px; height: 54px; border-top: 1px solid #e6e8ed; font-size: 10px; color: #9198a4; padding: 0 9px; }
 .status-dot { display: inline-block; height: 6px; width: 6px; background: #6f9f87; border-radius: 50%; flex-shrink: 0; }

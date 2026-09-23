@@ -33,7 +33,7 @@ export function App() {
   const [defaultProvider, setDefaultProvider] = useState("");
   const [providerBySession, setProviderBySession] = useState<Record<string, string>>({});
   const [activeTurnIds, setActiveTurnIds] = useState<Set<string>>(new Set());
-  const [collapsedWorkspaces, setCollapsedWorkspaces] = useState<Set<string>>(new Set());
+  const [expandedWorkspaces, setExpandedWorkspaces] = useState<Set<string>>(new Set());
   const [settingsSection, setSettingsSection] = useState<SettingsSection | null>(null);
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
   const [creatingScratch, setCreatingScratch] = useState(false);
@@ -134,6 +134,22 @@ export function App() {
     () => chatSessions.find((item) => item.session_id === selectedSessionId) ?? chatSessions[0],
     [chatSessions, selectedSessionId],
   );
+  const selectedProjectWorkspace = useMemo(() => {
+    const workspace = selectedSession?.workspace;
+    return workspace && sessionGroups.some((group) => group.workspace === workspace && !group.scratch)
+      ? workspace
+      : null;
+  }, [selectedSession?.workspace, sessionGroups]);
+
+  useEffect(() => {
+    if (!selectedProjectWorkspace) return;
+    setExpandedWorkspaces((previous) => {
+      if (previous.has(selectedProjectWorkspace)) return previous;
+      const next = new Set(previous);
+      next.add(selectedProjectWorkspace);
+      return next;
+    });
+  }, [selectedProjectWorkspace]);
 
   async function selectSession(id: string) {
     setSettingsSection(null);
@@ -215,6 +231,8 @@ export function App() {
   }
 
   const sessions = sessionGroups.flatMap((group) => group.sessions);
+  const projectGroups = sessionGroups.filter((group) => !group.scratch);
+  const scratchSessions = sessionGroups.filter((group) => group.scratch).flatMap((group) => group.sessions);
   const selectedTitle = sessions.find((item) => item.session_id === selectedSessionId)?.title ?? "New chat";
   const busy = Boolean(busyBySession[selectedSessionId]);
   const contextWindow = contextBySession[selectedSessionId] ?? selectedSession?.context_window ?? null;
@@ -231,6 +249,7 @@ export function App() {
     <div className="settings-popover-label">Settings</div>
     {settingsItems.map((item) => { const Icon = item.icon; return <button type="button" role="menuitem" key={item.id} onClick={() => { setSettingsSection(item.id); setSettingsMenuOpen(false); }}><Icon size={15} /><span><strong>{item.label}</strong><small>{item.description}</small></span><ChevronRight size={13} /></button>; })}
   </div>;
+  const sessionRow = (item: WorkspaceSessions["sessions"][number]) => <div className={`session-row ${item.session_id === selectedSessionId ? "selected" : ""}`} key={item.session_id}><button className="session-button" title={item.title} disabled={loadingSessionId === item.session_id} onClick={() => void selectSession(item.session_id)}>{busyBySession[item.session_id] ? <LoaderCircle size={15} className="spin" role="img" aria-label="正在执行任务" /> : <MessageSquare size={15} />}<span>{item.title}</span></button><button className="delete-session" aria-label={`删除会话 ${item.title}`} title="删除会话" disabled={loadingSessionId === item.session_id || Boolean(busyBySession[item.session_id])} onClick={(event) => { event.stopPropagation(); void removeSession(item.session_id); }}><Trash2 size={14} /></button></div>;
 
   return (
     <div className={`app-shell ${sessionsCollapsed ? "sessions-collapsed" : ""} ${workspaceCollapsed ? "workspace-collapsed" : ""}`}>
@@ -248,23 +267,28 @@ export function App() {
             <button className="new-chat" onClick={() => createNewChat()}><Plus size={17} /> New chat</button>
             <button className="scratch-chat" disabled={creatingScratch} onClick={() => void createScratchChat()}>{creatingScratch ? <LoaderCircle size={15} className="spin" /> : <Plus size={15} />} Temporary</button>
           </div>
-          <div className="section-label">Projects</div>
           <nav className="session-list">
-            {sessionGroups.map((group) => {
-              const collapsed = collapsedWorkspaces.has(group.workspace);
+            <div className="section-label">Projects</div>
+            {projectGroups.map((group) => {
+              const expanded = expandedWorkspaces.has(group.workspace);
               return <section className="workspace-group" key={group.workspace}>
                 <div className="workspace-group-header">
-                  <button className="workspace-group-title" title={group.workspace} aria-expanded={!collapsed} onClick={() => setCollapsedWorkspaces((previous) => {
+                  <button className="workspace-group-title" title={group.workspace} aria-expanded={expanded} onClick={() => setExpandedWorkspaces((previous) => {
                     const next = new Set(previous);
-                    if (collapsed) next.delete(group.workspace); else next.add(group.workspace);
+                    if (expanded) next.delete(group.workspace); else next.add(group.workspace);
                     return next;
-                  })}><span className="workspace-chevron">{collapsed ? <ChevronRight size={13} /> : <ChevronDown size={13} />}</span><span className="workspace-group-name">{group.scratch ? `Temporary · ${(group.workspace.split(/[\\/]/).pop() || "workspace").slice(0, 8)}` : group.workspace.split(/[\\/]/).pop() || group.workspace}</span><small>{group.workspace}</small></button>
+                  })}><span className="workspace-chevron">{expanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}</span><span className="workspace-group-name">{group.workspace.split(/[\\/]/).pop() || group.workspace}</span><small>{group.workspace}</small></button>
                   <button className="workspace-new-session" aria-label={`在 ${group.workspace} 中新建会话`} title="在此工作区新建会话" onClick={() => createNewChat(group.workspace)}><Plus size={14} /></button>
                 </div>
-                {!collapsed && group.sessions.map((item) => <div className={`session-row ${item.session_id === selectedSessionId ? "selected" : ""}`} key={item.session_id}><button className="session-button" title={item.title} disabled={loadingSessionId === item.session_id} onClick={() => void selectSession(item.session_id)}>{busyBySession[item.session_id] ? <LoaderCircle size={15} className="spin" role="img" aria-label="正在执行任务" /> : <MessageSquare size={15} />}<span>{item.title}</span></button><button className="delete-session" aria-label={`删除会话 ${item.title}`} title="删除会话" disabled={loadingSessionId === item.session_id || Boolean(busyBySession[item.session_id])} onClick={(event) => { event.stopPropagation(); void removeSession(item.session_id); }}><Trash2 size={14} /></button></div>)}
+                {expanded && group.sessions.map(sessionRow)}
               </section>;
             })}
-            {sessionGroups.length === 0 && <p className="session-empty">从一段对话开始。</p>}
+            {projectGroups.length === 0 && <p className="session-empty">暂无项目会话。</p>}
+            <div className="section-label chat-section-label">Chat</div>
+            <section className="chat-session-group">
+              {scratchSessions.map(sessionRow)}
+              {scratchSessions.length === 0 && <p className="session-empty">暂无聊天。</p>}
+            </section>
           </nav>
           <div className="settings-menu-wrap" ref={settingsMenuRef}>
             {settingsPopover}
