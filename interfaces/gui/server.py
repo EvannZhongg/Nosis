@@ -958,7 +958,7 @@ def create_app(
             signature = base64.urlsafe_b64decode(
                 encoded_signature + "=" * (-len(encoded_signature) % 4)
             )
-        except (UnicodeEncodeError, ValueError) as error:
+        except ValueError as error:
             raise HTTPException(status_code=404, detail="图片链接无效。") from error
         expected = hmac.new(
             image_url_secret, payload_bytes, hashlib.sha256
@@ -971,7 +971,7 @@ def create_app(
                     encoded + "=" * (-len(encoded) % 4)
                 )
             )
-        except (UnicodeDecodeError, ValueError) as error:
+        except ValueError as error:
             raise HTTPException(status_code=404, detail="图片链接无效。") from error
         if not isinstance(payload, dict):
             raise HTTPException(status_code=404, detail="图片链接无效。")

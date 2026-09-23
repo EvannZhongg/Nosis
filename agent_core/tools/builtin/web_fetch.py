@@ -3,37 +3,24 @@
 from __future__ import annotations
 
 import html
-import ipaddress
-import json
 import re
 from collections.abc import Iterable
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urljoin
 
 import httpx
 
 from ..base import JSONValue, Tool, ToolDefinition
 from ..budget import MAX_TOOL_RESULT_CHARS, escaped_length, envelope_chars
 from ..context import ToolExecutionContext
+from ...public_url import require_public_url
 
 
 MAX_REDIRECTS = 5
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 REQUEST_TIMEOUT_SECONDS = 20.0
-PUBLIC_DNS_ENDPOINT = "https://cloudflare-dns.com/dns-query"
-PUBLIC_DNS_TIMEOUT_SECONDS = 5.0
 USER_AGENT = "Nosis/1.0 web_fetch"
 _RESULT_RESERVE_CHARS = 200
 _CHUNK_SIZE = 64 * 1024
-_NON_PUBLIC_NETWORKS = tuple(
-    ipaddress.ip_network(network)
-    for network in (
-        "0.0.0.0/8",
-        "100.64.0.0/10",  # Shared address space is not publicly routable.
-        "192.0.0.0/24",
-        "198.18.0.0/15",
-        "240.0.0.0/4",
-    )
-)
 
 
 class WebFetchTool(Tool):
@@ -95,7 +82,7 @@ def _fetch(
     ) as client:
         current = url
         for _ in range(MAX_REDIRECTS + 1):
-            _require_public_url(current)
+            require_public_url(current)
             with client.stream(
                 "GET",
                 current,
@@ -134,84 +121,6 @@ def _read_bounded(response) -> tuple[bytes, bool]:
         if size == MAX_RESPONSE_BYTES:
             return b"".join(chunks), True
     return b"".join(chunks), False
-
-
-def _require_public_url(url: str) -> None:
-    parsed = urlsplit(url)
-    if parsed.scheme not in {"http", "https"}:
-        raise ValueError("web_fetch only accepts http(s) URLs")
-    if parsed.username is not None or parsed.password is not None:
-        raise ValueError("web_fetch does not accept URLs with credentials")
-    try:
-        host = parsed.hostname
-        _ = parsed.port  # Validate an explicitly supplied port.
-    except ValueError as error:
-        raise ValueError(f"web_fetch received an invalid URL: {url!r}") from error
-    if not host:
-        raise ValueError("web_fetch requires a URL with a host")
-
-    addresses = _resolve_public_addresses(host)
-    for address in addresses:
-        ip = ipaddress.ip_address(address)
-        mapped = getattr(ip, "ipv4_mapped", None)
-        if mapped is not None:
-            ip = mapped
-        if not ip.is_global or any(
-            ip in network for network in _NON_PUBLIC_NETWORKS
-        ):
-            raise ValueError(
-                f"web_fetch refused non-public address for host '{host}'"
-            )
-
-
-def _resolve_public_addresses(host: str) -> tuple[str, ...]:
-    """Resolve through public DNS instead of the host's intercepted resolver."""
-    # A proxy may point names at reserved fake-IP ranges; literals keep the blocklist.
-    try:
-        literal = ipaddress.ip_address(host)
-    except ValueError:
-        literal = None
-    if literal is not None:
-        return (str(literal),)
-
-    addresses: list[str] = []
-    try:
-        with httpx.Client(
-            timeout=httpx.Timeout(PUBLIC_DNS_TIMEOUT_SECONDS),
-        ) as client:
-            for record_type in ("A", "AAAA"):
-                response = client.get(
-                    PUBLIC_DNS_ENDPOINT,
-                    params={"name": host, "type": record_type},
-                    headers={"accept": "application/dns-json"},
-                )
-                response.raise_for_status()
-                payload = response.json()
-                if not isinstance(payload, dict) or payload.get("Status") != 0:
-                    continue
-                answers = payload.get("Answer", [])
-                if not isinstance(answers, list):
-                    continue
-                for answer in answers:
-                    if not isinstance(answer, dict):
-                        continue
-                    value = answer.get("data")
-                    if not isinstance(value, str):
-                        continue
-                    try:
-                        address = ipaddress.ip_address(value)
-                    except ValueError:
-                        continue
-                    if answer.get("type") == 1 and address.version == 4:
-                        addresses.append(str(address))
-                    elif answer.get("type") == 28 and address.version == 6:
-                        addresses.append(str(address))
-    except (httpx.HTTPError, json.JSONDecodeError) as error:
-        raise ValueError(f"web_fetch could not resolve host '{host}'") from error
-
-    if not addresses:
-        raise ValueError(f"web_fetch could not resolve host '{host}'")
-    return tuple(dict.fromkeys(addresses))
 
 
 def _decode_body(body: bytes, content_type: str) -> str:

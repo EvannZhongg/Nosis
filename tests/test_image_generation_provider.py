@@ -7,8 +7,8 @@ from unittest.mock import patch
 from agent_core.providers import LiteLLMImageGenerator
 from agent_core.providers.image_generation import (
     _read_image_url,
-    _validate_public_https_url,
 )
+from agent_core.public_url import require_public_url
 from tests.test_media import png_bytes
 
 
@@ -120,7 +120,7 @@ class LiteLLMImageGeneratorTest(unittest.TestCase):
                 return_value=stream,
             ) as request,
             patch(
-                "agent_core.providers.image_generation._validate_public_https_url"
+                "agent_core.providers.image_generation.require_public_url"
             ),
         ):
             with self.assertRaisesRegex(ValueError, "redirect"):
@@ -135,10 +135,10 @@ class LiteLLMImageGeneratorTest(unittest.TestCase):
             "https://169.254.169.254/latest/meta-data",
             "https://user:password@example.com/image.png",
         ):
-            with self.subTest(url=url), self.assertRaisesRegex(
-                ValueError, "image URL"
-            ):
-                _validate_public_https_url(url)
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                require_public_url(
+                    url, allowed_schemes=frozenset({"https"})
+                )
 
     def test_rejects_provider_image_redirects(self) -> None:
         redirect = unittest.mock.MagicMock()
@@ -153,7 +153,7 @@ class LiteLLMImageGeneratorTest(unittest.TestCase):
                 return_value=redirect,
             ),
             patch(
-                "agent_core.providers.image_generation._validate_public_https_url"
+                "agent_core.providers.image_generation.require_public_url"
             ),
         ):
             with self.assertRaisesRegex(ValueError, "redirect"):
