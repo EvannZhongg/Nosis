@@ -80,6 +80,22 @@ class SettingsStoreTest(unittest.TestCase):
             "~/.nosis/workspaces/scratch",
         )
 
+    def test_agent_update_reports_missing_scratch_workspace_root(self) -> None:
+        document = json.loads(
+            (self.root / "agent_config.json").read_text(encoding="utf-8")
+        )
+        document.pop("scratch_workspace_root")
+        (self.root / "agent_config.json").write_text(
+            json.dumps(document),
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "missing required config field 'scratch_workspace_root'.*add an absolute path",
+        ):
+            self.store.save_agent({"max_same_tool_calls": 6})
+
     def test_rejects_a_stale_revision(self) -> None:
         revision = configuration_fingerprint(self.root)
         (self.root / ".env").write_text("FIRST_KEY=changed\n", encoding="utf-8")

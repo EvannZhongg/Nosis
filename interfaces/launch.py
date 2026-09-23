@@ -49,11 +49,16 @@ def main() -> None:
             raise SystemExit("--temporary cannot be used with --workspace")
         if arguments.count("--temporary") > 1:
             raise SystemExit("--temporary may only be specified once")
-        workspace = create_scratch_workspace(
-            load_scratch_workspace_root(
-                config_directory / "agent_config.json"
+        try:
+            workspace = create_scratch_workspace(
+                load_scratch_workspace_root(
+                    config_directory / "agent_config.json"
+                )
             )
-        )
+        except (OSError, ValueError) as error:
+            raise SystemExit(
+                f"Failed to create scratch workspace: {error}"
+            ) from error
         arguments = [
             argument for argument in arguments if argument != "--temporary"
         ]

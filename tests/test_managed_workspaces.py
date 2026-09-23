@@ -21,7 +21,7 @@ class ManagedWorkspaceTest(unittest.TestCase):
             self.assertNotEqual(first.path, second.path)
             self.assertTrue(first.path.is_dir())
             self.assertTrue(second.path.is_dir())
-            self.assertTrue(is_scratch_workspace(root, first.path))
+            self.assertTrue(is_scratch_workspace(first.path))
 
     def test_rejects_an_identifier_that_escapes_the_root(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

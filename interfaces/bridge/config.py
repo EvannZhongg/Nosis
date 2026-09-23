@@ -49,14 +49,22 @@ def load_scratch_workspace_root(path: Path) -> Path:
     if not isinstance(document, dict):
         raise ValueError(f"configuration must be a JSON object: {path}")
     value = document.get("scratch_workspace_root")
+    if value is None:
+        raise ValueError(
+            "missing required config field 'scratch_workspace_root' in "
+            f"{path}; add an absolute path such as "
+            "'~/.nosis/workspaces/scratch'"
+        )
     if not isinstance(value, str) or not value.strip():
         raise ValueError(
-            "config field 'scratch_workspace_root' must be a non-empty path"
+            "config field 'scratch_workspace_root' must be a non-empty "
+            f"path in {path}"
         )
     root = Path(value.strip()).expanduser()
     if not root.is_absolute():
         raise ValueError(
-            "config field 'scratch_workspace_root' must be an absolute path"
+            "config field 'scratch_workspace_root' must resolve to an "
+            f"absolute path in {path}"
         )
     return root.resolve()
 

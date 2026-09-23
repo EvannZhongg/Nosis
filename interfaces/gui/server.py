@@ -766,14 +766,12 @@ def create_app(
 
     @app.get("/api/sessions")
     def list_sessions() -> list[dict[str, object]]:
-        scratch_root = load_scratch_workspace_root(settings.agent_path)
         return [
             {
                 **group,
                 **(
                     {"scratch": True}
                     if is_scratch_workspace(
-                        scratch_root,
                         str(group["workspace"]),
                     )
                     else {}

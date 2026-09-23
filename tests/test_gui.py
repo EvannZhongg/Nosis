@@ -809,8 +809,12 @@ class GuiTest(unittest.TestCase):
         self.assertTrue(expected.is_dir())
 
     def test_lists_scratch_sessions_without_changing_store_shape(self) -> None:
-        scratch = self.root / "scratch" / "scratch-session"
-        scratch.mkdir(parents=True)
+        with self.client() as client:
+            response = client.post(
+                "/api/workspaces/scratch",
+                json={"session_id": "scratch-session"},
+            )
+        scratch = Path(response.json()["workspace"])
         session = Session("scratch-session")
         session.begin_turn("turn-1")
         session.add_item("user", "临时会话")
@@ -827,6 +831,58 @@ class GuiTest(unittest.TestCase):
 
         self.assertEqual(groups[0]["workspace"], str(scratch.resolve()))
         self.assertTrue(groups[0]["scratch"])
+
+    def test_session_list_does_not_require_scratch_configuration(self) -> None:
+        session = Session("project-session")
+        session.begin_turn("turn-1")
+        session.add_item("user", "项目会话")
+        session.finish_turn("completed")
+        self.store.bind_workspace(session.session_id, self.root)
+        self.store.append_events(
+            session.session_id,
+            session.journal,
+            workspace=self.root,
+        )
+        document = json.loads(
+            (self.config / "agent_config.json").read_text(encoding="utf-8")
+        )
+        document.pop("scratch_workspace_root")
+        (self.config / "agent_config.json").write_text(
+            json.dumps(document),
+            encoding="utf-8",
+        )
+
+        with self.client() as client:
+            response = client.get("/api/sessions")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), [{
+            "workspace": str(self.root.resolve()),
+            "sessions": [{
+                "session_id": "project-session",
+                "title": "项目会话",
+            }],
+        }])
+
+    def test_scratch_creation_reports_missing_configuration(self) -> None:
+        document = json.loads(
+            (self.config / "agent_config.json").read_text(encoding="utf-8")
+        )
+        document.pop("scratch_workspace_root")
+        (self.config / "agent_config.json").write_text(
+            json.dumps(document),
+            encoding="utf-8",
+        )
+
+        with self.client() as client:
+            response = client.post(
+                "/api/workspaces/scratch",
+                json={"session_id": "scratch-session"},
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("missing required config field", response.json()["detail"])
+        self.assertIn("scratch_workspace_root", response.json()["detail"])
 
     def test_deleting_a_scratch_session_keeps_its_workspace(self) -> None:
         scratch = self.root / "scratch" / "scratch-session"

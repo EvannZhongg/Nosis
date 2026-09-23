@@ -116,6 +116,17 @@ class ConfigTest(unittest.TestCase):
                 Path("~/scratch").expanduser().resolve(),
             )
 
+    def test_missing_scratch_workspace_root_has_an_actionable_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "agent_config.json"
+            path.write_text("{}", encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "missing required config field 'scratch_workspace_root'.*add an absolute path",
+            ):
+                load_scratch_workspace_root(path)
+
     def test_initializes_packaged_default_configs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config_directory = Path(directory) / "nosis"

@@ -6,6 +6,9 @@ from uuid import uuid4
 from agent_core import Workspace
 
 
+SCRATCH_WORKSPACE_MARKER = ".nosis-scratch-workspace"
+
+
 def create_scratch_workspace(root: Path, workspace_id: str | None = None) -> Workspace:
     identifier = workspace_id or uuid4().hex
     if (
@@ -21,15 +24,17 @@ def create_scratch_workspace(root: Path, workspace_id: str | None = None) -> Wor
     workspace = Workspace(path)
     if not workspace.path.is_relative_to(resolved_root):
         raise ValueError("scratch workspace must stay within its configured root")
+    (workspace.path / SCRATCH_WORKSPACE_MARKER).touch(exist_ok=True)
     return workspace
 
 
-def is_scratch_workspace(root: Path, workspace: Path | str) -> bool:
-    resolved_root = root.expanduser().resolve()
+def is_scratch_workspace(workspace: Path | str) -> bool:
     resolved_workspace = Path(workspace).expanduser().resolve()
-    return resolved_workspace != resolved_root and resolved_workspace.is_relative_to(
-        resolved_root
-    )
+    return (resolved_workspace / SCRATCH_WORKSPACE_MARKER).is_file()
 
 
-__all__ = ["create_scratch_workspace", "is_scratch_workspace"]
+__all__ = [
+    "SCRATCH_WORKSPACE_MARKER",
+    "create_scratch_workspace",
+    "is_scratch_workspace",
+]
