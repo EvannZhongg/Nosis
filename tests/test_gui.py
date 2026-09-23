@@ -22,6 +22,7 @@ from agent_core import (
     Workspace,
 )
 from agent_core.scheduler import IntervalTrigger, OneShotTrigger, SchedulerService
+from interfaces.bridge.managed_workspaces import create_scratch_workspace
 from interfaces.bridge.settings import SettingsStore
 
 try:
@@ -885,9 +886,11 @@ class GuiTest(unittest.TestCase):
         self.assertIn("missing required config field", response.json()["detail"])
         self.assertIn("scratch_workspace_root", response.json()["detail"])
 
-    def test_deleting_a_scratch_session_keeps_its_workspace(self) -> None:
-        scratch = self.root / "scratch" / "scratch-session"
-        scratch.mkdir(parents=True)
+    def test_deleting_a_scratch_session_removes_its_workspace(self) -> None:
+        scratch = create_scratch_workspace(
+            self.root / "scratch", "scratch-session"
+        ).path
+        (scratch / "result.txt").write_text("done", encoding="utf-8")
         session = Session("scratch-session")
         session.begin_turn("turn-1")
         session.add_item("user", "临时会话")
@@ -903,7 +906,33 @@ class GuiTest(unittest.TestCase):
             response = client.delete("/api/sessions/scratch-session")
 
         self.assertEqual(response.status_code, 200)
-        self.assertTrue(scratch.is_dir())
+        self.assertFalse(scratch.exists())
+
+    def test_deleting_a_shared_scratch_session_keeps_its_workspace(self) -> None:
+        scratch = create_scratch_workspace(
+            self.root / "scratch", "first-session"
+        ).path
+        for session_id in ("first-session", "second-session"):
+            session = Session(session_id)
+            session.begin_turn("turn-1")
+            session.add_item("user", "临时会话")
+            session.finish_turn("completed")
+            self.store.bind_workspace(session_id, scratch)
+            self.store.append_events(
+                session_id,
+                session.journal,
+                workspace=scratch,
+            )
+
+        with self.client() as client:
+            self.assertEqual(
+                client.delete("/api/sessions/second-session").status_code, 200
+            )
+            self.assertTrue(scratch.is_dir())
+            response = client.delete("/api/sessions/first-session")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(scratch.exists())
 
     def test_reconnect_restores_a_user_question(self) -> None:
         question = {

@@ -290,7 +290,13 @@ class JsonlSessionStoreTest(unittest.TestCase):
             session.finish_turn("completed")
             persist(store, workspace, session)
 
+            session_directory = session_log_path(
+                store.directory, workspace, "session-1"
+            ).parent
+            workspace_sessions_directory = session_directory.parent
             self.assertTrue(store.delete_session("session-1"))
+            self.assertFalse(session_directory.exists())
+            self.assertTrue(workspace_sessions_directory.is_dir())
             self.assertFalse(store.delete_session("session-1"))
 
 

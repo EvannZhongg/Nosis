@@ -4,6 +4,7 @@ from pathlib import Path
 
 from interfaces.bridge.managed_workspaces import (
     create_scratch_workspace,
+    delete_scratch_workspace,
     is_scratch_workspace,
 )
 
@@ -42,6 +43,24 @@ class ManagedWorkspaceTest(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "configured root"):
                 create_scratch_workspace(root, "session-1")
+
+    def test_deletes_a_managed_scratch_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = create_scratch_workspace(
+                Path(directory) / "scratch", "session-1"
+            )
+            (workspace.path / "result.txt").write_text("done", encoding="utf-8")
+
+            self.assertTrue(delete_scratch_workspace(workspace.path))
+            self.assertFalse(workspace.path.exists())
+
+    def test_does_not_delete_an_unmanaged_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory) / "project"
+            workspace.mkdir()
+
+            self.assertFalse(delete_scratch_workspace(workspace))
+            self.assertTrue(workspace.is_dir())
 
 
 if __name__ == "__main__":

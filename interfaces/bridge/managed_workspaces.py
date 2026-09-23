@@ -1,5 +1,6 @@
 """Persistent workspaces created and owned by the interface layer."""
 
+import shutil
 from pathlib import Path
 from uuid import uuid4
 
@@ -33,8 +34,17 @@ def is_scratch_workspace(workspace: Path | str) -> bool:
     return (resolved_workspace / SCRATCH_WORKSPACE_MARKER).is_file()
 
 
+def delete_scratch_workspace(workspace: Path | str) -> bool:
+    resolved_workspace = Path(workspace).expanduser().resolve()
+    if not is_scratch_workspace(resolved_workspace):
+        return False
+    shutil.rmtree(resolved_workspace)
+    return True
+
+
 __all__ = [
     "SCRATCH_WORKSPACE_MARKER",
     "create_scratch_workspace",
+    "delete_scratch_workspace",
     "is_scratch_workspace",
 ]

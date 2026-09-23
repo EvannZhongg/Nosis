@@ -101,7 +101,7 @@ GUI 默认监听 <http://127.0.0.1:8737>。
 | `~/.nosis/AGENTS.md` | 用户级全局 Workspace Instruction |
 | `~/.nosis/MEMORY.md` | 跨 Workspace 的 Global Memory |
 | `~/.nosis/.env` | 配置中 `${ENV_NAME}` 引用的密钥 |
-| `~/.nosis/workspaces/scratch/<workspace-id>/` | Nosis 创建并持久保留的临时工作区；根路径由 `scratch_workspace_root` 配置 |
+| `~/.nosis/workspaces/scratch/<workspace-id>/` | Nosis 创建的临时工作区；根路径由 `scratch_workspace_root` 配置，最后一个使用它的 Session 被删除时一并删除 |
 | `~/.nosis/sessions/<workspace-key>/MEMORY.md` | 当前 Workspace 独立的长期记忆 |
 | `~/.nosis/sessions/<workspace-key>/<session-id>/` | Session 的 Journal、权限 preset、大输出与子 Agent 记录 |
 | `<workspace>/.nosis/attachments/` | GUI 上传的附件与 Agent 生成的图片 |

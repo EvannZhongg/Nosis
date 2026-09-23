@@ -54,6 +54,7 @@ from ..bridge.config import (
 )
 from ..bridge.managed_workspaces import (
     create_scratch_workspace,
+    delete_scratch_workspace,
     is_scratch_workspace,
 )
 from ..bridge.process import cancel_process
@@ -875,7 +876,16 @@ def create_app(
     async def delete_session(session_id: str) -> dict[str, bool]:
         try:
             await release_idle_session(session_id)
+            workspace_path = store.workspace_for(session_id)
             deleted = store.delete_session(session_id)
+            # A scratch workspace can hold several Sessions; it is removed
+            # once the last one is gone.
+            if (
+                deleted
+                and workspace_path is not None
+                and not store.list_workspace_sessions(workspace_path)
+            ):
+                delete_scratch_workspace(workspace_path)
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         if not deleted:

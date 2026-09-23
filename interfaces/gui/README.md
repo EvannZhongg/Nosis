@@ -14,7 +14,7 @@ Provider、Agent 与 Skill 固定从 `~/.nosis/` 读取。
 
 界面分三栏：左侧按 Workspace 分组列出历史会话（可新建、删除），中间是对话与输入区，右侧是当前 Workspace 的文件树。重新打开页面会回到上次的会话。
 
-侧边栏的 `Temporary` 会在 `agent_config.json` 的 `scratch_workspace_root` 下创建一个独立 Workspace。该目录按 Session 标识命名并持久保留；删除 Session 不会删除其中的文件。输入区的 Workspace 菜单也可以把尚未运行的会话切换到对应的临时工作区。
+侧边栏的 `Temporary` 会在 `agent_config.json` 的 `scratch_workspace_root` 下创建一个独立 Workspace。该目录按 Session 标识命名，并在最后一个使用它的 Session 被删除时一并删除。输入区的 Workspace 菜单也可以把尚未运行的会话切换到对应的临时工作区。
 
 左下角 Settings 可管理 Provider 与默认路由、调整 Agent Runtime 配置，并查看当前发现的 Skill、Plugin 与 MCP Server。API key 只写入 `~/.nosis/.env`，设置接口不会回传密钥正文。
 
