@@ -31,6 +31,16 @@ class ModelConfig:
 
 
 @dataclass(frozen=True)
+class ImageGenerationConfig:
+    provider: str
+    model: str
+    url: str | None
+    key: str | None
+    default_aspect_ratio: str | None = None
+    default_image_size: str | None = None
+
+
+@dataclass(frozen=True)
 class PromptTemplates:
     system: str
     subagent: str
@@ -370,6 +380,56 @@ def load_vision_config(
     return result
 
 
+def load_image_generation_config(
+    path: Path,
+) -> ImageGenerationConfig | None:
+    """Load the separately routed image generator, when configured."""
+    with path.open(encoding="utf-8") as file:
+        document = json.load(file)
+    if not isinstance(document, dict):
+        raise ValueError(f"configuration must be a JSON object: {path}")
+    value = document.get("image_generation")
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("config field 'image_generation' must be an object")
+    unknown = set(value) - {
+        "provider",
+        "model",
+        "default_aspect_ratio",
+        "default_image_size",
+    }
+    if unknown:
+        raise ValueError(
+            "unknown field(s) in 'image_generation': "
+            + ", ".join(sorted(unknown))
+        )
+    provider = value.get("provider")
+    model = value.get("model")
+    if not isinstance(provider, str) or not provider.strip():
+        raise ValueError(
+            "config field 'image_generation.provider' must be a non-empty string"
+        )
+    if not isinstance(model, str) or not model.strip():
+        raise ValueError(
+            "config field 'image_generation.model' must be a non-empty string"
+        )
+    provider = provider.strip()
+    connection = load_config(path, provider)
+    return ImageGenerationConfig(
+        provider=provider,
+        model=model.strip(),
+        url=connection.url,
+        key=connection.key,
+        default_aspect_ratio=_optional_image_setting(
+            value, "default_aspect_ratio"
+        ),
+        default_image_size=_optional_image_setting(
+            value, "default_image_size"
+        ),
+    )
+
+
 def _is_vision_capable(config: ModelConfig) -> bool:
     return "image" in LiteLLMProvider.capabilities_for_model(
         config.model,
@@ -396,6 +456,19 @@ def _optional_string(
     if not isinstance(value, str) or not value.strip():
         raise ValueError(
             f"provider '{provider}' field '{field}' must be a non-empty string"
+        )
+    return value.strip()
+
+
+def _optional_image_setting(
+    data: dict[str, object], field: str
+) -> str | None:
+    value = data.get(field)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(
+            f"config field 'image_generation.{field}' must be a non-empty string"
         )
     return value.strip()
 

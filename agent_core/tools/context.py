@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from ..jobs import JobManager
     from ..jobs import CancellationToken
     from ..memory import MemoryManager
+    from ..image_generation import ImageGenerator
 
 
 @dataclass(frozen=True)
@@ -46,6 +47,7 @@ class ToolExecutionContext:
     # provider via ``analyze_image``.
     vision_input: bool = False
     vision_provider: "LLMProvider | None" = None
+    image_generator: "ImageGenerator | None" = None
     mcp: "McpClientManager | None" = None
     subagents: "SubagentRuntime | None" = None
     jobs: "JobManager | None" = None

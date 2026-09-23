@@ -461,7 +461,11 @@ class SettingsStore:
 
     def _validate_provider_document(self, document: dict[str, object]) -> None:
         unknown_top_level = set(document) - {
-            "main_agent", "subagent", "subagent_roles", "providers"
+            "main_agent",
+            "subagent",
+            "subagent_roles",
+            "providers",
+            "image_generation",
         }
         if unknown_top_level:
             raise ValueError(
@@ -512,6 +516,47 @@ class SettingsStore:
                 if unknown:
                     raise ValueError(f"unknown field(s) in 'subagent_roles.{role}': {', '.join(sorted(unknown))}")
                 self._validate_routes(route, providers, f"subagent_roles.{role}")
+            image_generation = document.get("image_generation")
+            if image_generation is not None:
+                if not isinstance(image_generation, dict):
+                    raise ValueError(
+                        "config field 'image_generation' must be an object"
+                    )
+                unknown = set(image_generation) - {
+                    "provider",
+                    "model",
+                    "default_aspect_ratio",
+                    "default_image_size",
+                }
+                if unknown:
+                    raise ValueError(
+                        "unknown field(s) in 'image_generation': "
+                        + ", ".join(sorted(unknown))
+                    )
+                provider = image_generation.get("provider")
+                model = image_generation.get("model")
+                if not isinstance(provider, str) or provider not in providers:
+                    raise ValueError(
+                        "config field 'image_generation.provider' must name "
+                        "a configured provider"
+                    )
+                if not isinstance(model, str) or not model.strip():
+                    raise ValueError(
+                        "config field 'image_generation.model' must be a "
+                        "non-empty string"
+                    )
+                for field in (
+                    "default_aspect_ratio",
+                    "default_image_size",
+                ):
+                    value = image_generation.get(field)
+                    if value is not None and (
+                        not isinstance(value, str) or not value.strip()
+                    ):
+                        raise ValueError(
+                            f"config field 'image_generation.{field}' must "
+                            "be a non-empty string"
+                        )
         finally:
             path.unlink(missing_ok=True)
 

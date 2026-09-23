@@ -67,7 +67,7 @@ from agent_core import (
 )
 from agent_core.prompting import render_system_prompt
 from agent_core.path_utils import path_for_comparison
-from agent_core.providers import LiteLLMProvider
+from agent_core.providers import LiteLLMImageGenerator, LiteLLMProvider
 from agent_core.mcp.manager import McpClientManager, McpServerStatus
 from agent_core.tools import ROLE_TOOL_NAMES
 
@@ -75,6 +75,7 @@ from .config import (
     configured_role_names,
     default_config_directory,
     load_config_with_name,
+    load_image_generation_config,
     load_model_options,
     load_prompt_templates,
     load_vision_config,
@@ -663,6 +664,21 @@ class Bridge:
                 max_context_tokens=config.max_context_tokens,
                 media_root=workspace.path,
             )
+            image_generator = None
+            if agent_config.tools.is_enabled("generate_image"):
+                image_config = load_image_generation_config(config_path)
+                if image_config is None:
+                    raise ValueError(
+                        "generate_image is enabled but provider_config.json "
+                        "has no image_generation configuration"
+                    )
+                image_generator = LiteLLMImageGenerator(
+                    model=image_config.model,
+                    base_url=image_config.url,
+                    api_key=image_config.key,
+                    default_aspect_ratio=image_config.default_aspect_ratio,
+                    default_image_size=image_config.default_image_size,
+                )
             vision_provider = self._provider_for(
                 load_vision_config(config_path), workspace
             )
@@ -738,6 +754,7 @@ class Bridge:
                     "image" in main_provider.capabilities.input_modalities
                 ),
                 vision_provider=vision_provider,
+                image_generator=image_generator,
                 mcp=mcp,
                 subagents=subagents,
                 jobs=jobs,

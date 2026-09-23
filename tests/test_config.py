@@ -12,6 +12,7 @@ from interfaces.bridge.config import (
     default_config_directory,
     initialize_config_directory,
     load_config,
+    load_image_generation_config,
     load_model_options,
     load_prompt_templates,
     load_scratch_workspace_root,
@@ -126,6 +127,42 @@ class ConfigTest(unittest.TestCase):
                 "missing required config field 'scratch_workspace_root'.*add an absolute path",
             ):
                 load_scratch_workspace_root(path)
+
+    def test_loads_image_generation_from_a_configured_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "main_agent": {"provider": "main"},
+                        "image_generation": {
+                            "provider": "images",
+                            "model": "openrouter/example/image",
+                            "default_aspect_ratio": "16:9",
+                            "default_image_size": "2K",
+                        },
+                        "providers": {
+                            "main": {"model": "openai/main"},
+                            "images": {
+                                "model": "openrouter/unused-chat-model",
+                                "url": "https://example.test/v1",
+                                "key": "secret",
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            config = load_image_generation_config(path)
+
+        self.assertIsNotNone(config)
+        self.assertEqual(config.provider, "images")
+        self.assertEqual(config.model, "openrouter/example/image")
+        self.assertEqual(config.url, "https://example.test/v1")
+        self.assertEqual(config.key, "secret")
+        self.assertEqual(config.default_aspect_ratio, "16:9")
+        self.assertEqual(config.default_image_size, "2K")
 
     def test_initializes_packaged_default_configs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

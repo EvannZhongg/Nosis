@@ -1753,43 +1753,61 @@ class GuiTest(unittest.TestCase):
                 400,
             )
 
-    def test_serves_a_workspace_image_the_agent_read(self) -> None:
-        """``read_image`` may load any image, not only an upload."""
+    def test_serves_a_workspace_image_through_a_signed_url(self) -> None:
         from tests.test_media import png_bytes
 
         (self.root / "src" / "diagram.png").write_bytes(png_bytes(8, 8))
+        self.store.bind_workspace("image-session", self.root)
         with self.client() as client:
-            response = client.get(
-                "/api/workspace-image",
-                params={"path": "src/diagram.png"},
+            signed = client.post(
+                "/api/image-url",
+                json={
+                    "path": "src/diagram.png",
+                    "session_id": "image-session",
+                },
             )
+            response = client.get(signed.json()["url"])
 
+            self.assertEqual(signed.status_code, 200)
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.headers["content-type"], "image/png")
 
-    def test_the_workspace_image_type_comes_from_the_bytes(self) -> None:
+    def test_image_url_rejects_an_unknown_session(self) -> None:
+        from tests.test_media import png_bytes
+
+        (self.root / "image.png").write_bytes(png_bytes(8, 8))
+        with self.client() as client:
+            response = client.post(
+                "/api/image-url",
+                json={"path": "image.png", "session_id": "missing"},
+            )
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_the_signed_image_type_comes_from_the_bytes(self) -> None:
         """A mislabelled extension must not set the served type."""
         from tests.test_media import jpeg_bytes
 
         (self.root / "lying.png").write_bytes(jpeg_bytes(8, 8))
         with self.client() as client:
-            response = client.get(
-                "/api/workspace-image", params={"path": "lying.png"}
+            signed = client.post(
+                "/api/image-url", json={"path": "lying.png"}
             )
+            response = client.get(signed.json()["url"])
 
             self.assertEqual(response.headers["content-type"], "image/jpeg")
 
-    def test_the_workspace_image_route_refuses_non_images(self) -> None:
+    def test_the_image_url_endpoint_refuses_non_images(self) -> None:
         """It must not become a way to read arbitrary workspace files."""
         with self.client() as client:
             self.assertEqual(
-                client.get(
-                    "/api/workspace-image", params={"path": "README.md"}
+                client.post(
+                    "/api/image-url", json={"path": "README.md"}
                 ).status_code,
                 404,
             )
 
-    def test_the_workspace_image_route_rejects_traversal(self) -> None:
+    def test_the_image_url_endpoint_rejects_traversal(self) -> None:
         secret = self.root.parent / "secret.png"
         secret.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 64)
         self.addCleanup(secret.unlink)
@@ -1797,8 +1815,8 @@ class GuiTest(unittest.TestCase):
             for path in ("../secret.png", "/etc/hosts", "src/../../secret.png"):
                 with self.subTest(path=path):
                     self.assertEqual(
-                        client.get(
-                            "/api/workspace-image", params={"path": path}
+                        client.post(
+                            "/api/image-url", json={"path": path}
                         ).status_code,
                         404,
                     )
@@ -1808,7 +1826,7 @@ class GuiTest(unittest.TestCase):
         "creating symlinks needs Developer Mode or administrator rights "
         "on Windows",
     )
-    def test_the_workspace_image_route_rejects_external_symlinks(self) -> None:
+    def test_the_image_url_endpoint_rejects_external_symlinks(self) -> None:
         from tests.test_media import png_bytes
 
         outside = self.root.parent / "outside.png"
@@ -1817,13 +1835,13 @@ class GuiTest(unittest.TestCase):
         (self.root / "link.png").symlink_to(outside)
         with self.client() as client:
             self.assertEqual(
-                client.get(
-                    "/api/workspace-image", params={"path": "link.png"}
+                client.post(
+                    "/api/image-url", json={"path": "link.png"}
                 ).status_code,
                 404,
             )
 
-    def test_the_workspace_image_route_404s_an_unreadable_file(self) -> None:
+    def test_the_image_url_endpoint_404s_an_unreadable_file(self) -> None:
         """An unreadable file is a missing image, not a server fault."""
         from tests.test_media import png_bytes
 
@@ -1835,13 +1853,13 @@ class GuiTest(unittest.TestCase):
             self.skipTest("this user can read a mode-000 file")
         with self.client() as client:
             self.assertEqual(
-                client.get(
-                    "/api/workspace-image", params={"path": "locked.png"}
+                client.post(
+                    "/api/image-url", json={"path": "locked.png"}
                 ).status_code,
                 404,
             )
 
-    def test_the_workspace_image_route_serves_a_large_image(self) -> None:
+    def test_the_signed_image_route_serves_a_large_image(self) -> None:
         """The 5 MiB ceiling bounds model delivery, not display."""
         from agent_core.media import MAX_IMAGE_BYTES
 
@@ -1850,12 +1868,48 @@ class GuiTest(unittest.TestCase):
             b"\x89PNG\r\n\x1a\n" + b"\x00" * (MAX_IMAGE_BYTES + 1024)
         )
         with self.client() as client:
+            signed = client.post(
+                "/api/image-url", json={"path": "huge.png"}
+            )
+            self.assertEqual(client.get(signed.json()["url"]).status_code, 200)
+
+    def test_signed_image_url_rejects_a_tampered_token(self) -> None:
+        from tests.test_media import png_bytes
+
+        (self.root / "image.png").write_bytes(png_bytes(8, 8))
+        with self.client() as client:
+            signed = client.post(
+                "/api/image-url", json={"path": "image.png"}
+            ).json()["url"]
+            # Tamper the first signature character: the last one shares
+            # its low bits with base64 padding, so ``a`` and ``b`` there
+            # decode to the same signature.
+            prefix, _, signature = signed.rpartition(".")
+            replacement = "a" if signature[0] != "a" else "b"
+
             self.assertEqual(
                 client.get(
-                    "/api/workspace-image", params={"path": "huge.png"}
+                    f"{prefix}.{replacement}{signature[1:]}"
                 ).status_code,
-                200,
+                404,
             )
+
+    def test_signed_image_url_expires(self) -> None:
+        from tests.test_media import png_bytes
+
+        (self.root / "image.png").write_bytes(png_bytes(8, 8))
+        with self.client() as client:
+            with patch("interfaces.gui.server.time.time", return_value=1000):
+                signed = client.post(
+                    "/api/image-url", json={"path": "image.png"}
+                ).json()["url"]
+            with patch(
+                "interfaces.gui.server.time.time",
+                return_value=1000 + server.IMAGE_URL_TTL_SECONDS + 1,
+            ):
+                response = client.get(signed)
+
+        self.assertEqual(response.status_code, 410)
 
     def test_upload_names_an_attachment_after_its_bytes(self) -> None:
         """A declared media type never decides what an upload is."""

@@ -1,6 +1,6 @@
 import type { ThreadMessageLike } from "@assistant-ui/react";
 import type { ContextWindow, Incoming, PermissionPreset, UserQuestion } from "@nosis/protocol";
-import { attachmentDownloadUrl, attachmentUrl, type SessionItem } from "./api";
+import { attachmentDownloadUrl, type SessionItem } from "./api";
 
 /** A transcript item, plus the streaming state the live turn needs. */
 export type TranscriptItem = SessionItem & { streaming?: boolean };
@@ -36,6 +36,7 @@ export function isTurnActivity(message: Incoming): boolean {
   return message.type === "assistant_delta"
     || message.type === "reasoning_delta"
     || message.type === "tool_batch_started"
+    || message.type === "tool_media"
     || message.type === "assistant_message"
     || message.type === "job_status";
 }
@@ -122,6 +123,18 @@ export function applyMessage(
                 ? ({ ok: true } satisfies ToolOutcome)
                 : ({ ok: false, error: message.error ?? undefined }),
             ),
+          },
+        ],
+      };
+
+    case "tool_media":
+      return {
+        items: [
+          ...items,
+          {
+            role: "user",
+            origin: "tool_media",
+            content: message.attachments,
           },
         ],
       };
@@ -307,8 +320,11 @@ function itemParts(
       if (part.type === "text") parts.push({ type: "text", text: part.text });
       else if (part.type === "image") parts.push({
         type: "image",
-        image: attachmentUrl(part.path, sessionId),
+        image: part.path,
         filename: part.filename,
+        providerMetadata: {
+          nosis: { session_id: sessionId ?? null },
+        },
       } as unknown as Part);
       else parts.push({
         type: "file",

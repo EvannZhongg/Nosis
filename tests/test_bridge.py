@@ -1721,6 +1721,73 @@ class BridgeSessionOpenTest(unittest.TestCase):
             ):
                 bridge._ensure_execution_plane()
 
+    def test_injects_the_configured_image_generator(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bridge, _ = make_bridge([], root)
+            bridge.open_session(
+                open_session_message(
+                    root,
+                    agent_config={
+                        "max_same_tool_calls": 5,
+                        "output_reserve_tokens": 100,
+                        "scratch_workspace_root": str(root / "scratch"),
+                        "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
+                        "main_agent": {"tools": {"generate_image": True}},
+                    },
+                    provider_config={
+                        "main_agent": {"provider": "first"},
+                        "image_generation": {
+                            "provider": "images",
+                            "model": "openrouter/example/image",
+                            "default_aspect_ratio": "16:9",
+                            "default_image_size": "2K",
+                        },
+                        "providers": {
+                            "first": {
+                                "model": "openai/first",
+                                "max_context_tokens": 1000,
+                            },
+                            "images": {
+                                "model": "openrouter/unused",
+                                "url": "https://example.test/v1",
+                                "key": "secret",
+                            },
+                        },
+                    },
+                )
+            )
+
+            plane = bridge._ensure_execution_plane()
+            generator = plane.agent._tools._context.image_generator
+
+        self.assertIsNotNone(generator)
+        self.assertEqual(generator.model, "openrouter/example/image")
+        self.assertIn(
+            "generate_image",
+            [definition.name for definition in plane.agent._tools.definitions],
+        )
+
+    def test_enabled_image_tool_requires_image_generation_config(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bridge, _ = make_bridge([], root)
+            bridge.open_session(
+                open_session_message(
+                    root,
+                    agent_config={
+                        "max_same_tool_calls": 5,
+                        "output_reserve_tokens": 100,
+                        "scratch_workspace_root": str(root / "scratch"),
+                        "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
+                        "main_agent": {"tools": {"generate_image": True}},
+                    },
+                )
+            )
+
+            with self.assertRaisesRegex(ValueError, "no image_generation"):
+                bridge._ensure_execution_plane()
+
     def test_restores_the_session_permission_preset(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

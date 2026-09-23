@@ -15,8 +15,8 @@ Bridge 以独立进程运行，是前端驱动 Agent 的唯一通道，两端用
 ## 能力
 
 - **本地执行，人工确认**：Session 支持 `Ask for approval`、`Workspace Access` 与 `Full Access`，选择随 Session 持久化。每个权限模式决定 Shell 的默认执行边界与授权规则：`Ask for approval` 和 `Workspace Access` 默认在沙箱内运行，前者对两种 scope 都请求授权、后者只对越过沙箱的 `host` 请求；`Full Access` 默认直接以 `host` 运行且不再请求授权，仍可显式请求 `workspace`。macOS 使用 Seatbelt、Linux 使用 bubblewrap，二者仅暴露最小只读系统视图并断开网络；Windows 的 RestrictedToken backend 保留宿主文件读取权限、允许网络，并主要把写权限授予 Workspace 与私有临时目录；已对 Everyone 开放写入的位置属于明确例外。无人值守的定时任务最多获得 `Workspace Access`。文件类 Tool 只作用于当前 Workspace。
-- **Tool 与扩展**：内置文件读写、搜索、Shell、Web Search、图片读取、子 Agent 等 Tool；可接入 MCP Server，并可用 Skill 扩展工作流。
-- **模型路由**：主 Agent、子 Agent 与每个角色都可以单独选择 Provider（LiteLLM 支持多家模型），图片分析可另配 vision Provider。
+- **Tool 与扩展**：内置文件读写、搜索、Shell、Web Search、图片读取与生成、子 Agent 等 Tool；可接入 MCP Server，并可用 Skill 扩展工作流。
+- **模型路由**：主 Agent、子 Agent 与每个角色都可以单独选择 Provider（LiteLLM 支持多家模型），图片分析与图片生成可以独立配置 Provider。
 - **子 Agent 与计划**：按角色派发子 Agent（默认 `researcher` 只读），主 Agent 维护跨轮次的执行计划，两个前端都展示进度。
 - **会话持久化**：对话与执行事件以 append-only JSONL Journal 保存，重启后可以恢复；TUI 用 `/sessions` 切换历史会话，GUI 从侧边栏打开并默认回到上次的会话。
 - **上下文管理**：接近预算时自动压缩较早的历史并保留最近若干轮，另有硬上限；窗口占用在 GUI 中可见。
@@ -104,7 +104,7 @@ GUI 默认监听 <http://127.0.0.1:8737>。
 | `~/.nosis/workspaces/scratch/<workspace-id>/` | Nosis 创建并持久保留的临时工作区；根路径由 `scratch_workspace_root` 配置 |
 | `~/.nosis/sessions/<workspace-key>/MEMORY.md` | 当前 Workspace 独立的长期记忆 |
 | `~/.nosis/sessions/<workspace-key>/<session-id>/` | Session 的 Journal、权限 preset、大输出与子 Agent 记录 |
-| `<workspace>/.nosis/attachments/` | GUI 上传的图片 |
+| `<workspace>/.nosis/attachments/` | GUI 上传的附件与 Agent 生成的图片 |
 
 字段与结构见 [Agent Core](agent_core/README.md)，默认配置见 [`interfaces/bridge/defaults/`](interfaces/bridge/defaults)。
 

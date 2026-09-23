@@ -20,6 +20,7 @@
       "apply_patch": true,
       "edit_file": true,
       "write_file": true,
+      "generate_image": false,
       "search_files": true,
       "list_directory": true,
       "shell": true,

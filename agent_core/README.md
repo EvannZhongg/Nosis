@@ -36,13 +36,24 @@ Runtime 由 [`interfaces/bridge`](../interfaces/bridge/README.md) 统一装配�
 }
 ```
 
-模型名称遵循 LiteLLM 约定。`subagent` 和 `subagent_roles.<role>` 可以覆盖主 Agent 的 Provider；空字符串表示继承上一级。图片降级分析需要显式配置 `vision_provider`。
+模型名称遵循 LiteLLM 约定。`subagent` 和 `subagent_roles.<role>` 可以覆盖主 Agent 的 Provider；空字符串表示继承上一级。图片降级分析需要显式配置 `vision_provider`。图片生成使用 `provider_config.json` 的独立 `image_generation` 配置，它引用已有 Provider 的 URL 与密钥，并单独指定图片模型：
+
+```json
+{
+  "image_generation": {
+    "provider": "openrouter",
+    "model": "openrouter/openai/gpt-5.4-image-2",
+    "default_aspect_ratio": "1:1",
+    "default_image_size": "1K"
+  }
+}
+```
 
 ## Runtime 能力
 
 ### Tool
 
-内置 Tool 包括文件读写、搜索、Shell、Web Search、图片读取/分析、子 Agent、用户提问、计划更新和 Skill 读取。每个 Agent 只获得配置中启用且运行依赖齐全的 Tool。`ask_user` 与 `update_plan` 是仅由主 Agent 使用的 Runtime 能力，不属于用户配置开关。
+内置 Tool 包括文件读写、搜索、Shell、Web Search、图片读取/分析/生成、子 Agent、用户提问、计划更新和 Skill 读取。每个 Agent 只获得配置中启用且运行依赖齐全的 Tool。`generate_image` 只提供给主 Agent；生成图持久化到 Workspace 的 `.nosis/attachments/`，并作为结构化图片附件进入 Session 和前端。`ask_user` 与 `update_plan` 是仅由主 Agent 使用的 Runtime 能力，不属于用户配置开关。
 
 文件 Tool 限制在当前 Workspace；Shell 与需要确认的 MCP Tool 统一经过 Session 权限控制。较大的 Tool 输出会保存为 Session Artifact，供 Agent 后续读取。
 
@@ -79,7 +90,7 @@ Session 是 append-only JSONL Journal，保存对话、执行事件和当前计�
 失败 Turn 将错误保存为 `{type, message, details}`。Provider 流协议错误的
 `details` 只记录定位所需的结构信息和参数摘要，不保存完整 Tool 参数。
 
-GUI 上传的附件保存在 Workspace 的 `.nosis/attachments/`，Session 只记录附件路径、原始文件名、类型和大小。图片可作为模型视觉输入；其他文件以 Workspace 文件引用进入上下文，由 Agent 通过 Tool 自主读取或处理。
+GUI 上传的附件和 Agent 生成的图片保存在 Workspace 的 `.nosis/attachments/`，Session 只记录附件路径、原始文件名、类型和大小。图片可作为模型视觉输入；其他文件以 Workspace 文件引用进入上下文，由 Agent 通过 Tool 自主读取或处理。
 
 ## 代码入口
 

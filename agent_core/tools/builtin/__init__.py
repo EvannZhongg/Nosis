@@ -1,5 +1,6 @@
 from .apply_patch import ApplyPatchTool
 from .edit_file import EditFileTool
+from .generate_image import GenerateImageTool
 from .list_directory import ListDirectoryTool
 from .read_file import ReadFileTool
 from .read_image import ReadImageTool
@@ -37,6 +38,7 @@ def builtin_catalog():
             ApplyPatchTool(),
             EditFileTool(),
             WriteFileTool(),
+            GenerateImageTool(),
             SearchFilesTool(),
             ListDirectoryTool(),
             ShellTool(),
@@ -62,6 +64,7 @@ __all__ = [
     "ApplyPatchTool",
     "AskUserTool",
     "EditFileTool",
+    "GenerateImageTool",
     "DeleteScheduledTaskTool",
     "ListDirectoryTool",
     "ReadFileTool",

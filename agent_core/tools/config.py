@@ -6,6 +6,7 @@ TOOL_NAMES = (
     "apply_patch",
     "edit_file",
     "write_file",
+    "generate_image",
     "search_files",
     "list_directory",
     "shell",
@@ -22,8 +23,12 @@ TOOL_NAMES = (
 # they are derived from Runtime capabilities rather than configured. See
 # ``agent_core.subagent``.
 
-# A role runs inside a sub-agent, so it can never delegate again.
-ROLE_TOOL_NAMES = tuple(name for name in TOOL_NAMES if name != "subagent")
+# A role runs inside a sub-agent, so it cannot delegate again. Image
+# generation is kept on the main Agent so generated media joins the visible
+# parent conversation directly.
+ROLE_TOOL_NAMES = tuple(
+    name for name in TOOL_NAMES if name not in {"subagent", "generate_image"}
+)
 
 
 @dataclass(frozen=True)

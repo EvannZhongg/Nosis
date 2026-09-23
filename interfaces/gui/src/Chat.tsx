@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent, type PropsWithChildren } from "react";
 import {
-  AssistantRuntimeProvider, ComposerPrimitive, MessagePartPrimitive, MessagePrimitive,
+  AssistantRuntimeProvider, ComposerPrimitive, MessagePrimitive,
   ThreadPrimitive, useAuiState, useExternalStoreRuntime,
-  type AppendMessage, type FileMessagePartProps, type PartState, type ReasoningMessagePartProps, type ToolCallMessagePartProps,
+  type AppendMessage, type FileMessagePartProps, type ImageMessagePartProps, type PartState, type ReasoningMessagePartProps, type ToolCallMessagePartProps,
 } from "@assistant-ui/react";
 import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
 import { AlertTriangle, ArrowUp, Check, ChevronDown, ChevronRight, FileText, LoaderCircle, MessageCircleQuestion, Paperclip, ShieldCheck, Square, Terminal, X } from "lucide-react";
 import remarkGfm from "remark-gfm";
-import { createScratchWorkspace, get, releaseActiveSession, selectWorkspace, sessionUrl, uploadAttachments, type ModelOption, type Session, type UserAttachment } from "./api";
+import { createScratchWorkspace, createSignedImageUrl, get, releaseActiveSession, selectWorkspace, sessionUrl, uploadAttachments, type ModelOption, type Session, type UserAttachment } from "./api";
 import { SessionSocket } from "./session";
 import { applyMessage, isTurnActivity, toMessages, TURN_PROCESS_GROUP, turnProcessPartIndexes, type Feedback, type TranscriptItem } from "./transcript";
 import { runtimeIsActive, type ContextWindow, type Incoming, type PermissionPreset, type PlanSnapshot, type RuntimePhase, type UserQuestion } from "@nosis/protocol";
@@ -203,7 +203,7 @@ function PlanStatus({ plan, open, disabled, onOpenChange }: {
 function UserMessage() {
   return <MessagePrimitive.Root className="user-turn">
     <MessageTimestamp className="turn-timestamp" />
-    <div className="user-message"><MessagePrimitive.Parts components={{ File: FileAttachmentPart }} /></div>
+    <div className="user-message"><MessagePrimitive.Parts components={{ File: FileAttachmentPart, Image: SignedImage }} /></div>
   </MessagePrimitive.Root>;
 }
 
@@ -212,6 +212,43 @@ function FileAttachmentPart({ data, filename, mimeType }: FileMessagePartProps) 
     <FileText size={18} />
     <span>{filename || "附件"}</span>
   </a>;
+}
+
+function SignedImage({ image, filename, providerMetadata }: ImageMessagePartProps) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [refreshes, setRefreshes] = useState(0);
+  const metadata = providerMetadata?.nosis;
+  const sessionId = metadata && !Array.isArray(metadata)
+    && typeof metadata.session_id === "string"
+    ? metadata.session_id
+    : undefined;
+
+  useEffect(() => {
+    const controller = new AbortController();
+    setUrl(null);
+    setFailed(false);
+    void createSignedImageUrl(image, sessionId, controller.signal)
+      .then(setUrl)
+      .catch((error: unknown) => {
+        if (!(error instanceof DOMException && error.name === "AbortError")) {
+          setFailed(true);
+        }
+      });
+    return () => controller.abort();
+  }, [image, refreshes, sessionId]);
+
+  if (failed) return <span className="message-image-status">图片无法加载</span>;
+  if (!url) return <span className="message-image-status">图片加载中…</span>;
+  return <img
+    className="message-image"
+    src={url}
+    alt={filename || "图片"}
+    onError={() => {
+      if (refreshes === 0) setRefreshes(1);
+      else setFailed(true);
+    }}
+  />;
 }
 
 function MessageTimestamp({ className = "" }: { className?: string } = {}) {
@@ -265,7 +302,7 @@ function AssistantParts() {
         case "reasoning":
           return <ReasoningText {...part} />;
         case "image":
-          return <MessagePartPrimitive.Image />;
+          return <SignedImage {...part} />;
         case "tool-call":
           return part.toolUI ?? <ToolCard {...part} />;
         default:

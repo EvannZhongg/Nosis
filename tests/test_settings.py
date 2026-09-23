@@ -135,6 +135,36 @@ class SettingsStoreTest(unittest.TestCase):
         }, snapshot["revision"])
         self.assertEqual(updated["routing"]["subagent"], "first")
 
+    def test_provider_save_preserves_image_generation_config(self) -> None:
+        document = json.loads(
+            (self.root / "provider_config.json").read_text(encoding="utf-8")
+        )
+        document["image_generation"] = {
+            "provider": "first",
+            "model": "openai/image-model",
+        }
+        (self.root / "provider_config.json").write_text(
+            json.dumps(document), encoding="utf-8"
+        )
+
+        self.store.save_provider(
+            "first",
+            {
+                "model": "openai/first",
+                "url": None,
+                "max_context_tokens": None,
+                "api_key": {"action": "keep"},
+            },
+        )
+
+        saved = json.loads(
+            (self.root / "provider_config.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            saved["image_generation"],
+            {"provider": "first", "model": "openai/image-model"},
+        )
+
 
 class EnvironmentReloaderTest(unittest.TestCase):
     def test_reloads_changes_and_removes_deleted_values(self) -> None:

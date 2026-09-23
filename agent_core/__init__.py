@@ -58,6 +58,7 @@ from .errors import (
 )
 from .jobs import CancellationToken, JobCancelled, JobHandle, JobManager, JobUpdate
 from .llm import LLMProvider, LLMRequest, LLMResponse, TokenUsage, ProviderCapabilities
+from .image_generation import GeneratedImage, ImageGenerator
 from .content import (
     AttachmentPart,
     Content,
@@ -141,6 +142,7 @@ from .tools import (
     AskUserTool,
     CompositeToolPolicy,
     EditFileTool,
+    GenerateImageTool,
     JSONValue,
     ListDirectoryTool,
     MAX_TOOL_RESULT_CHARS,
@@ -223,7 +225,10 @@ __all__ = [
     "DEFAULT_TOOL_RESULT_PREVIEW_CHARS",
     "DirectorySkillSource",
     "EditFileTool",
+    "GeneratedImage",
+    "GenerateImageTool",
     "ImageInfo",
+    "ImageGenerator",
     "ImagePart",
     "FilePart",
     "HostCommandExecutor",

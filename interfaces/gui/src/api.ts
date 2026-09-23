@@ -149,20 +149,22 @@ export async function uploadAttachments(files: File[], sessionId?: string): Prom
   return data.attachments;
 }
 
-export function attachmentUrl(path: string, sessionId?: string): string {
-  const query = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : "";
-  const prefix = ".nosis/attachments/";
-  if (path.startsWith(prefix)) {
-    return `/api/attachments/${encodeURIComponent(path.slice(prefix.length))}${query}`;
+export async function createSignedImageUrl(
+  path: string,
+  sessionId?: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  const response = await fetch("/api/image-url", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path, session_id: sessionId ?? null }),
+    signal,
+  });
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail ?? `图片加载失败 (${response.status})`);
   }
-  // An image the agent read itself can live anywhere in the workspace,
-  // so it is fetched by path. An absolute path belongs to a session
-  // artifact outside the workspace and has no route.
-  if (path && !path.startsWith("/") && !/^[a-zA-Z]:[\\/]/.test(path)) {
-    const separator = query ? "&" : "?";
-    return `/api/workspace-image${query}${separator}path=${encodeURIComponent(path)}`;
-  }
-  return path;
+  return (await response.json() as { url: string }).url;
 }
 
 export function attachmentDownloadUrl(path: string, filename: string, sessionId?: string): string {

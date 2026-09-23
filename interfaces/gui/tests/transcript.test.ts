@@ -9,6 +9,7 @@ describe("isTurnActivity", () => {
     { type: "assistant_delta", turn_id: "t1", text: "hi", model_call_index: 1 },
     { type: "reasoning_delta", turn_id: "t1", text: "thinking", model_call_index: 1 },
     { type: "tool_batch_started", turn_id: "t1", model_call_index: 1, tool_calls: [] },
+    { type: "tool_media", turn_id: "t1", attachments: [] },
     { type: "assistant_message", turn_id: "t1", content: "hi", timestamp_utc: "2026-09-16T00:00:00Z", model_call_index: 1 },
     { type: "job_status", turn_id: "t1", job_id: "job-1", kind: "shell", status: "running" },
   ] satisfies Incoming[])("recognizes $type", (message) => {
@@ -273,6 +274,53 @@ describe("applyMessage", () => {
     });
     // The protocol carries no output, only the status.
     expect(JSON.parse(items[1].content as string)).toEqual({ ok: true });
+  });
+
+  it("renders tool media immediately with the active assistant reply", () => {
+    const { items } = fold([
+      {
+        type: "tool_batch_started",
+        turn_id: "t1",
+        model_call_index: 1,
+        tool_calls: [{ id: "image-call", name: "generate_image", arguments: { prompt: "draw" } }],
+      },
+      {
+        type: "tool_result",
+        turn_id: "t1",
+        tool_call_id: "image-call",
+        name: "generate_image",
+        ok: true,
+        error: null,
+        tool_index: 1,
+        tool_count: 1,
+      },
+      {
+        type: "tool_media",
+        turn_id: "t1",
+        attachments: [{
+          type: "image",
+          path: ".nosis/attachments/generated.png",
+          filename: "generated.png",
+          mime_type: "image/png",
+          size_bytes: 123,
+        }],
+      },
+    ]);
+
+    const messages = toMessages(items, "session-1");
+    expect(messages).toHaveLength(1);
+    expect(messages[0].role).toBe("assistant");
+    expect(messages[0].content).toEqual([
+      expect.objectContaining({ type: "tool-call", toolCallId: "image-call" }),
+      {
+        type: "image",
+        image: ".nosis/attachments/generated.png",
+        filename: "generated.png",
+        providerMetadata: {
+          nosis: { session_id: "session-1" },
+        },
+      },
+    ]);
   });
 
   it("applies a later tool result before earlier calls finish", () => {
