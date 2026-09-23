@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent, type PropsWithChildren } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ClipboardEvent, type ComponentPropsWithoutRef, type FormEvent, type KeyboardEvent, type PropsWithChildren } from "react";
 import {
   AssistantRuntimeProvider, ComposerPrimitive, MessagePrimitive,
   ThreadPrimitive, useAuiState, useExternalStoreRuntime,
@@ -37,6 +37,11 @@ export function updateBackgroundJobs(
 }
 
 const MARKDOWN_PLUGINS = [remarkGfm];
+const SessionIdContext = createContext<string | undefined>(undefined);
+
+export function isRemoteMarkdownImage(src: string | undefined): boolean {
+  return Boolean(src && /^https?:\/\//i.test(src));
+}
 
 export function shouldSubmitComposerEnter(
   event: Pick<globalThis.KeyboardEvent, "key" | "shiftKey" | "isComposing" | "keyCode">,
@@ -214,20 +219,18 @@ function FileAttachmentPart({ data, filename, mimeType }: FileMessagePartProps) 
   </a>;
 }
 
-function SignedImage({ image, filename, providerMetadata }: ImageMessagePartProps) {
+function WorkspaceImage({ path, sessionId, alt, className, ...props }: {
+  path: string;
+  sessionId?: string;
+} & Omit<ComponentPropsWithoutRef<"img">, "src">) {
   const [url, setUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
-  const metadata = providerMetadata?.nosis;
-  const sessionId = metadata && !Array.isArray(metadata)
-    && typeof metadata.session_id === "string"
-    ? metadata.session_id
-    : undefined;
 
   useEffect(() => {
     const controller = new AbortController();
     setUrl(null);
     setFailed(false);
-    void createSignedImageUrl(image, sessionId, controller.signal)
+    void createSignedImageUrl(path, sessionId, controller.signal)
       .then(setUrl)
       .catch((error: unknown) => {
         if (!(error instanceof DOMException && error.name === "AbortError")) {
@@ -235,12 +238,30 @@ function SignedImage({ image, filename, providerMetadata }: ImageMessagePartProp
         }
       });
     return () => controller.abort();
-  }, [image, sessionId]);
+  }, [path, sessionId]);
 
   if (failed) return <span className="message-image-status">图片无法加载</span>;
   if (!url) return <span className="message-image-status">图片加载中…</span>;
-  return <img className="message-image" src={url} alt={filename || "图片"} onError={() => setFailed(true)} />;
+  return <img {...props} className={["message-image", className].filter(Boolean).join(" ")} src={url} alt={alt || "图片"} onError={() => setFailed(true)} />;
 }
+
+function SignedImage({ image, filename, providerMetadata }: ImageMessagePartProps) {
+  const metadata = providerMetadata?.nosis;
+  const sessionId = metadata && !Array.isArray(metadata)
+    && typeof metadata.session_id === "string"
+    ? metadata.session_id
+    : undefined;
+  return <WorkspaceImage path={image} sessionId={sessionId} alt={filename || "图片"} />;
+}
+
+function MarkdownImage({ node: _node, src, alt, ...props }: ComponentPropsWithoutRef<"img"> & { node?: unknown }) {
+  const sessionId = useContext(SessionIdContext);
+  if (!src) return null;
+  if (isRemoteMarkdownImage(src)) return <img {...props} src={src} alt={alt ?? ""} />;
+  return <WorkspaceImage {...props} path={src} sessionId={sessionId} alt={alt ?? "图片"} />;
+}
+
+const MARKDOWN_COMPONENTS = { img: MarkdownImage };
 
 function MessageTimestamp({ className = "" }: { className?: string } = {}) {
   const createdAt = useAuiState((state) => state.message.createdAt);
@@ -249,7 +270,7 @@ function MessageTimestamp({ className = "" }: { className?: string } = {}) {
 }
 
 function MarkdownText() {
-  return <MarkdownTextPrimitive remarkPlugins={MARKDOWN_PLUGINS} />;
+  return <MarkdownTextPrimitive remarkPlugins={MARKDOWN_PLUGINS} components={MARKDOWN_COMPONENTS} />;
 }
 
 /** Model reasoning, shown the way the TUI shows it: dim and italic. */
@@ -977,8 +998,9 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
     }
   }, [hasActiveJobs, interactionActive, reconnecting, runtimePopover, visiblePlan]);
 
-  return <AssistantRuntimeProvider runtime={runtime}>
-    <ThreadPrimitive.Root className="thread">
+  return <SessionIdContext.Provider value={session.session_id}>
+    <AssistantRuntimeProvider runtime={runtime}>
+      <ThreadPrimitive.Root className="thread">
       <ThreadPrimitive.Viewport className="thread-viewport">
         <ThreadPrimitive.Empty>
           <div className="welcome"><div className="welcome-symbol"><Terminal size={26} /></div><div className="eyebrow">YOUR PERSONAL AGENT</div><h1>一起，把想法变成现实。</h1><p>聊聊你的项目，或者交给 Nosis 一个任务。</p></div>
@@ -1045,6 +1067,7 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
           <div className="composer-actions"><ContextWindowIndicator window={contextWindow} /><ComposerPrimitive.Send className="send-button" aria-label={running ? "发送引导" : "发送消息"}><ArrowUp size={19} /></ComposerPrimitive.Send></div></div></ComposerPrimitive.Root>
         <div className="composer-footer">Nosis · 你的项目搭档</div>
       </div>
-    </ThreadPrimitive.Root>
-  </AssistantRuntimeProvider>;
+      </ThreadPrimitive.Root>
+    </AssistantRuntimeProvider>
+  </SessionIdContext.Provider>;
 }

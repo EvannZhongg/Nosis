@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { composerConnectionGate, shouldBlockRunningAttachmentSubmit, shouldShowPlan, shouldSubmitComposerEnter, updateBackgroundJobs, updateRuntimeIndicatorOrder } from "../src/Chat";
+import { composerConnectionGate, isRemoteMarkdownImage, shouldBlockRunningAttachmentSubmit, shouldShowPlan, shouldSubmitComposerEnter, updateBackgroundJobs, updateRuntimeIndicatorOrder } from "../src/Chat";
 
 const enter = {
   key: "Enter",
@@ -29,6 +29,27 @@ describe("composer Enter handling", () => {
 
   it("keeps Shift+Enter as a newline", () => {
     expect(shouldSubmitComposerEnter({ ...enter, shiftKey: true }, false)).toBe(false);
+  });
+});
+
+describe("Markdown image routing", () => {
+  it.each([
+    "https://example.com/image.png",
+    "http://example.com/image.png",
+    "HTTPS://example.com/image.png",
+  ])("keeps remote image URLs in the browser: %s", (src) => {
+    expect(isRemoteMarkdownImage(src)).toBe(true);
+  });
+
+  it.each([
+    "docs/image.png",
+    "./docs/image.png",
+    ".nosis/attachments/image.png",
+    "/absolute/image.png",
+    "data:image/png;base64,abc",
+    undefined,
+  ])("routes non-HTTP image sources through the workspace signer: %s", (src) => {
+    expect(isRemoteMarkdownImage(src)).toBe(false);
   });
 });
 
