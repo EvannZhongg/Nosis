@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,7 +14,7 @@ class LaunchTest(unittest.TestCase):
             config = root / "config"
             config.mkdir()
             (config / "agent_config.json").write_text(
-                '{"scratch_workspace_root": "' + str(root / "scratch") + '"}',
+                json.dumps({"scratch_workspace_root": str(root / "scratch")}),
                 encoding="utf-8",
             )
             bundle = root / "app.js"
