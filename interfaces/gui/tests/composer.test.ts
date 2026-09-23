@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { composerConnectionGate, isRemoteMarkdownImage, shouldBlockRunningAttachmentSubmit, shouldShowPlan, shouldSubmitAttachmentOnly, shouldSubmitComposerEnter, updateBackgroundJobs, updateRuntimeIndicatorOrder } from "../src/Chat";
+import { composerConnectionGate, isRemoteMarkdownImage, shouldBlockRunningAttachmentSubmit, shouldShowPlan, shouldSubmitAttachmentOnly, shouldSubmitComposerEnter, updateBackgroundJobs, updateRuntimeIndicatorOrder, userMessagePreview } from "../src/Chat";
 
 const enter = {
   key: "Enter",
@@ -118,6 +118,18 @@ describe("attachment-only submission", () => {
   it("leaves text messages and empty composers to the normal submit path", () => {
     expect(shouldSubmitAttachmentOnly("describe this", 1)).toBe(false);
     expect(shouldSubmitAttachmentOnly("", 0)).toBe(false);
+  });
+});
+
+describe("turn navigation previews", () => {
+  it("normalizes user text into a short single-line preview", () => {
+    expect(userMessagePreview({ content: [{ type: "text", text: "  分析当前的 GUI\n并增加导航  " }] }, 12))
+      .toBe("分析当前的 GUI 并增…");
+  });
+
+  it("labels an attachment-only turn", () => {
+    expect(userMessagePreview({ content: [{ type: "image", image: "image.png" }] }))
+      .toBe("附件消息");
   });
 });
 

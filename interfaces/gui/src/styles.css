@@ -64,7 +64,17 @@ svg { flex-shrink: 0; }
 .breadcrumb > svg { color: #c1c6cf; }
 .status-label { display: flex; align-items: center; gap: 7px; font-size: 10px; color: #8d95a2; margin-left: 20px; }
 .thread { display: flex; flex-direction: column; flex: 1; min-height: 0; }
-.thread-viewport { overflow-y: auto; flex: 1; min-height: 0; scroll-behavior: smooth; }
+.thread-scroll-area { position: relative; display: flex; flex: 1; min-height: 0; }
+.thread-viewport { overflow-y: auto; flex: 1; min-width: 0; min-height: 0; scroll-behavior: smooth; }
+.turn-navigation { position: absolute; z-index: 2; top: 50%; right: 8px; width: 30px; max-height: 64%; transform: translateY(-50%); }
+.turn-navigation-list { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; max-height: inherit; padding: 7px 3px; overflow-y: auto; scrollbar-width: none; }
+.turn-navigation-list::-webkit-scrollbar { display: none; }
+.turn-navigation-mark { display: flex; justify-content: flex-end; align-items: center; flex: none; width: 24px; height: 10px; border: 0; padding: 0; background: transparent; }
+.turn-navigation-mark::before { content: ""; width: 10px; height: 2px; border-radius: 999px; background: #aeb6c3; opacity: .38; transition: width .16s ease, opacity .16s ease, background .16s ease; }
+.turn-navigation-mark:hover::before, .turn-navigation-mark:focus-visible::before { width: 17px; background: #71809a; opacity: .75; }
+.turn-navigation-mark.active::before { width: 20px; background: #5f7194; opacity: .92; }
+.turn-navigation-preview { position: absolute; right: 34px; width: max-content; max-width: min(300px, calc(100vw - 120px)); padding: 7px 10px; border: 1px solid #e2e6ed; border-radius: 7px; background: #fffffff2; box-shadow: 0 5px 18px #20385c17; color: #596477; font-size: 11px; line-height: 1.4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none; transform: translateY(-50%); }
+.turn-navigation-preview span { margin-right: 7px; color: #9aa3b1; font-size: 9px; }
 .welcome { display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; min-height: 100%; padding: 50px 20px; }
 .welcome-symbol { display: grid; place-items: center; color: #7583a7; background: #f3f5f9; border: 1px solid #e9edf3; border-radius: 17px; width: 62px; height: 62px; margin-bottom: 28px; }
 .eyebrow { color: #9ba5b7; font-size: 9px; letter-spacing: 2.2px; margin-bottom: 13px; }

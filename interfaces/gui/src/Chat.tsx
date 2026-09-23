@@ -1,8 +1,8 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ClipboardEvent, type ComponentPropsWithoutRef, type FormEvent, type KeyboardEvent, type PropsWithChildren } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ClipboardEvent, type ComponentPropsWithoutRef, type FormEvent, type KeyboardEvent, type PropsWithChildren, type RefObject } from "react";
 import {
   ActionBarPrimitive, AssistantRuntimeProvider, ComposerPrimitive, MessagePrimitive,
   ThreadPrimitive, useAuiState, useExternalStoreRuntime,
-  type AppendMessage, type FileMessagePartProps, type ImageMessagePartProps, type PartState, type ReasoningMessagePartProps, type ToolCallMessagePartProps,
+  type AppendMessage, type FileMessagePartProps, type ImageMessagePartProps, type PartState, type ReasoningMessagePartProps, type ThreadMessageLike, type ToolCallMessagePartProps,
 } from "@assistant-ui/react";
 import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
 import { AlertTriangle, ArrowUp, Check, ChevronDown, ChevronRight, Copy, FileText, LoaderCircle, MessageCircleQuestion, Paperclip, ShieldCheck, Square, Terminal, X } from "lucide-react";
@@ -66,6 +66,22 @@ export function shouldSubmitAttachmentOnly(
   pendingFileCount: number,
 ): boolean {
   return !text.trim() && pendingFileCount > 0;
+}
+
+export function userMessagePreview(message: Pick<ThreadMessageLike, "content">, maxLength = 48): string {
+  const text = (typeof message.content === "string"
+    ? message.content
+    : message.content
+      .filter((part) => part.type === "text")
+      .map((part) => part.text)
+      .join(" "))
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return "附件消息";
+  const characters = Array.from(text);
+  return characters.length > maxLength
+    ? `${characters.slice(0, maxLength).join("")}…`
+    : text;
 }
 
 export function composerConnectionGate({
@@ -393,6 +409,84 @@ function AssistantMessage() {
   </MessagePrimitive.Root>;
 }
 
+function TurnNavigation({ previews, viewportRef, active }: {
+  previews: string[];
+  viewportRef: RefObject<HTMLDivElement | null>;
+  active: boolean;
+}) {
+  const [activeTurn, setActiveTurn] = useState(Math.max(0, previews.length - 1));
+  const [preview, setPreview] = useState<{ index: number; top: number } | null>(null);
+  const navigationRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport || !active || previews.length === 0) return;
+
+    let frame: number | null = null;
+    const updateActiveTurn = () => {
+      frame = null;
+      const turns = Array.from(viewport.querySelectorAll<HTMLElement>(".user-turn"));
+      if (turns.length === 0) return;
+      if (viewport.scrollTop + viewport.clientHeight >= viewport.scrollHeight - 2) {
+        setActiveTurn(turns.length - 1);
+        return;
+      }
+      const marker = viewport.getBoundingClientRect().top + Math.min(viewport.clientHeight * 0.3, 180);
+      let next = 0;
+      turns.forEach((turn, index) => {
+        if (turn.getBoundingClientRect().top <= marker) next = index;
+      });
+      setActiveTurn(next);
+    };
+    const scheduleUpdate = () => {
+      if (frame === null) frame = requestAnimationFrame(updateActiveTurn);
+    };
+
+    updateActiveTurn();
+    viewport.addEventListener("scroll", scheduleUpdate, { passive: true });
+    window.addEventListener("resize", scheduleUpdate);
+    return () => {
+      viewport.removeEventListener("scroll", scheduleUpdate);
+      window.removeEventListener("resize", scheduleUpdate);
+      if (frame !== null) cancelAnimationFrame(frame);
+    };
+  }, [active, previews.length, viewportRef]);
+
+  if (previews.length === 0) return null;
+  const jumpToTurn = (index: number) => {
+    const turn = viewportRef.current?.querySelectorAll<HTMLElement>(".user-turn")[index];
+    if (!turn) return;
+    setActiveTurn(index);
+    turn.scrollIntoView({ block: "start" });
+  };
+  const showPreview = (index: number, mark: HTMLElement) => {
+    const navigation = navigationRef.current;
+    if (!navigation) return;
+    const navigationRect = navigation.getBoundingClientRect();
+    const markRect = mark.getBoundingClientRect();
+    setPreview({ index, top: markRect.top - navigationRect.top + markRect.height / 2 });
+  };
+
+  return <nav ref={navigationRef} className="turn-navigation" aria-label="对话轮次导航" onMouseLeave={() => setPreview(null)}>
+    <div className="turn-navigation-list">
+      {previews.map((text, index) => <button
+        type="button"
+        className={`turn-navigation-mark ${index === activeTurn ? "active" : ""}`}
+        aria-label={`跳转到第 ${index + 1} 轮对话：${text}`}
+        aria-current={index === activeTurn ? "true" : undefined}
+        key={index}
+        onClick={() => jumpToTurn(index)}
+        onMouseEnter={(event) => showPreview(index, event.currentTarget)}
+        onFocus={(event) => showPreview(index, event.currentTarget)}
+        onBlur={() => setPreview(null)}
+      />)}
+    </div>
+    {preview && <div className="turn-navigation-preview" style={{ top: preview.top }} role="tooltip">
+      <span>第 {preview.index + 1} 轮</span>{previews[preview.index]}
+    </div>}
+  </nav>;
+}
+
 function PendingAttachment({ file, onRemove }: { file: File; onRemove: () => void }) {
   const [url, setUrl] = useState("");
   const image = file.type.startsWith("image/");
@@ -507,9 +601,13 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
   const steerCounter = useRef(0);
   const activeTurnIdRef = useRef<string | null>(null);
   const eventCounterRef = useRef(session.event_sequence ?? 0);
+  const viewportRef = useRef<HTMLDivElement | null>(null);
   const [attachmentId] = useState(() => crypto.randomUUID());
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const messages = useMemo(() => toMessages(items, session.session_id), [items, session.session_id]);
+  const turnPreviews = useMemo(() => messages
+    .filter((message) => message.role === "user")
+    .map((message) => userMessagePreview(message)), [messages]);
 
   // Socket callbacks fire outside React's render, so the transcript and
   // turn state they fold onto are kept in refs.
@@ -1081,12 +1179,15 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
   return <SessionIdContext.Provider value={session.session_id}>
     <AssistantRuntimeProvider runtime={runtime}>
       <ThreadPrimitive.Root className="thread">
-      <ThreadPrimitive.Viewport className="thread-viewport">
-        <ThreadPrimitive.Empty>
-          <div className="welcome"><div className="welcome-symbol"><Terminal size={26} /></div><div className="eyebrow">YOUR PERSONAL AGENT</div><h1>一起，把想法变成现实。</h1><p>聊聊你的项目，或者交给 Nosis 一个任务。</p></div>
-        </ThreadPrimitive.Empty>
-        <div className="messages"><ThreadPrimitive.Messages components={{ UserMessage, AssistantMessage }} /></div>
-      </ThreadPrimitive.Viewport>
+      <div className="thread-scroll-area">
+        <ThreadPrimitive.Viewport ref={viewportRef} className="thread-viewport">
+          <ThreadPrimitive.Empty>
+            <div className="welcome"><div className="welcome-symbol"><Terminal size={26} /></div><div className="eyebrow">YOUR PERSONAL AGENT</div><h1>一起，把想法变成现实。</h1><p>聊聊你的项目，或者交给 Nosis 一个任务。</p></div>
+          </ThreadPrimitive.Empty>
+          <div className="messages"><ThreadPrimitive.Messages components={{ UserMessage, AssistantMessage }} /></div>
+        </ThreadPrimitive.Viewport>
+        <TurnNavigation previews={turnPreviews} viewportRef={viewportRef} active={selected} />
+      </div>
       <div className="composer-area">
         {attachmentReplaced && <div className="attachment-replaced" role="status"><span>此会话由另一个页面控制，可在此页面手动接管。</span><button type="button" onClick={takeOverAttachment} disabled={attaching}>{attaching ? "正在接管…" : "在此页面接管"}</button></div>}
         {!attachmentReplaced && approval && <div className="approval-card" role="region" aria-label="工具执行确认"><div className="approval-title"><ShieldCheck size={17} /> 允许执行此工具调用？</div><pre>{approval.command}</pre><div className="approval-actions"><button onClick={() => respond(false)}>拒绝</button><button className="approve-button" onClick={() => respond(true)}>允许执行</button></div></div>}
