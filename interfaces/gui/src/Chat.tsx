@@ -217,7 +217,6 @@ function FileAttachmentPart({ data, filename, mimeType }: FileMessagePartProps) 
 function SignedImage({ image, filename, providerMetadata }: ImageMessagePartProps) {
   const [url, setUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
-  const [refreshes, setRefreshes] = useState(0);
   const metadata = providerMetadata?.nosis;
   const sessionId = metadata && !Array.isArray(metadata)
     && typeof metadata.session_id === "string"
@@ -236,19 +235,11 @@ function SignedImage({ image, filename, providerMetadata }: ImageMessagePartProp
         }
       });
     return () => controller.abort();
-  }, [image, refreshes, sessionId]);
+  }, [image, sessionId]);
 
   if (failed) return <span className="message-image-status">图片无法加载</span>;
   if (!url) return <span className="message-image-status">图片加载中…</span>;
-  return <img
-    className="message-image"
-    src={url}
-    alt={filename || "图片"}
-    onError={() => {
-      if (refreshes === 0) setRefreshes(1);
-      else setFailed(true);
-    }}
-  />;
+  return <img className="message-image" src={url} alt={filename || "图片"} onError={() => setFailed(true)} />;
 }
 
 function MessageTimestamp({ className = "" }: { className?: string } = {}) {

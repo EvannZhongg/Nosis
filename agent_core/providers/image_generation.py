@@ -1,7 +1,8 @@
 """Image generation through LiteLLM's provider adapters."""
 
 import base64
-import binascii
+import ipaddress
+import socket
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -123,21 +124,23 @@ def _decode_base64(value: str) -> bytes:
     )
     try:
         return base64.b64decode(payload, validate=True)
-    except (binascii.Error, ValueError) as error:
+    except ValueError as error:
         raise ValueError(
             "image generation provider returned invalid base64 data"
         ) from error
 
 
 def _read_image_url(url: str, timeout_seconds: float) -> bytes:
-    parsed = urlparse(url)
-    if parsed.scheme == "data":
+    if url.startswith("data:"):
         return _decode_base64(url)
-    if parsed.scheme != "https":
-        raise ValueError("image generation provider returned a non-HTTPS image URL")
+    _validate_public_https_url(url)
     with httpx.stream(
-        "GET", url, timeout=timeout_seconds, follow_redirects=True
+        "GET", url, timeout=timeout_seconds, follow_redirects=False
     ) as response:
+        if response.is_redirect:
+            raise ValueError(
+                "image generation provider returned a redirect image URL"
+            )
         response.raise_for_status()
         data = bytearray()
         for chunk in response.iter_bytes():
@@ -147,6 +150,36 @@ def _read_image_url(url: str, timeout_seconds: float) -> bytes:
                     f"generated image exceeds the maximum of {MAX_IMAGE_BYTES} bytes"
                 )
     return bytes(data)
+
+
+def _validate_public_https_url(url: str) -> None:
+    parsed = urlparse(url)
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname is None
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise ValueError(
+            "image generation provider returned an invalid HTTPS image URL"
+        )
+    try:
+        addresses = socket.getaddrinfo(
+            parsed.hostname,
+            parsed.port or 443,
+            type=socket.SOCK_STREAM,
+        )
+    except OSError as error:
+        raise ValueError(
+            "image generation provider returned an unresolvable image URL"
+        ) from error
+    if not addresses or any(
+        not ipaddress.ip_address(address[4][0].split("%", 1)[0]).is_global
+        for address in addresses
+    ):
+        raise ValueError(
+            "image generation provider returned a non-public image URL"
+        )
 
 
 __all__ = ["LiteLLMImageGenerator"]
