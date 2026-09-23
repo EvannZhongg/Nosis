@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agent_core import JsonlSessionStore, PermissionPreset, Session, ToolCall
+from agent_core import FilePart, ImagePart, JsonlSessionStore, PermissionPreset, Session, ToolCall
 from agent_core.session_paths import session_log_path, workspace_directory
 
 
@@ -51,6 +51,83 @@ class JsonlSessionStoreTest(unittest.TestCase):
             self.assertEqual(
                 {item["title"] for item in store.list_sessions()[0]["sessions"]},
                 {"first", "second"},
+            )
+
+    def test_lists_session_with_attachments_by_first_user_text(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            store = JsonlSessionStore(workspace / "sessions")
+            session = Session("attachment-session")
+            session.begin_turn("t")
+            session.add_item(
+                "user",
+                "分析这张图片",
+                attachments=(
+                    ImagePart(
+                        path=".nosis/attachments/image.png",
+                        filename="image.png",
+                        size_bytes=12,
+                    ),
+                ),
+            )
+            session.finish_turn("completed")
+            persist(store, workspace, session)
+
+            self.assertEqual(
+                store.list_sessions()[0]["sessions"],
+                [{"session_id": "attachment-session", "title": "分析这张图片"}],
+            )
+
+    def test_names_attachment_only_sessions_from_their_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            store = JsonlSessionStore(workspace / "sessions")
+            single = Session("single-attachment")
+            single.begin_turn("t")
+            single.add_item(
+                "user",
+                "",
+                attachments=(
+                    ImagePart(
+                        path=".nosis/attachments/design.png",
+                        filename="design.png",
+                        size_bytes=12,
+                    ),
+                ),
+            )
+            single.finish_turn("completed")
+            persist(store, workspace, single)
+
+            multiple = Session("multiple-attachments")
+            multiple.begin_turn("t")
+            multiple.add_item(
+                "user",
+                "",
+                attachments=(
+                    FilePart(
+                        path=".nosis/attachments/brief.pdf",
+                        filename="brief.pdf",
+                        mime_type="application/pdf",
+                        size_bytes=24,
+                    ),
+                    ImagePart(
+                        path=".nosis/attachments/reference.png",
+                        filename="reference.png",
+                        size_bytes=12,
+                    ),
+                ),
+            )
+            multiple.finish_turn("completed")
+            persist(store, workspace, multiple)
+
+            titles = {
+                item["session_id"]: item["title"]
+                for item in store.list_sessions()[0]["sessions"]
+            }
+            self.assertEqual(titles["single-attachment"], "design.png")
+            self.assertEqual(
+                titles["multiple-attachments"],
+                "brief.pdf 等 2 个附件",
             )
 
     def test_lists_sessions_newest_first(self) -> None:

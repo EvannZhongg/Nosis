@@ -4,7 +4,7 @@ import { Chat } from "./Chat";
 import { Settings, type SettingsSection } from "./Settings";
 import { Workspace } from "./Workspace";
 import { runtimeIsActive, type ContextWindow, type RuntimePhase } from "@nosis/protocol";
-import { createScratchWorkspace, deleteSession, get, sessionUrl, type ModelOption, type ModelOptions, type Session, type WorkspaceSessions } from "./api";
+import { deleteSession, get, sessionUrl, type ModelOption, type ModelOptions, type Session, type WorkspaceSessions } from "./api";
 
 type ActiveSession = Session & { provider: string | null; phase: RuntimePhase };
 const SELECTED_SESSION_KEY = "nosis.selectedSessionId";
@@ -36,7 +36,6 @@ export function App() {
   const [expandedWorkspaces, setExpandedWorkspaces] = useState<Set<string>>(new Set());
   const [settingsSection, setSettingsSection] = useState<SettingsSection | null>(null);
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
-  const [creatingScratch, setCreatingScratch] = useState(false);
   const [sessionsCollapsed, setSessionsCollapsed] = useState(false);
   const [workspaceCollapsed, setWorkspaceCollapsed] = useState(false);
   const settingsMenuRef = useRef<HTMLDivElement>(null);
@@ -188,23 +187,6 @@ export function App() {
     setError("");
   }
 
-  async function createScratchChat() {
-    const fresh = newSession();
-    setCreatingScratch(true);
-    setError("");
-    try {
-      fresh.workspace = await createScratchWorkspace(fresh.session_id);
-      setChatSessions((all) => [...all, fresh]);
-      setSelectedSessionId(fresh.session_id);
-      setSettingsSection(null);
-      setSettingsMenuOpen(false);
-    } catch (error) {
-      setError(String(error));
-    } finally {
-      setCreatingScratch(false);
-    }
-  }
-
   async function removeSession(id: string) {
     if (busyBySession[id] || !window.confirm("确定删除这个会话吗？此操作无法撤销。")) return;
     setLoadingSessionId(id);
@@ -265,7 +247,6 @@ export function App() {
           <div className="brand"><span>Nosis<span className="brand-dot">.</span></span><button className="sidebar-collapse-button" aria-label="收起会话栏" title="收起会话栏" onClick={() => { setSessionsCollapsed(true); setSettingsMenuOpen(false); }}><PanelLeftClose size={17} /></button></div>
           <div className="new-chat-actions">
             <button className="new-chat" onClick={() => createNewChat()}><Plus size={17} /> New chat</button>
-            <button className="scratch-chat" disabled={creatingScratch} onClick={() => void createScratchChat()}>{creatingScratch ? <LoaderCircle size={15} className="spin" /> : <Plus size={15} />} Temporary</button>
           </div>
           <nav className="session-list">
             <div className="section-label">Projects</div>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { composerConnectionGate, isRemoteMarkdownImage, shouldBlockRunningAttachmentSubmit, shouldShowPlan, shouldSubmitComposerEnter, updateBackgroundJobs, updateRuntimeIndicatorOrder } from "../src/Chat";
+import { composerConnectionGate, isRemoteMarkdownImage, shouldBlockRunningAttachmentSubmit, shouldShowPlan, shouldSubmitAttachmentOnly, shouldSubmitComposerEnter, updateBackgroundJobs, updateRuntimeIndicatorOrder } from "../src/Chat";
 
 const enter = {
   key: "Enter",
@@ -106,6 +106,18 @@ describe("running attachment submission", () => {
 
   it("allows steering without attachments", () => {
     expect(shouldBlockRunningAttachmentSubmit(true, 0)).toBe(false);
+  });
+});
+
+describe("attachment-only submission", () => {
+  it("submits when attachments are present and text is empty", () => {
+    expect(shouldSubmitAttachmentOnly("", 1)).toBe(true);
+    expect(shouldSubmitAttachmentOnly("   ", 2)).toBe(true);
+  });
+
+  it("leaves text messages and empty composers to the normal submit path", () => {
+    expect(shouldSubmitAttachmentOnly("describe this", 1)).toBe(false);
+    expect(shouldSubmitAttachmentOnly("", 0)).toBe(false);
   });
 });
 

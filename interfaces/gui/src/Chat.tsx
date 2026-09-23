@@ -1,11 +1,11 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ClipboardEvent, type ComponentPropsWithoutRef, type FormEvent, type KeyboardEvent, type PropsWithChildren } from "react";
 import {
-  AssistantRuntimeProvider, ComposerPrimitive, MessagePrimitive,
+  ActionBarPrimitive, AssistantRuntimeProvider, ComposerPrimitive, MessagePrimitive,
   ThreadPrimitive, useAuiState, useExternalStoreRuntime,
   type AppendMessage, type FileMessagePartProps, type ImageMessagePartProps, type PartState, type ReasoningMessagePartProps, type ToolCallMessagePartProps,
 } from "@assistant-ui/react";
 import { MarkdownTextPrimitive } from "@assistant-ui/react-markdown";
-import { AlertTriangle, ArrowUp, Check, ChevronDown, ChevronRight, FileText, LoaderCircle, MessageCircleQuestion, Paperclip, ShieldCheck, Square, Terminal, X } from "lucide-react";
+import { AlertTriangle, ArrowUp, Check, ChevronDown, ChevronRight, Copy, FileText, LoaderCircle, MessageCircleQuestion, Paperclip, ShieldCheck, Square, Terminal, X } from "lucide-react";
 import remarkGfm from "remark-gfm";
 import { createScratchWorkspace, createSignedImageUrl, get, releaseActiveSession, selectWorkspace, sessionUrl, uploadAttachments, type ModelOption, type Session, type UserAttachment } from "./api";
 import { SessionSocket } from "./session";
@@ -59,6 +59,13 @@ export function shouldBlockRunningAttachmentSubmit(
   pendingFileCount: number,
 ): boolean {
   return running && pendingFileCount > 0;
+}
+
+export function shouldSubmitAttachmentOnly(
+  text: string,
+  pendingFileCount: number,
+): boolean {
+  return !text.trim() && pendingFileCount > 0;
 }
 
 export function composerConnectionGate({
@@ -261,7 +268,59 @@ function MarkdownImage({ node: _node, src, alt, ...props }: ComponentPropsWithou
   return <WorkspaceImage {...props} path={src} sessionId={sessionId} alt={alt ?? "图片"} />;
 }
 
-const MARKDOWN_COMPONENTS = { img: MarkdownImage };
+function CopyTextButton({ getText, label, className = "" }: {
+  getText: () => string;
+  label: string;
+  className?: string;
+}) {
+  const [copied, setCopied] = useState(false);
+  const resetRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {
+    if (resetRef.current) clearTimeout(resetRef.current);
+  }, []);
+
+  const copy = () => {
+    const text = getText();
+    if (!text || !navigator.clipboard) return;
+    void navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      if (resetRef.current) clearTimeout(resetRef.current);
+      resetRef.current = setTimeout(() => {
+        resetRef.current = null;
+        setCopied(false);
+      }, 2000);
+    }, () => undefined);
+  };
+
+  const title = copied ? "已复制" : label;
+  return <button type="button" className={`copy-button ${className}`.trim()} aria-label={title} title={title} onClick={copy}>
+    {copied ? <Check size={13} /> : <Copy size={13} />}
+  </button>;
+}
+
+function CopyablePre({ node: _node, children, ...props }: ComponentPropsWithoutRef<"pre"> & { node?: unknown }) {
+  const contentRef = useRef<HTMLPreElement | null>(null);
+  const running = useAuiState((state) => state.message.status?.type === "running");
+  return <div className="markdown-copy-block markdown-code-block">
+    {!running && <CopyTextButton className="markdown-copy-button" label="复制代码" getText={() => contentRef.current?.innerText ?? ""} />}
+    <pre {...props} ref={contentRef}>{children}</pre>
+  </div>;
+}
+
+function CopyableTable({ node: _node, children, ...props }: ComponentPropsWithoutRef<"table"> & { node?: unknown }) {
+  const tableRef = useRef<HTMLTableElement | null>(null);
+  const running = useAuiState((state) => state.message.status?.type === "running");
+  const getText = () => Array.from(tableRef.current?.rows ?? [])
+    .map((row) => Array.from(row.cells).map((cell) => cell.innerText).join("\t"))
+    .join("\n");
+  return <div className="markdown-copy-block markdown-table-block">
+    {!running && <CopyTextButton className="markdown-copy-button" label="复制表格" getText={getText} />}
+    <table {...props} ref={tableRef}>{children}</table>
+  </div>;
+}
+
+const MARKDOWN_COMPONENTS = { img: MarkdownImage, pre: CopyablePre, table: CopyableTable };
 
 function MessageTimestamp({ className = "" }: { className?: string } = {}) {
   const createdAt = useAuiState((state) => state.message.createdAt);
@@ -325,9 +384,12 @@ function AssistantParts() {
 }
 
 function AssistantMessage() {
+  const running = useAuiState((state) => state.message.status?.type === "running");
+  const hasText = useAuiState((state) => state.message.parts.some((part) => part.type === "text" && part.text.length > 0));
+  const copied = useAuiState((state) => state.message.isCopied);
   return <MessagePrimitive.Root className="assistant-message">
     <div className="assistant-label"><span className="assistant-avatar"><img src="/nosis-avatar-128.png" alt="" /></span>Nosis</div>
-    <div className="assistant-content"><AssistantParts /><MessageTimestamp /></div>
+    <div className="assistant-content"><AssistantParts /><div className="assistant-message-meta"><MessageTimestamp />{!running && hasText && <ActionBarPrimitive.Copy className="copy-button message-copy-button" aria-label={copied ? "已复制完整回答" : "复制完整回答"} title={copied ? "已复制" : "复制完整回答"} copiedDuration={2000}>{copied ? <Check size={13} /> : <Copy size={13} />}</ActionBarPrimitive.Copy>}</div></div>
   </MessagePrimitive.Root>;
 }
 
@@ -429,6 +491,7 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
   const [pendingProvider, setPendingProvider] = useState<string | null>(null);
   const [questionDraft, setQuestionDraft] = useState("");
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [uploadingAttachments, setUploadingAttachments] = useState(false);
   const [workspaceDraft, setWorkspaceDraft] = useState(session.workspace ?? "");
   const [pendingWorkspace, setPendingWorkspace] = useState<string | null>(null);
   const [workspaceEditing, setWorkspaceEditing] = useState(false);
@@ -453,6 +516,7 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
   const itemsRef = useRef(items);
   const runningRef = useRef(false);
   const attachmentReplacedRef = useRef(false);
+  const attachmentSubmitRef = useRef(false);
   const awaitingSessionActivityRef = useRef(false);
   const permissionSaving = pendingPermissionPreset !== null;
   const providerSaving = pendingProvider !== null;
@@ -768,9 +832,9 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
     connect({ attachOnly: true, takeover: true });
   }
 
-  async function onNew(message: AppendMessage) {
-    const text = message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n").trim();
+  async function submitMessage(text: string) {
     if (!text && pendingFiles.length === 0) return;
+    if (attachmentSubmitRef.current) return;
     if (runningRef.current) {
       const turnId = activeTurnIdRef.current;
       if (pendingFiles.length > 0) {
@@ -792,11 +856,16 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
 
     let attachments: UserAttachment[] = [];
     if (pendingFiles.length) {
+      attachmentSubmitRef.current = true;
+      setUploadingAttachments(true);
       try {
-      attachments = await uploadAttachments(pendingFiles, session.session_id);
+        attachments = await uploadAttachments(pendingFiles, session.session_id);
       } catch (error) {
         showAlert({ kind: "alert", id: "attachment-upload", level: "error", text: String(error) });
         return;
+      } finally {
+        attachmentSubmitRef.current = false;
+        setUploadingAttachments(false);
       }
       setPendingFiles([]);
     }
@@ -829,6 +898,11 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
       text,
       ...(attachments.length ? { attachments } : {}),
     });
+  }
+
+  async function onNew(message: AppendMessage) {
+    const text = message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n").trim();
+    await submitMessage(text);
   }
 
   function respond(approved: boolean) {
@@ -920,11 +994,17 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
   }
 
   function onComposerSubmit(event: FormEvent<HTMLFormElement>) {
-    if (!shouldBlockRunningAttachmentSubmit(runningRef.current, pendingFiles.length)) return;
-    // Stop assistant-ui before it clears the draft; attachments cannot be steered
-    // into an already running turn, so the whole pending message stays intact.
+    if (shouldBlockRunningAttachmentSubmit(runningRef.current, pendingFiles.length)) {
+      // Stop assistant-ui before it clears the draft; attachments cannot be steered
+      // into an already running turn, so the whole pending message stays intact.
+      event.preventDefault();
+      showToast({ kind: "toast", level: "info", text: "任务运行中不能发送附件；待发送内容已保留，请停止或等待当前任务结束。" });
+      return;
+    }
+    const text = event.currentTarget.querySelector("textarea")?.value ?? "";
+    if (!shouldSubmitAttachmentOnly(text, pendingFiles.length)) return;
     event.preventDefault();
-    showToast({ kind: "toast", level: "info", text: "任务运行中不能发送附件；待发送内容已保留，请停止或等待当前任务结束。" });
+    void submitMessage("");
   }
 
   function onCompositionStart() {
@@ -945,7 +1025,7 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
   const interactionActive = approval !== null || question !== null;
   const backgroundDisconnected = backgroundActive && socketRef.current === null;
   const composerGate = composerConnectionGate({
-    attaching,
+    attaching: attaching || uploadingAttachments,
     configurationPending,
     attachmentReplaced,
     interactionActive,
@@ -1049,7 +1129,7 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
             </div>}
           </div>
           <ComposerPrimitive.Input placeholder={question ? "请先回答上方问题…" : approval ? "请先处理上方确认…" : "Ask Nosis…"} aria-label="消息" rows={2} autoFocus submitMode="none" disabled={composerGate.inputDisabled} onKeyDown={onComposerKeyDown} onCompositionStart={onCompositionStart} onCompositionEnd={onCompositionEnd} onPaste={onPaste} /><div className="composer-bottom">
-          <button type="button" className="attachment-button" aria-label="添加附件" title="添加附件" disabled={controlsDisabled || sessionRunning} onClick={() => fileInputRef.current?.click()}><Paperclip size={15} /></button>
+          <button type="button" className="attachment-button" aria-label="添加附件" title="添加附件" disabled={controlsDisabled || sessionRunning || uploadingAttachments} onClick={() => fileInputRef.current?.click()}><Paperclip size={15} /></button>
           <input ref={fileInputRef} className="attachment-input" type="file" multiple onChange={(event) => { setPendingFiles((files) => [...files, ...Array.from(event.target.files ?? [])]); event.currentTarget.value = ""; }} />
           <label className="model-selector" title={providers.find((option) => option.id === displayedProvider)?.model}>
             <select aria-label="选择模型" value={displayedProvider} disabled={controlsDisabled || sessionRunning || providerSaving} onChange={(event) => changeProvider(event.target.value)}>
@@ -1064,7 +1144,7 @@ export function Chat({ session, selected, contextWindow, workspaceOptions = [], 
               <option value="full_access">完全访问</option>
             </select>{permissionSaving ? <LoaderCircle size={12} className="spin" aria-label="正在保存权限" /> : <ChevronDown size={12} />}
           </label>
-          <div className="composer-actions"><ContextWindowIndicator window={contextWindow} /><ComposerPrimitive.Send className="send-button" aria-label={running ? "发送引导" : "发送消息"}><ArrowUp size={19} /></ComposerPrimitive.Send></div></div></ComposerPrimitive.Root>
+          <div className="composer-actions"><ContextWindowIndicator window={contextWindow} />{pendingFiles.length > 0 ? <button type="submit" className="send-button" aria-label="发送消息" disabled={composerGate.sendDisabled || sessionRunning}><ArrowUp size={19} /></button> : <ComposerPrimitive.Send className="send-button" aria-label={running ? "发送引导" : "发送消息"}><ArrowUp size={19} /></ComposerPrimitive.Send>}</div></div></ComposerPrimitive.Root>
         <div className="composer-footer">Nosis · 你的项目搭档</div>
       </div>
       </ThreadPrimitive.Root>

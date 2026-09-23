@@ -486,7 +486,8 @@ def _content_to_provider_format(
     rendered: list[dict[str, object]] = []
     for part in parts:
         if isinstance(part, TextPart):
-            rendered.append({"type": "text", "text": part.text})
+            if part.text:
+                rendered.append({"type": "text", "text": part.text})
         elif isinstance(part, ImagePart):
             try:
                 path = _resolve_media_path(part.path, media_root)

@@ -50,6 +50,32 @@ USAGE = type(
 
 
 class LiteLLMProviderTest(unittest.TestCase):
+    def test_omits_empty_text_from_an_image_only_message(self) -> None:
+        from agent_core.providers.litellm_provider import (
+            _content_to_provider_format,
+        )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            image = root / "image.png"
+            image.write_bytes(b"image-bytes")
+            content = _content_to_provider_format(
+                Message(
+                    role="user",
+                    content=(
+                        TextPart(text=""),
+                        ImagePart(
+                            path="image.png",
+                            filename="image.png",
+                        ),
+                    ),
+                ),
+                media_root=root,
+            )
+
+        self.assertEqual(len(content), 1)
+        self.assertEqual(content[0]["type"], "image_url")
+
     def test_describes_attached_files_as_workspace_paths(self) -> None:
         from agent_core.providers.litellm_provider import (
             _content_to_provider_format,

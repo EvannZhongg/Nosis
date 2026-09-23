@@ -7,8 +7,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable
 
+from .content import FilePart, ImagePart, text_content
 from .permissions import PermissionPreset
-from .session import JournalEvent, Session
+from .session import JournalEvent, Session, message_from_dict
 from .session_paths import (
     _validate_session_id,
     default_sessions_directory,
@@ -368,9 +369,22 @@ def _session_title(path: Path, session_id: str) -> str:
                     and isinstance(message, dict)
                     and message.get("role") == "user"
                 ):
-                    content = message.get("content")
-                    if isinstance(content, str) and content:
+                    parsed = message_from_dict(message)
+                    content = text_content(parsed.content)
+                    if content:
                         return content
+                    filenames = [
+                        part.filename
+                        for part in parsed.parts
+                        if isinstance(part, (ImagePart, FilePart))
+                        and part.filename
+                    ]
+                    if filenames:
+                        return (
+                            filenames[0]
+                            if len(filenames) == 1
+                            else f"{filenames[0]} 等 {len(filenames)} 个附件"
+                        )
                     return session_id
     except (OSError, ValueError):
         pass
