@@ -621,24 +621,49 @@ def message_from_dict(data: dict[str, object]) -> Message:
                 raise ValueError("message content part must be an object")
             if part.get("type") == "text":
                 parts.append(TextPart(str(part.get("text", ""))))
-            elif part.get("type") == "image":
-                parts.append(
-                    ImagePart(
-                        path=str(part["path"]),
-                        mime_type=str(part["mime_type"]),
-                        filename=str(part["filename"]),
-                        size_bytes=int(part["size_bytes"]),
+            elif part.get("type") in {"image", "file"}:
+                path = part.get("path")
+                filename = part.get("filename")
+                mime_type = part.get("mime_type")
+                size_bytes = part.get("size_bytes")
+                if not isinstance(path, str) or not path:
+                    raise ValueError(
+                        "attachment path must be a non-empty string"
                     )
-                )
-            elif part.get("type") == "file":
-                parts.append(
-                    FilePart(
-                        path=str(part["path"]),
-                        filename=str(part["filename"]),
-                        mime_type=str(part["mime_type"]),
-                        size_bytes=int(part["size_bytes"]),
+                if not isinstance(filename, str) or not filename:
+                    raise ValueError(
+                        "attachment filename must be a non-empty string"
                     )
-                )
+                if not isinstance(mime_type, str) or not mime_type:
+                    raise ValueError(
+                        "attachment mime_type must be a non-empty string"
+                    )
+                if (
+                    isinstance(size_bytes, bool)
+                    or not isinstance(size_bytes, int)
+                    or size_bytes < 0
+                ):
+                    raise ValueError(
+                        "attachment size_bytes must be a non-negative integer"
+                    )
+                if part["type"] == "image":
+                    parts.append(
+                        ImagePart(
+                            path=path,
+                            mime_type=mime_type,
+                            filename=filename,
+                            size_bytes=size_bytes,
+                        )
+                    )
+                else:
+                    parts.append(
+                        FilePart(
+                            path=path,
+                            filename=filename,
+                            mime_type=mime_type,
+                            size_bytes=size_bytes,
+                        )
+                    )
             else:
                 raise ValueError("unknown message content part type")
         content = tuple(parts)

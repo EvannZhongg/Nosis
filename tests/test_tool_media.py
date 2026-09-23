@@ -117,7 +117,14 @@ class ToolMediaPersistenceTest(unittest.TestCase):
             ),
             Message(
                 role="user",
-                content=(ImagePart(path="found.png"),),
+                content=(
+                    ImagePart(
+                        path="found.png",
+                        mime_type="image/png",
+                        filename="found.png",
+                        size_bytes=123,
+                    ),
+                ),
                 timestamp_utc=datetime(2024, 1, 1, tzinfo=timezone.utc),
                 origin="tool_media",
             ),

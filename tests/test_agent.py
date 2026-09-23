@@ -1316,7 +1316,14 @@ class AgentTest(unittest.TestCase):
             "user",
             "look at this",
             REQUEST_TIME,
-            attachments=(ImagePart(path=".nosis/attachments/a1.png"),),
+            attachments=(
+                ImagePart(
+                    path=".nosis/attachments/a1.png",
+                    mime_type="image/png",
+                    filename="a1.png",
+                    size_bytes=123,
+                ),
+            ),
         )
         provider = MockProvider(["ok"])
         agent = Agent(
@@ -1339,7 +1346,12 @@ class AgentTest(unittest.TestCase):
             historical.parts,
             (
                 TextPart(text="look at this"),
-                ImagePart(path=".nosis/attachments/a1.png"),
+                ImagePart(
+                    path=".nosis/attachments/a1.png",
+                    mime_type="image/png",
+                    filename="a1.png",
+                    size_bytes=123,
+                ),
             ),
         )
 

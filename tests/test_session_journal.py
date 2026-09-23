@@ -14,9 +14,44 @@ from agent_core import (
 )
 from agent_core.projection import project_context_units
 from agent_core.content import historical_content
+from agent_core.session import message_from_dict
 
 
 class SessionJournalTest(unittest.TestCase):
+    def test_attachment_replay_requires_current_metadata(self):
+        for missing in ("filename", "size_bytes"):
+            part = {
+                "type": "file",
+                "path": ".nosis/attachments/report.pdf",
+                "filename": "report.pdf",
+                "mime_type": "application/pdf",
+                "size_bytes": 123,
+            }
+            del part[missing]
+
+            with self.subTest(missing=missing):
+                with self.assertRaises(ValueError):
+                    message_from_dict({"role": "user", "content": [part]})
+
+    def test_attachment_replay_does_not_coerce_metadata_types(self):
+        for field, value in (
+            ("filename", 123),
+            ("size_bytes", "123"),
+            ("size_bytes", True),
+        ):
+            part = {
+                "type": "file",
+                "path": ".nosis/attachments/report.pdf",
+                "filename": "report.pdf",
+                "mime_type": "application/pdf",
+                "size_bytes": 123,
+            }
+            part[field] = value
+
+            with self.subTest(field=field, value=value):
+                with self.assertRaises(ValueError):
+                    message_from_dict({"role": "user", "content": [part]})
+
     def test_file_attachment_is_journaled_and_replayed(self):
         session = Session("s")
         attachment = FilePart(
