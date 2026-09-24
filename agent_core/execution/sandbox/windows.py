@@ -28,6 +28,10 @@ class WindowsSandboxBackend(SandboxBackend):
     def __init__(self) -> None:
         self._temporary_directory: Path | None = None
         self._sandbox = None
+        if os.name == "nt":
+            from ...windows_sandbox import _CapabilityLeases, _WindowsApi
+
+            _CapabilityLeases(_WindowsApi()).cleanup_stale()
 
     def execute(
         self,
@@ -53,7 +57,11 @@ class WindowsSandboxBackend(SandboxBackend):
             )
         private_tmp = self._temporary_directory.resolve()
         if self._sandbox is None:
-            self._sandbox = WindowsWriteRestrictedSandbox(workspace, private_tmp)
+            try:
+                self._sandbox = WindowsWriteRestrictedSandbox(workspace, private_tmp)
+            except BaseException:
+                self.close()
+                raise
         elif self._sandbox.workspace != workspace:
             raise RuntimeError(
                 "a Windows sandbox backend cannot be shared across workspaces"
@@ -79,9 +87,12 @@ class WindowsSandboxBackend(SandboxBackend):
         )
 
     def close(self) -> None:
-        if self._sandbox is not None:
-            self._sandbox.close()
+        try:
+            if self._sandbox is not None:
+                self._sandbox.close()
+        finally:
             self._sandbox = None
-        if self._temporary_directory is not None:
-            shutil.rmtree(self._temporary_directory, ignore_errors=True)
-            self._temporary_directory = None
+            if self._temporary_directory is not None:
+                if self._temporary_directory.exists():
+                    shutil.rmtree(self._temporary_directory)
+                self._temporary_directory = None

@@ -11,11 +11,17 @@ from __future__ import annotations
 
 import ctypes
 import hashlib
+import json
+import logging
 import os
+import shutil
+import stat
 import subprocess
 import tempfile
+import time
 import uuid
 from ctypes import wintypes
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import BinaryIO
 
@@ -50,6 +56,12 @@ FILE_GENERIC_EXECUTE = 0x001200A0
 DELETE = 0x00010000
 FILE_DELETE_CHILD = 0x00000040
 STANDARD_RIGHTS_WRITE = 0x00020000
+WRITE_DAC = 0x00040000
+FILE_SHARE_ALL = 0x00000007
+OPEN_EXISTING = 3
+FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+ERROR_INVALID_PARAMETER = 87
 WORKSPACE_GRANT = (
     FILE_GENERIC_READ
     | FILE_GENERIC_WRITE
@@ -76,6 +88,21 @@ JobObjectExtendedLimitInformation = 9
 _CAPABILITY_LEASE_DIRECTORY = (
     Path(tempfile.gettempdir()) / "nosis-capability-leases"
 )
+_CAPABILITY_LEASE_TTL_SECONDS = 24 * 60 * 60
+_logger = logging.getLogger(__name__)
+
+
+class WindowsSandboxWorkspaceError(RuntimeError):
+    """The selected workspace cannot receive sandbox capabilities."""
+
+    def __init__(self, workspace: Path, error: OSError) -> None:
+        super().__init__(
+            f"Cannot prepare Windows workspace sandbox at '{workspace}': "
+            "the current user must be able to write to the directory and "
+            "change its permissions (WRITE_DAC). Select a directory you own "
+            "and can modify instead of a protected directory or drive root. "
+            f"The command was not executed. Windows error: {error.errno}."
+        )
 
 
 class SID_AND_ATTRIBUTES(ctypes.Structure):
@@ -244,6 +271,16 @@ class _WindowsApi:
             wintypes.DWORD, wintypes.BOOL, wintypes.DWORD
         ]
         self.kernel32.OpenProcess.restype = wintypes.HANDLE
+        self.kernel32.GetProcessTimes.argtypes = [
+            wintypes.HANDLE,
+            *([ctypes.POINTER(wintypes.FILETIME)] * 4),
+        ]
+        self.kernel32.GetProcessTimes.restype = wintypes.BOOL
+        self.kernel32.CreateFileW.argtypes = [
+            wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+            ctypes.c_void_p, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+        ]
+        self.kernel32.CreateFileW.restype = wintypes.HANDLE
         self.kernel32.LocalFree.argtypes = [ctypes.c_void_p]
         self.kernel32.LocalFree.restype = ctypes.c_void_p
         self.kernel32.WaitForSingleObject.argtypes = [
@@ -439,17 +476,178 @@ class _WindowsApi:
         finally:
             self.local_free(ctypes.cast(value, ctypes.c_void_p))
 
-    def process_is_running(self, pid: int) -> bool:
-        handle = self.kernel32.OpenProcess(SYNCHRONIZE, False, pid)
+    def process_identity(self, pid: int) -> int | None:
+        handle = self.kernel32.OpenProcess(
+            SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, False, pid
+        )
         if not handle:
-            return False
+            error = self.error("OpenProcess")
+            if error.errno == ERROR_INVALID_PARAMETER:
+                return None
+            raise error
         try:
-            return (
-                self.kernel32.WaitForSingleObject(handle, 0)
-                == WAIT_TIMEOUT
-            )
+            status = self.kernel32.WaitForSingleObject(handle, 0)
+            if status == WAIT_OBJECT_0:
+                return None
+            if status != WAIT_TIMEOUT:
+                raise self.error("WaitForSingleObject")
+            created, exited, kernel, user = (wintypes.FILETIME() for _ in range(4))
+            if not self.kernel32.GetProcessTimes(
+                handle, ctypes.byref(created), ctypes.byref(exited),
+                ctypes.byref(kernel), ctypes.byref(user),
+            ):
+                raise self.error("GetProcessTimes")
+            return (created.dwHighDateTime << 32) | created.dwLowDateTime
         finally:
             self.close_handle(handle)
+
+    def validate_workspace(self, path: Path) -> None:
+        handle = self.kernel32.CreateFileW(
+            str(path), FILE_GENERIC_WRITE | WRITE_DAC, FILE_SHARE_ALL, None,
+            OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, None,
+        )
+        if handle == ctypes.c_void_p(-1).value:
+            error = self.error("CreateFileW")
+            raise WindowsSandboxWorkspaceError(path, error) from error
+        self.close_handle(handle)
+
+    def has_write_grant(self, path: Path, sid: ctypes.c_void_p) -> bool:
+        acl = ctypes.c_void_p()
+        descriptor = ctypes.c_void_p()
+        result = self.advapi32.GetNamedSecurityInfoW(
+            str(path), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, None, None,
+            ctypes.byref(acl), None, ctypes.byref(descriptor),
+        )
+        if result:
+            raise self.error("GetNamedSecurityInfoW", result)
+        try:
+            return bool(acl) and self._has_write_grant(acl, sid)
+        finally:
+            self.local_free(descriptor)
+
+    def convert_sid(self, value: str) -> ctypes.c_void_p:
+        pointer = ctypes.c_void_p()
+        if not self.advapi32.ConvertStringSidToSidW(
+            value, ctypes.byref(pointer)
+        ):
+            raise self.error("ConvertStringSidToSidW")
+        return pointer
+
+    def grant_write(self, path: Path, sid: ctypes.c_void_p) -> bool:
+        old_acl = ctypes.c_void_p()
+        descriptor = ctypes.c_void_p()
+        result = self.advapi32.GetNamedSecurityInfoW(
+            str(path),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            None,
+            None,
+            ctypes.byref(old_acl),
+            None,
+            ctypes.byref(descriptor),
+        )
+        if result:
+            raise self.error("GetNamedSecurityInfoW", result)
+        try:
+            if old_acl and self._has_write_grant(old_acl, sid):
+                return False
+            new_acl = ctypes.c_void_p()
+            entry = _explicit_access(sid, WORKSPACE_GRANT)
+            result = self.advapi32.SetEntriesInAclW(
+                1, ctypes.byref(entry), old_acl, ctypes.byref(new_acl)
+            )
+            if result:
+                raise self.error("SetEntriesInAclW", result)
+            try:
+                result = self.advapi32.SetNamedSecurityInfoW(
+                    str(path),
+                    SE_FILE_OBJECT,
+                    DACL_SECURITY_INFORMATION,
+                    None,
+                    None,
+                    new_acl,
+                    None,
+                )
+                if result:
+                    raise self.error("SetNamedSecurityInfoW", result)
+                return True
+            finally:
+                self.local_free(new_acl)
+        finally:
+            self.local_free(descriptor)
+
+    def revoke_write(self, path: Path, sid: ctypes.c_void_p) -> None:
+        old_acl = ctypes.c_void_p()
+        descriptor = ctypes.c_void_p()
+        result = self.advapi32.GetNamedSecurityInfoW(
+            str(path),
+            SE_FILE_OBJECT,
+            DACL_SECURITY_INFORMATION,
+            None,
+            None,
+            ctypes.byref(old_acl),
+            None,
+            ctypes.byref(descriptor),
+        )
+        if result:
+            raise self.error("GetNamedSecurityInfoW", result)
+        try:
+            if not old_acl:
+                return
+            new_acl = ctypes.c_void_p()
+            entry = _explicit_access(sid, 0, mode=REVOKE_ACCESS)
+            result = self.advapi32.SetEntriesInAclW(
+                1, ctypes.byref(entry), old_acl, ctypes.byref(new_acl)
+            )
+            if result:
+                raise self.error("SetEntriesInAclW(REVOKE_ACCESS)", result)
+            try:
+                old_count = ctypes.cast(old_acl, ctypes.POINTER(ACL)).contents.AceCount
+                new_count = ctypes.cast(new_acl, ctypes.POINTER(ACL)).contents.AceCount
+                if new_count == old_count:
+                    return
+                result = self.advapi32.SetNamedSecurityInfoW(
+                    str(path),
+                    SE_FILE_OBJECT,
+                    DACL_SECURITY_INFORMATION,
+                    None,
+                    None,
+                    new_acl,
+                    None,
+                )
+                if result:
+                    raise self.error(
+                        "SetNamedSecurityInfoW(REVOKE_ACCESS)", result
+                    )
+            finally:
+                self.local_free(new_acl)
+        finally:
+            self.local_free(descriptor)
+
+    def _has_write_grant(
+        self, acl_pointer: ctypes.c_void_p, sid: ctypes.c_void_p
+    ) -> bool:
+        acl = ctypes.cast(acl_pointer, ctypes.POINTER(ACL)).contents
+        for index in range(acl.AceCount):
+            ace_pointer = ctypes.c_void_p()
+            if not self.advapi32.GetAce(
+                acl_pointer, index, ctypes.byref(ace_pointer)
+            ):
+                raise self.error("GetAce")
+            ace = ctypes.cast(
+                ace_pointer, ctypes.POINTER(ACCESS_ALLOWED_ACE)
+            ).contents
+            if (
+                ace.Header.AceType == ACCESS_ALLOWED_ACE_TYPE
+                and ace.Header.AceFlags
+                & SUB_CONTAINERS_AND_OBJECTS_INHERIT
+                == SUB_CONTAINERS_AND_OBJECTS_INHERIT
+                and ace.Mask & WORKSPACE_GRANT == WORKSPACE_GRANT
+            ):
+                ace_sid = ctypes.c_void_p(ace_pointer.value + 8)
+                if self.advapi32.EqualSid(ace_sid, sid):
+                    return True
+        return False
 
 
 class _WindowsJob:
@@ -497,7 +695,7 @@ class _WindowsJob:
 
 
 class _CapabilityMutex:
-    """Cross-process critical section for one workspace capability SID."""
+    """Cross-process critical section for capability grants and records."""
 
     def __init__(self, api: _WindowsApi, key: tuple[str, str]) -> None:
         digest = hashlib.sha256("\0".join(key).encode("utf-8")).hexdigest()
@@ -527,6 +725,159 @@ class _CapabilityMutex:
                 raise self._api.error("ReleaseMutex")
         finally:
             self._api.close_handle(handle)
+
+
+@dataclass(frozen=True)
+class _CapabilityLease:
+    path: str
+    sid: str
+    pid: int
+    process_started: int
+    managed: bool
+    temporary: bool
+
+
+class _CapabilityLeases:
+    """Persist ACL ownership before granting access; serialize all reclamation."""
+
+    def __init__(self, api: _WindowsApi) -> None:
+        self._api = api
+        self._directory = _CAPABILITY_LEASE_DIRECTORY
+
+    def _mutex(self) -> _CapabilityMutex:
+        return _CapabilityMutex(self._api, (str(self._directory), "leases"))
+
+    def _read(self) -> dict[Path, _CapabilityLease]:
+        records = {}
+        for marker in self._directory.glob("*.lease"):
+            try:
+                records[marker] = _CapabilityLease(
+                    **json.loads(marker.read_text(encoding="utf-8"))
+                )
+            except (OSError, ValueError, TypeError) as error:
+                _logger.warning("Cannot read sandbox lease %s: %s", marker, error)
+        return records
+
+    def _active(self, marker: Path, lease: _CapabilityLease) -> bool:
+        age = time.time() - marker.stat().st_mtime
+        try:
+            identity = self._api.process_identity(lease.pid)
+        except OSError:
+            # An inaccessible process is unknown, not dead. Its last verified
+            # lease remains valid until TTL, without renewing it indefinitely.
+            return age < _CAPABILITY_LEASE_TTL_SECONDS
+        if identity != lease.process_started:
+            return False
+        if age >= _CAPABILITY_LEASE_TTL_SECONDS:
+            # Long-lived sessions keep their grants, including running jobs.
+            marker.touch()
+        return True
+
+    def _reap(
+        self, records: dict[Path, _CapabilityLease],
+        *, release: Path | None = None,
+    ) -> None:
+        paths: dict[str, dict[str, list[Path]]] = {}
+        for marker, lease in records.items():
+            paths.setdefault(lease.path, {}).setdefault(lease.sid, []).append(marker)
+        for path_value, groups in paths.items():
+            markers = [marker for group in groups.values() for marker in group]
+            stale = [
+                marker for marker in markers
+                if marker == release or not self._active(marker, records[marker])
+            ]
+            if not stale:
+                continue
+            path = Path(path_value)
+            for sid_value, group in groups.items():
+                if (
+                    all(marker in stale for marker in group)
+                    and any(records[marker].managed for marker in group)
+                    and path.exists()
+                ):
+                    sid = self._api.convert_sid(sid_value)
+                    try:
+                        self._api.revoke_write(path, sid)
+                    finally:
+                        self._api.local_free(sid)
+            # Keep the recovery records until directory removal succeeds.
+            # Never remove a workspace or a redirected private temp root.
+            if (
+                len(stale) == len(markers)
+                and all(records[marker].temporary for marker in markers)
+                and path.parent == Path(tempfile.gettempdir()).resolve()
+                and path.name.startswith("nosis-sandbox-tmp-")
+                and path.exists()
+                and not (
+                    path.lstat().st_file_attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT
+                )
+            ):
+                shutil.rmtree(path)
+            for marker in stale:
+                marker.unlink(missing_ok=True)
+                del records[marker]
+
+    def cleanup_stale(self) -> None:
+        with self._mutex():
+            self._reap(self._read())
+
+    def acquire(
+        self, path: Path, sid: ctypes.c_void_p, sid_value: str,
+        *, capability: bool, temporary: bool,
+    ) -> Path:
+        path_value = os.path.normcase(os.path.realpath(path))
+        with self._mutex():
+            self._directory.mkdir(parents=True, exist_ok=True)
+            records = {
+                marker: lease for marker, lease in self._read().items()
+                if lease.path == path_value
+            }
+            self._reap(records)
+            records = {
+                marker: lease for marker, lease in records.items()
+                if lease.sid == sid_value
+            }
+            managed = (
+                any(lease.managed for lease in records.values()) if records
+                else capability or not self._api.has_write_grant(path, sid)
+            )
+            identity = self._api.process_identity(os.getpid())
+            if identity is None:
+                raise RuntimeError("cannot identify sandbox lease owner")
+            lease = _CapabilityLease(
+                path_value, sid_value, os.getpid(), identity, managed, temporary
+            )
+            marker = self._directory / f"{uuid.uuid4().hex}.lease"
+            pending = marker.with_suffix(".tmp")
+            try:
+                pending.write_text(json.dumps(asdict(lease)), encoding="utf-8")
+                pending.replace(marker)
+            finally:
+                pending.unlink(missing_ok=True)
+            try:
+                if not records:
+                    self._api.grant_write(path, sid)
+            except BaseException:
+                # Leave the durable record if rollback fails, so startup can
+                # still reclaim a partially propagated grant.
+                try:
+                    if managed and not records:
+                        self._api.revoke_write(path, sid)
+                    marker.unlink(missing_ok=True)
+                except OSError as error:
+                    _logger.warning("Cannot roll back sandbox grant at %s: %s", path, error)
+                raise
+            return marker
+
+    def release(self, marker: Path) -> None:
+        with self._mutex():
+            records = self._read()
+            lease = records.get(marker)
+            if lease is not None:
+                self._reap(
+                    {key: value for key, value in records.items() if value.path == lease.path},
+                    release=marker,
+                )
 
 
 class _WindowsProcess:
@@ -605,24 +956,24 @@ class WindowsWriteRestrictedSandbox:
         self.workspace = workspace
         self.private_tmp = private_tmp
         self._api = _WindowsApi()
+        self._leases = _CapabilityLeases(self._api)
         self._workspace_sid: ctypes.c_void_p | None = None
         self._temporary_sid: ctypes.c_void_p | None = None
         self._user_sid: ctypes.Array | None = None
         self._token: wintypes.HANDLE | None = None
-        self._capability_leases: list[
-            tuple[Path, str, ctypes.c_void_p, Path]
-        ] = []
+        self._capability_leases: list[Path] = []
         try:
+            self._api.validate_workspace(workspace)
             self._workspace_sid_value = _capability_sid(
                 str(workspace), temporary=False
             )
             self._temporary_sid_value = _capability_sid(
                 str(private_tmp), temporary=True
             )
-            self._workspace_sid = self._convert_sid(
+            self._workspace_sid = self._api.convert_sid(
                 self._workspace_sid_value
             )
-            self._temporary_sid = self._convert_sid(
+            self._temporary_sid = self._api.convert_sid(
                 self._temporary_sid_value
             )
             self._user_sid = self._current_user_sid()
@@ -632,16 +983,21 @@ class WindowsWriteRestrictedSandbox:
                 (workspace, self._workspace_sid, self._workspace_sid_value),
                 (private_tmp, self._temporary_sid, self._temporary_sid_value),
             ):
-                self._acquire_capability_lease(
-                    path, capability_sid, capability_sid_value
-                )
-                # A WRITE_RESTRICTED token must satisfy both its normal user
-                # SID and a restricting SID.  Temporary directories can be
-                # created without an inherited user ACE, so install both
-                # sides of the capability and revoke them together.
-                self._acquire_capability_lease(
-                    path, user_sid, user_sid_value, cleanup_stale=False
-                )
+                try:
+                    self._capability_leases.append(self._leases.acquire(
+                        path, capability_sid, capability_sid_value,
+                        capability=True, temporary=path == private_tmp,
+                    ))
+                    # WRITE_RESTRICTED checks both the user's access and a
+                    # restricting SID. Private temp roots may lack a user ACE.
+                    self._capability_leases.append(self._leases.acquire(
+                        path, user_sid, user_sid_value,
+                        capability=False, temporary=path == private_tmp,
+                    ))
+                except OSError as error:
+                    if path == workspace:
+                        raise WindowsSandboxWorkspaceError(workspace, error) from error
+                    raise
             self._token = self._create_restricted_token()
         except BaseException:
             self.close()
@@ -756,9 +1112,9 @@ class WindowsWriteRestrictedSandbox:
             except BaseException as error:
                 failures.append(error)
             self._token = None
-        for path, sid_value, sid, marker in reversed(self._capability_leases):
+        for marker in reversed(self._capability_leases):
             try:
-                self._release_capability_lease(path, sid_value, sid, marker)
+                self._leases.release(marker)
             except BaseException as error:
                 failures.append(error)
         self._capability_leases.clear()
@@ -772,269 +1128,6 @@ class WindowsWriteRestrictedSandbox:
                 setattr(self, attribute, None)
         if failures:
             raise ExceptionGroup("Windows sandbox cleanup failed", failures)
-
-    def _acquire_capability_lease(
-        self,
-        path: Path,
-        sid: ctypes.c_void_p,
-        sid_value: str,
-        *,
-        cleanup_stale: bool = True,
-    ) -> None:
-        key = (os.path.normcase(os.path.realpath(path)), sid_value)
-        with _CapabilityMutex(self._api, key):
-            markers, orphaned_managed = self._active_capability_markers(key)
-            managed = orphaned_managed or any(
-                self._marker_is_managed(marker) for marker in markers
-            )
-            if not markers:
-                if orphaned_managed:
-                    self._revoke_write(path, sid)
-                if cleanup_stale:
-                    self._remove_stale_capability_grants(path, sid_value)
-                # The deterministic capability SID belongs to this runtime,
-                # even when a previous unclean shutdown left its ACE behind.
-                # Ordinary user-SID ACEs are different: preserve an existing
-                # user grant instead of claiming ownership of it.
-                managed = self._grant_write(path, sid) or cleanup_stale
-            marker = self._new_capability_marker(key, managed)
-        self._capability_leases.append((path, sid_value, sid, marker))
-
-    def _release_capability_lease(
-        self,
-        path: Path,
-        sid_value: str,
-        sid: ctypes.c_void_p,
-        marker: Path,
-    ) -> None:
-        key = (os.path.normcase(os.path.realpath(path)), sid_value)
-        with _CapabilityMutex(self._api, key):
-            managed = self._marker_is_managed(marker)
-            marker.unlink(missing_ok=True)
-            markers, orphaned_managed = self._active_capability_markers(key)
-            if (managed or orphaned_managed) and not markers:
-                self._revoke_write(path, sid)
-
-    def _capability_marker_prefix(self, key: tuple[str, str]) -> str:
-        digest = hashlib.sha256("\0".join(key).encode("utf-8")).hexdigest()
-        return f"{digest}-"
-
-    def _active_capability_markers(
-        self, key: tuple[str, str]
-    ) -> tuple[list[Path], bool]:
-        _CAPABILITY_LEASE_DIRECTORY.mkdir(parents=True, exist_ok=True)
-        prefix = self._capability_marker_prefix(key)
-        active: list[Path] = []
-        orphaned_managed = False
-        for marker in _CAPABILITY_LEASE_DIRECTORY.glob(f"{prefix}*.lease"):
-            try:
-                pid = int(marker.name[len(prefix) :].split("-", 1)[0])
-            except (ValueError, IndexError):
-                marker.unlink(missing_ok=True)
-                continue
-            if self._api.process_is_running(pid):
-                active.append(marker)
-            else:
-                orphaned_managed = (
-                    orphaned_managed or self._marker_is_managed(marker)
-                )
-                marker.unlink(missing_ok=True)
-        return active, orphaned_managed
-
-    def _marker_is_managed(self, marker: Path) -> bool:
-        try:
-            return marker.read_text(encoding="ascii") == "1"
-        except (FileNotFoundError, OSError):
-            return False
-
-    def _new_capability_marker(
-        self, key: tuple[str, str], managed: bool
-    ) -> Path:
-        prefix = self._capability_marker_prefix(key)
-        marker = _CAPABILITY_LEASE_DIRECTORY / (
-            f"{prefix}{os.getpid()}-{uuid.uuid4().hex}.lease"
-        )
-        marker.write_text("1" if managed else "0", encoding="ascii")
-        return marker
-
-    def _remove_stale_capability_grants(
-        self, path: Path, current_sid_value: str
-    ) -> None:
-        """Remove pre-deterministic S-1-4 capability ACEs on a root path."""
-        old_acl = ctypes.c_void_p()
-        descriptor = ctypes.c_void_p()
-        result = self._api.advapi32.GetNamedSecurityInfoW(
-            str(path),
-            SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION,
-            None,
-            None,
-            ctypes.byref(old_acl),
-            None,
-            ctypes.byref(descriptor),
-        )
-        if result:
-            raise self._api.error("GetNamedSecurityInfoW", result)
-        stale: list[str] = []
-        try:
-            if not old_acl:
-                return
-            acl = ctypes.cast(old_acl, ctypes.POINTER(ACL)).contents
-            for index in range(acl.AceCount):
-                ace_pointer = ctypes.c_void_p()
-                if not self._api.advapi32.GetAce(
-                    old_acl, index, ctypes.byref(ace_pointer)
-                ):
-                    raise self._api.error("GetAce")
-                ace = ctypes.cast(
-                    ace_pointer, ctypes.POINTER(ACCESS_ALLOWED_ACE)
-                ).contents
-                if (
-                    ace.Header.AceType == ACCESS_ALLOWED_ACE_TYPE
-                    and ace.Header.AceFlags
-                    & SUB_CONTAINERS_AND_OBJECTS_INHERIT
-                    == SUB_CONTAINERS_AND_OBJECTS_INHERIT
-                    and ace.Mask == WORKSPACE_GRANT
-                ):
-                    sid = ctypes.c_void_p(ace_pointer.value + 8)
-                    sid_value = self._api.sid_to_string(sid)
-                    if (
-                        sid_value.startswith("S-1-4-")
-                        and sid_value != current_sid_value
-                    ):
-                        stale.append(sid_value)
-        finally:
-            self._api.local_free(descriptor)
-        for sid_value in stale:
-            pointer = self._convert_sid(sid_value)
-            try:
-                self._revoke_write(path, pointer)
-            finally:
-                self._api.local_free(pointer)
-
-    def _convert_sid(self, value: str) -> ctypes.c_void_p:
-        pointer = ctypes.c_void_p()
-        if not self._api.advapi32.ConvertStringSidToSidW(
-            value, ctypes.byref(pointer)
-        ):
-            raise self._api.error("ConvertStringSidToSidW")
-        return pointer
-
-    def _grant_write(self, path: Path, sid: ctypes.c_void_p) -> bool:
-        old_acl = ctypes.c_void_p()
-        descriptor = ctypes.c_void_p()
-        result = self._api.advapi32.GetNamedSecurityInfoW(
-            str(path),
-            SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION,
-            None,
-            None,
-            ctypes.byref(old_acl),
-            None,
-            ctypes.byref(descriptor),
-        )
-        if result:
-            raise self._api.error("GetNamedSecurityInfoW", result)
-        try:
-            if old_acl and self._has_write_grant(old_acl, sid):
-                return False
-            new_acl = ctypes.c_void_p()
-            entry = _explicit_access(sid, WORKSPACE_GRANT)
-            result = self._api.advapi32.SetEntriesInAclW(
-                1, ctypes.byref(entry), old_acl, ctypes.byref(new_acl)
-            )
-            if result:
-                raise self._api.error("SetEntriesInAclW", result)
-            try:
-                result = self._api.advapi32.SetNamedSecurityInfoW(
-                    str(path),
-                    SE_FILE_OBJECT,
-                    DACL_SECURITY_INFORMATION,
-                    None,
-                    None,
-                    new_acl,
-                    None,
-                )
-                if result:
-                    raise self._api.error("SetNamedSecurityInfoW", result)
-                return True
-            finally:
-                self._api.local_free(new_acl)
-        finally:
-            self._api.local_free(descriptor)
-
-    def _revoke_write(self, path: Path, sid: ctypes.c_void_p) -> None:
-        old_acl = ctypes.c_void_p()
-        descriptor = ctypes.c_void_p()
-        result = self._api.advapi32.GetNamedSecurityInfoW(
-            str(path),
-            SE_FILE_OBJECT,
-            DACL_SECURITY_INFORMATION,
-            None,
-            None,
-            ctypes.byref(old_acl),
-            None,
-            ctypes.byref(descriptor),
-        )
-        if result:
-            raise self._api.error("GetNamedSecurityInfoW", result)
-        try:
-            if not old_acl:
-                return
-            new_acl = ctypes.c_void_p()
-            entry = _explicit_access(sid, 0, mode=REVOKE_ACCESS)
-            result = self._api.advapi32.SetEntriesInAclW(
-                1, ctypes.byref(entry), old_acl, ctypes.byref(new_acl)
-            )
-            if result:
-                raise self._api.error("SetEntriesInAclW(REVOKE_ACCESS)", result)
-            try:
-                old_count = ctypes.cast(old_acl, ctypes.POINTER(ACL)).contents.AceCount
-                new_count = ctypes.cast(new_acl, ctypes.POINTER(ACL)).contents.AceCount
-                if new_count == old_count:
-                    return
-                result = self._api.advapi32.SetNamedSecurityInfoW(
-                    str(path),
-                    SE_FILE_OBJECT,
-                    DACL_SECURITY_INFORMATION,
-                    None,
-                    None,
-                    new_acl,
-                    None,
-                )
-                if result:
-                    raise self._api.error(
-                        "SetNamedSecurityInfoW(REVOKE_ACCESS)", result
-                    )
-            finally:
-                self._api.local_free(new_acl)
-        finally:
-            self._api.local_free(descriptor)
-
-    def _has_write_grant(
-        self, acl_pointer: ctypes.c_void_p, sid: ctypes.c_void_p
-    ) -> bool:
-        acl = ctypes.cast(acl_pointer, ctypes.POINTER(ACL)).contents
-        for index in range(acl.AceCount):
-            ace_pointer = ctypes.c_void_p()
-            if not self._api.advapi32.GetAce(
-                acl_pointer, index, ctypes.byref(ace_pointer)
-            ):
-                raise self._api.error("GetAce")
-            ace = ctypes.cast(
-                ace_pointer, ctypes.POINTER(ACCESS_ALLOWED_ACE)
-            ).contents
-            if (
-                ace.Header.AceType == ACCESS_ALLOWED_ACE_TYPE
-                and ace.Header.AceFlags
-                & SUB_CONTAINERS_AND_OBJECTS_INHERIT
-                == SUB_CONTAINERS_AND_OBJECTS_INHERIT
-                and ace.Mask == WORKSPACE_GRANT
-            ):
-                ace_sid = ctypes.c_void_p(ace_pointer.value + 8)
-                if self._api.advapi32.EqualSid(ace_sid, sid):
-                    return True
-        return False
 
     def _create_restricted_token(self) -> wintypes.HANDLE:
         current_token = wintypes.HANDLE()
