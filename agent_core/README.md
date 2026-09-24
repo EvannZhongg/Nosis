@@ -103,6 +103,7 @@ GUI 上传的附件和 Agent 生成的图片保存在 Workspace 的 `.nosis/atta
 | 模块 | 职责 |
 | --- | --- |
 | `agent.py` | Agent Loop |
+| `tool_batch.py` | Tool 批次调度、Journal、结果规范化与清理 |
 | `context_manager.py` | 上下文窗口与压缩 |
 | `tools/` | Tool 接口、Catalog 与 Policy |
 | `providers/` | Provider 实现 |

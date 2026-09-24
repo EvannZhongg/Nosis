@@ -1,6 +1,5 @@
 from .agent import (
     Agent,
-    AgentCancelled,
     AgentEvent,
     AgentRunResult,
     AssistantMessageDeltaEvent,
@@ -137,6 +136,7 @@ from .tool_result import (
     DEFAULT_TOOL_RESULT_PREVIEW_CHARS,
     ToolResultNormalizer,
 )
+from .tool_batch import ToolBatchExecutor
 from .tools import (
     AnalyzeImageTool,
     ApplyPatchTool,
@@ -188,7 +188,12 @@ from .mcp import (
 )
 from .workspace import Workspace
 from .workspace_instructions import WorkspaceInstruction, WorkspaceInstructions
-from .turn_control import TurnControl, UserSteer, UserSteeringMailbox
+from .turn_control import (
+    AgentCancelled,
+    TurnControl,
+    UserSteer,
+    UserSteeringMailbox,
+)
 
 __all__ = [
     "Agent",
@@ -306,6 +311,7 @@ __all__ = [
     "TokenUsage",
     "Tool",
     "ToolBatchStartedEvent",
+    "ToolBatchExecutor",
     "ToolCall",
     "ToolCallEvent",
     "ToolCallLimitExceededError",

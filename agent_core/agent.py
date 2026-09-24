@@ -1,5 +1,4 @@
 import json
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable, TypeAlias
@@ -12,12 +11,13 @@ from .llm import (
     LLMResponse,
     with_generation_limit,
 )
-from .session import Message, Session, ToolExecutionStatus
+from .session import Message, Session
 from .content import AttachmentPart, ImagePart
 from .errors import ProviderProtocolError, runtime_error_info
 from .tool_result import ToolResultNormalizer
+from .tool_batch import ToolBatchExecutor
 from .tools import ToolCall, ToolExecutionContext, ToolResult, ToolSet
-from .turn_control import TurnControl, UserSteer
+from .turn_control import AgentCancelled, TurnControl, UserSteer
 
 
 class ToolCallLimitExceededError(RuntimeError):
@@ -28,10 +28,6 @@ class ToolCallLimitExceededError(RuntimeError):
             f"tool call '{tool_name}' exceeded the maximum of "
             f"{limit} identical consecutive executions"
         )
-
-
-class AgentCancelled(BaseException):
-    """Unwind the Runtime when the interface cancels active work."""
 
 
 @dataclass(frozen=True)
@@ -122,20 +118,6 @@ AgentEvent: TypeAlias = (
 )
 
 
-def _media_notice(attachments: tuple[ImagePart, ...]) -> str:
-    """Describe the images that follow in the same message.
-
-    The model is told these came from its own tool call so it does not
-    read them as a new instruction from the person it is talking to.
-    """
-    listed = "\n".join(f"- {part.path}" for part in attachments)
-    noun = "image" if len(attachments) == 1 else "images"
-    return (
-        f"[Tool output] The {noun} requested by the preceding tool "
-        f"call:\n{listed}"
-    )
-
-
 class Agent:
     """One conversation loop over one Session and one ToolSet.
 
@@ -162,7 +144,7 @@ class Agent:
         self._now = now or (lambda: datetime.now(timezone.utc))
         self._tools = tools
         self._execution_context = context
-        self._tool_result_normalizer = (
+        tool_result_normalizer = (
             tool_result_normalizer
             or ToolResultNormalizer(
                 context.workspace,
@@ -171,7 +153,13 @@ class Agent:
             )
         )
         if context.jobs is not None:
-            context.jobs.set_result_normalizer(self._tool_result_normalizer)
+            context.jobs.set_result_normalizer(tool_result_normalizer)
+        self._tool_batch_executor = ToolBatchExecutor(
+            tools=tools,
+            session=session,
+            result_normalizer=tool_result_normalizer,
+            now=self._now,
+        )
         self._context = ContextManager(
             provider=provider,
             session=session,
@@ -379,9 +367,12 @@ class Agent:
                             tool_calls=response.tool_calls,
                         )
                     )
-                tool_count = len(response.tool_calls)
 
-                def emit_call(call: ToolCall, index: int) -> None:
+                def emit_call(
+                    call: ToolCall,
+                    index: int,
+                    tool_count: int,
+                ) -> None:
                     if on_event is not None:
                         on_event(
                             ToolCallEvent(
@@ -394,6 +385,7 @@ class Agent:
                 def emit_result(
                     result: ToolResult,
                     index: int,
+                    tool_count: int,
                 ) -> None:
                     if on_event is not None:
                         on_event(
@@ -404,185 +396,17 @@ class Agent:
                             )
                         )
 
-                indexed_calls = list(enumerate(response.tool_calls, start=1))
-                completed: dict[int, tuple[ToolCall, ToolResult]] = {}
-                # Only tools that declare themselves concurrent may share a
-                # batch across threads; they hold no invocation state, so
-                # parallel calls cannot observe each other.
-                if len(indexed_calls) > 1 and all(
-                    self._tools.is_concurrent(call.name)
-                    for _, call in indexed_calls
-                ):
-                    with ThreadPoolExecutor(
-                        max_workers=len(indexed_calls)
-                    ) as executor:
-                        futures = {}
-                        first_error: BaseException | None = None
-                        # Invocation events retain the model's call order.
-                        # Completion events are emitted later by
-                        # as_completed(), without waiting for an earlier
-                        # invocation that is still running.
-                        for index, call in indexed_calls:
-                            self._session.tool_started(call, turn_id)
-                            try:
-                                emit_call(call, index)
-                                future = executor.submit(
-                                    self._tools.execute, call
-                                )
-                            except BaseException as error:
-                                self._session.tool_finished(
-                                    call,
-                                    _tool_failure_status(error),
-                                    error=str(error),
-                                    turn_id=turn_id,
-                                )
-                                first_error = error
-                                break
-                            futures[future] = (index, call)
+                def emit_media(media: tuple[ImagePart, ...]) -> None:
+                    if on_event is not None:
+                        on_event(ToolMediaEvent(attachments=media))
 
-                        observed: set[int] = set()
-
-                        def settle_future(future) -> None:
-                            nonlocal first_error
-                            index, call = futures[future]
-                            observed.add(index)
-                            try:
-                                result = future.result()
-                            except BaseException as error:
-                                self._session.tool_finished(
-                                    call,
-                                    _tool_failure_status(error),
-                                    error=str(error),
-                                    turn_id=turn_id,
-                                )
-                                if first_error is None:
-                                    first_error = error
-                                return
-
-                            completed[index] = (call, result)
-                            status = (
-                                "failed"
-                                if result.error is not None
-                                else "completed"
-                            )
-                            self._session.tool_finished(
-                                call,
-                                status,
-                                error=(
-                                    result.error.message
-                                    if result.error is not None
-                                    else None
-                                ),
-                                turn_id=turn_id,
-                            )
-                            try:
-                                normalized_content = (
-                                    self._tool_result_normalizer.normalize(
-                                        result
-                                    )
-                                )
-                                self._session.add_item(
-                                    "tool",
-                                    normalized_content,
-                                    self._now().astimezone(timezone.utc),
-                                    tool_call_id=call.id,
-                                )
-                                emit_result(result, index)
-                            except BaseException as error:
-                                if first_error is None:
-                                    first_error = error
-
-                        try:
-                            for future in as_completed(futures):
-                                settle_future(future)
-                        except BaseException as error:
-                            # SIGINT can interrupt the coordinator while tools
-                            # are still running.  They cannot be safely killed;
-                            # drain them and journal every resulting fact.
-                            first_error = first_error or error
-                        finally:
-                            for future, (index, _call) in futures.items():
-                                if index not in observed:
-                                    settle_future(future)
-                        if first_error is not None:
-                            _cleanup_completed_results(completed)
-                            raise first_error
-                else:
-                    active_call: ToolCall | None = None
-                    try:
-                        for index, call in indexed_calls:
-                            active_call = call
-                            self._session.tool_started(call, turn_id)
-                            emit_call(call, index)
-                            result = self._tools.execute(call)
-                            completed[index] = (call, result)
-                            status = (
-                                "failed"
-                                if result.error is not None
-                                else "completed"
-                            )
-                            self._session.tool_finished(
-                                call,
-                                status,
-                                error=(
-                                    result.error.message
-                                    if result.error is not None
-                                    else None
-                                ),
-                                turn_id=turn_id,
-                            )
-                            active_call = None
-                            normalized_content = (
-                                self._tool_result_normalizer.normalize(result)
-                            )
-                            self._session.add_item(
-                                "tool",
-                                normalized_content,
-                                self._now().astimezone(timezone.utc),
-                                tool_call_id=call.id,
-                            )
-                            emit_result(result, index)
-                    except BaseException as error:
-                        if active_call is not None:
-                            self._session.tool_finished(
-                                active_call,
-                                _tool_failure_status(error),
-                                error=str(error),
-                                turn_id=turn_id,
-                            )
-                        _cleanup_completed_results(completed)
-                        raise
-
-                # Session commit order is independent from completion order:
-                # providers receive one result for each call in the exact
-                # order in which the model emitted those calls.
-                executed = [
-                    (index, completed[index][0], completed[index][1])
-                    for index, _ in indexed_calls
-                ]
-                try:
-                    # Images arrive after every tool result, never between
-                    # two of them: a provider rejects an assistant step whose
-                    # tool calls are not each answered by the message that
-                    # follows, so one batch yields at most one media message.
-                    media = tuple(
-                        attachment
-                        for _, _, result in executed
-                        for attachment in result.attachments
-                    )
-                    if media:
-                        self._session.add_item(
-                            role="user",
-                            content=_media_notice(media),
-                            timestamp_utc=self._now().astimezone(timezone.utc),
-                            attachments=media,
-                            origin="tool_media",
-                        )
-                        if on_event is not None:
-                            on_event(ToolMediaEvent(attachments=media))
-                finally:
-                    for _, _, tool_result in executed:
-                        _cleanup_tool_result(tool_result)
+                self._tool_batch_executor.execute(
+                    response.tool_calls,
+                    turn_id=turn_id,
+                    on_call=emit_call,
+                    on_result=emit_result,
+                    on_media=emit_media,
+                )
                 _raise_if_cancelled(turn_control)
                 applied_jobs, _pending_jobs = _apply_job_results(
                     self._session,
@@ -769,6 +593,7 @@ def _apply_job_results(
     )
     return True, pending
 
+
 def _tool_call_key(tool_call: ToolCall) -> tuple[str, str]:
     normalized_arguments = json.dumps(
         tool_call.arguments,
@@ -777,25 +602,3 @@ def _tool_call_key(tool_call: ToolCall) -> tuple[str, str]:
         separators=(",", ":"),
     )
     return tool_call.name, normalized_arguments
-
-
-def _tool_failure_status(error: BaseException) -> ToolExecutionStatus:
-    if isinstance(error, AgentCancelled):
-        return "cancelled"
-    if isinstance(error, KeyboardInterrupt):
-        # SIGINT may arrive after an irreversible side effect but before the
-        # tool returns, so completion cannot be inferred.
-        return "unknown"
-    return "failed"
-
-
-def _cleanup_tool_result(result: ToolResult) -> None:
-    if result.artifact_cleanup is not None:
-        result.artifact_cleanup()
-
-
-def _cleanup_completed_results(
-    completed: dict[int, tuple[ToolCall, ToolResult]],
-) -> None:
-    for _, result in completed.values():
-        _cleanup_tool_result(result)

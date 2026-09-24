@@ -6,6 +6,10 @@ from threading import Lock
 from typing import Callable
 
 
+class AgentCancelled(BaseException):
+    """Unwind the Runtime when the interface cancels active work."""
+
+
 @dataclass(frozen=True)
 class UserSteer:
     steer_id: str
