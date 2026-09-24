@@ -31,6 +31,7 @@ class WindowsSandboxBackend(SandboxBackend):
     def __init__(self) -> None:
         self._temporary_directory: Path | None = None
         self._sandbox = None
+        self._pending_cleanup = []
         if os.name == "nt":
             from ...windows_sandbox import _CapabilityLeases, _WindowsApi
 
@@ -90,26 +91,28 @@ class WindowsSandboxBackend(SandboxBackend):
         )
 
     def close(self) -> None:
+        if self._sandbox is not None or self._temporary_directory is not None:
+            self._pending_cleanup.append((self._sandbox, self._temporary_directory))
+        # Closed resources may still need cleanup, but must never be reused
+        # by execute(), even if another instance has already reclaimed them.
+        self._sandbox = None
+        self._temporary_directory = None
+        pending, self._pending_cleanup = self._pending_cleanup, []
         failures: list[Exception] = []
-        if self._sandbox is not None:
+        for sandbox, private_tmp in pending:
             try:
-                self._sandbox.close()
+                if sandbox is not None:
+                    sandbox.close()
+                    sandbox = None
+                if private_tmp is not None and private_tmp.exists():
+                    shutil.rmtree(private_tmp)
             except Exception as error:
                 failures.append(error)
-            else:
-                self._sandbox = None
-        if self._sandbox is None and self._temporary_directory is not None:
-            try:
-                if self._temporary_directory.exists():
-                    shutil.rmtree(self._temporary_directory)
-            except OSError as error:
-                failures.append(error)
-            else:
-                self._temporary_directory = None
+                self._pending_cleanup.append((sandbox, private_tmp))
         if failures:
             error = ExceptionGroup("Windows sandbox cleanup incomplete", failures)
             _logger.warning(
                 "Windows sandbox cleanup incomplete at %s; retaining resources "
-                "for later cleanup", self._temporary_directory,
+                "for later cleanup", [path for _, path in self._pending_cleanup],
                 exc_info=(type(error), error, error.__traceback__),
             )

@@ -431,6 +431,8 @@ assert not list(windows._CAPABILITY_LEASE_DIRECTORY.glob('*.workspace-pending'))
                 router.close()
             host.close.assert_called_once()
             self.assertIn("cleanup incomplete", logs.output[0])
+            self.assertIsNone(backend._sandbox)
+            self.assertIsNone(backend._temporary_directory)
             markers = list(self.lease_directory.glob("*.lease"))
             self.assertTrue(markers)
             self.assertTrue(all(json.loads(marker.read_text())["released"] for marker in markers))
@@ -445,9 +447,17 @@ assert not list(windows._CAPABILITY_LEASE_DIRECTORY.glob('*.workspace-pending'))
         another.close()
         self.assertFalse(private.exists())
         self.assertFalse(list(self.lease_directory.glob("*.lease")))
+        result = backend.execute(
+            "Write-Output restarted", working_directory=self.workspace,
+            policy=backend.default_policy, timeout_seconds=10,
+        )
+        self.assertEqual(result.exit_code, 0)
+        self.assertEqual(result.stdout.strip(), "restarted")
+        self.assertNotEqual(backend._temporary_directory, private)
         backend.close()
         self.assertIsNone(backend._sandbox)
         self.assertIsNone(backend._temporary_directory)
+        self.assertEqual(backend._pending_cleanup, [])
 
     def test_backend_close_logs_revoke_failure_and_retries_remaining_lease(self):
         backend = WindowsSandboxBackend()
@@ -463,17 +473,69 @@ assert not list(windows._CAPABILITY_LEASE_DIRECTORY.glob('*.workspace-pending'))
         self.assertFalse(list(self.lease_directory.glob("*.lease")))
         self.assertFalse(self.private.exists())
 
-    def test_unleased_temp_cleanup_failure_is_logged_and_retryable(self):
+    def test_execute_rebuilds_after_failed_sandbox_close(self):
         backend = WindowsSandboxBackend()
-        backend._temporary_directory = self.private
-        with patch("agent_core.execution.sandbox.windows.shutil.rmtree",
-                   side_effect=OSError(32, "in use")), \
-                self.assertLogs("agent_core.execution.sandbox.windows", level="WARNING"):
-            backend.close()
-        self.assertEqual(backend._temporary_directory, self.private)
+        self.addCleanup(backend.close)
+        executor = SandboxedCommandExecutor(self.workspace, backend)
+        self.assertEqual(executor.execute("Write-Output first").exit_code, 0)
+        old_sandbox = backend._sandbox
+        old_tmp = backend._temporary_directory
+        locked = (old_tmp / "spool.txt").open("wb")
+        try:
+            with self.assertLogs("agent_core.execution.sandbox.windows", level="WARNING"):
+                backend.close()
+            self.assertIsNone(backend._sandbox)
+            self.assertIsNone(backend._temporary_directory)
+            result = executor.execute(
+                "Set-Content -LiteralPath (Join-Path $env:TEMP new.txt) new; "
+                "Write-Output $env:TEMP"
+            )
+            self.assertEqual(result.exit_code, 0)
+            new_tmp = backend._temporary_directory
+            self.assertNotEqual(new_tmp, old_tmp)
+            self.assertIsNot(backend._sandbox, old_sandbox)
+            self.assertEqual(Path(result.stdout.strip()), new_tmp)
+            self.assertTrue((new_tmp / "new.txt").exists())
+            # One stale resource must not prevent closing the new sandbox.
+            with self.assertLogs("agent_core.execution.sandbox.windows", level="WARNING"):
+                backend.close()
+            self.assertFalse(new_tmp.exists())
+            self.assertTrue(old_tmp.exists())
+        finally:
+            locked.close()
         backend.close()
-        self.assertIsNone(backend._temporary_directory)
-        self.assertFalse(self.private.exists())
+        self.assertFalse(old_tmp.exists())
+        self.assertEqual(backend._pending_cleanup, [])
+        self.assertFalse(list(self.lease_directory.glob("*.lease")))
+
+    def test_unleased_temp_cleanup_failure_is_detached_before_next_execute(self):
+        for reclaimed in (False, True):
+            with self.subTest(reclaimed=reclaimed):
+                old_tmp = self.root / f"unleased-{reclaimed}"
+                old_tmp.mkdir()
+                backend = WindowsSandboxBackend()
+                self.addCleanup(backend.close)
+                backend._temporary_directory = old_tmp
+                with patch("agent_core.execution.sandbox.windows.shutil.rmtree",
+                           side_effect=OSError(32, "in use")), \
+                        self.assertLogs("agent_core.execution.sandbox.windows", level="WARNING"):
+                    backend.close()
+                self.assertIsNone(backend._temporary_directory)
+                if reclaimed:
+                    shutil.rmtree(old_tmp)
+                result = backend.execute(
+                    "Write-Output $env:TEMP", working_directory=self.workspace,
+                    policy=backend.default_policy, timeout_seconds=10,
+                )
+                self.assertEqual(result.exit_code, 0)
+                new_tmp = backend._temporary_directory
+                self.assertNotEqual(new_tmp, old_tmp)
+                self.assertEqual(Path(result.stdout.strip()), new_tmp)
+                self.assertEqual(old_tmp.exists(), not reclaimed)
+                backend.close()
+                self.assertFalse(old_tmp.exists())
+                self.assertFalse(new_tmp.exists())
+                self.assertEqual(backend._pending_cleanup, [])
 
     def test_setup_error_survives_cleanup_failure(self):
         backend = WindowsSandboxBackend()
