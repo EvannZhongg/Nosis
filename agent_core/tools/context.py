@@ -7,7 +7,7 @@ from ..workspace import Workspace
 from .base import JSONValue
 
 if TYPE_CHECKING:
-    from ..execution import ExecutionRouter, ResolvedExecution
+    from ..execution.router import ExecutionRouter, ResolvedExecution
     from ..llm import LLMProvider
     from ..mcp.manager import McpClientManager
     from ..plan import PlanManager

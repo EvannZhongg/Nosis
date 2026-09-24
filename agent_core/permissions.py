@@ -5,7 +5,7 @@ from enum import StrEnum
 from threading import Lock
 from typing import TYPE_CHECKING, Callable
 
-from .execution import (
+from .execution.authority import (
     APPROVAL_REQUIRED_AUTHORITY,
     FULL_ACCESS_AUTHORITY,
     WORKSPACE_ACCESS_AUTHORITY,

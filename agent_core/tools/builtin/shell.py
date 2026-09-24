@@ -2,14 +2,14 @@ import os
 from pathlib import Path
 from typing import Callable
 
-from ...execution import (
+from ...execution.authority import ExecutionScope
+from ...execution.process import (
     DEFAULT_COMMAND_TIMEOUT_SECONDS,
     MAX_COMMAND_TIMEOUT_SECONDS,
     CommandExecutionResult,
     CommandOutputSpool,
-    ExecutionScope,
-    NetworkAccess,
 )
+from ...execution.sandbox.base import NetworkAccess
 from ..base import JSONValue, Tool, ToolDefinition, ToolOutput
 from ..context import ToolExecutionContext
 

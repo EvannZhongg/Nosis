@@ -30,11 +30,11 @@ from agent_core import (
     WORKSPACE_ACCESS_AUTHORITY,
     platform_workspace_sandbox_backend,
 )
-from agent_core.execution import (
+from agent_core.execution.process import (
     MAX_COMMAND_OUTPUT_CHARS,
     CommandOutputSpool,
-    _sandbox_environment,
 )
+from agent_core.execution.sandbox.base import _sandbox_environment
 
 
 def _python_script_command(working_directory: Path, script: str) -> str:

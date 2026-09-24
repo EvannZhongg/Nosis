@@ -16,7 +16,7 @@ from typing import Callable, Literal, TypedDict
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from .execution import ExecutionScope
+from .execution.authority import ExecutionScope
 
 
 @dataclass(frozen=True)

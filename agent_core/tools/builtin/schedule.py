@@ -11,7 +11,7 @@ from ...scheduler import (
     parse_trigger_input,
     trigger_to_dict,
 )
-from ...execution import ExecutionAuthority, ExecutionScope
+from ...execution.authority import ExecutionAuthority, ExecutionScope
 from ...permissions import PermissionPreset
 from ...session_store import JsonlSessionStore
 

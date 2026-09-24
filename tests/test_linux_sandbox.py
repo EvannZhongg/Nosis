@@ -35,8 +35,13 @@ class LinuxSandboxFailureTest(unittest.TestCase):
 
     def test_missing_bwrap_fails_without_launching_a_command(self) -> None:
         with (
-            patch("agent_core.execution.shutil.which", return_value=None),
-            patch("agent_core.execution._execute_process") as execute,
+            patch(
+                "agent_core.execution.sandbox.linux.shutil.which",
+                return_value=None,
+            ),
+            patch(
+                "agent_core.execution.process._execute_process"
+            ) as execute,
         ):
             with self.assertRaisesRegex(RuntimeError, "requires bubblewrap"):
                 self.executor.execute("touch escaped")
@@ -49,9 +54,13 @@ class LinuxSandboxFailureTest(unittest.TestCase):
         )
         failure = CommandExecutionResult("touch escaped", 1, "", diagnostic)
         with (
-            patch("agent_core.execution.shutil.which", return_value="/usr/bin/bwrap"),
             patch(
-                "agent_core.execution._execute_process", return_value=failure
+                "agent_core.execution.sandbox.linux.shutil.which",
+                return_value="/usr/bin/bwrap",
+            ),
+            patch(
+                "agent_core.execution.process._execute_process",
+                return_value=failure,
             ) as execute,
         ):
             result = self.executor.execute("touch escaped")
