@@ -19,6 +19,7 @@ from agent_core import (
     FilesystemAccess,
     FULL_ACCESS_AUTHORITY,
     HostCommandExecutor,
+    LinuxSandboxBackend,
     MacOSSandboxBackend,
     NetworkAccess,
     ProcessIsolation,
@@ -28,6 +29,7 @@ from agent_core import (
     TemporaryDirectoryMode,
     ToolCall,
     WORKSPACE_ACCESS_AUTHORITY,
+    WindowsSandboxBackend,
     platform_workspace_sandbox_backend,
 )
 from agent_core.execution.process import (
@@ -301,6 +303,38 @@ class ExecutionAuthorityTest(unittest.TestCase):
 
 
 class SandboxedCommandExecutorTest(unittest.TestCase):
+    def test_platform_policies_describe_their_filesystem_boundary(self) -> None:
+        for backend_type, filesystem, network in (
+            (WindowsSandboxBackend, FilesystemAccess.WRITE_RESTRICTED, NetworkAccess.ALLOW),
+            (MacOSSandboxBackend, FilesystemAccess.DENIED, NetworkAccess.DENY),
+            (LinuxSandboxBackend, FilesystemAccess.DENIED, NetworkAccess.DENY),
+        ):
+            with self.subTest(backend=backend_type.__name__):
+                backend = backend_type()
+                try:
+                    executor = SandboxedCommandExecutor(Path.cwd(), backend)
+                    self.assertEqual(executor.policy.host_filesystem, filesystem)
+                    self.assertEqual(executor.policy.network, network)
+                finally:
+                    backend.close()
+
+    def test_windows_rejects_strict_host_protection_before_launch(self) -> None:
+        backend = WindowsSandboxBackend()
+        self.addCleanup(backend.close)
+        for access in (FilesystemAccess.READ_ONLY, FilesystemAccess.DENIED):
+            with self.subTest(host_filesystem=access), patch(
+                "agent_core.execution.process._execute_process"
+            ) as execute:
+                executor = SandboxedCommandExecutor(
+                    Path.cwd(), backend,
+                    SandboxPolicy(host_filesystem=access, network=NetworkAccess.ALLOW),
+                )
+                with self.assertRaisesRegex(ValueError, "does not support"):
+                    executor.execute("should not run")
+                execute.assert_not_called()
+                self.assertIsNone(backend._sandbox)
+                self.assertIsNone(backend._temporary_directory)
+
     def test_sandbox_environment_excludes_only_named_variables(self) -> None:
         with patch.dict(
             os.environ,
@@ -462,7 +496,7 @@ class SandboxedCommandExecutorTest(unittest.TestCase):
             ["icacls", str(workspace)], capture_output=True, text=True, check=True,
         ).stdout
         self.assertEqual(
-            executor.policy.host_filesystem, FilesystemAccess.READ_ONLY
+            executor.policy.host_filesystem, FilesystemAccess.WRITE_RESTRICTED
         )
         self.assertEqual(executor.policy.network, NetworkAccess.ALLOW)
         try:

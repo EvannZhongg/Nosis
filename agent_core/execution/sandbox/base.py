@@ -13,8 +13,15 @@ from ..process import (
 
 
 class FilesystemAccess(StrEnum):
+    """Filesystem access provided by a backend.
+
+    WRITE_RESTRICTED retains reads and limits writes without guaranteeing
+    read-only access; Windows can still write to Everyone-writable paths.
+    """
+
     DENIED = "denied"
     READ_ONLY = "read_only"
+    WRITE_RESTRICTED = "write_restricted"
     READ_WRITE = "read_write"
 
 

@@ -86,7 +86,7 @@ class WindowsSandboxBackend(SandboxBackend):
     @property
     def default_policy(self) -> SandboxPolicy:
         return SandboxPolicy(
-            host_filesystem=FilesystemAccess.READ_ONLY,
+            host_filesystem=FilesystemAccess.WRITE_RESTRICTED,
             network=NetworkAccess.ALLOW,
         )
 

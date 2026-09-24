@@ -16,9 +16,11 @@ from agent_core import (
     EditFileTool,
     ExecutionRouter,
     ExecutionScope,
+    FilesystemAccess,
     FULL_ACCESS_AUTHORITY,
     JsonlSessionStore,
     ListDirectoryTool,
+    NetworkAccess,
     ReadFileTool,
     SearchFilesTool,
     Session,
@@ -2423,6 +2425,37 @@ class SearchFilesToolTest(unittest.TestCase):
 
 
 class ShellToolTest(unittest.TestCase):
+    def test_description_uses_the_policy_for_write_and_network_restrictions(self) -> None:
+        for access, restricted in (
+            (FilesystemAccess.WRITE_RESTRICTED, True),
+            (FilesystemAccess.DENIED, False),
+        ):
+            for network, available in (
+                (NetworkAccess.ALLOW, True),
+                (NetworkAccess.DENY, False),
+            ):
+                with self.subTest(host_filesystem=access, network=network):
+                    executor = SimpleNamespace(
+                        policy=SimpleNamespace(
+                            host_filesystem=access, network=network,
+                        ),
+                    )
+                    tool = _Bound(
+                        ShellTool(), _TMP_WORKSPACE,
+                        execution_router=ExecutionRouter(executor, UnusedExecutor()),
+                    )
+                    description = tool.definition.description
+                    self.assertEqual(
+                        "best-effort write boundary" in description, restricted
+                    )
+                    self.assertEqual("writable by Everyone" in description, restricted)
+                    self.assertEqual(
+                        "Network access remains available" in description, available
+                    )
+                    self.assertEqual(
+                        "Network access is disabled" in description, not available
+                    )
+
     def test_delegates_command_to_executor(self) -> None:
         class RecordingExecutor:
             def __init__(self) -> None:

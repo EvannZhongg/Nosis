@@ -9,7 +9,7 @@ from ...execution.process import (
     CommandExecutionResult,
     CommandOutputSpool,
 )
-from ...execution.sandbox.base import NetworkAccess
+from ...execution.sandbox.base import FilesystemAccess, NetworkAccess
 from ..base import JSONValue, Tool, ToolDefinition, ToolOutput
 from ..context import ToolExecutionContext
 
@@ -76,17 +76,22 @@ class ShellTool(Tool):
         workspace_policy = router.workspace_policy
         authority = router.authority
         default_scope = authority.default_scope
-        workspace_description = (
+        filesystem_description = (
             "Workspace scope primarily grants writes to the workspace and "
-            "private temporary directory; host files remain readable and "
-            "network access remains available. On Windows, the restricted "
-            "token is a best-effort write boundary: locations already "
-            "writable by Everyone are an exception. "
+            "private temporary directory; host files remain readable. On "
+            "Windows, the restricted token is a best-effort write boundary: "
+            "locations already writable by Everyone are an exception. "
+            if getattr(workspace_policy, "host_filesystem", None)
+            is FilesystemAccess.WRITE_RESTRICTED
+            else "Workspace scope is confined to the workspace. "
+        )
+        network_description = (
+            "Network access remains available. "
             if getattr(workspace_policy, "network", None)
             is NetworkAccess.ALLOW
-            else "Workspace scope is confined to the workspace with network "
-            "disabled. "
+            else "Network access is disabled. "
         )
+        workspace_description = filesystem_description + network_description
         scope_guidance = (
             "Use explicit workspace scope to run with reduced authority. "
             if default_scope is ExecutionScope.HOST
