@@ -65,7 +65,8 @@ React 应用提供可折叠的 Session 列表、对话区和 Workspace 文件树
 | `src/chat/Composer.tsx` | 输入、附件、Provider、权限和 Workspace 控件 |
 | `src/chat/Messages/` | assistant、user、Tool 与媒体消息渲染 |
 | `src/chat/RuntimeIndicators/` | Context Window、计划和后台 Job |
-| `src/Workspace.tsx` | Workspace 文件树 |
+| `src/Workspace.tsx` | Workspace 文件树与逐项复制相对路径 |
+| `src/CopyTextButton.tsx` | 复制按钮（代码块、表格与文件树共用） |
 | `src/Settings.tsx` | Provider、Agent、Memory、Skill、Plugin、MCP、Schedule 设置页 |
 | `src/api.ts` | HTTP API 类型与请求函数 |
 

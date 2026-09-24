@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, File, Folder, FolderOpen, PanelRightClose, RefreshCw } from "lucide-react";
 import { get, type Directory } from "./api";
+import { CopyTextButton } from "./CopyTextButton";
 
 function DirectoryTree({ path, version, sessionId }: { path: string; version: number; sessionId?: string }) {
   const [directory, setDirectory] = useState<Directory>();
@@ -48,20 +49,26 @@ function DirectoryTree({ path, version, sessionId }: { path: string; version: nu
           const isOpen = expanded.has(entry.name);
           return <li key={entry.name}>
             {entry.type === "directory" ? <>
-              <button className="tree-entry" aria-expanded={isOpen} onClick={() => setExpanded((previous) => {
-                const next = new Set(previous);
-                if (isOpen) next.delete(entry.name); else next.add(entry.name);
-                return next;
-              })}>
-                {isOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
-                {isOpen ? <FolderOpen size={15} /> : <Folder size={15} />}<span>{entry.name}</span>
-              </button>
+              <div className="tree-entry-row">
+                <button className="tree-entry" title={childPath} aria-expanded={isOpen} onClick={() => setExpanded((previous) => {
+                  const next = new Set(previous);
+                  if (isOpen) next.delete(entry.name); else next.add(entry.name);
+                  return next;
+                })}>
+                  {isOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+                  {isOpen ? <FolderOpen size={15} /> : <Folder size={15} />}<span>{entry.name}</span>
+                </button>
+                <CopyTextButton className="tree-copy-button" label={`复制相对路径 ${childPath}`} getText={() => childPath} />
+              </div>
               {isOpen && <DirectoryTree path={childPath} version={version} sessionId={sessionId} />}
-            </> : <div className="tree-entry file-entry" title={childPath}><File size={15} /><span>{entry.name}</span>{entry.type === "symlink" && <span>↗</span>}</div>}
+            </> : <div className="tree-entry-row">
+              <div className="tree-entry file-entry" title={childPath}><File size={15} /><span>{entry.name}</span>{entry.type === "symlink" && <span>↗</span>}</div>
+              <CopyTextButton className="tree-copy-button" label={`复制相对路径 ${childPath}`} getText={() => childPath} />
+            </div>}
           </li>;
         })}
         {entries.length === 0 && <li className="empty-directory">空目录</li>}
-        {directory.has_more && <li><button className="tree-entry" disabled={loadingMore} onClick={() => { void loadMore(); }}>{loadingMore ? "加载中…" : "加载更多"}</button></li>}
+        {directory.has_more && <li><div className="tree-entry-row"><button className="tree-entry" disabled={loadingMore} onClick={() => { void loadMore(); }}>{loadingMore ? "加载中…" : "加载更多"}</button></div></li>}
       </ul>
     </>
   );

@@ -285,11 +285,14 @@ pre { overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-famil
 .workspace-root span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .file-tree { list-style: none; padding: 0; margin: 0; }
 .file-tree .file-tree { padding-left: 15px; border-left: 1px solid #e7ebf1; margin-left: 12px; }
-.tree-entry { display: flex; align-items: center; gap: 7px; padding: 7px 4px; width: 100%; background: transparent; border: 0; font-size: 11px; color: #7c879a; text-align: left; border-radius: 4px; }
-button.tree-entry:hover { background: #edf1f7; }
+.tree-entry-row { display: flex; align-items: center; width: 100%; border-radius: 4px; }
+.tree-entry-row:hover { background: #edf1f7; }
+.tree-entry { display: flex; flex: 1; min-width: 0; align-items: center; gap: 7px; padding: 7px 4px; background: transparent; border: 0; font-size: 11px; color: #7c879a; text-align: left; border-radius: 4px; }
 .tree-entry span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tree-entry svg { color: #9ba9be; }
 .file-entry { padding-left: 24px; color: #8b95a6; }
+.tree-copy-button { flex: none; width: 24px; height: 24px; margin-right: 2px; opacity: 0; }
+:where(.tree-entry-row:hover) .tree-copy-button { opacity: .48; }
 .tree-error, .tree-loading, .empty-directory { font-size: 11px; padding: 5px; color: #9ca5b3; overflow-wrap: anywhere; }
 .tree-error { color: #ab6666; }
 .workspace-footer { margin: 0 18px; height: 54px; display: flex; gap: 7px; align-items: center; border-top: 1px solid #ebedf2; font-size: 10px; color: #a1aab8; }
