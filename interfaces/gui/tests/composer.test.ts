@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { composerConnectionGate, isRemoteMarkdownImage, shouldBlockRunningAttachmentSubmit, shouldShowPlan, shouldSubmitAttachmentOnly, shouldSubmitComposerEnter, updateBackgroundJobs, updateRuntimeIndicatorOrder, userMessagePreview } from "../src/Chat";
+import { composerConnectionGate, shouldBlockRunningAttachmentSubmit, shouldSubmitAttachmentOnly, shouldSubmitComposerEnter } from "../src/chat/composerState";
+import { isRemoteMarkdownImage } from "../src/chat/Messages";
+import { shouldShowPlan, updateBackgroundJobs, updateRuntimeIndicatorOrder, userMessagePreview } from "../src/chat/runtimeState";
 
 const enter = {
   key: "Enter",
