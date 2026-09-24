@@ -21,7 +21,7 @@ import tempfile
 import time
 import uuid
 from ctypes import wintypes
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import BinaryIO
 
@@ -533,7 +533,9 @@ class _WindowsApi:
             raise self.error("ConvertStringSidToSidW")
         return pointer
 
-    def grant_write(self, path: Path, sid: ctypes.c_void_p) -> bool:
+    def grant_write(
+        self, path: Path, *sids: ctypes.c_void_p, pending_marker: Path | None = None,
+    ) -> bool:
         old_acl = ctypes.c_void_p()
         descriptor = ctypes.c_void_p()
         result = self.advapi32.GetNamedSecurityInfoW(
@@ -549,16 +551,29 @@ class _WindowsApi:
         if result:
             raise self.error("GetNamedSecurityInfoW", result)
         try:
-            if old_acl and self._has_write_grant(old_acl, sid):
+            incomplete = pending_marker is not None and pending_marker.exists()
+            missing = [
+                sid for sid in sids
+                if incomplete or not old_acl or not self._has_write_grant(old_acl, sid)
+            ]
+            if not missing:
                 return False
             new_acl = ctypes.c_void_p()
-            entry = _explicit_access(sid, WORKSPACE_GRANT)
+            entries = (EXPLICIT_ACCESS_W * len(missing))(
+                *(_explicit_access(sid, WORKSPACE_GRANT) for sid in missing)
+            )
             result = self.advapi32.SetEntriesInAclW(
-                1, ctypes.byref(entry), old_acl, ctypes.byref(new_acl)
+                len(entries), entries, old_acl, ctypes.byref(new_acl)
             )
             if result:
                 raise self.error("SetEntriesInAclW", result)
             try:
+                # A root ACE can survive a failed propagation. Record the
+                # attempt before changing the ACL so another process knows
+                # it must propagate again instead of trusting the root.
+                if pending_marker is not None:
+                    pending_marker.parent.mkdir(parents=True, exist_ok=True)
+                    pending_marker.touch()
                 result = self.advapi32.SetNamedSecurityInfoW(
                     str(path),
                     SE_FILE_OBJECT,
@@ -570,6 +585,8 @@ class _WindowsApi:
                 )
                 if result:
                     raise self.error("SetNamedSecurityInfoW", result)
+                if pending_marker is not None:
+                    pending_marker.unlink()
                 return True
             finally:
                 self.local_free(new_acl)
@@ -734,11 +751,11 @@ class _CapabilityLease:
     pid: int
     process_started: int
     managed: bool
-    temporary: bool
+    released: bool
 
 
 class _CapabilityLeases:
-    """Persist ACL ownership before granting access; serialize all reclamation."""
+    """Track revocable private-temp grants and deferred directory cleanup."""
 
     def __init__(self, api: _WindowsApi) -> None:
         self._api = api
@@ -754,11 +771,23 @@ class _CapabilityLeases:
                 records[marker] = _CapabilityLease(
                     **json.loads(marker.read_text(encoding="utf-8"))
                 )
-            except (OSError, ValueError, TypeError) as error:
+            except (ValueError, TypeError):
+                marker.unlink(missing_ok=True)
+            except OSError as error:
                 _logger.warning("Cannot read sandbox lease %s: %s", marker, error)
         return records
 
+    def _write(self, marker: Path, lease: _CapabilityLease) -> None:
+        pending = marker.with_suffix(".tmp")
+        try:
+            pending.write_text(json.dumps(asdict(lease)), encoding="utf-8")
+            pending.replace(marker)
+        finally:
+            pending.unlink(missing_ok=True)
+
     def _active(self, marker: Path, lease: _CapabilityLease) -> bool:
+        if lease.released:
+            return False
         age = time.time() - marker.stat().st_mtime
         try:
             identity = self._api.process_identity(lease.pid)
@@ -773,10 +802,7 @@ class _CapabilityLeases:
             marker.touch()
         return True
 
-    def _reap(
-        self, records: dict[Path, _CapabilityLease],
-        *, release: Path | None = None,
-    ) -> None:
+    def _reap(self, records: dict[Path, _CapabilityLease]) -> None:
         paths: dict[str, dict[str, list[Path]]] = {}
         for marker, lease in records.items():
             paths.setdefault(lease.path, {}).setdefault(lease.sid, []).append(marker)
@@ -784,7 +810,7 @@ class _CapabilityLeases:
             markers = [marker for group in groups.values() for marker in group]
             stale = [
                 marker for marker in markers
-                if marker == release or not self._active(marker, records[marker])
+                if not self._active(marker, records[marker])
             ]
             if not stale:
                 continue
@@ -804,7 +830,6 @@ class _CapabilityLeases:
             # Never remove a workspace or a redirected private temp root.
             if (
                 len(stale) == len(markers)
-                and all(records[marker].temporary for marker in markers)
                 and path.parent == Path(tempfile.gettempdir()).resolve()
                 and path.name.startswith("nosis-sandbox-tmp-")
                 and path.exists()
@@ -819,11 +844,22 @@ class _CapabilityLeases:
 
     def cleanup_stale(self) -> None:
         with self._mutex():
-            self._reap(self._read())
+            records = self._read()
+            for path in {lease.path for lease in records.values()}:
+                try:
+                    self._reap({
+                        marker: lease for marker, lease in records.items()
+                        if lease.path == path
+                    })
+                except OSError:
+                    _logger.warning(
+                        "Cannot reclaim sandbox temporary directory %s; "
+                        "retaining leases for later cleanup", path, exc_info=True,
+                    )
 
     def acquire(
         self, path: Path, sid: ctypes.c_void_p, sid_value: str,
-        *, capability: bool, temporary: bool,
+        *, capability: bool,
     ) -> Path:
         path_value = os.path.normcase(os.path.realpath(path))
         with self._mutex():
@@ -845,15 +881,10 @@ class _CapabilityLeases:
             if identity is None:
                 raise RuntimeError("cannot identify sandbox lease owner")
             lease = _CapabilityLease(
-                path_value, sid_value, os.getpid(), identity, managed, temporary
+                path_value, sid_value, os.getpid(), identity, managed, released=False
             )
             marker = self._directory / f"{uuid.uuid4().hex}.lease"
-            pending = marker.with_suffix(".tmp")
-            try:
-                pending.write_text(json.dumps(asdict(lease)), encoding="utf-8")
-                pending.replace(marker)
-            finally:
-                pending.unlink(missing_ok=True)
+            self._write(marker, lease)
             try:
                 if not records:
                     self._api.grant_write(path, sid)
@@ -861,6 +892,7 @@ class _CapabilityLeases:
                 # Leave the durable record if rollback fails, so startup can
                 # still reclaim a partially propagated grant.
                 try:
+                    self._write(marker, replace(lease, released=True))
                     if managed and not records:
                         self._api.revoke_write(path, sid)
                     marker.unlink(missing_ok=True)
@@ -874,9 +906,10 @@ class _CapabilityLeases:
             records = self._read()
             lease = records.get(marker)
             if lease is not None:
+                records[marker] = replace(lease, released=True)
+                self._write(marker, records[marker])
                 self._reap(
                     {key: value for key, value in records.items() if value.path == lease.path},
-                    release=marker,
                 )
 
 
@@ -950,7 +983,7 @@ class _WindowsProcess:
 
 
 class WindowsWriteRestrictedSandbox:
-    """Own one workspace's ACL capabilities, token, and command jobs."""
+    """Reuse workspace ACL grants; own temporary grants, token, and jobs."""
 
     def __init__(self, workspace: Path, private_tmp: Path) -> None:
         self.workspace = workspace
@@ -979,28 +1012,36 @@ class WindowsWriteRestrictedSandbox:
             self._user_sid = self._current_user_sid()
             user_sid = ctypes.cast(self._user_sid, ctypes.c_void_p)
             user_sid_value = self._api.sid_to_string(user_sid)
-            for path, capability_sid, capability_sid_value in (
-                (workspace, self._workspace_sid, self._workspace_sid_value),
-                (private_tmp, self._temporary_sid, self._temporary_sid_value),
-            ):
-                try:
-                    self._capability_leases.append(self._leases.acquire(
-                        path, capability_sid, capability_sid_value,
-                        capability=True, temporary=path == private_tmp,
-                    ))
-                    # WRITE_RESTRICTED checks both the user's access and a
-                    # restricting SID. Private temp roots may lack a user ACE.
-                    self._capability_leases.append(self._leases.acquire(
-                        path, user_sid, user_sid_value,
-                        capability=False, temporary=path == private_tmp,
-                    ))
-                except OSError as error:
-                    if path == workspace:
-                        raise WindowsSandboxWorkspaceError(workspace, error) from error
-                    raise
+            try:
+                key = (os.path.normcase(os.path.realpath(workspace)), "workspace")
+                with _CapabilityMutex(self._api, key):
+                    digest = hashlib.sha256(key[0].encode("utf-8")).hexdigest()
+                    self._api.grant_write(
+                        workspace, self._workspace_sid, user_sid,
+                        pending_marker=(
+                            _CAPABILITY_LEASE_DIRECTORY / f"{digest}.workspace-pending"
+                        ),
+                    )
+            except OSError as error:
+                raise WindowsSandboxWorkspaceError(workspace, error) from error
+            self._capability_leases.append(self._leases.acquire(
+                private_tmp, self._temporary_sid, self._temporary_sid_value,
+                capability=True,
+            ))
+            # WRITE_RESTRICTED checks the user's access as well as a
+            # restricting SID; private temp roots may lack a user ACE.
+            self._capability_leases.append(self._leases.acquire(
+                private_tmp, user_sid, user_sid_value, capability=False,
+            ))
             self._token = self._create_restricted_token()
         except BaseException:
-            self.close()
+            try:
+                self.close()
+            except Exception:
+                _logger.warning(
+                    "Windows sandbox setup cleanup failed at %s",
+                    private_tmp, exc_info=True,
+                )
             raise
 
     def start(
@@ -1105,25 +1146,27 @@ class WindowsWriteRestrictedSandbox:
             stdin_file.close()
 
     def close(self) -> None:
-        failures: list[BaseException] = []
+        failures: list[Exception] = []
         if self._token is not None:
             try:
                 self._api.close_handle(self._token)
-            except BaseException as error:
+            except Exception as error:
                 failures.append(error)
             self._token = None
+        remaining_leases = []
         for marker in reversed(self._capability_leases):
             try:
                 self._leases.release(marker)
-            except BaseException as error:
+            except Exception as error:
                 failures.append(error)
-        self._capability_leases.clear()
+                remaining_leases.append(marker)
+        self._capability_leases = list(reversed(remaining_leases))
         for attribute in ("_workspace_sid", "_temporary_sid"):
             pointer = getattr(self, attribute, None)
             if pointer is not None:
                 try:
                     self._api.local_free(pointer)
-                except BaseException as error:
+                except Exception as error:
                     failures.append(error)
                 setattr(self, attribute, None)
         if failures:

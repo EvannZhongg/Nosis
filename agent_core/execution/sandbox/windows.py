@@ -1,3 +1,4 @@
+import logging
 import os
 import shutil
 import tempfile
@@ -14,6 +15,8 @@ from .base import (
     _require_supported_policy,
     _windows_sandbox_environment,
 )
+
+_logger = logging.getLogger(__name__)
 
 
 class WindowsSandboxBackend(SandboxBackend):
@@ -87,12 +90,26 @@ class WindowsSandboxBackend(SandboxBackend):
         )
 
     def close(self) -> None:
-        try:
-            if self._sandbox is not None:
+        failures: list[Exception] = []
+        if self._sandbox is not None:
+            try:
                 self._sandbox.close()
-        finally:
-            self._sandbox = None
-            if self._temporary_directory is not None:
+            except Exception as error:
+                failures.append(error)
+            else:
+                self._sandbox = None
+        if self._sandbox is None and self._temporary_directory is not None:
+            try:
                 if self._temporary_directory.exists():
                     shutil.rmtree(self._temporary_directory)
+            except OSError as error:
+                failures.append(error)
+            else:
                 self._temporary_directory = None
+        if failures:
+            error = ExceptionGroup("Windows sandbox cleanup incomplete", failures)
+            _logger.warning(
+                "Windows sandbox cleanup incomplete at %s; retaining resources "
+                "for later cleanup", self._temporary_directory,
+                exc_info=(type(error), error, error.__traceback__),
+            )
