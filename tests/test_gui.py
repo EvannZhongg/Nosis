@@ -27,7 +27,7 @@ from interfaces.bridge.settings import SettingsStore
 
 try:
     from fastapi.testclient import TestClient
-    from starlette.websockets import WebSocketDisconnect
+    from fastapi import WebSocketDisconnect
 
     from interfaces.gui import server
 except ModuleNotFoundError:  # pragma: no cover - exercised without [gui]

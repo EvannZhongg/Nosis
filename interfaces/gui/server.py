@@ -27,7 +27,7 @@ from fastapi import Body, FastAPI, File, HTTPException, UploadFile, WebSocket, W
 from fastapi.responses import FileResponse
 from fastapi.encoders import jsonable_encoder
 from fastapi.staticfiles import StaticFiles
-from starlette.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 
 from agent_core import (
     JsonlSessionStore,
