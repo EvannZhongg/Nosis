@@ -49,27 +49,16 @@ nosis
 OPENAI_KEY=your-api-key
 ```
 
-配置完成后重新启动：
+配置完成后重新启动TUI：
 
 ```bash
 nosis
 ```
-或
+
+或启动 GUI：
+
 ```bash
 nosis-gui
-```
-
-指定 Workspace 或创建由 Nosis 管理的 scratch Workspace：
-
-```bash
-nosis --workspace ~/projects/my-project
-nosis --temporary
-```
-
-启动 GUI：
-
-```bash
-nosis-gui --workspace ~/projects/my-project
 ```
 
 GUI 默认监听 <http://127.0.0.1:8737>。
@@ -84,8 +73,6 @@ GUI 默认监听 <http://127.0.0.1:8737>。
 | [`interfaces/protocol`](interfaces/protocol/README.md) | TUI 与 GUI 共用的 TypeScript 协议类型和连接状态约定 |
 | [`interfaces/tui`](interfaces/tui/README.md) | Ink 终端界面、命令、输入状态和 Bridge 子进程接入 |
 | [`interfaces/gui`](interfaces/gui/README.md) | FastAPI 服务、React 界面、多会话连接、HTTP / WebSocket API 与媒体访问 |
-
-子目录 README 只说明所属模块；跨模块的总体关系以本 README 为准。
 
 ## 配置与数据
 
