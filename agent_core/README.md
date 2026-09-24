@@ -2,7 +2,7 @@
 
 `agent_core` 是与前端无关的 Agent Runtime，负责 Agent Loop、模型调用、上下文、Tool 执行、Session 和执行事件。它不感知 TUI、GUI 或 Bridge 协议。
 
-Runtime 由 [`interfaces/bridge`](../interfaces/bridge/README.md) 统一装配；前端不直接运行 Agent 或 Tool。
+Runtime 由 [`agent_runtime`](../agent_runtime/README.md) 统一装配；前端不直接运行 Agent 或 Tool。
 
 ## 配置
 
@@ -17,9 +17,9 @@ Runtime 由 [`interfaces/bridge`](../interfaces/bridge/README.md) 统一装配�
 
 仓库中的默认配置是字段与结构的直接参考：
 
-- [`provider_config.json`](../interfaces/bridge/defaults/provider_config.json)
-- [`agent_config.json`](../interfaces/bridge/defaults/agent_config.json)
-- [`prompts_template/`](../interfaces/bridge/defaults/prompts_template)
+- [`provider_config.json`](../agent_runtime/defaults/provider_config.json)
+- [`agent_config.json`](../agent_runtime/defaults/agent_config.json)
+- [`prompts_template/`](../agent_runtime/defaults/prompts_template)
 
 最小 Provider 配置示例：
 

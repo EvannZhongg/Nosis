@@ -12,13 +12,13 @@
 
 ```text
 TUI (Ink + React) ──────┐
-                        ├─── Bridge ── Agent Core
+                        ├─── Bridge ── agent_runtime ── Agent Core
 GUI (React) ── FastAPI ─┘
 ```
 
-Bridge 以 `python -m interfaces.bridge` 作为独立进程运行，由前端宿主启动，是前端与 Runtime 之间的唯一通道，两端用 newline-delimited JSON 交换协议消息。
+`agent_runtime` 是共享的应用 Runtime；Bridge 以 `python -m interfaces.bridge` 作为独立进程运行，由前端宿主启动，是前端与 Runtime 之间的唯一通道，两端用 newline-delimited JSON 交换协议消息。
 
-* 依赖方向单向：`interfaces/* → agent_core`；`agent_core` 不得 import `interfaces`。
+* 依赖方向单向：`interfaces/* → agent_runtime → agent_core`；`agent_core` 不得 import `interfaces` 或 `agent_runtime`，`agent_runtime` 不得 import `interfaces`。
 * 驱动 Agent、执行 Tool、发起审批只能经由 Bridge 协议；前端不得运行 Agent Loop，也不得执行会改变 Workspace 或 Session 的 Tool。
 * 前端对 Core 的复用仅限只读能力（如 Session 读取、Workspace 路径解析、只读 Tool 的文件列举）；执行语义不得在前端复制。
 * TUI 和 GUI 仅作为交互层，共享同一套 Agent Runtime。
@@ -30,7 +30,7 @@ Bridge 以 `python -m interfaces.bridge` 作为独立进程运行，由前端宿
 新增能力的落点由职责决定：
 
 * 影响所有前端共享的执行语义 → `agent_core`。
-* 只决定选择、装配与协议 → `interfaces/bridge`（Bridge 进程自身的生命周期由前端宿主管理，见 §2）。
+* 只决定选择、装配与协议 → `agent_runtime` 与 `interfaces/bridge`（Bridge 进程自身的生命周期由前端宿主管理，见 §2）。
 * 只影响单个前端的呈现与交互 → 对应前端；不得反向进入 Core。
 
 ### 3.1 Agent Core：机制
@@ -48,7 +48,7 @@ Bridge 以 `python -m interfaces.bridge` 作为独立进程运行，由前端宿
 * 计划状态与跨 Turn 的计划恢复
 * 后台 Jobs 与 Turn 控制（steer、cancel 的语义与终止条件）
 * 媒体与附件处理（图片探测、降级分析）
-* Workspace Instruction 的数据类型与 fingerprint（读取时机与来源顺序由 Bridge 决定）
+* Workspace Instruction 的数据类型与 fingerprint（读取时机与来源顺序由 `agent_runtime` 决定）
 * 子 Agent Runtime 与角色注册表
 * Provider 抽象、MCP 客户端机制
 
@@ -58,9 +58,9 @@ Bridge 以 `python -m interfaces.bridge` 作为独立进程运行，由前端宿
 * 机制通过已有稳定接口暴露；不引入只服务某个前端的参数、事件或分支。
 * Core 不感知 TUI/GUI、终端、浏览器或协议消息。
 
-### 3.2 Bridge：Runtime 装配
+### 3.2 agent_runtime：Runtime 装配
 
-Bridge 是唯一把 Core 拼装成可运行 Runtime 的地方，负责：
+`agent_runtime` 是唯一把 Core 拼装成可运行 Runtime 的地方，负责：
 
 * 选择 Provider，读取 `provider_config.json` 与 `agent_config.json`，并处理配置写入
 * 初始化配置目录、安装内置 Skill 与 Plugin、读取 Prompt 模板与 Workspace Instructions
@@ -69,13 +69,18 @@ Bridge 是唯一把 Core 拼装成可运行 Runtime 的地方，负责：
 * 发现 Plugin：把其声明的 Skill、MCP 与 Agent 组件加 namespace 后交给对应子系统
 * 子 Agent 角色注册表
 * Workspace 绑定、Session 存储位置、取消与持久化时机
-* 一次装配由一个 `ExecutionPlane` 原子持有；Provider、Workspace、配置或 Instructions 变化时整体重建
-* 把 `AgentEvent` 翻译为协议消息，并转发用户输入、授权、提问与取消
+* 一次装配由一个 `ExecutionPlaneManager` 原子持有；Provider、Workspace、配置或 Instructions 变化时整体重建
+* Turn 生命周期（含取消与 steer）与定时任务的执行入口
 
 约束：
 
-* Bridge 不含 Agent 决策逻辑：Agent Loop、上下文压缩、结果回灌都属于 Core。
+* `agent_runtime` 不含 Agent 决策逻辑：Agent Loop、上下文压缩、结果回灌都属于 Core。
 * Runtime 装配只有一处实现；TUI 与 GUI 不得各建一套。前端只决定进程与附着（何时启动、接管或释放 Bridge），不参与 Runtime 装配。
+
+### 3.3 Bridge：协议适配
+
+Bridge 把 `AgentEvent` 与运行状态翻译为协议消息，并转发用户输入、授权、提问与取消，不持有装配工厂。
+
 * 协议消息的增改必须同时更新 `interfaces/protocol/src/protocol.ts` 与发送方：`protocol.py` 定义大部分消息，其余由 `bridge.py` 与 `__main__.py` 内联发出。
 * 允许存在只服务单个前端的协议消息（如 `attach_only`、`takeover`、`attachment_replaced`），但它们只表达呈现与进程附着，不得承载 Agent 语义。
 

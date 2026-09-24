@@ -89,7 +89,7 @@ def memory_store(directory: Path) -> MemoryStore:
 def initialize_config_directory(directory: Path) -> tuple[Path, ...]:
     created = []
     directory.mkdir(parents=True, exist_ok=True)
-    defaults = files("interfaces.bridge.defaults")
+    defaults = files("agent_runtime.defaults")
     for filename in DEFAULT_CONFIG_FILENAMES:
         path = directory / filename
         if path.exists():

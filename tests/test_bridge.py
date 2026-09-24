@@ -57,8 +57,12 @@ from agent_core.projection import project_context_units
 from agent_core.providers import LiteLLMProvider
 from agent_core.subagent import vision_aware_tool_names
 from agent_core.tools.config import ROLE_TOOL_NAMES, TOOL_NAMES
-from interfaces.bridge.bridge import Bridge, Cancelled, _parse_attachments
-from interfaces.bridge.execution_plane import ExecutionPlane
+from interfaces.bridge.bridge import Bridge, Cancelled
+from agent_runtime.attachments import parse_attachments as _parse_attachments
+from agent_runtime.host import RuntimeHost
+from agent_runtime.plane_manager import ExecutionPlaneManager
+from agent_runtime.scheduled_runner import ScheduledTurnRunner
+from agent_runtime.execution_plane import ExecutionPlane
 from interfaces.bridge.protocol import (
     attachment_replaced_message,
     decode,
@@ -462,7 +466,7 @@ class IsolatedBridgeTest(unittest.TestCase):
     def test_scheduler_directory_survives_helper_return(self) -> None:
         bridge = isolated_bridge(io.StringIO(), io.StringIO())
         try:
-            self.assertTrue(bridge._scheduler.path.parent.is_dir())
+            self.assertTrue(bridge.host.scheduler.path.parent.is_dir())
         finally:
             bridge.close()
 
@@ -478,10 +482,10 @@ class PermissionProtocolTest(unittest.TestCase):
                 {"type": "permission_set", "preset": "workspace_access"}
             )
 
-            self.assertIsNone(bridge._execution_plane)
-            assert bridge._session is not None
+            self.assertIsNone(bridge.host.planes.current)
+            assert bridge.host.sessions.session is not None
             self.assertEqual(
-                bridge._session.permission_preset,
+                bridge.host.sessions.session.permission_preset,
                 PermissionPreset.WORKSPACE_ACCESS,
             )
             self.assertEqual(
@@ -499,10 +503,10 @@ class PermissionProtocolTest(unittest.TestCase):
                 {"type": "permission_set", "preset": "full_access"}
             )
 
-            self.assertIsNone(bridge._execution_plane)
-            assert bridge._session is not None
+            self.assertIsNone(bridge.host.planes.current)
+            assert bridge.host.sessions.session is not None
             self.assertEqual(
-                bridge._session.permission_preset,
+                bridge.host.sessions.session.permission_preset,
                 PermissionPreset.FULL_ACCESS,
             )
             self.assertEqual(
@@ -510,7 +514,7 @@ class PermissionProtocolTest(unittest.TestCase):
                 PermissionPreset.FULL_ACCESS,
             )
             self.assertEqual(
-                bridge._session.journal[-1].event_type,
+                bridge.host.sessions.session.journal[-1].event_type,
                 "permission_preset_changed",
             )
             self.assertEqual(
@@ -547,7 +551,7 @@ class PermissionProtocolTest(unittest.TestCase):
             bridge._set_permission_preset(
                 {"type": "permission_set", "preset": "workspace_access"}
             )
-            plane = bridge._ensure_execution_plane()
+            plane = bridge.host.planes.ensure(bridge.host.sessions)
             try:
                 command = (
                     "Set-Content -NoNewline -LiteralPath routed.txt "
@@ -563,7 +567,7 @@ class PermissionProtocolTest(unittest.TestCase):
                     )
                 )
             finally:
-                bridge._close_execution_plane()
+                bridge.host.planes.close()
 
             if (
                 result.error is not None
@@ -599,13 +603,13 @@ class PermissionProtocolTest(unittest.TestCase):
                 {"type": "permission_set", "preset": "full_access"}
             )
 
-            self.assertIsNone(bridge._execution_plane)
+            self.assertIsNone(bridge.host.planes.current)
             self.assertEqual(
                 JsonlSessionStore(root / "sessions").provider_for("s"),
                 "second",
             )
             self.assertEqual(
-                bridge._workspace.path,
+                bridge.host.sessions.workspace.path,
                 next_workspace.resolve(),
             )
             self.assertEqual(
@@ -628,7 +632,7 @@ class PermissionProtocolTest(unittest.TestCase):
             root = Path(directory)
             bridge, _ = make_bridge([], root)
             bridge.open_session(open_session_message(root, session_id="s"))
-            plane = bridge._ensure_execution_plane()
+            plane = bridge.host.planes.ensure(bridge.host.sessions)
 
             with (
                 patch.object(
@@ -651,7 +655,7 @@ class PermissionProtocolTest(unittest.TestCase):
                     {"type": "provider_set", "provider": "second"}
                 )
 
-            self.assertIsNone(bridge._execution_plane)
+            self.assertIsNone(bridge.host.planes.current)
             close_jobs.assert_called_once_with()
             close_mcp.assert_called_once_with()
             close_execution_router.assert_called_once_with()
@@ -663,7 +667,7 @@ class PermissionProtocolTest(unittest.TestCase):
             next_workspace.mkdir()
             bridge, _ = make_bridge([], root)
             bridge.open_session(open_session_message(root, session_id="s"))
-            plane = bridge._ensure_execution_plane()
+            plane = bridge.host.planes.ensure(bridge.host.sessions)
 
             with (
                 patch.object(
@@ -689,7 +693,7 @@ class PermissionProtocolTest(unittest.TestCase):
                     }
                 )
 
-            self.assertIsNone(bridge._execution_plane)
+            self.assertIsNone(bridge.host.planes.current)
             close_jobs.assert_called_once_with()
             close_mcp.assert_called_once_with()
             close_execution_router.assert_called_once_with()
@@ -750,7 +754,7 @@ class BridgeApprovalTest(unittest.TestCase):
             bridge.open_session(
                 open_session_message(Path(directory), session_id="s")
             )
-            bridge._execution_plane = Plane()
+            bridge.host.planes.current = Plane()
 
             bridge._emit_runtime_state("running")
 
@@ -769,7 +773,7 @@ class BridgeApprovalTest(unittest.TestCase):
             bridge.open_session(
                 open_session_message(Path(directory), session_id="s")
             )
-            bridge._turn_id = "t1"
+            bridge.host.turns.turn_id = "t1"
 
             self.assertTrue(bridge.request_permission("ls"))
 
@@ -895,8 +899,8 @@ class BridgeApprovalTest(unittest.TestCase):
         stdout = io.StringIO()
         bridge = isolated_bridge(stdin, stdout)
         control = TurnControl()
-        bridge._turn_id = "t1"
-        bridge._turn_control = control
+        bridge.host.turns.turn_id = "t1"
+        bridge.host.turns.control = control
 
         self.assertTrue(bridge.request_permission("ls"))
         self.assertEqual(control.drain_steering()[0].text, "check tests")
@@ -904,7 +908,7 @@ class BridgeApprovalTest(unittest.TestCase):
             "user_steer_received",
             [message["type"] for message in emitted(stdout)],
         )
-        bridge._turn_control = None
+        bridge.host.turns.control = None
         stdin.release.set()
 
     def test_ignores_a_stale_response_that_arrived_before_its_waiter(self) -> None:
@@ -931,7 +935,7 @@ class BridgeApprovalTest(unittest.TestCase):
         assert message is not None
         time.sleep(0.02)
 
-        self.assertIn("t1", bridge._pending_cancels)
+        self.assertIn("t1", bridge.host.turns._pending_cancels)
 
 
 class BridgeUserQuestionTest(unittest.TestCase):
@@ -950,7 +954,7 @@ class BridgeUserQuestionTest(unittest.TestCase):
             bridge.open_session(
                 open_session_message(Path(directory), session_id="s")
             )
-            bridge._turn_id = "t1"
+            bridge.host.turns.turn_id = "t1"
 
             bridge.request_user_choice("Cache?", self.OPTIONS, False)
 
@@ -1105,7 +1109,7 @@ class BridgeServeTest(unittest.TestCase):
                 ),
                 PermissionPreset.FULL_ACCESS,
             )
-            self.assertIsNone(bridge._execution_plane)
+            self.assertIsNone(bridge.host.planes.current)
 
     def test_answers_settings_requests_without_starting_runtime(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1124,7 +1128,7 @@ class BridgeServeTest(unittest.TestCase):
             snapshot = next(message for message in emitted(stdout) if message["type"] == "settings_snapshot")
             self.assertEqual(snapshot["request_id"], "settings-1")
             self.assertEqual(snapshot["settings"]["default_provider"], "first")
-            self.assertIsNone(bridge._execution_plane)
+            self.assertIsNone(bridge.host.planes.current)
 
 
 def open_session_message(
@@ -1299,12 +1303,12 @@ class InterruptedTurnTest(unittest.TestCase):
             if message["type"] == "session_ready"
         )
         self.store = JsonlSessionStore(self.root / "sessions")
-        session = self.bridge._session
+        session = self.bridge.host.sessions.session
         assert session is not None
         self.session = session
 
     def start_turn(self, agent: object, text: str = "do the work") -> None:
-        plane = self.bridge._ensure_execution_plane()
+        plane = self.bridge.host.planes.ensure(self.bridge.host.sessions)
         plane.agent = agent
         self.bridge.run_turn({"turn_id": "t1", "text": text})
 
@@ -1312,7 +1316,7 @@ class InterruptedTurnTest(unittest.TestCase):
         return self.store.load(self.session_id).items
 
     def test_stores_a_cancelled_turn(self) -> None:
-        plane = self.bridge._ensure_execution_plane()
+        plane = self.bridge.host.planes.ensure(self.bridge.host.sessions)
         memory = MemorySpy()
         plane.memory = memory
         plane.agent = ScriptedAgent(
@@ -1330,7 +1334,7 @@ class InterruptedTurnTest(unittest.TestCase):
         )
 
     def test_reconciles_memory_only_after_a_successful_turn(self) -> None:
-        plane = self.bridge._ensure_execution_plane()
+        plane = self.bridge.host.planes.ensure(self.bridge.host.sessions)
         memory = MemorySpy()
         plane.memory = memory
         plane.agent = SuccessfulAgent(self.session)
@@ -1341,7 +1345,7 @@ class InterruptedTurnTest(unittest.TestCase):
         self.assertEqual(emitted(self.stdout)[-1]["type"], "turn_completed")
 
     def test_discards_memory_candidates_when_a_turn_fails(self) -> None:
-        plane = self.bridge._ensure_execution_plane()
+        plane = self.bridge.host.planes.ensure(self.bridge.host.sessions)
         memory = MemorySpy()
         plane.memory = memory
         plane.agent = FailingAgent(self.session)
@@ -1489,7 +1493,7 @@ class InterruptedTurnTest(unittest.TestCase):
 
     def test_reports_a_storage_failure_without_ending_the_bridge(self) -> None:
         storage = patch.object(
-            self.bridge._store,
+            self.bridge.host.sessions.store,
             "append_events",
             side_effect=ValueError("session already exists in workspace: 'x'"),
         )
@@ -1520,14 +1524,14 @@ class ScheduledTurnTest(unittest.TestCase):
             scheduler = SchedulerService(root / "schedule.jsonl")
             captured = []
 
-            def open_session(worker: Bridge, message: object) -> None:
-                captured.append(worker._execution_authority_limit)
+            def open_session(worker: RuntimeHost, *args, **kwargs) -> None:
+                captured.append(worker.planes._execution_authority_limit)
                 raise RuntimeError("stop after capturing worker authority")
 
             with patch(
                 "interfaces.bridge.bridge.default_config_directory",
                 return_value=root,
-            ), patch.object(Bridge, "open_session", open_session):
+            ), patch.object(RuntimeHost, "open_session", open_session):
                 bridge = Bridge(
                     io.StringIO(),
                     io.StringIO(),
@@ -1556,7 +1560,7 @@ class ScheduledTurnTest(unittest.TestCase):
                         RuntimeError,
                         "stop after capturing worker authority",
                     ):
-                        bridge._run_scheduled_turn(schedule, run)
+                        ScheduledTurnRunner(root, scheduler)(schedule, run)
                 bridge.close()
 
             self.assertEqual(
@@ -1588,13 +1592,13 @@ class ScheduledTurnTest(unittest.TestCase):
                         {"response": type("Response", (), {"usage": None})()},
                     )()
 
-            def execution_plane(bridge: Bridge) -> object:
-                assert bridge._session is not None
+            def execution_plane(manager, state) -> object:
+                assert state.session is not None
                 return type(
                     "Plane",
                     (),
                     {
-                        "agent": ScheduledAgent(bridge._session),
+                        "agent": ScheduledAgent(state.session),
                         "jobs": type("Jobs", (), {"snapshot": lambda self: []})(),
                         "memory": None,
                         "runtime_warnings": (),
@@ -1604,7 +1608,7 @@ class ScheduledTurnTest(unittest.TestCase):
             with patch(
                 "interfaces.bridge.bridge.default_config_directory",
                 return_value=root,
-            ), patch.object(Bridge, "_ensure_execution_plane", execution_plane):
+            ), patch.object(ExecutionPlaneManager, "ensure", execution_plane):
                 bridge = Bridge(
                     io.StringIO(),
                     io.StringIO(),
@@ -1636,7 +1640,7 @@ class ScheduledTurnTest(unittest.TestCase):
                         datetime.now(timezone.utc),
                     )
 
-                    bridge._run_scheduled_turn(schedule, run)
+                    ScheduledTurnRunner(root, scheduler)(schedule, run)
                 bridge.close()
 
             store = JsonlSessionStore(root / "sessions")
@@ -1691,7 +1695,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
 
             bridge.open_session(open_session_message(root))
 
-            self.assertIsNone(bridge._execution_plane)
+            self.assertIsNone(bridge.host.planes.current)
             self.assertEqual(
                 [message["type"] for message in emitted(stdout)],
                 ["session_ready", "runtime_state"],
@@ -1751,7 +1755,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
                     )
                 ),
             ):
-                plane = bridge._ensure_execution_plane()
+                plane = bridge.host.planes.ensure(bridge.host.sessions)
             main_provider = plane.agent._provider
             vision_provider = plane.agent._tools._context.vision_provider
             subagents = plane.agent._tools._context.subagents
@@ -1790,7 +1794,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
                 ValueError,
                 "MISSING_NOSIS_TEST_KEY",
             ):
-                bridge._ensure_execution_plane()
+                bridge.host.planes.ensure(bridge.host.sessions)
 
     def test_injects_the_configured_image_generator(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1829,7 +1833,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
                 )
             )
 
-            plane = bridge._ensure_execution_plane()
+            plane = bridge.host.planes.ensure(bridge.host.sessions)
             generator = plane.agent._tools._context.image_generator
 
         self.assertIsNotNone(generator)
@@ -1857,7 +1861,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
             )
 
             with self.assertRaisesRegex(ValueError, "no image_generation"):
-                bridge._ensure_execution_plane()
+                bridge.host.planes.ensure(bridge.host.sessions)
 
     def test_restores_the_session_permission_preset(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1878,12 +1882,12 @@ class BridgeSessionOpenTest(unittest.TestCase):
 
             ready = emitted(stdout)[0]
             self.assertEqual(ready["permission_preset"], "full_access")
-            assert bridge._permissions is not None
-            bridge._permissions.authorize(
+            assert bridge.host.sessions.permissions is not None
+            bridge.host.sessions.permissions.authorize(
                 TOOL_CALL,
                 ToolExecutionContext(
                     workspace=Workspace(Path(__file__).parent),
-                    session=bridge._permissions._session,
+                    session=bridge.host.sessions.permissions._session,
                 ),
             )
             self.assertFalse(
@@ -1934,7 +1938,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
             bridge, _ = make_bridge([], root)
 
             bridge.open_session(open_session_message(root))
-            plane = bridge._ensure_execution_plane()
+            plane = bridge.host.planes.ensure(bridge.host.sessions)
 
             names = [item.name for item in plane.agent._tools.definitions]
             prompt = plane.agent._context._system_prompt
@@ -1968,7 +1972,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
             bridge, _ = make_bridge([], root)
 
             bridge.open_session(open_session_message(root))
-            plane = bridge._ensure_execution_plane()
+            plane = bridge.host.planes.ensure(bridge.host.sessions)
 
             skills = plane.agent._execution_context.skills
             assert skills is not None
@@ -2044,7 +2048,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
             )
 
             try:
-                plane = bridge._ensure_execution_plane()
+                plane = bridge.host.planes.ensure(bridge.host.sessions)
                 names = {
                     item.name for item in plane.agent._tools.definitions
                 }
@@ -2061,7 +2065,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
                     if message["type"] == "mcp_server_status"
                 ]
             finally:
-                bridge._close_execution_plane()
+                bridge.host.planes.close()
 
         self.assertIn("mcp__example_fake__echo", names)
         self.assertIsNone(result.error)
@@ -2095,9 +2099,9 @@ class BridgeSessionOpenTest(unittest.TestCase):
             bridge.open_session(open_session_message(root))
 
             try:
-                plane = bridge._ensure_execution_plane()
+                plane = bridge.host.planes.ensure(bridge.host.sessions)
             finally:
-                bridge._close_execution_plane()
+                bridge.host.planes.close()
 
         self.assertEqual(plane.mcp.tool_names, ())
         self.assertEqual(plane.runtime_warnings, ())
@@ -2144,9 +2148,9 @@ class BridgeSessionOpenTest(unittest.TestCase):
             )
 
             try:
-                plane = bridge._ensure_execution_plane()
+                plane = bridge.host.planes.ensure(bridge.host.sessions)
             finally:
-                bridge._close_execution_plane()
+                bridge.host.planes.close()
 
         self.assertEqual(plane.mcp.tool_names, ())
         self.assertEqual(len(plane.runtime_warnings), 1)
@@ -2163,7 +2167,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
             bridge, _ = make_bridge([], root)
 
             bridge.open_session(message)
-            plane = bridge._ensure_execution_plane()
+            plane = bridge.host.planes.ensure(bridge.host.sessions)
 
             prompt = plane.agent._context._system_prompt
 
@@ -2181,10 +2185,10 @@ class BridgeSessionOpenTest(unittest.TestCase):
             bridge, _ = make_bridge([], root)
 
             bridge.open_session(open_session_message(root, workspace=str(workspace)))
-            plane = bridge._ensure_execution_plane()
+            plane = bridge.host.planes.ensure(bridge.host.sessions)
 
             prompt = plane.agent._context._system_prompt
-            session = bridge._session
+            session = bridge.host.sessions.session
             assert session is not None
 
         self.assertLess(prompt.index("global rule"), prompt.index("claude rule"))
@@ -2217,7 +2221,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
             )
 
             bridge.open_session(message)
-            plane = bridge._ensure_execution_plane()
+            plane = bridge.host.planes.ensure(bridge.host.sessions)
             prompt = plane.agent._context._system_prompt
 
         self.assertIn("project rule", prompt)
@@ -2232,12 +2236,12 @@ class BridgeSessionOpenTest(unittest.TestCase):
             instructions_path.write_text("first rule", encoding="utf-8")
             bridge, _ = make_bridge([], root)
             bridge.open_session(open_session_message(root))
-            first_plane = bridge._ensure_execution_plane()
+            first_plane = bridge.host.planes.ensure(bridge.host.sessions)
 
-            self.assertIs(bridge._ensure_execution_plane(), first_plane)
+            self.assertIs(bridge.host.planes.ensure(bridge.host.sessions), first_plane)
 
             instructions_path.write_text("second rule", encoding="utf-8")
-            second_plane = bridge._ensure_execution_plane()
+            second_plane = bridge.host.planes.ensure(bridge.host.sessions)
 
             self.assertIsNot(second_plane, first_plane)
             self.assertIn(
@@ -2252,7 +2256,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
             root = Path(directory)
             bridge, _ = make_bridge([], root)
             bridge.open_session(open_session_message(root))
-            first_plane = bridge._ensure_execution_plane()
+            first_plane = bridge.host.planes.ensure(bridge.host.sessions)
             store = MemoryStore(
                 root / "MEMORY.md",
                 root / "sessions",
@@ -2264,7 +2268,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
                 ),
             )
 
-            second_plane = bridge._ensure_execution_plane()
+            second_plane = bridge.host.planes.ensure(bridge.host.sessions)
 
             self.assertIs(second_plane, first_plane)
             self.assertNotIn(
@@ -2272,8 +2276,8 @@ class BridgeSessionOpenTest(unittest.TestCase):
                 second_plane.agent._context._system_prompt,
             )
 
-            bridge._close_execution_plane()
-            third_plane = bridge._ensure_execution_plane()
+            bridge.host.planes.close()
+            third_plane = bridge.host.planes.ensure(bridge.host.sessions)
 
             self.assertIsNot(third_plane, first_plane)
             self.assertIn(
@@ -2291,7 +2295,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
             (root / "PROJECT.md").write_text("project rule", encoding="utf-8")
             bridge, _ = make_bridge([], root)
             bridge.open_session(open_session_message(root))
-            first_plane = bridge._ensure_execution_plane()
+            first_plane = bridge.host.planes.ensure(bridge.host.sessions)
             config = json.loads(
                 (root / "agent_config.json").read_text(encoding="utf-8")
             )
@@ -2301,7 +2305,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            second_plane = bridge._ensure_execution_plane()
+            second_plane = bridge.host.planes.ensure(bridge.host.sessions)
 
             self.assertIsNot(second_plane, first_plane)
             self.assertIn(
@@ -2317,7 +2321,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
             root = Path(directory)
             bridge, _ = make_bridge([], root)
             bridge.open_session(open_session_message(root))
-            first_plane = bridge._ensure_execution_plane()
+            first_plane = bridge.host.planes.ensure(bridge.host.sessions)
             config = json.loads(
                 (root / "agent_config.json").read_text(encoding="utf-8")
             )
@@ -2339,7 +2343,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
                     wraps=first_plane.mcp.close,
                 ) as close_mcp,
             ):
-                second_plane = bridge._ensure_execution_plane()
+                second_plane = bridge.host.planes.ensure(bridge.host.sessions)
 
             self.assertIsNot(second_plane, first_plane)
             self.assertEqual(second_plane.agent_config.max_same_tool_calls, 6)
@@ -2351,7 +2355,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
             root = Path(directory)
             bridge, _ = make_bridge([], root)
             bridge.open_session(open_session_message(root))
-            first_plane = bridge._ensure_execution_plane()
+            first_plane = bridge.host.planes.ensure(bridge.host.sessions)
             config = json.loads(
                 (root / "provider_config.json").read_text(encoding="utf-8")
             )
@@ -2361,7 +2365,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            second_plane = bridge._ensure_execution_plane()
+            second_plane = bridge.host.planes.ensure(bridge.host.sessions)
 
             self.assertIsNot(second_plane, first_plane)
             self.assertNotEqual(
@@ -2391,10 +2395,10 @@ class BridgeSessionOpenTest(unittest.TestCase):
             open_session_message(root, provider_config=config)
             (root / ".env").write_text("FIRST_KEY=first\n", encoding="utf-8")
             bridge.open_session({"type": "open_session", "workspace": str(root), "session_id": None})
-            first_plane = bridge._ensure_execution_plane()
+            first_plane = bridge.host.planes.ensure(bridge.host.sessions)
 
             (root / ".env").write_text("FIRST_KEY=second\n", encoding="utf-8")
-            second_plane = bridge._ensure_execution_plane()
+            second_plane = bridge.host.planes.ensure(bridge.host.sessions)
 
             self.assertIsNot(second_plane, first_plane)
             self.assertEqual(second_plane.agent._provider._api_key, "second")
@@ -2409,22 +2413,22 @@ class BridgeSessionOpenTest(unittest.TestCase):
 
             with (
                 patch(
-                    "interfaces.bridge.bridge.Agent",
+                    "agent_runtime.plane_manager.Agent",
                     side_effect=RuntimeError("assembly failed"),
                 ),
                 patch(
-                    "interfaces.bridge.bridge.JobManager.close",
+                    "agent_runtime.plane_manager.JobManager.close",
                     autospec=True,
                 ) as close_jobs,
                 patch(
-                    "interfaces.bridge.bridge.McpClientManager.close",
+                    "agent_runtime.plane_manager.McpClientManager.close",
                     autospec=True,
                 ) as close_mcp,
             ):
                 with self.assertRaisesRegex(RuntimeError, "assembly failed"):
-                    bridge._ensure_execution_plane()
+                    bridge.host.planes.ensure(bridge.host.sessions)
 
-            self.assertIsNone(bridge._execution_plane)
+            self.assertIsNone(bridge.host.planes.current)
             close_jobs.assert_called_once()
             close_mcp.assert_called_once()
 
@@ -2433,9 +2437,9 @@ class BridgeSessionOpenTest(unittest.TestCase):
             root = Path(directory)
             bridge, stdout = make_bridge([], root)
             bridge.open_session(open_session_message(root))
-            plane = bridge._ensure_execution_plane()
+            plane = bridge.host.planes.ensure(bridge.host.sessions)
 
-            bridge._emit_agent_event(
+            bridge.host.publish_event(
                 ContextWindowEvent(
                     ContextWindow(
                         input_tokens=240,
@@ -2481,7 +2485,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
             bridge, stdout = make_bridge([], root)
 
             bridge.open_session(open_session_message(root))
-            plane = bridge._ensure_execution_plane()
+            plane = bridge.host.planes.ensure(bridge.host.sessions)
 
             runtime_state = emitted(stdout)[-1]
             names = [item.name for item in plane.agent._tools.definitions]
@@ -2511,7 +2515,7 @@ class SubagentRoleStartTest(unittest.TestCase):
                     },
                 )
             )
-            plane = bridge._ensure_execution_plane()
+            plane = bridge.host.planes.ensure(bridge.host.sessions)
             subagents = plane.agent._tools._context.subagents
             if subagents is None:
                 return []
@@ -2569,7 +2573,7 @@ class SubagentRoleStartTest(unittest.TestCase):
                     },
                 )
             )
-            plane = bridge._ensure_execution_plane()
+            plane = bridge.host.planes.ensure(bridge.host.sessions)
 
             self.assertEqual(
                 [definition.name for definition in plane.agent._tools.definitions],
@@ -2596,7 +2600,7 @@ class SubagentRoleStartTest(unittest.TestCase):
                     },
                 )
             )
-            plane = bridge._ensure_execution_plane()
+            plane = bridge.host.planes.ensure(bridge.host.sessions)
 
             main_names = {
                 definition.name for definition in plane.agent._tools.definitions
@@ -2688,7 +2692,7 @@ class PluginAgentStartTest(unittest.TestCase):
                 )
             )
 
-            plane = bridge._ensure_execution_plane()
+            plane = bridge.host.planes.ensure(bridge.host.sessions)
             runtime = plane.agent._tools._context.subagents
             assert runtime is not None
             matched = runtime.roles.get("review-kit:matched")
@@ -2784,7 +2788,7 @@ class AnalyzeImageDerivationTest(unittest.TestCase):
                         },
                     )
                 )
-                plane = bridge._ensure_execution_plane()
+                plane = bridge.host.planes.ensure(bridge.host.sessions)
                 main_names = sorted(
                     d.name for d in plane.agent._tools.definitions
                 )
@@ -2884,7 +2888,7 @@ class CrossFileRoleValidationTest(unittest.TestCase):
                     },
                 )
             )
-            bridge._ensure_execution_plane()
+            bridge.host.planes.ensure(bridge.host.sessions)
 
     def test_rejects_a_provider_override_for_an_unknown_role(self) -> None:
         """A typo must fail loudly instead of silently doing nothing."""

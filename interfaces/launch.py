@@ -13,7 +13,7 @@ import sys
 from importlib.resources import files
 from pathlib import Path
 
-from .bridge.config import (
+from agent_runtime.config import (
     default_config_directory,
     initialize_config_directory,
     load_scratch_workspace_root,

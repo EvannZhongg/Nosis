@@ -46,7 +46,7 @@ from agent_core import (
 )
 from agent_core.path_utils import path_for_comparison
 
-from ..bridge.config import (
+from agent_runtime.config import (
     default_config_directory,
     initialize_config_directory,
     load_scratch_workspace_root,
@@ -59,7 +59,7 @@ from ..bridge.managed_workspaces import (
 )
 from ..bridge.process import cancel_process
 from ..bridge.protocol import attachment_replaced_message, runtime_state_message
-from ..bridge.settings import SettingsStore
+from agent_runtime.settings import SettingsStore
 
 
 STATIC_PATH = Path(__file__).resolve().parent / "static"

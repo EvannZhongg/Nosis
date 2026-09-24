@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from agent_core import DirectorySkillSource, ProviderCapabilities, SkillLoader
 from agent_core.providers import LiteLLMProvider
-from interfaces.bridge.config import (
+from agent_runtime.config import (
     ModelConfig,
     configured_role_names,
     default_config_directory,
@@ -19,7 +19,7 @@ from interfaces.bridge.config import (
     load_vision_config,
     memory_store,
 )
-from interfaces.bridge.plugins import PluginManager
+from agent_runtime.plugins import PluginManager
 
 
 class ConfigTest(unittest.TestCase):
@@ -87,7 +87,7 @@ class ConfigTest(unittest.TestCase):
             self.assertEqual(path.read_text(encoding="utf-8"), content)
 
     def test_uses_home_for_default_directory(self) -> None:
-        with patch("interfaces.bridge.config.Path.home") as home:
+        with patch("agent_runtime.config.Path.home") as home:
             home.return_value = Path("/home/test")
 
             self.assertEqual(
@@ -349,7 +349,7 @@ class ConfigTest(unittest.TestCase):
 
             config_directory = root / "nosis"
             with patch(
-                "interfaces.bridge.config.files",
+                "agent_runtime.config.files",
                 return_value=defaults,
             ):
                 initialize_config_directory(config_directory)
@@ -391,7 +391,7 @@ class ConfigTest(unittest.TestCase):
 
             config_directory = root / "nosis"
             with patch(
-                "interfaces.bridge.config.files",
+                "agent_runtime.config.files",
                 return_value=defaults,
             ):
                 initialize_config_directory(config_directory)
@@ -431,7 +431,7 @@ class ConfigTest(unittest.TestCase):
 
             config_directory = root / "nosis"
             with patch(
-                "interfaces.bridge.config.files",
+                "agent_runtime.config.files",
                 return_value=defaults,
             ):
                 initialize_config_directory(config_directory)

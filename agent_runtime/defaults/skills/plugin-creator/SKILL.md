@@ -8,7 +8,7 @@ description: Create and validate Nosis Plugin packages — one directory with a 
 A Nosis Plugin is a directory whose `plugin.json` declares the components it contributes. Bridge
 discovers plugins under `~/.nosis/plugins/` while assembling the Runtime and routes every enabled
 component into the matching subsystem, so a manifest must satisfy the contract implemented by
-`interfaces/bridge/plugins.py`.
+`agent_runtime/plugins.py`.
 
 ## Quick Start
 

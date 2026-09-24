@@ -23,7 +23,7 @@ from agent_core import (
 )
 from agent_core.scheduler import IntervalTrigger, OneShotTrigger, SchedulerService
 from interfaces.bridge.managed_workspaces import create_scratch_workspace
-from interfaces.bridge.settings import SettingsStore
+from agent_runtime.settings import SettingsStore
 
 try:
     from fastapi.testclient import TestClient

@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 from agent_core import Workspace
-from interfaces.bridge.instructions import load_workspace_instructions
+from agent_runtime.instructions import load_workspace_instructions
 
 
 class WorkspaceInstructionsTest(unittest.TestCase):

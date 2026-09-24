@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from interfaces.bridge.settings import EnvironmentReloader, SettingsStore, configuration_fingerprint
+from agent_runtime.settings import EnvironmentReloader, SettingsStore, configuration_fingerprint
 
 
 PROVIDERS = {

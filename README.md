@@ -6,7 +6,7 @@ Nosis 是一个开源的轻量级个人 Agent Runtime：执行边界由 Session 
 
 ```text
 TUI ──────────┐
-              ├── Bridge ── Agent Core
+              ├── Bridge ── agent_runtime ── Agent Core
 GUI ─ FastAPI ┘
 ```
 
@@ -83,7 +83,8 @@ GUI 默认监听 <http://127.0.0.1:8737>。
 | 文档 | 内容 |
 | --- | --- |
 | [`agent_core`](agent_core/README.md) | Agent Runtime、Tool、Provider、Session |
-| [`interfaces/bridge`](interfaces/bridge/README.md) | Runtime 装配与前端协议适配 |
+| [`agent_runtime`](agent_runtime/README.md) | Runtime 装配：Provider、配置、Tool、Session 与 Turn |
+| [`interfaces/bridge`](interfaces/bridge/README.md) | 前端协议适配与进程入口 |
 | [`interfaces/protocol`](interfaces/protocol/README.md) | TUI/GUI 共用的 TypeScript 协议类型 |
 | [`interfaces/tui`](interfaces/tui/README.md) | 终端界面、命令行参数与快捷键 |
 | [`interfaces/gui`](interfaces/gui/README.md) | Web 界面与 FastAPI 服务 |
@@ -106,7 +107,7 @@ GUI 默认监听 <http://127.0.0.1:8737>。
 | `~/.nosis/sessions/<workspace-key>/<session-id>/` | Session 的 Journal、权限 preset、大输出与子 Agent 记录 |
 | `<workspace>/.nosis/attachments/` | GUI 上传的附件与 Agent 生成的图片 |
 
-字段与结构见 [Agent Core](agent_core/README.md)，默认配置见 [`interfaces/bridge/defaults/`](interfaces/bridge/defaults)。
+字段与结构见 [Agent Core](agent_core/README.md)，默认配置见 [`agent_runtime/defaults/`](agent_runtime/defaults)。
 
 ## 开发与测试
 

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from agent_core import SkillLoader
 from agent_core.tools import ROLE_TOOL_NAMES
-from interfaces.bridge.plugins import PluginLoader, PluginManager
+from agent_runtime.plugins import PluginLoader, PluginManager
 
 
 def write_manifest(root: Path, name: str, **fields: object) -> Path:

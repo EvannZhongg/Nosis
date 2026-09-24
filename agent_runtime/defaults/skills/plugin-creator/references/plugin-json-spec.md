@@ -129,6 +129,6 @@ MCP components are only loaded when `"mcp": {"enabled": true}` is set in `agent_
 
 ## Canonical shape accepted by the loader
 
-`interfaces/bridge/plugins.py` is authoritative. It parses the manifest above into
+`agent_runtime/plugins.py` is authoritative. It parses the manifest above into
 `PluginDescriptor` and routes `components` as follows: `skills` through the Skill registry,
 `agents` into sub-agent roles, `mcp` through the MCP subsystem.

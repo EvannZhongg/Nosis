@@ -28,14 +28,14 @@ nosis = "interfaces.launch:main"
 nosis-gui = "interfaces.gui.server:main"
 
 [tool.setuptools.packages.find]
-include = ["agent_core*", "interfaces*"]
+include = ["agent_core*", "agent_runtime*", "interfaces*"]
 # Without this, discovery walks every directory in the tree, so the
 # TypeScript sources and node_modules under interfaces/ become packages.
 namespaces = false
 
 [tool.setuptools.package-data]
 "interfaces" = ["tui/dist/app.js"]
-"interfaces.bridge" = [
+"agent_runtime" = [
     "defaults/*.json",
     "defaults/prompts_template/*.md",
     "defaults/skills/**/*",
@@ -50,7 +50,7 @@ namespaces = false
 # working tree, so byte-code caches and Finder metadata reach the wheel when a
 # skill's own scripts have been run in place.
 [tool.setuptools.exclude-package-data]
-"interfaces.bridge" = [
+"agent_runtime" = [
     "defaults/skills/**/__pycache__/*",
     "defaults/skills/**/*.pyc",
     "defaults/skills/**/.DS_Store",
