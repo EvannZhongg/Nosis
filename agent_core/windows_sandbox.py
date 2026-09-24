@@ -533,9 +533,7 @@ class _WindowsApi:
             raise self.error("ConvertStringSidToSidW")
         return pointer
 
-    def grant_write(
-        self, path: Path, *sids: ctypes.c_void_p, pending_marker: Path | None = None,
-    ) -> bool:
+    def grant_write(self, path: Path, sid: ctypes.c_void_p) -> bool:
         old_acl = ctypes.c_void_p()
         descriptor = ctypes.c_void_p()
         result = self.advapi32.GetNamedSecurityInfoW(
@@ -551,29 +549,16 @@ class _WindowsApi:
         if result:
             raise self.error("GetNamedSecurityInfoW", result)
         try:
-            incomplete = pending_marker is not None and pending_marker.exists()
-            missing = [
-                sid for sid in sids
-                if incomplete or not old_acl or not self._has_write_grant(old_acl, sid)
-            ]
-            if not missing:
+            if old_acl and self._has_write_grant(old_acl, sid):
                 return False
             new_acl = ctypes.c_void_p()
-            entries = (EXPLICIT_ACCESS_W * len(missing))(
-                *(_explicit_access(sid, WORKSPACE_GRANT) for sid in missing)
-            )
+            entry = _explicit_access(sid, WORKSPACE_GRANT)
             result = self.advapi32.SetEntriesInAclW(
-                len(entries), entries, old_acl, ctypes.byref(new_acl)
+                1, ctypes.byref(entry), old_acl, ctypes.byref(new_acl)
             )
             if result:
                 raise self.error("SetEntriesInAclW", result)
             try:
-                # A root ACE can survive a failed propagation. Record the
-                # attempt before changing the ACL so another process knows
-                # it must propagate again instead of trusting the root.
-                if pending_marker is not None:
-                    pending_marker.parent.mkdir(parents=True, exist_ok=True)
-                    pending_marker.touch()
                 result = self.advapi32.SetNamedSecurityInfoW(
                     str(path),
                     SE_FILE_OBJECT,
@@ -585,8 +570,6 @@ class _WindowsApi:
                 )
                 if result:
                     raise self.error("SetNamedSecurityInfoW", result)
-                if pending_marker is not None:
-                    pending_marker.unlink()
                 return True
             finally:
                 self.local_free(new_acl)
@@ -619,10 +602,8 @@ class _WindowsApi:
             if result:
                 raise self.error("SetEntriesInAclW(REVOKE_ACCESS)", result)
             try:
-                old_count = ctypes.cast(old_acl, ctypes.POINTER(ACL)).contents.AceCount
-                new_count = ctypes.cast(new_acl, ctypes.POINTER(ACL)).contents.AceCount
-                if new_count == old_count:
-                    return
+                # A prior failed revoke may have removed the root ACE while
+                # leaving inherited copies. Complete propagation on release.
                 result = self.advapi32.SetNamedSecurityInfoW(
                     str(path),
                     SE_FILE_OBJECT,
@@ -752,10 +733,11 @@ class _CapabilityLease:
     process_started: int
     managed: bool
     released: bool
+    temporary: bool
 
 
 class _CapabilityLeases:
-    """Track revocable private-temp grants and deferred directory cleanup."""
+    """Share grants while sandboxes are alive and reclaim released grants."""
 
     def __init__(self, api: _WindowsApi) -> None:
         self._api = api
@@ -830,6 +812,7 @@ class _CapabilityLeases:
             # Never remove a workspace or a redirected private temp root.
             if (
                 len(stale) == len(markers)
+                and all(records[marker].temporary for marker in markers)
                 and path.parent == Path(tempfile.gettempdir()).resolve()
                 and path.name.startswith("nosis-sandbox-tmp-")
                 and path.exists()
@@ -853,13 +836,13 @@ class _CapabilityLeases:
                     })
                 except OSError:
                     _logger.warning(
-                        "Cannot reclaim sandbox temporary directory %s; "
+                        "Cannot reclaim sandbox capability at %s; "
                         "retaining leases for later cleanup", path, exc_info=True,
                     )
 
     def acquire(
         self, path: Path, sid: ctypes.c_void_p, sid_value: str,
-        *, capability: bool,
+        *, capability: bool, temporary: bool,
     ) -> Path:
         path_value = os.path.normcase(os.path.realpath(path))
         with self._mutex():
@@ -881,7 +864,8 @@ class _CapabilityLeases:
             if identity is None:
                 raise RuntimeError("cannot identify sandbox lease owner")
             lease = _CapabilityLease(
-                path_value, sid_value, os.getpid(), identity, managed, released=False
+                path_value, sid_value, os.getpid(), identity, managed,
+                released=False, temporary=temporary,
             )
             marker = self._directory / f"{uuid.uuid4().hex}.lease"
             self._write(marker, lease)
@@ -983,7 +967,7 @@ class _WindowsProcess:
 
 
 class WindowsWriteRestrictedSandbox:
-    """Reuse workspace ACL grants; own temporary grants, token, and jobs."""
+    """Own capability leases and a token for one executor lifecycle."""
 
     def __init__(self, workspace: Path, private_tmp: Path) -> None:
         self.workspace = workspace
@@ -1013,25 +997,23 @@ class WindowsWriteRestrictedSandbox:
             user_sid = ctypes.cast(self._user_sid, ctypes.c_void_p)
             user_sid_value = self._api.sid_to_string(user_sid)
             try:
-                key = (os.path.normcase(os.path.realpath(workspace)), "workspace")
-                with _CapabilityMutex(self._api, key):
-                    digest = hashlib.sha256(key[0].encode("utf-8")).hexdigest()
-                    self._api.grant_write(
-                        workspace, self._workspace_sid, user_sid,
-                        pending_marker=(
-                            _CAPABILITY_LEASE_DIRECTORY / f"{digest}.workspace-pending"
-                        ),
-                    )
+                # The original DACL remains the authority for normal SIDs;
+                # only the restricting-SID check receives a workspace grant.
+                self._capability_leases.append(self._leases.acquire(
+                    workspace, self._workspace_sid, self._workspace_sid_value,
+                    capability=True, temporary=False,
+                ))
             except OSError as error:
                 raise WindowsSandboxWorkspaceError(workspace, error) from error
             self._capability_leases.append(self._leases.acquire(
                 private_tmp, self._temporary_sid, self._temporary_sid_value,
-                capability=True,
+                capability=True, temporary=True,
             ))
             # WRITE_RESTRICTED checks the user's access as well as a
             # restricting SID; private temp roots may lack a user ACE.
             self._capability_leases.append(self._leases.acquire(
-                private_tmp, user_sid, user_sid_value, capability=False,
+                private_tmp, user_sid, user_sid_value,
+                capability=False, temporary=True,
             ))
             self._token = self._create_restricted_token()
         except BaseException:

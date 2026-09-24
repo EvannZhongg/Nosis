@@ -458,6 +458,9 @@ class SandboxedCommandExecutorTest(unittest.TestCase):
         )
         backend = platform_workspace_sandbox_backend()
         executor = SandboxedCommandExecutor(workspace, backend)
+        acl_before = subprocess.run(
+            ["icacls", str(workspace)], capture_output=True, text=True, check=True,
+        ).stdout
         self.assertEqual(
             executor.policy.host_filesystem, FilesystemAccess.READ_ONLY
         )
@@ -524,18 +527,28 @@ class SandboxedCommandExecutorTest(unittest.TestCase):
         self.assertFalse(private_tmp.exists())
         self.assertNotEqual(private_tmp.parent, workspace)
         self.assertIn(capability_sid, acl_during)
-        self.assertIn(capability_sid, acl_after)
-        self.assertIn(capability_sid, child_acl_after)
-        self.assertEqual(acl_after, acl_during)
+        self.assertNotIn(capability_sid, acl_after)
+        self.assertNotIn(capability_sid, child_acl_after)
+        self.assertEqual(acl_after, acl_before)
 
     @unittest.skipUnless(platform.system() == "Windows", "Windows ACL test")
-    def test_workspace_capability_cache_survives_another_session_close(self) -> None:
+    def test_workspace_capability_survives_until_last_session_close(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
+            user = "*" + subprocess.run(
+                ["whoami", "/user", "/fo", "csv", "/nh"], capture_output=True, check=True,
+            ).stdout.split(b",")[-1].strip(b'"\r\n ').decode("ascii")
+            subprocess.run(
+                ["icacls", str(workspace), "/grant", f"{user}:(OI)(CI)F"],
+                capture_output=True, check=True,
+            )
             first_backend = platform_workspace_sandbox_backend()
             second_backend = platform_workspace_sandbox_backend()
             first = SandboxedCommandExecutor(workspace, first_backend)
             second = SandboxedCommandExecutor(workspace, second_backend)
+            before = subprocess.run(
+                ["icacls", str(workspace)], capture_output=True, check=True,
+            ).stdout
             try:
                 self.assertEqual(first.execute("Set-Content first.txt one").exit_code, 0)
                 self.assertEqual(second.execute("Set-Content second.txt two").exit_code, 0)
@@ -549,9 +562,13 @@ class SandboxedCommandExecutorTest(unittest.TestCase):
             finally:
                 first.close()
                 second.close()
+            after = subprocess.run(
+                ["icacls", str(workspace)], capture_output=True, check=True,
+            ).stdout
+            self.assertEqual(after, before)
 
     @unittest.skipUnless(platform.system() == "Windows", "Windows ACL test")
-    def test_crashed_session_reuses_workspace_acl_cache(self) -> None:
+    def test_crashed_session_workspace_grant_is_reclaimed(self) -> None:
         child = (
             "import os\n"
             "from pathlib import Path\n"
@@ -572,12 +589,15 @@ class SandboxedCommandExecutorTest(unittest.TestCase):
             workspace = Path(directory)
             environment = os.environ.copy()
             environment["CRASH_WORKSPACE"] = str(workspace)
+            before = subprocess.run(
+                ["icacls", str(workspace)], capture_output=True, text=True, check=True,
+            ).stdout
             subprocess.run(
                 [sys.executable, "-c", child],
                 check=True,
                 env=environment,
             )
-            cached = subprocess.run(
+            abandoned = subprocess.run(
                 ["icacls", str(workspace)],
                 capture_output=True, text=True, check=True,
             ).stdout
@@ -595,7 +615,8 @@ class SandboxedCommandExecutorTest(unittest.TestCase):
                 check=True,
             ).stdout
 
-        self.assertEqual(recovered, cached)
+        self.assertNotEqual(abandoned, before)
+        self.assertEqual(recovered, before)
 
 if __name__ == "__main__":
     unittest.main()

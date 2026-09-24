@@ -1,6 +1,7 @@
 import io
 import json
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -528,6 +529,15 @@ class PermissionProtocolTest(unittest.TestCase):
     def test_workspace_access_routes_shell_without_host_approval(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            if sys.platform == "win32":
+                user = "*" + subprocess.run(
+                    ["whoami", "/user", "/fo", "csv", "/nh"],
+                    capture_output=True, check=True,
+                ).stdout.split(b",")[-1].strip(b'"\r\n ').decode("ascii")
+                subprocess.run(
+                    ["icacls", str(root), "/grant", f"{user}:(OI)(CI)F"],
+                    capture_output=True, check=True,
+                )
             bridge, stdout = make_bridge([], root)
             bridge.open_session(
                 open_session_message(

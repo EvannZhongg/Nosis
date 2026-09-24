@@ -16,6 +16,7 @@ from agent_core import (
 )
 from agent_core import windows_sandbox as windows
 from agent_core.execution.sandbox.windows import WindowsSandboxBackend
+from agent_runtime.execution_plane import ExecutionPlane
 
 
 @unittest.skipUnless(os.name == "nt", "Windows ACL tests")
@@ -26,6 +27,15 @@ class WindowsSandboxLifecycleTest(unittest.TestCase):
         self.root = Path(root.name).resolve()
         self.workspace = self.root / "workspace"
         self.workspace.mkdir()
+        self.user = "*" + subprocess.run(
+            ["whoami", "/user", "/fo", "csv", "/nh"], capture_output=True, check=True,
+        ).stdout.split(b",")[-1].strip(b'"\r\n ').decode("ascii")
+        # Give the test workspace ordinary user access independent of the
+        # elevated runner's system-temp DACL and OWNER RIGHTS entries.
+        subprocess.run(
+            ["icacls", str(self.workspace), "/grant", f"{self.user}:(OI)(CI)F"],
+            capture_output=True, check=True,
+        )
         self.lease_directory = self.root / "leases"
         patcher = patch.object(windows, "_CAPABILITY_LEASE_DIRECTORY", self.lease_directory)
         patcher.start()
@@ -43,13 +53,37 @@ class WindowsSandboxLifecycleTest(unittest.TestCase):
 
     def acquire(self):
         return self.leases.acquire(
-            self.private, self.private_sid, self.private_sid_value, capability=True
+            self.private, self.private_sid, self.private_sid_value,
+            capability=True, temporary=True,
         )
 
     def acl(self, path):
         return subprocess.run(
-            ["icacls", str(path)], capture_output=True, text=True, check=True
+            ["icacls", str(path)], capture_output=True, text=True, errors="replace", check=True
         ).stdout
+
+    def acl_entries(self, path):
+        acl = ctypes.c_void_p()
+        descriptor = ctypes.c_void_p()
+        result = self.api.advapi32.GetNamedSecurityInfoW(
+            str(path), windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION,
+            None, None, ctypes.byref(acl), None, ctypes.byref(descriptor),
+        )
+        self.assertEqual(result, 0)
+        try:
+            entries = []
+            count = ctypes.cast(acl, ctypes.POINTER(windows.ACL)).contents.AceCount
+            for index in range(count):
+                pointer = ctypes.c_void_p()
+                self.assertTrue(self.api.advapi32.GetAce(acl, index, ctypes.byref(pointer)))
+                ace = ctypes.cast(pointer, ctypes.POINTER(windows.ACCESS_ALLOWED_ACE)).contents
+                entries.append((
+                    ace.Header.AceType, ace.Header.AceFlags, ace.Mask,
+                    self.api.sid_to_string(ctypes.c_void_p(pointer.value + 8)),
+                ))
+            return entries
+        finally:
+            self.api.local_free(descriptor)
 
     def expire(self, marker):
         timestamp = time.time() - windows._CAPABILITY_LEASE_TTL_SECONDS - 10
@@ -126,7 +160,8 @@ class WindowsSandboxLifecycleTest(unittest.TestCase):
         self.assertTrue(all(not path.exists() for path in created))
         self.assertFalse(list(self.lease_directory.glob("*.lease")))
 
-    def test_startup_reclaims_crashed_temp_and_preserves_workspace_cache(self):
+    def test_startup_reclaims_crashed_temp_and_workspace_grant(self):
+        before = self.acl(self.workspace)
         script = """
 import os
 import tempfile
@@ -145,10 +180,9 @@ os._exit(0)
         private = Path(private_record.read_text())
         self.assertTrue(private.exists())
         self.assertIn(self.sid_value, self.acl(self.workspace))
-        cached_acl = self.acl(self.workspace)
         backend = WindowsSandboxBackend()
         backend.close()
-        self.assertEqual(self.acl(self.workspace), cached_acl)
+        self.assertEqual(self.acl(self.workspace), before)
         self.assertFalse(private.exists())
         self.assertFalse(list(self.lease_directory.glob("*.lease")))
 
@@ -223,7 +257,7 @@ os._exit(0)
         sid = self.api.convert_sid(sid_value)
         self.addCleanup(self.api.local_free, sid)
         marker = self.leases.acquire(
-            private, sid, sid_value, capability=True
+            private, sid, sid_value, capability=True, temporary=True
         )
         with patch.object(windows.shutil, "rmtree", side_effect=OSError(32, "in use")):
             with self.assertRaises(OSError):
@@ -259,7 +293,8 @@ os._exit(0)
         self.assertFalse(list(self.lease_directory.glob("*.lease")))
         self.assertNotIn(self.private_sid_value, self.acl(self.private))
 
-    def test_constructor_failure_cleans_temp_and_keeps_workspace_cache(self):
+    def test_constructor_failure_cleans_temp_and_workspace_grant(self):
+        before = self.acl(self.workspace)
         backend = WindowsSandboxBackend()
         self.addCleanup(backend.close)
         with patch.object(windows.WindowsWriteRestrictedSandbox, "_create_restricted_token",
@@ -267,37 +302,179 @@ os._exit(0)
             with self.assertRaisesRegex(RuntimeError, "token failed"):
                 backend.execute("$null = 1", working_directory=self.workspace,
                                 policy=backend.default_policy, timeout_seconds=1)
-        self.assertIn(self.sid_value, self.acl(self.workspace))
+        self.assertEqual(self.acl(self.workspace), before)
         self.assertIsNone(backend._temporary_directory)
         self.assertFalse(list(self.lease_directory.glob("*.lease")))
 
-    def test_workspace_grants_share_one_write_and_reuse_the_acl_cache(self):
+    def test_execution_plane_grants_once_and_revokes_on_close(self):
+        before = self.acl(self.workspace)
+        backend = WindowsSandboxBackend()
+        executor = SandboxedCommandExecutor(self.workspace, backend)
+        plane = ExecutionPlane(
+            workspace=Workspace(self.workspace), provider_name="test",
+            agent_config=Mock(), configuration_fingerprint="test",
+            instructions=Mock(), memory=None, agent=Mock(),
+            execution_router=ExecutionRouter(executor, Mock()),
+            jobs=Mock(), mcp=Mock(), context_window=Mock(),
+        )
+        self.addCleanup(plane.close)
         set_acl = self.api.advapi32.SetNamedSecurityInfoW
         with patch.object(windows, "_WindowsApi", return_value=self.api), \
                 patch.object(self.api.advapi32, "SetNamedSecurityInfoW", wraps=set_acl) as writes:
-            first = windows.WindowsWriteRestrictedSandbox(self.workspace, self.private)
-            self.addCleanup(first.close)
-            workspace_writes = [
-                call for call in writes.call_args_list
-                if Path(call.args[0]) == self.workspace
-            ]
-            self.assertEqual(len(workspace_writes), 1)
-            first.close()
-            cached_acl = self.acl(self.workspace)
+            for index in range(3):
+                result = executor.execute(f"Set-Content command-{index}.txt value")
+                self.assertEqual(result.exit_code, 0, result.stderr)
+            self.assertEqual(sum(
+                Path(call.args[0]) == self.workspace for call in writes.call_args_list
+            ), 1)
+            self.assertIn(self.sid_value, self.acl(self.workspace))
+            plane.close()
+            self.assertEqual(sum(
+                Path(call.args[0]) == self.workspace for call in writes.call_args_list
+            ), 2)
             writes.reset_mock()
-            second = windows.WindowsWriteRestrictedSandbox(self.workspace, self.private)
-            self.addCleanup(second.close)
-            second.close()
-            self.assertFalse([
-                call for call in writes.call_args_list
-                if Path(call.args[0]) == self.workspace
-            ])
-        self.assertEqual(self.acl(self.workspace), cached_acl)
+            plane.close()
+            writes.assert_not_called()
+        self.assertEqual(self.acl(self.workspace), before)
+        for child in self.workspace.iterdir():
+            self.assertNotIn(self.sid_value, self.acl(child))
         self.assertFalse(list(self.lease_directory.glob("*.lease")))
 
-    def test_workspace_cache_is_reused_by_a_fresh_process(self):
+    def test_workspace_grant_only_adds_capability_ace(self):
+        subprocess.run(
+            ["icacls", str(self.workspace), "/remove:g", self.user],
+            capture_output=True, check=True,
+        )
+        child = self.workspace / "child"
+        child.mkdir()
+        before = {path: self.acl_entries(path) for path in (self.workspace, child)}
+        sandbox = windows.WindowsWriteRestrictedSandbox(self.workspace, self.private)
+        self.addCleanup(sandbox.close)
+        for path, entries in before.items():
+            during = self.acl_entries(path)
+            added = [entry for entry in during if entry not in entries]
+            self.assertEqual(len(added), 1)
+            self.assertEqual(added[0][-1], self.sid_value)
+            self.assertEqual([entry for entry in during if entry not in added], entries)
+        sandbox.close()
+        for path, entries in before.items():
+            self.assertEqual(self.acl_entries(path), entries)
+
+    def test_workspace_close_preserves_unrelated_acl_changes(self):
+        sandbox = windows.WindowsWriteRestrictedSandbox(self.workspace, self.private)
+        self.addCleanup(sandbox.close)
+        other_sid_value = "S-1-4-112233-445566"
+        other_sid = self.api.convert_sid(other_sid_value)
+        self.addCleanup(self.api.local_free, other_sid)
+        self.api.grant_write(self.workspace, other_sid)
+        sandbox.close()
+        after = self.acl(self.workspace)
+        self.assertIn(other_sid_value, after)
+        self.assertNotIn(self.sid_value, after)
+
+    def test_capability_does_not_make_original_readonly_children_writable(self):
+        child = self.workspace / "readonly"
+        child.mkdir()
+        existing = child / "existing.txt"
+        existing.write_text("original", encoding="utf-8")
+        # The root is writable, but only read access is inherited by children.
+        subprocess.run(
+            ["icacls", str(self.workspace), "/inheritance:r", "/grant:r",
+             f"{self.user}:(OI)(CI)(RX)"], capture_output=True, check=True,
+        )
+        subprocess.run(
+            ["icacls", str(self.workspace), "/grant", f"{self.user}:(F)"],
+            capture_output=True, check=True,
+        )
+        self.addCleanup(
+            subprocess.run,
+            ["icacls", str(self.workspace), "/grant", f"{self.user}:(OI)(CI)F"],
+            capture_output=True, check=True,
+        )
+        self.api.validate_workspace(self.workspace)
+        with self.assertRaises(PermissionError):
+            existing.write_text("host write", encoding="utf-8")
+        before = self.acl_entries(child)
+        backend = WindowsSandboxBackend()
+        self.addCleanup(backend.close)
+        executor = SandboxedCommandExecutor(self.workspace, backend)
+        allowed = executor.execute("Set-Content root.txt allowed")
+        self.assertEqual(allowed.exit_code, 0, allowed.stderr)
+        self.assertIn(self.sid_value, self.acl(child))
+        for target in ("readonly/existing.txt", "readonly/new.txt"):
+            denied = executor.execute(
+                "$ErrorActionPreference = 'Stop'; "
+                f"Set-Content -LiteralPath '{target}' denied"
+            )
+            self.assertNotEqual(denied.exit_code, 0)
+        self.assertEqual(existing.read_text(encoding="utf-8"), "original")
+        self.assertFalse((child / "new.txt").exists())
+        backend.close()
+        self.assertEqual(self.acl_entries(child), before)
+
+    def test_failed_workspace_propagation_rolls_back_grant(self):
+        child = self.workspace / "child"
+        child.mkdir()
+        before = {path: self.acl(path) for path in (self.workspace, child)}
+        set_acl = self.api.advapi32.SetNamedSecurityInfoW
+        failed = False
+
+        def write_root_then_report_failure(path, *args):
+            nonlocal failed
+            result = set_acl(path, *args)
+            if Path(path) == self.workspace and not failed:
+                failed = True
+                self.assertEqual(result, 0)
+                return 5
+            return result
+
+        with patch.object(windows, "_WindowsApi", return_value=self.api), \
+                patch.object(self.api.advapi32, "SetNamedSecurityInfoW",
+                             side_effect=write_root_then_report_failure):
+            with self.assertRaises(windows.WindowsSandboxWorkspaceError):
+                windows.WindowsWriteRestrictedSandbox(self.workspace, self.private)
+        for path, acl in before.items():
+            self.assertEqual(self.acl(path), acl)
+        self.assertFalse(list(self.lease_directory.glob("*.lease")))
+
+    def test_workspace_lease_failure_prevents_acl_write(self):
+        set_acl = self.api.advapi32.SetNamedSecurityInfoW
+        with patch.object(windows, "_WindowsApi", return_value=self.api), \
+                patch.object(Path, "replace", side_effect=OSError(112, "disk full")), \
+                patch.object(self.api.advapi32, "SetNamedSecurityInfoW", wraps=set_acl) as writes:
+            with self.assertRaises(windows.WindowsSandboxWorkspaceError):
+                windows.WindowsWriteRestrictedSandbox(self.workspace, self.private)
+        writes.assert_not_called()
+        self.assertFalse(self.api.has_write_grant(self.workspace, self.sid))
+
+    def test_failed_workspace_revoke_finishes_propagation_without_root_ace(self):
+        marker = self.leases.acquire(
+            self.workspace, self.sid, self.sid_value, capability=True, temporary=False,
+        )
+        self.addCleanup(self.leases.release, marker)
+        set_acl = self.api.advapi32.SetNamedSecurityInfoW
+
+        def write_then_report_failure(*args):
+            self.assertEqual(set_acl(*args), 0)
+            return 5
+
+        with patch.object(self.api.advapi32, "SetNamedSecurityInfoW",
+                          side_effect=write_then_report_failure):
+            with self.assertRaises(OSError):
+                self.leases.release(marker)
+        self.assertNotIn(self.sid_value, self.acl(self.workspace))
+        self.assertTrue(marker.exists())
+        with patch.object(self.api.advapi32, "SetNamedSecurityInfoW", wraps=set_acl) as writes:
+            self.leases.release(marker)
+        writes.assert_called_once()
+        self.assertFalse(marker.exists())
+
+    def test_live_workspace_lease_is_shared_across_processes(self):
+        before = self.acl(self.workspace)
         first = windows.WindowsWriteRestrictedSandbox(self.workspace, self.private)
-        first.close()
+        self.addCleanup(first.close)
+        child_private = self.root / "child-private"
+        child_private.mkdir()
         script = """
 import os
 from pathlib import Path
@@ -309,7 +486,7 @@ api = windows._WindowsApi()
 set_acl = api.advapi32.SetNamedSecurityInfoW
 def check_write(path, *args):
     if Path(path) == workspace:
-        raise AssertionError('warm workspace must not rewrite its ACL')
+        raise AssertionError('a live workspace lease must not rewrite its ACL')
     return set_acl(path, *args)
 with patch.object(windows, '_WindowsApi', return_value=api):
     with patch.object(api.advapi32, 'SetNamedSecurityInfoW', side_effect=check_write):
@@ -319,94 +496,26 @@ with patch.object(windows, '_WindowsApi', return_value=api):
         subprocess.run(
             [sys.executable, "-c", script], check=True,
             env=dict(os.environ, TEST_LEASES=str(self.lease_directory),
-                     TEST_WORKSPACE=str(self.workspace), TEST_PRIVATE=str(self.private)),
+                     TEST_WORKSPACE=str(self.workspace), TEST_PRIVATE=str(child_private)),
         )
-
-    def test_workspace_cache_repairs_removed_grant(self):
-        first = windows.WindowsWriteRestrictedSandbox(self.workspace, self.private)
-        first.close()
-        self.api.revoke_write(self.workspace, self.sid)
-        self.assertNotIn(self.sid_value, self.acl(self.workspace))
-        second = windows.WindowsWriteRestrictedSandbox(self.workspace, self.private)
-        second.close()
         self.assertIn(self.sid_value, self.acl(self.workspace))
+        first.close()
+        self.assertEqual(self.acl(self.workspace), before)
+        self.assertFalse(list(self.lease_directory.glob("*.lease")))
 
-    def test_failed_workspace_propagation_is_retried_by_a_fresh_process(self):
-        child_directory = self.workspace / "child"
-        child_directory.mkdir()
-        set_acl = self.api.advapi32.SetNamedSecurityInfoW
-
-        def write_root_then_report_failure(path, *args):
-            result = set_acl(path, *args)
-            self.assertEqual(result, 0)
-            return 5 if Path(path) == self.workspace else result
-
-        with patch.object(windows, "_WindowsApi", return_value=self.api), \
-                patch.object(self.api.advapi32, "SetNamedSecurityInfoW",
-                             side_effect=write_root_then_report_failure):
-            with self.assertRaises(windows.WindowsSandboxWorkspaceError):
-                windows.WindowsWriteRestrictedSandbox(self.workspace, self.private)
-        self.assertTrue(self.api.has_write_grant(self.workspace, self.sid))
-        pending = list(self.lease_directory.glob("*.workspace-pending"))
-        self.assertEqual(len(pending), 1)
-        # The lease sweeper must not discard an incomplete standing grant.
-        self.leases.cleanup_stale()
-        self.assertTrue(pending[0].exists())
-        script = """
-import os
-from pathlib import Path
-from unittest.mock import patch
-from agent_core import windows_sandbox as windows
-windows._CAPABILITY_LEASE_DIRECTORY = Path(os.environ['TEST_LEASES'])
-workspace = Path(os.environ['TEST_WORKSPACE'])
-api = windows._WindowsApi()
-set_acl = api.advapi32.SetNamedSecurityInfoW
-with patch.object(windows, '_WindowsApi', return_value=api):
-    with patch.object(api.advapi32, 'SetNamedSecurityInfoW', wraps=set_acl) as writes:
-        sandbox = windows.WindowsWriteRestrictedSandbox(workspace, Path(os.environ['TEST_PRIVATE']))
-        sandbox.close()
-        assert sum(Path(call.args[0]) == workspace for call in writes.call_args_list) == 1
-assert not list(windows._CAPABILITY_LEASE_DIRECTORY.glob('*.workspace-pending'))
-"""
-        subprocess.run(
-            [sys.executable, "-c", script], check=True,
-            env=dict(os.environ, TEST_LEASES=str(self.lease_directory),
-                     TEST_WORKSPACE=str(self.workspace), TEST_PRIVATE=str(self.private)),
-        )
-        self.assertFalse(pending[0].exists())
-        self.assertIn(self.sid_value, self.acl(child_directory))
-
-    def test_workspace_pending_marker_failure_prevents_acl_write(self):
-        set_acl = self.api.advapi32.SetNamedSecurityInfoW
-        with patch.object(windows, "_WindowsApi", return_value=self.api), \
-                patch.object(Path, "touch", side_effect=OSError(112, "disk full")), \
-                patch.object(self.api.advapi32, "SetNamedSecurityInfoW", wraps=set_acl) as writes:
-            with self.assertRaises(windows.WindowsSandboxWorkspaceError):
-                windows.WindowsWriteRestrictedSandbox(self.workspace, self.private)
-        writes.assert_not_called()
-        self.assertFalse(self.api.has_write_grant(self.workspace, self.sid))
-
-    def test_failed_workspace_repropagation_keeps_pending_marker(self):
-        pending = self.lease_directory / "workspace.workspace-pending"
-        pending.parent.mkdir()
-        pending.touch()
-        self.api.grant_write(self.workspace, self.sid)
-        with patch.object(self.api.advapi32, "SetNamedSecurityInfoW", return_value=5):
-            with self.assertRaises(OSError):
-                self.api.grant_write(self.workspace, self.sid, pending_marker=pending)
-        self.assertTrue(pending.exists())
-        self.assertTrue(self.api.grant_write(self.workspace, self.sid, pending_marker=pending))
-        self.assertFalse(pending.exists())
-        self.assertFalse(self.api.grant_write(self.workspace, self.sid, pending_marker=pending))
-        self.assertFalse(pending.exists())
-
-    def test_cached_workspace_is_not_writable_by_another_workspace_token(self):
-        cached = windows.WindowsWriteRestrictedSandbox(self.workspace, self.private)
-        cached.close()
+    def test_active_workspace_is_not_writable_by_another_workspace_token(self):
+        sandbox = windows.WindowsWriteRestrictedSandbox(self.workspace, self.private)
+        self.addCleanup(sandbox.close)
         other = self.root / "other-workspace"
         other.mkdir()
+        subprocess.run(
+            ["icacls", str(other), "/grant", f"{self.user}:(OI)(CI)F"],
+            capture_output=True, check=True,
+        )
         executor = SandboxedCommandExecutor(other, WindowsSandboxBackend())
         try:
+            allowed = executor.execute("Set-Content own.txt allowed")
+            self.assertEqual(allowed.exit_code, 0, allowed.stderr)
             result = executor.execute(
                 "$ErrorActionPreference = 'Stop'; "
                 f"Set-Content -LiteralPath '{self.workspace / 'blocked.txt'}' blocked"
