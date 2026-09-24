@@ -1,27 +1,29 @@
 # Nosis
 
-Nosis 是一个开源的轻量级个人 Agent Runtime：执行边界由 Session 自行声明，越界命令在 OS 级沙箱中运行；内置工具集与 Plugin / Skill / MCP 扩展机制齐备，GUI 与 TUI 共享 Agent Runtime，会话、计划与记忆以文件持久化。
+Nosis 是一个开源的轻量级个人 Agent 应用。它提供本地 Workspace 操作、人工授权、会话持久化、上下文管理、长期记忆、计划、子 Agent、定时任务，以及 Skill、Plugin、MCP 扩展能力，并同时提供 TUI 和 GUI。
 
-核心是一个不依赖 Agent 框架的 Python Runtime：TUI 与 Web GUI 共用同一套 Runtime、Tool、授权与 Session。
+两个前端共享同一个应用 Runtime：Agent 执行、Tool 调用、授权、取消和 Session 语义只实现一次，前端只负责交互与展示。
 
 ```text
-TUI ──────────┐
-              ├── Bridge ── agent_runtime ── Agent Core
-GUI ─ FastAPI ┘
+TUI (Ink + React) ──────┐
+                        ├── Bridge ── agent_runtime ── agent_core
+GUI (React) ── FastAPI ─┘
 ```
 
-Bridge 以独立进程运行，是前端驱动 Agent 的唯一通道，两端用 newline-delimited JSON 交换协议消息。
+- `agent_core` 提供与前端无关的 Agent 机制。
+- `agent_runtime` 读取应用配置并把 Core 组装成可运行实例。
+- Bridge 作为独立进程，是前端驱动 Runtime 的唯一通道。
+- TUI 与 GUI 宿主通过 Bridge 协议共享执行状态和交互语义；Bridge 子进程通道使用 newline-delimited JSON。
 
-## 能力
+## 主要能力
 
-- **本地执行，人工确认**：Session 支持 `Ask for approval`、`Workspace Access` 与 `Full Access`，选择随 Session 持久化。每个权限模式决定 Shell 的默认执行边界与授权规则：`Ask for approval` 和 `Workspace Access` 默认在沙箱内运行，前者对两种 scope 都请求授权、后者只对越过沙箱的 `host` 请求；`Full Access` 默认直接以 `host` 运行且不再请求授权，仍可显式请求 `workspace`。macOS 使用 Seatbelt、Linux 使用 bubblewrap，二者仅暴露最小只读系统视图并断开网络；Windows 的 RestrictedToken backend 保留宿主文件读取权限、允许网络，并主要把写权限授予 Workspace 与私有临时目录；已对 Everyone 开放写入的位置属于明确例外。无人值守的定时任务最多获得 `Workspace Access`。文件类 Tool 只作用于当前 Workspace。
-- **Tool 与扩展**：内置文件读写、搜索、Shell、Web Search、图片读取与生成、子 Agent 等 Tool；可接入 MCP Server，并可用 Skill 扩展工作流。
-- **模型路由**：主 Agent、子 Agent 与每个角色都可以单独选择 Provider（LiteLLM 支持多家模型），图片分析与图片生成可以独立配置 Provider。
-- **子 Agent 与计划**：按角色派发子 Agent（默认 `researcher` 只读），主 Agent 维护跨轮次的执行计划，两个前端都展示进度。
-- **会话持久化**：对话与执行事件以 append-only JSONL Journal 保存，重启后可以恢复；TUI 用 `/sessions` 切换历史会话，GUI 从侧边栏打开并默认回到上次的会话。
-- **上下文管理**：接近预算时自动压缩较早的历史并保留最近若干轮，另有硬上限；窗口占用在 GUI 中可见。
-- **一个 Runtime，两个前端**：驱动 Agent、执行 Tool、授权与取消只实现一次，TUI 与 GUI 只渲染状态并采集输入。
-- **统一设置**：GUI 可编辑 Provider 与 Agent 配置并查看 Skill、Plugin、MCP；TUI 可用 `/model` 切换当前 Session 的 Provider，并用 `/provider` 查看配置概览。
+- **受控本地执行**：Session 支持 `Ask for approval`、`Workspace Access` 和 `Full Access` 三种权限 preset；Shell 根据 scope 进入 Workspace 沙箱或宿主环境，文件 Tool 始终限制在当前 Workspace。
+- **完整 Agent Loop**：支持流式响应、Tool 批次、上下文压缩、steer、取消、计划和后台 Job。
+- **可恢复 Session**：对话和执行事件写入 append-only JSONL Journal，TUI 与 GUI 可读取同一类 Session。
+- **记忆与定时任务**：维护全局及 Workspace 长期记忆，并可创建 one-shot、interval 和 cron 任务。
+- **模型与媒体**：通过 LiteLLM 接入模型，可为主 Agent、视觉、图片生成及不同子 Agent 角色独立路由 Provider。
+- **扩展系统**：支持 standalone Skill、Plugin 提供的 Skill / Agent / MCP 组件，以及独立 MCP Server。
+- **两个前端**：TUI 适合终端工作流；GUI 提供多会话、附件、文件树、设置、记忆和定时任务管理。
 
 ## 快速开始
 
@@ -35,38 +37,32 @@ npm run build
 uv tool install --editable ".[gui]"
 ```
 
-首次启动会在 `~/.nosis/` 生成配置、Prompt 模板、内置 Skill 与内置 Plugin。要使用 OpenAI 兼容模型，可将
-`~/.nosis/provider_config.json` 精简为下面的最小配置（保留其他 Provider 也可以）：
+先在当前目录启动一次 TUI：
 
-```json
-{
-  "main_agent": {"provider": "openai"},
-  "providers": {
-    "openai": {
-      "model": "openai/gpt-5",
-      "url": "https://api.openai.com/v1",
-      "key": "${OPENAI_KEY}"
-    }
-  }
-}
+```bash
+nosis
 ```
 
-在 `~/.nosis/.env` 中填写密钥即可：
+首次启动会初始化 `~/.nosis/`。退出 TUI 后，创建 `~/.nosis/.env` 并填入默认 Provider 所需的环境变量，例如：
 
 ```dotenv
 OPENAI_KEY=your-api-key
 ```
 
-终端界面由 Node 运行，启动前请确认 `node` 在 PATH 中：
+配置完成后重新启动：
 
 ```bash
-cd ~/projects/my-project
 nosis
 ```
+或
+```bash
+nosis-gui
+```
 
-不绑定已有项目时，可以创建一个持久保留的独立临时工作区：
+指定 Workspace 或创建由 Nosis 管理的 scratch Workspace：
 
 ```bash
+nosis --workspace ~/projects/my-project
 nosis --temporary
 ```
 
@@ -78,36 +74,38 @@ nosis-gui --workspace ~/projects/my-project
 
 GUI 默认监听 <http://127.0.0.1:8737>。
 
-## 文档导航
+## 模块文档
 
-| 文档 | 内容 |
+| 文档 | 负责范围 |
 | --- | --- |
-| [`agent_core`](agent_core/README.md) | Agent Runtime、Tool、Provider、Session |
-| [`agent_runtime`](agent_runtime/README.md) | Runtime 装配：Provider、配置、Tool、Session 与 Turn |
-| [`interfaces/bridge`](interfaces/bridge/README.md) | 前端协议适配与进程入口 |
-| [`interfaces/protocol`](interfaces/protocol/README.md) | TUI/GUI 共用的 TypeScript 协议类型 |
-| [`interfaces/tui`](interfaces/tui/README.md) | 终端界面、命令行参数与快捷键 |
-| [`interfaces/gui`](interfaces/gui/README.md) | Web 界面与 FastAPI 服务 |
-| [`tests`](tests) | Python Runtime 与接口测试 |
+| [`agent_core`](agent_core/README.md) | Agent Loop、上下文、Session、Tool、执行、权限、记忆、计划、Job、Scheduler、Provider、Skill 与 MCP 机制 |
+| [`agent_runtime`](agent_runtime/README.md) | 配置、Prompt、Plugin 发现、Runtime 装配、Execution Plane、Session 绑定和 Turn 入口 |
+| [`interfaces/bridge`](interfaces/bridge/README.md) | 独立 Bridge 进程、协议路由、事件转换和前端交互转发 |
+| [`interfaces/protocol`](interfaces/protocol/README.md) | TUI 与 GUI 共用的 TypeScript 协议类型和连接状态约定 |
+| [`interfaces/tui`](interfaces/tui/README.md) | Ink 终端界面、命令、输入状态和 Bridge 子进程接入 |
+| [`interfaces/gui`](interfaces/gui/README.md) | FastAPI 服务、React 界面、多会话连接、HTTP / WebSocket API 与媒体访问 |
 
-## 数据与配置
+子目录 README 只说明所属模块；跨模块的总体关系以本 README 为准。
+
+## 配置与数据
+
+`agent_runtime` 首次启动时创建配置目录，并负责读取与更新其中的应用配置：
 
 | 路径 | 内容 |
 | --- | --- |
-| `~/.nosis/provider_config.json` | Provider、模型与角色对应关系 |
-| `~/.nosis/agent_config.json` | Tool、子 Agent、MCP、上下文压缩与 Scratch Workspace 根路径 |
-| `~/.nosis/prompts/` | 主 Agent、子 Agent 与上下文压缩的 Prompt 模板 |
-| `~/.nosis/skills/` | Skill 目录，首次启动安装内置 Skill |
-| `~/.nosis/plugins/` | Plugin capability package；由 `plugin.json` 声明组件引用，首次启动安装内置 Plugin |
+| `~/.nosis/provider_config.json` | Provider、模型和角色路由 |
+| `~/.nosis/agent_config.json` | Tool、上下文、记忆、子 Agent、MCP、Workspace Instructions 与 scratch Workspace 设置 |
+| `~/.nosis/.env` | 配置引用的密钥和环境变量 |
+| `~/.nosis/prompts/` | 主 Agent、子 Agent、压缩与记忆 Prompt |
+| `~/.nosis/skills/` | standalone Skill |
+| `~/.nosis/plugins/` | Plugin capability package |
 | `~/.nosis/AGENTS.md` | 用户级全局 Workspace Instruction |
-| `~/.nosis/MEMORY.md` | 跨 Workspace 的 Global Memory |
-| `~/.nosis/.env` | 配置中 `${ENV_NAME}` 引用的密钥 |
-| `~/.nosis/workspaces/scratch/<workspace-id>/` | Nosis 创建的临时工作区；根路径由 `scratch_workspace_root` 配置，最后一个使用它的 Session 被删除时一并删除 |
-| `~/.nosis/sessions/<workspace-key>/MEMORY.md` | 当前 Workspace 独立的长期记忆 |
-| `~/.nosis/sessions/<workspace-key>/<session-id>/` | Session 的 Journal、权限 preset、大输出与子 Agent 记录 |
-| `<workspace>/.nosis/attachments/` | GUI 上传的附件与 Agent 生成的图片 |
+| `~/.nosis/MEMORY.md` | 全局长期记忆 |
+| `~/.nosis/sessions/` | Session Journal、Workspace 记忆、Artifact 和子 Agent 记录 |
+| `~/.nosis/schedule.jsonl` | 定时任务及运行记录 |
+| `<workspace>/.nosis/attachments/` | 上传附件和 Agent 生成的图片 |
 
-字段与结构见 [Agent Core](agent_core/README.md)，默认配置见 [`agent_runtime/defaults/`](agent_runtime/defaults)。
+默认配置与内置资源位于 [`agent_runtime/defaults/`](agent_runtime/defaults)。具体装配方式见 [`agent_runtime/README.md`](agent_runtime/README.md)。
 
 ## 开发与测试
 
@@ -115,30 +113,23 @@ Python 测试使用 Mock Provider，不需要真实 API Key：
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate          # Windows PowerShell: .\.venv\Scripts\Activate.ps1
+source .venv/bin/activate
 python -m pip install -e ".[gui]"
 python -m unittest discover -s tests -v
 ```
 
-Linux 沙箱边界测试使用真实 bubblewrap（另需 `/usr/bin/python3`），不依赖外网：
+前端构建、类型检查和测试：
 
 ```bash
-python -m unittest discover -s tests -p test_linux_sandbox.py -v
-```
-
-未安装 bwrap 或运行环境禁止必要 namespace 时，integration test 会明确 skip；skip 不代表边界验证通过，应在允许 user namespace 的 Linux 主机上运行。namespace 受限时还会检查 backend 返回原始失败诊断且命令未执行。
-
-前端测试和类型检查：
-
-```bash
+npm run build
 npm run typecheck
 npm test
 ```
 
-## 说明
+Linux 沙箱集成测试需要可用的 bubblewrap 和 user namespace；未满足运行条件时测试会明确 skip。
 
-Windows 用户需要安装 [PowerShell 7](https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-windows)。Windows 上不论权限 scope，`shell` Tool 都使用 PowerShell 7；Shell Tool 只承诺 PowerShell 方言，不承诺直接运行 POSIX `.sh` 脚本。
+Windows 上 Shell Tool 使用 PowerShell 7，因此需要另外安装 PowerShell 7。
 
 ## 许可
 
-[MIT](LICENSE)。
+[MIT](LICENSE)

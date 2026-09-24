@@ -1,8 +1,8 @@
 # TUI
 
-Nosis 的终端界面使用 TypeScript、Ink 和 React。它只负责渲染 Bridge 消息和采集输入。
+`interfaces/tui` 是使用 TypeScript、Ink 和 React 实现的终端交互层。它启动独立 Bridge 子进程，渲染协议消息并采集输入，不运行 Agent Loop，也不直接执行 Tool。
 
-## 使用
+## 启动
 
 ```bash
 nosis
@@ -10,32 +10,60 @@ nosis --workspace ~/projects/my-project
 nosis --temporary
 ```
 
-未传 `--workspace` 时，当前目录即 Workspace。
-`--temporary` 会在 `agent_config.json` 的 `scratch_workspace_root` 下创建一个持久保留的独立 Workspace，不能与 `--workspace` 同时使用。
-Provider、Agent 与 Skill 固定从 `~/.nosis/` 读取。
+未传 `--workspace` 时使用当前目录。`--temporary` 由 Python 启动器在配置的 `scratch_workspace_root` 下创建持久保留的 Nosis-managed Workspace，再把解析后的路径交给 TUI；它不能与 `--workspace` 同时使用。
 
-常用操作：
+`interfaces/launch.py` 负责初始化 `~/.nosis/`、定位 Node 和已构建的 TUI bundle，并通过 `NOSIS_PYTHON` 告诉前端应使用哪个 Python 解释器启动 Bridge。
+
+## 交互模型
+
+TUI 在启动或切换 Session 时先发送 `open_session`，等待 `session_ready` 与首个 `runtime_state` 后才允许提交命令。普通消息通过 `user_turn` 发送；Turn 执行中提交的新输入转为 `user_steer`。
+
+界面由结构化协议状态驱动，展示：
+
+- assistant 文本与 reasoning 流
+- Tool 调用、结果和错误
+- Context Window、计划及后台 Job
+- Provider、权限和 Runtime phase
+- 授权请求与结构化用户提问
+- 历史 Session 列表和恢复结果
+
+主要命令：
+
+| 命令 | 作用 |
+| --- | --- |
+| `/permissions` | 切换当前 Session 的权限 preset |
+| `/sessions` | 列出并切换当前 Workspace 的历史 Session |
+| `/model` | 切换当前 Session 的 Provider |
+| `/provider` | 查看 Provider、Skill、Plugin 与 MCP 配置概览 |
+
+常用按键：
 
 | 操作 | 作用 |
 | --- | --- |
-| `Enter` | 提交输入或确认当前选项 |
+| `Enter` | 提交输入或确认选项 |
 | `Ctrl+J` | 输入换行 |
-| `Shift+Enter` | 在支持 kitty keyboard protocol 的终端中换行 |
-| `↑` / `↓` | 移动光标或选择列表项 |
-| `Esc` | 关闭列表、拒绝授权或取消当前轮次 |
-| `Ctrl+C` | 取消当前轮次；空输入时退出 |
+| `Shift+Enter` | 支持 kitty keyboard protocol 时输入换行 |
+| `↑` / `↓` | 移动输入光标或列表选择 |
+| `Esc` | 关闭列表、拒绝授权或取消当前 Turn |
+| `Ctrl+C` | 取消当前 Turn；空输入时退出 |
 | `Ctrl+D` | 退出 |
 
-输入 `/` 可打开命令列表。主要命令：
+TUI 只在已知支持的终端环境启用 kitty keyboard protocol，不进行可能把探测响应写入输入框的主动探测。
 
-- `/permissions`：切换当前 Session 的授权模式
-- `/sessions`：列出并切换当前 Workspace 的历史会话
-- `/model`：列出 Provider，并切换当前 Session 使用的模型配置
-- `/provider`：查看 Provider、Skill、Plugin 与 MCP 配置概览
+## 模块索引
 
-执行中提交的新输入会作为 steering 发送给当前轮次。
+| 模块 | 职责 |
+| --- | --- |
+| `src/cli.tsx` | Node CLI 参数和 Ink 根节点 |
+| `src/app.tsx` | Bridge 生命周期、界面组合和用户操作路由 |
+| `src/bridge.ts` | Bridge 子进程与 NDJSON 收发 |
+| `src/state.ts` | 协议消息驱动的 TUI 状态归约 |
+| `src/input.tsx` | 多行输入、光标和键盘行为 |
+| `src/commands.ts` | slash command 定义与匹配 |
+| `src/renderer.tsx` | transcript、Tool、状态和交互卡片渲染 |
+| `build.mjs` | esbuild bundle |
 
-TUI 启动或切换会话时只打开 Session；Provider、MCP、Tool 和 Agent 在首次发送普通消息时才初始化。`/permissions` 因此可以在第一次对话前直接修改授权模式。
+共享协议来自 [`interfaces/protocol`](../protocol/README.md)，Bridge 行为见 [`interfaces/bridge`](../bridge/README.md)。
 
 ## 开发
 
@@ -45,4 +73,4 @@ npm run typecheck --workspace interfaces/tui
 npm test --workspace interfaces/tui
 ```
 
-入口为 `src/app.tsx`，构建产物为 `dist/app.js`。协议来自 [`../protocol`](../protocol/README.md)，Runtime 通过 [`../bridge`](../bridge/README.md) 启动。
+构建入口为 `src/cli.tsx`，产物为 `dist/app.js`，并作为 Python package data 随 Nosis 安装。
