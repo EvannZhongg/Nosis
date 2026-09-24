@@ -29,7 +29,15 @@ try:
     from fastapi.testclient import TestClient
     from fastapi import WebSocketDisconnect
 
-    from interfaces.gui import server
+    from interfaces.bridge import protocol as bridge_protocol
+    from interfaces.gui import __main__ as gui_main
+    from interfaces.gui import (
+        active_session,
+        bridge_process,
+        runtime_projection,
+        server,
+    )
+    from interfaces.gui.routes import media
 except ModuleNotFoundError:  # pragma: no cover - exercised without [gui]
     TestClient = None
 
@@ -97,7 +105,7 @@ class BridgeProcessTest(unittest.TestCase):
     def test_cancel_does_not_interrupt_an_idle_starting_bridge(self) -> None:
         process = SimpleNamespace(returncode=None)
         process.send_signal = Mock()
-        bridge = server.BridgeProcess(process)
+        bridge = bridge_process.BridgeProcess(process)
 
         bridge.cancel_turn()
 
@@ -110,7 +118,7 @@ class BridgeProcessTest(unittest.TestCase):
         )
         process = SimpleNamespace(returncode=None, stdin=stdin)
         process.send_signal = Mock()
-        bridge = server.BridgeProcess(process)
+        bridge = bridge_process.BridgeProcess(process)
 
         bridge.send({"type": "user_turn", "turn_id": "t1", "text": "hi"})
         bridge.cancel_turn()
@@ -124,9 +132,9 @@ class BridgeProcessTest(unittest.TestCase):
     @unittest.skipIf(os.name == "nt", "POSIX process groups only")
     def test_forced_close_kills_the_bridge_process_group(self) -> None:
         process = SimpleNamespace(returncode=None, pid=123)
-        bridge = server.BridgeProcess(process)
+        bridge = bridge_process.BridgeProcess(process)
 
-        with patch("interfaces.gui.server.os.killpg") as killpg:
+        with patch("interfaces.gui.bridge_process.os.killpg") as killpg:
             bridge._kill()
 
         killpg.assert_called_once_with(123, signal.SIGKILL)
@@ -139,10 +147,10 @@ class BridgeProcessSpawnTest(unittest.IsolatedAsyncioTestCase):
         spawn = AsyncMock(return_value=process)
 
         with patch(
-            "interfaces.gui.server.asyncio.create_subprocess_exec",
+            "interfaces.gui.bridge_process.asyncio.create_subprocess_exec",
             spawn,
         ):
-            await server.BridgeProcess.spawn(Workspace(Path.cwd()))
+            await bridge_process.BridgeProcess.spawn(Workspace(Path.cwd()))
 
         self.assertEqual(
             spawn.call_args.kwargs["creationflags"],
@@ -162,7 +170,7 @@ class BridgeProcessSpawnTest(unittest.IsolatedAsyncioTestCase):
 class ActiveSessionTest(unittest.IsolatedAsyncioTestCase):
     async def test_event_replay_window_is_bounded_and_sequences_are_monotonic(self) -> None:
         bridge = FakeBridge()
-        runtime = server.ActiveSession("s1", "first", "/tmp", [], bridge)
+        runtime = active_session.ActiveSession("s1", "first", "/tmp", [], bridge)
         self.addAsyncCleanup(runtime.close)
 
         bridge.emit(*(
@@ -172,22 +180,22 @@ class ActiveSessionTest(unittest.IsolatedAsyncioTestCase):
                 "text": str(index),
                 "model_call_index": 0,
             }
-            for index in range(server.EVENT_REPLAY_LIMIT + 8)
+            for index in range(active_session.EVENT_REPLAY_LIMIT + 8)
         ))
         await _wait_for_async(
-            lambda: runtime.event_sequence == server.EVENT_REPLAY_LIMIT + 8
+            lambda: runtime.event_sequence == active_session.EVENT_REPLAY_LIMIT + 8
         )
 
-        self.assertEqual(len(runtime._events), server.EVENT_REPLAY_LIMIT)
+        self.assertEqual(len(runtime._events), active_session.EVENT_REPLAY_LIMIT)
         self.assertEqual(runtime._events[0]["event_sequence"], 9)
         self.assertEqual(
             runtime._events[-1]["event_sequence"],
-            server.EVENT_REPLAY_LIMIT + 8,
+            active_session.EVENT_REPLAY_LIMIT + 8,
         )
 
     async def test_runtime_state_replaces_the_cached_attachment_snapshot(self) -> None:
         bridge = FakeBridge()
-        runtime = server.ActiveSession("s1", "first", "/tmp", [], bridge)
+        runtime = active_session.ActiveSession("s1", "first", "/tmp", [], bridge)
         self.addAsyncCleanup(runtime.close)
         approval = {
             "type": "approval_request",
@@ -195,7 +203,7 @@ class ActiveSessionTest(unittest.IsolatedAsyncioTestCase):
             "request_id": "t1:1",
             "command": "ls",
         }
-        bridge.emit(server.runtime_state_message(
+        bridge.emit(bridge_protocol.runtime_state_message(
             phase="waiting_approval",
             turn_id="t1",
             approval=approval,
@@ -207,19 +215,19 @@ class ActiveSessionTest(unittest.IsolatedAsyncioTestCase):
         ))
         await _wait_for_async(lambda: runtime.event_sequence == 1)
 
-        self.assertEqual(runtime.approval, approval)
-        self.assertIsNone(runtime.question)
-        self.assertEqual(runtime.permission_preset, "full_access")
-        self.assertEqual(list(runtime.jobs), ["j1"])
-        self.assertEqual(runtime.context_window, {"input_tokens": 1})
+        self.assertEqual(runtime.projection.approval, approval)
+        self.assertIsNone(runtime.projection.question)
+        self.assertEqual(runtime.projection.permission_preset, "full_access")
+        self.assertEqual(list(runtime.projection.jobs), ["j1"])
+        self.assertEqual(runtime.projection.context_window, {"input_tokens": 1})
 
     async def test_plan_updates_replace_the_cached_snapshot(self) -> None:
         bridge = FakeBridge()
-        runtime = server.ActiveSession("s1", "first", "/tmp", [], bridge)
+        runtime = active_session.ActiveSession("s1", "first", "/tmp", [], bridge)
         self.addAsyncCleanup(runtime.close)
         first = {"plan_id": "plan-1", "goal": "Ship", "revision": 1, "steps": []}
         second = {"plan_id": "plan-1", "goal": "Ship", "revision": 2, "steps": []}
-        bridge.emit(server.runtime_state_message(
+        bridge.emit(bridge_protocol.runtime_state_message(
             phase="running",
             turn_id="t1",
             approval=None,
@@ -233,38 +241,72 @@ class ActiveSessionTest(unittest.IsolatedAsyncioTestCase):
         bridge.emit({"type": "plan_updated", "plan": second})
         await _wait_for_async(lambda: runtime.event_sequence == 2)
 
-        self.assertEqual(runtime.plan, second)
+        self.assertEqual(runtime.projection.plan, second)
 
     async def test_owner_close_does_not_relabel_the_runtime_as_failed(self) -> None:
         bridge = FakeBridge()
-        runtime = server.ActiveSession("s1", "first", "/tmp", [], bridge)
-        runtime.phase = "idle"
+        runtime = active_session.ActiveSession("s1", "first", "/tmp", [], bridge)
+        runtime.projection.phase = "idle"
 
         await runtime.close()
 
-        self.assertEqual(runtime.phase, "idle")
+        self.assertEqual(runtime.projection.phase, "idle")
 
     async def test_clean_bridge_exit_does_not_relabel_the_runtime_as_failed(self) -> None:
         bridge = FakeBridge()
         bridge.returncode = 0
-        runtime = server.ActiveSession("s1", "first", "/tmp", [], bridge)
-        runtime.phase = "idle"
+        runtime = active_session.ActiveSession("s1", "first", "/tmp", [], bridge)
+        runtime.projection.phase = "idle"
 
         bridge.emit(None)
         await _wait_for_async(lambda: runtime.done)
 
-        self.assertEqual(runtime.phase, "idle")
+        self.assertEqual(runtime.projection.phase, "idle")
 
     async def test_bridge_exit_during_a_turn_marks_the_runtime_failed(self) -> None:
         bridge = FakeBridge()
         bridge.returncode = 0
-        runtime = server.ActiveSession("s1", "first", "/tmp", [], bridge)
-        runtime.phase = "running"
+        runtime = active_session.ActiveSession("s1", "first", "/tmp", [], bridge)
+        runtime.projection.phase = "running"
 
         bridge.emit(None)
         await _wait_for_async(lambda: runtime.done)
 
-        self.assertEqual(runtime.phase, "failed")
+        self.assertEqual(runtime.projection.phase, "failed")
+
+
+@unittest.skipIf(TestClient is None, "Install the gui extra to test the GUI")
+class RuntimeProjectionTest(unittest.TestCase):
+    def test_runtime_state_replaces_warnings_including_with_an_empty_list(self) -> None:
+        projection = runtime_projection.RuntimeProjection("first", "/tmp")
+
+        projection.apply_bridge_message(
+            bridge_protocol.runtime_state_message(
+                phase="running",
+                turn_id="t1",
+                approval=None,
+                question=None,
+                provider="first",
+                permission_preset="ask_for_approval",
+                context_window=None,
+                jobs=[],
+                runtime_warnings=("warning",),
+            )
+        )
+        projection.apply_bridge_message(
+            bridge_protocol.runtime_state_message(
+                phase="idle",
+                turn_id=None,
+                approval=None,
+                question=None,
+                provider="first",
+                permission_preset="ask_for_approval",
+                context_window=None,
+                jobs=[],
+            )
+        )
+
+        self.assertEqual(projection.runtime_warnings, ())
 
 @unittest.skipIf(TestClient is None, "Install the gui extra to test the GUI")
 class GuiTest(unittest.TestCase):
@@ -317,7 +359,7 @@ class GuiTest(unittest.TestCase):
                 return bridge
 
             patcher = patch.object(
-                server.BridgeProcess,
+                bridge_process.BridgeProcess,
                 "spawn",
                 classmethod(spawn),
             )
@@ -1270,7 +1312,7 @@ class GuiTest(unittest.TestCase):
         )
 
     def test_reconnecting_marks_old_snapshots_as_replay_before_current_state(self) -> None:
-        snapshot = server.runtime_state_message(
+        snapshot = bridge_protocol.runtime_state_message(
             phase="inactive", turn_id=None, approval=None, question=None,
             provider="first", permission_preset="ask_for_approval",
             context_window=None, jobs=[],
@@ -1312,7 +1354,7 @@ class GuiTest(unittest.TestCase):
 
         with (
             patch.object(
-                server.BridgeProcess,
+                bridge_process.BridgeProcess,
                 "spawn",
                 classmethod(spawn),
             ),
@@ -1382,7 +1424,7 @@ class GuiTest(unittest.TestCase):
 
         with (
             patch.object(
-                server.BridgeProcess,
+                bridge_process.BridgeProcess,
                 "spawn",
                 classmethod(spawn),
             ),
@@ -1929,13 +1971,13 @@ class GuiTest(unittest.TestCase):
 
         (self.root / "image.png").write_bytes(png_bytes(8, 8))
         with self.client() as client:
-            with patch("interfaces.gui.server.time.time", return_value=1000):
+            with patch("interfaces.gui.routes.media.time.time", return_value=1000):
                 signed = client.post(
                     "/api/image-url", json={"path": "image.png"}
                 ).json()["url"]
             with patch(
-                "interfaces.gui.server.time.time",
-                return_value=1000 + server.IMAGE_URL_TTL_SECONDS + 1,
+                "interfaces.gui.routes.media.time.time",
+                return_value=1000 + media.IMAGE_URL_TTL_SECONDS + 1,
             ):
                 response = client.get(signed)
 
@@ -2014,14 +2056,14 @@ class GuiStartupTest(unittest.TestCase):
             config_directory = root / "nosis"
             with (
                 patch.object(
-                    server,
+                    gui_main,
                     "default_config_directory",
                     return_value=config_directory,
                 ),
                 patch("uvicorn.run") as serve,
                 patch("builtins.print"),
             ):
-                server.main(["--workspace", str(root)])
+                gui_main.main(["--workspace", str(root)])
 
             self.assertTrue(
                 (config_directory / "provider_config.json").is_file()

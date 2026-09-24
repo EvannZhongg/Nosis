@@ -15,8 +15,9 @@ class WriteFileTool(Tool):
         return ToolDefinition(
             name=self.name,
             description=(
-                "Write an entire UTF-8 workspace file atomically. Existing files "
-                "require overwrite=true; use edit_file for targeted changes."
+                "Write an entire UTF-8 workspace file atomically, creating missing "
+                "parent directories within the workspace. Existing files require "
+                "overwrite=true; use edit_file for targeted changes."
             ),
             parameters={
                 "type": "object",
@@ -61,27 +62,65 @@ class WriteFileTool(Tool):
 
         workspace = context.workspace
         file_path = workspace.resolve_path(path)
-        if file_path.exists() and not overwrite:
+        existed = file_path.exists()
+        if existed and not overwrite:
             raise ValueError(
                 "file already exists; use edit_file, or explicitly set overwrite=true"
             )
-        if not file_path.parent.exists():
-            raise FileNotFoundError(
-                errno.ENOENT,
-                os.strerror(errno.ENOENT),
-                str(file_path),
-            )
+
+        missing_parent_dirs = _missing_parent_directories(
+            file_path,
+            workspace.path,
+        )
+        for directory in missing_parent_dirs:
+            directory.mkdir()
 
         data = content.encode("utf-8")
         write_bytes_atomic(file_path, data)
 
+        workspace_path = path_for_comparison(workspace.path)
         return {
             "path": path_for_comparison(file_path).relative_to(
-                path_for_comparison(workspace.path)
+                workspace_path
             ).as_posix(),
+            "created": not existed,
+            "created_parent_dirs": [
+                path_for_comparison(directory)
+                .relative_to(workspace_path)
+                .as_posix()
+                for directory in missing_parent_dirs
+            ],
             "bytes_written": len(data),
-            "overwritten": overwrite,
         }
+
+
+def _missing_parent_directories(path: Path, workspace_path: Path) -> list[Path]:
+    """Validate the complete parent chain before returning directories to create."""
+    workspace_comparison = path_for_comparison(workspace_path)
+    missing: list[Path] = []
+    current = path.parent
+
+    while current != workspace_path:
+        try:
+            path_for_comparison(current).relative_to(workspace_comparison)
+        except ValueError as error:
+            raise ValueError(
+                "workspace path must stay within the workspace"
+            ) from error
+
+        if current.exists():
+            if not current.is_dir():
+                raise NotADirectoryError(
+                    errno.ENOTDIR,
+                    os.strerror(errno.ENOTDIR),
+                    str(current),
+                )
+            break
+        missing.append(current)
+        current = current.parent
+
+    missing.reverse()
+    return missing
 
 
 def write_bytes_atomic(path: Path, data: bytes) -> None:

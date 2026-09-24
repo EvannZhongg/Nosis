@@ -32,6 +32,7 @@ from agent_core import (
     WORKSPACE_ONLY_AUTHORITY,
     WebSearchTool,
     Workspace,
+    WriteFileTool,
     builtin_catalog,
 )
 from agent_core.permissions import PermissionPreset
@@ -1382,6 +1383,118 @@ class ReadFileToolTest(unittest.TestCase):
                 tool.execute({"path": "notes.txt", "limit": 0})
             with self.assertRaisesRegex(ValueError, "accepts only"):
                 tool.execute({"path": "notes.txt", "extra": True})
+
+
+class WriteFileToolTest(unittest.TestCase):
+    def test_creates_missing_parent_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+
+            result = _Bound(WriteFileTool(), workspace).execute(
+                {
+                    "path": "src/foo/bar.py",
+                    "content": "print('hello')\n",
+                }
+            )
+
+            self.assertEqual(
+                result,
+                {
+                    "path": "src/foo/bar.py",
+                    "created": True,
+                    "created_parent_dirs": ["src", "src/foo"],
+                    "bytes_written": 15,
+                },
+            )
+            self.assertEqual(
+                (workspace.path / "src/foo/bar.py").read_text(encoding="utf-8"),
+                "print('hello')\n",
+            )
+
+    def test_reports_only_parent_directories_created_by_the_call(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+            (workspace.path / "src").mkdir()
+
+            result = _Bound(WriteFileTool(), workspace).execute(
+                {"path": "src/foo/bar.py", "content": "content"}
+            )
+
+            self.assertEqual(result["created_parent_dirs"], ["src/foo"])
+
+    def test_reports_overwrite_as_not_created(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+            file_path = workspace.path / "notes.txt"
+            file_path.write_text("old", encoding="utf-8")
+
+            result = _Bound(WriteFileTool(), workspace).execute(
+                {
+                    "path": "notes.txt",
+                    "content": "new",
+                    "overwrite": True,
+                }
+            )
+
+            self.assertEqual(
+                result,
+                {
+                    "path": "notes.txt",
+                    "created": False,
+                    "created_parent_dirs": [],
+                    "bytes_written": 3,
+                },
+            )
+            self.assertEqual(file_path.read_text(encoding="utf-8"), "new")
+
+    def test_rejects_file_in_parent_chain_before_creating_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+            (workspace.path / "a").mkdir()
+            blocking_file = workspace.path / "a/b"
+            blocking_file.write_text("file", encoding="utf-8")
+
+            with self.assertRaises(NotADirectoryError):
+                _Bound(WriteFileTool(), workspace).execute(
+                    {"path": "a/b/c/d.txt", "content": "content"}
+                )
+
+            self.assertEqual(blocking_file.read_text(encoding="utf-8"), "file")
+            self.assertFalse((workspace.path / "a/b/c").exists())
+
+    def test_rejects_workspace_escape_without_creating_directories(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+            outside = workspace.path.parent / f"{workspace.path.name}-outside"
+
+            with self.assertRaisesRegex(ValueError, "within the workspace"):
+                _Bound(WriteFileTool(), workspace).execute(
+                    {"path": f"new/../../{outside.name}/file.txt", "content": "x"}
+                )
+
+            self.assertFalse(workspace.path.joinpath("new").exists())
+            self.assertFalse(outside.exists())
+
+    @unittest.skipUnless(
+        SYMLINKS_AVAILABLE,
+        "creating symlinks needs Developer Mode or administrator rights "
+        "on Windows",
+    )
+    def test_rejects_symlink_parent_outside_workspace_without_creating(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            tempfile.TemporaryDirectory() as outside_directory,
+        ):
+            workspace = Workspace(Path(directory))
+            outside = Path(outside_directory)
+            os.symlink(outside, workspace.path / "link")
+
+            with self.assertRaisesRegex(ValueError, "within the workspace"):
+                _Bound(WriteFileTool(), workspace).execute(
+                    {"path": "link/missing/file.txt", "content": "x"}
+                )
+
+            self.assertFalse((outside / "missing").exists())
 
 
 class EditFileToolTest(unittest.TestCase):
