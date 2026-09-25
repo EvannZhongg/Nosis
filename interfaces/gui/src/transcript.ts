@@ -51,6 +51,10 @@ export function applyMessage(
   items: TranscriptItem[],
   message: Incoming,
 ): Applied {
+  if (message.transcript) {
+    const { transcript, ...event } = message;
+    return { ...applyMessage(items, event), items: transcript.items };
+  }
   switch (message.type) {
     case "session_ready":
       return {

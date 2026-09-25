@@ -37,7 +37,7 @@ def create_media_router(
         active = await active_sessions.get(session_id)
         if active is not None:
             try:
-                return Workspace(Path(active.projection.workspace))
+                return Workspace(Path(active.state["workspace"]))
             except (OSError, ValueError) as error:
                 raise HTTPException(
                     status_code=404,

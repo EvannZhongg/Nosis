@@ -22,7 +22,6 @@ from agent_core import (
     ContextWindowEvent,
     ExecutionScope,
     JsonlSessionStore,
-    JobHandle,
     JobStatusEvent,
     Message,
     MemoryDocument,
@@ -490,7 +489,7 @@ class PermissionProtocolTest(unittest.TestCase):
                 PermissionPreset.WORKSPACE_ACCESS,
             )
             self.assertEqual(
-                emitted(stdout)[-1],
+                {key: emitted(stdout)[-1][key] for key in ("type", "preset")},
                 {"type": "permission_changed", "preset": "workspace_access"},
             )
 
@@ -522,7 +521,7 @@ class PermissionProtocolTest(unittest.TestCase):
                 JsonlSessionStore(root / "sessions").list_sessions(), []
             )
             self.assertEqual(
-                emitted(stdout)[-1],
+                {key: emitted(stdout)[-1][key] for key in ("type", "preset")},
                 {"type": "permission_changed", "preset": "full_access"},
             )
 
@@ -740,32 +739,14 @@ class _BlockingAfterLines:
 
 class BridgeApprovalTest(unittest.TestCase):
     def test_runtime_state_contains_only_the_jobs_that_are_running(self) -> None:
-        class Jobs:
-            @staticmethod
-            def snapshot():
-                return (
-                    JobHandle("j1", "shell", "running"),
-                    JobHandle("j2", "shell", "completed"),
-                )
-
-        class Plane:
-            jobs = Jobs()
-            context_window = ContextWindow(
-                input_tokens=0,
-                max_input_tokens=900,
-                max_context_tokens=1000,
-                output_reserve_tokens=100,
-                compression_threshold=720,
-                compression_count=0,
-            )
-
         with tempfile.TemporaryDirectory() as directory:
             bridge, stdout = make_bridge([], Path(directory))
             bridge.open_session(
                 open_session_message(Path(directory), session_id="s")
             )
-            bridge.host.planes.current = Plane()
-
+            bridge._emit_agent_event(JobStatusEvent("j1", "shell", "running"), "t1")
+            bridge._emit_agent_event(JobStatusEvent("j2", "shell", "running"), "t1")
+            bridge._emit_agent_event(JobStatusEvent("j2", "shell", "completed"), "t1")
             bridge._emit_runtime_state("running")
 
             self.assertEqual(
@@ -1324,6 +1305,58 @@ class InterruptedTurnTest(unittest.TestCase):
 
     def stored_items(self) -> list[Message]:
         return self.store.load(self.session_id).items
+
+    def test_checkpoints_bind_transcript_to_the_bridge_event_cursor(self) -> None:
+        plane = self.bridge.host.planes.ensure(self.bridge.host.sessions)
+        plane.agent = SuccessfulAgent(self.session)
+        for turn_id in ("t1", "t2"):
+            self.bridge.run_turn({"turn_id": turn_id, "text": turn_id})
+        messages = emitted(self.stdout)
+        self.assertEqual(
+            [message["event_sequence"] for message in messages],
+            list(range(1, len(messages) + 1)),
+        )
+        first, second = [message for message in messages if message["type"] == "turn_completed"]
+        for message in (first, second):
+            self.assertEqual(message["transcript"]["event_sequence"], message["event_sequence"])
+            self.assertEqual(message["runtime"]["phase"], "idle")
+            self.assertIsNone(message["runtime"]["turn_id"])
+        self.assertEqual([item["content"] for item in second["transcript"]["items"]],
+                         ["t1", "done", "t2", "done"])
+        self.bridge.emit("fatal", error={"type": "TestError", "message": "failed", "details": {}})
+        fatal = emitted(self.stdout)[-1]
+        self.assertEqual(fatal["resume_after"], second["event_sequence"])
+        self.assertNotIn("transcript", fatal)
+        self.assertEqual(fatal["runtime"]["phase"], "failed")
+
+    def test_running_checkpoint_contains_new_user_input_and_prior_turns(self) -> None:
+        plane = self.bridge.host.planes.ensure(self.bridge.host.sessions)
+        plane.agent = SuccessfulAgent(self.session)
+        self.bridge.run_turn({"turn_id": "t1", "text": "first"})
+        previous_cursor = emitted(self.stdout)[-1]["event_sequence"]
+        session = self.session
+
+        class StreamingAgent:
+            def run(self, text, *, turn_id, on_event, **kwargs):
+                session.begin_turn(turn_id)
+                session.add_item("user", text)
+                on_event(ContextWindowEvent(plane.context_window))
+                on_event(AssistantMessageDeltaEvent("partial", 1))
+                session.add_item("assistant", "done")
+                session.finish_turn("completed", turn_id)
+                return SimpleNamespace(response=SimpleNamespace(usage=None))
+
+        plane.agent = StreamingAgent()
+        self.bridge.run_turn({"turn_id": "t2", "text": "second"})
+        messages = emitted(self.stdout)
+        context = next(message for message in messages if message["type"] == "context_window")
+        self.assertGreater(context["transcript"]["event_sequence"], previous_cursor)
+        self.assertEqual(context["runtime"]["phase"], "running")
+        self.assertEqual([item["content"] for item in context["transcript"]["items"]],
+                         ["first", "done", "second"])
+        delta = next(message for message in messages if message["type"] == "assistant_delta")
+        self.assertNotIn("transcript", delta)
+        self.assertGreater(delta["event_sequence"], context["event_sequence"])
 
     def test_stores_a_cancelled_turn(self) -> None:
         plane = self.bridge.host.planes.ensure(self.bridge.host.sessions)

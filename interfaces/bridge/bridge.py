@@ -4,7 +4,7 @@ import _thread
 from itertools import count
 from pathlib import Path
 from queue import Queue
-from threading import Lock, Thread
+from threading import Lock, RLock, Thread
 from typing import TextIO
 
 from agent_core import AgentCancelled as Cancelled, AgentEvent, PermissionPreset, SchedulerService, message_to_dict, runtime_error_info
@@ -28,6 +28,7 @@ from .protocol import (
     settings_update_failed_message,
     usage_to_dict,
 )
+from .event_stream import EventStream
 
 
 class Bridge:
@@ -36,7 +37,7 @@ class Bridge:
                  start_scheduler: bool = True) -> None:
         self._stdin = stdin
         self._stdout = stdout
-        self._stdout_lock = Lock()
+        self._stdout_lock = RLock()
         self._messages: Queue[dict[str, object] | BaseException | None] = Queue()
         self._reader: Thread | None = None
         self._reader_lock = Lock()
@@ -49,6 +50,11 @@ class Bridge:
         self._interaction_lock = Lock()
         self._approval: dict[str, object] | None = None
         self._question: dict[str, object] | None = None
+        self._stream = EventStream()
+        self._phase = "inactive"
+        self._runtime_warnings: tuple[str, ...] = ()
+        self._jobs: dict[str, dict[str, object]] = {}
+        self._checkpoint_turn: str | None = None
         self.host = RuntimeHost(
             default_config_directory().resolve(),
             scheduler=scheduler,
@@ -65,7 +71,39 @@ class Bridge:
 
     def emit(self, type: str, **fields: object) -> None:
         with self._stdout_lock:
-            self._stdout.write(encode({"type": type, **fields}) + "\n")
+            message = {"type": type, **fields}
+            if type == "job_status":
+                job_id = str(fields["job_id"])
+                if fields["status"] in {"submitted", "running"}:
+                    self._jobs[job_id] = {
+                        key: fields[key] for key in ("job_id", "kind", "status")
+                    }
+                else:
+                    self._jobs.pop(job_id, None)
+            if type == "fatal":
+                self._phase = "failed"
+                self._approval = self._question = None
+                self._jobs.clear()
+            state = None
+            if type == "runtime_state":
+                state = message
+            elif type in {
+                "permission_changed", "provider_changed", "workspace_changed",
+                "plan_updated", "context_window", "job_status", "fatal",
+                "turn_completed", "turn_cancelled", "turn_failed",
+            }:
+                state = self._runtime_snapshot()
+            items = None
+            if type == "session_ready" or type in {
+                "turn_completed", "turn_cancelled", "turn_failed",
+            } or (type == "context_window" and self._checkpoint_turn == fields.get("turn_id")):
+                session = self.host.sessions.session
+                if session is not None:
+                    items = [message_to_dict(item) for item in session.items]
+                self._checkpoint_turn = None
+            self._stdout.write(encode(self._stream.publish(
+                message, state=state, items=items,
+            )) + "\n")
 
 
     def read_message(self) -> dict[str, object] | None:
@@ -312,18 +350,15 @@ class Bridge:
         *,
         runtime_warnings: tuple[str, ...] = (),
     ) -> None:
+        with self._stdout_lock:
+            self._phase = phase
+            self._runtime_warnings = runtime_warnings
+            self.emit(**self._runtime_snapshot())
+
+    def _runtime_snapshot(self) -> dict[str, object]:
         plane = self.host.planes.current
-        jobs = (
-            [
-                job.to_dict()
-                for job in plane.jobs.snapshot()
-                if job.status in {"submitted", "running"}
-            ]
-            if plane is not None
-            else []
-        )
-        self.emit(**runtime_state_message(
-            phase=phase,
+        return runtime_state_message(
+            phase=self._phase,
             turn_id=self.host.turns.turn_id,
             approval=self._approval,
             question=self._question,
@@ -338,10 +373,11 @@ class Bridge:
                 if plane is not None
                 else None
             ),
-            jobs=jobs,
-            runtime_warnings=runtime_warnings,
+            jobs=list(self._jobs.values()),
+            runtime_warnings=self._runtime_warnings,
             plan=self.host.sessions.plan.snapshot if self.host.sessions.plan is not None else None,
-        ))
+            workspace=str(self.host.sessions.workspace.path) if self.host.sessions.workspace is not None else None,
+        )
 
 
     def _emit_agent_event(self, event: AgentEvent, turn_id: str) -> None:
@@ -541,10 +577,15 @@ class Bridge:
 
     def run_turn(self, message: dict[str, object]) -> None:
         turn_id = str(message["turn_id"])
+        self._checkpoint_turn = turn_id
         result = self.host.run_turn(
             turn_id, str(message["text"]),
             attachments=lambda: parse_attachments(message.get("attachments"), self.host.sessions.workspace),
         )
+        self._phase = "failed" if result.startup_failed else "idle"
+        self._approval = self._question = None
+        self._runtime_warnings = ()
+        self._jobs.clear()
         if result.status == "failed":
             self.emit("turn_failed", turn_id=turn_id, error=runtime_failure_to_dict(result.error))
             if result.startup_failed:

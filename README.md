@@ -1,12 +1,10 @@
 <div align="center"><img src="docs/nosis-banner.png" alt="Nosis" width="560"></div>
 Nosis 是一个开源的轻量级个人 Agent 应用。它提供本地 Workspace 操作、人工授权、会话持久化、上下文管理、长期记忆、计划、子 Agent、定时任务，以及 Skill、Plugin、MCP 扩展能力，并同时提供 TUI 和 GUI。
 
-两个前端共享同一个应用 Runtime：Agent 执行、Tool 调用、授权、取消和 Session 语义只实现一次，前端只负责交互与展示。
-
 ```text
-TUI (Ink + React) ──────┐
-                        ├── Bridge ── agent_runtime ── agent_core
-GUI (React) ── FastAPI ─┘
+TUI ────────────┐
+                ├── Bridge ── agent_runtime ── agent_core
+GUI ── FastAPI ─┘
 ```
 
 - `agent_core` 提供与前端无关的 Agent 机制。

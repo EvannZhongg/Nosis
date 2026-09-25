@@ -25,6 +25,7 @@ class BridgeProcess:
         self._opened = False
         self._turn_running = False
         self._turn_id: str | None = None
+        self._read_buffer = bytearray()
 
     @classmethod
     async def spawn(cls, workspace: Workspace) -> "BridgeProcess":
@@ -61,10 +62,21 @@ class BridgeProcess:
         if stdout is None:
             return None
         while True:
-            line = await stdout.readline()
-            if not line:
+            newline = self._read_buffer.find(b"\n")
+            if newline >= 0:
+                line = bytes(self._read_buffer[:newline])
+                del self._read_buffer[:newline + 1]
+            else:
+                # Transcript checkpoints can exceed StreamReader's line limit.
+                chunk = await stdout.read(65536)
+                if chunk:
+                    self._read_buffer.extend(chunk)
+                    continue
                 await self._process.wait()
-                return None
+                if not self._read_buffer:
+                    return None
+                line = bytes(self._read_buffer)
+                self._read_buffer.clear()
             stripped = line.strip()
             if stripped:
                 message = json.loads(stripped)

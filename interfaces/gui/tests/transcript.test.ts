@@ -62,6 +62,33 @@ function fold(messages: Incoming[], initial: TranscriptItem[] = []) {
 }
 
 describe("applyMessage", () => {
+  it("replaces the transcript with a checkpoint and then appends newer events", () => {
+    const checkpoint: TranscriptItem[] = [
+      { role: "user", content: "first" },
+      { role: "assistant", content: "done" },
+      { role: "user", content: "second" },
+    ];
+    const result = fold([
+      {
+        type: "context_window", turn_id: "t2", input_tokens: 10,
+        max_input_tokens: 100, max_context_tokens: 120, output_reserve_tokens: 20,
+        compression_threshold: 80, compression_count: 0, event_sequence: 15,
+        transcript: { items: checkpoint, event_sequence: 15 },
+      },
+      { type: "assistant_delta", turn_id: "t2", text: "new answer", model_call_index: 1, event_sequence: 16 },
+    ], [{ role: "assistant", content: "stale stream" }]);
+    expect(result.items.map((item) => item.content)).toEqual(["first", "done", "second", "new answer"]);
+  });
+
+  it("keeps completion feedback while replacing transcript from a checkpoint", () => {
+    const result = applyMessage([], {
+      type: "turn_completed", turn_id: "t1", usage: null,
+      transcript: { items: [{ role: "assistant", content: "persisted" }], event_sequence: 20 },
+    });
+    expect(result.finished).toBe(true);
+    expect(result.items).toEqual([{ role: "assistant", content: "persisted" }]);
+  });
+
   it("keeps update_plan out of the ordinary tool transcript", () => {
     const messages = toMessages([
       {

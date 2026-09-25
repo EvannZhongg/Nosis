@@ -48,12 +48,9 @@ export class SessionSocket {
     };
     this.socket.onmessage = ({ data }) => {
       const message = JSON.parse(data as string) as Incoming;
-      if (message.type === "runtime_state" && !message.replayed) {
-        this.phase = message.phase;
-      } else if (!message.replayed && (
-        message.type === "turn_completed" || message.type === "turn_cancelled" || message.type === "turn_failed"
-      )) {
-        this.phase = "idle";
+      const state = message.type === "runtime_state" ? message : message.runtime;
+      if (state && !message.replayed) {
+        this.phase = state.phase;
       }
       options.onMessage(message);
       // Only the current snapshot ends attachment synchronization; historical

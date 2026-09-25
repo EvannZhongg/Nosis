@@ -30,11 +30,11 @@ try:
     from fastapi import WebSocketDisconnect
 
     from interfaces.bridge import protocol as bridge_protocol
+    from interfaces.bridge.event_stream import EventStream
     from interfaces.gui import __main__ as gui_main
     from interfaces.gui import (
         active_session,
         bridge_process,
-        runtime_projection,
         server,
     )
     from interfaces.gui.routes import media
@@ -79,18 +79,59 @@ class FakeBridge:
         self.returncode: int | None = None
         self._replies = replies or {}
         self._messages: asyncio.Queue[dict | None] = asyncio.Queue()
+        self._stream = EventStream()
+        self.state = bridge_protocol.runtime_state_message(
+            phase="inactive", approval=None, question=None, provider=None,
+            permission_preset="ask_for_approval", context_window=None, jobs=[],
+        )
+        self.items = []
 
     def send(self, message: dict) -> None:
         self.sent.append(message)
+        if message["type"] == "open_session":
+            self.state.update(provider=message.get("provider"), workspace=message["workspace"])
+        elif message["type"] == "user_turn":
+            self.state.update(phase="starting", turn_id=message["turn_id"])
+            self.items.append({"role": "user", "content": message["text"]})
+            if not self._replies.get("user_turn"):
+                self.emit(dict(self.state))
+        elif message["type"] == "cancel":
+            self.cancel_turn()
         for reply in self._replies.get(str(message["type"]), ()):
-            self._messages.put_nowait(reply)
+            self.emit(reply)
 
     async def read(self) -> dict | None:
         return await self._messages.get()
 
     def emit(self, *messages: dict | None) -> None:
         for message in messages:
-            self._messages.put_nowait(message)
+            if message is None:
+                self._messages.put_nowait(None)
+                continue
+            kind = message["type"]
+            if kind == "runtime_state":
+                self.state.update(message)
+                message = dict(self.state)
+            elif kind == "permission_changed":
+                self.state["permission_preset"] = message["preset"]
+            elif kind == "provider_changed":
+                self.state["provider"] = message["provider"]
+            elif kind == "workspace_changed":
+                self.state["workspace"] = message["workspace"]
+            elif kind == "plan_updated":
+                self.state["plan"] = message["plan"]
+            elif kind == "approval_request":
+                self.state.update(phase="waiting_approval", approval=message)
+            elif kind == "user_question":
+                self.state.update(phase="waiting_user", question=message)
+            elif kind == "assistant_message":
+                self.items.append({"role": "assistant", "content": message["content"]})
+            elif kind in {"turn_completed", "turn_failed", "turn_cancelled", "fatal"}:
+                self.state.update(phase="failed" if kind == "fatal" else "idle", turn_id=None)
+            self._messages.put_nowait(self._stream.publish(
+                message, state=dict(self.state),
+                items=list(self.items) if kind in {"session_ready", "turn_completed", "turn_failed", "turn_cancelled"} else None,
+            ))
 
     def cancel_turn(self) -> None:
         self.cancelled += 1
@@ -142,6 +183,25 @@ class BridgeProcessTest(unittest.TestCase):
 
 @unittest.skipIf(TestClient is None, "Install the gui extra to test the GUI")
 class BridgeProcessSpawnTest(unittest.IsolatedAsyncioTestCase):
+    async def test_reads_a_large_utf8_checkpoint_followed_by_another_event(self) -> None:
+        reader = asyncio.StreamReader()
+        checkpoint = {
+            "type": "session_ready", "event_sequence": 1,
+            "transcript": {"items": [{"role": "user", "content": "续传" * 40000}],
+                           "event_sequence": 1},
+        }
+        following = {"type": "turn_completed", "turn_id": "t1"}
+        payload = (json.dumps(checkpoint, ensure_ascii=False) + "\n" +
+                   json.dumps(following) + "\n").encode("utf-8")
+        for start in range(0, len(payload), 4093):
+            reader.feed_data(payload[start:start + 4093])
+        reader.feed_eof()
+        process = SimpleNamespace(stdout=reader, wait=AsyncMock())
+        bridge = bridge_process.BridgeProcess(process)
+        self.assertEqual(await bridge.read(), checkpoint)
+        self.assertEqual(await bridge.read(), following)
+        self.assertIsNone(await bridge.read())
+
     async def test_spawn_creates_a_private_process_group(self) -> None:
         process = SimpleNamespace()
         spawn = AsyncMock(return_value=process)
@@ -168,6 +228,36 @@ class BridgeProcessSpawnTest(unittest.IsolatedAsyncioTestCase):
 
 @unittest.skipIf(TestClient is None, "Install the gui extra to test the GUI")
 class ActiveSessionTest(unittest.IsolatedAsyncioTestCase):
+    async def test_caches_protocol_cursors_without_deriving_them_from_phase(self) -> None:
+        bridge = FakeBridge()
+        runtime = active_session.ActiveSession("s1", "first", "/tmp", [], bridge)
+        self.addAsyncCleanup(runtime.close)
+        items = [{"role": "user", "content": "second turn"}]
+        bridge._messages.put_nowait({
+            **bridge_protocol.runtime_state_message(
+                phase="running", turn_id="t2", approval=None, question=None,
+                provider="first", permission_preset="full_access", context_window=None, jobs=[],
+            ),
+            "event_sequence": 75, "resume_after": 74,
+            "transcript": {"items": items, "event_sequence": 63},
+        })
+        await _wait_for_async(lambda: runtime.event_sequence == 75)
+        self.assertEqual(runtime.transcript, {"items": items, "event_sequence": 63})
+        queue, events, state = await runtime.attach(63, "page", takeover=False)
+        self.assertEqual(state["event_sequence"], 74)
+        self.assertEqual([event["event_sequence"] for event in events], [75])
+        await runtime.detach(queue, "page")
+
+    async def test_client_commands_do_not_change_the_cached_runtime_snapshot(self) -> None:
+        bridge = FakeBridge(replies={"user_turn": [{"type": "assistant_delta", "text": "queued"}]})
+        runtime = active_session.ActiveSession("s1", "first", "/tmp", [], bridge)
+        self.addAsyncCleanup(runtime.close)
+        before = dict(runtime.state)
+        runtime.send({"type": "user_turn", "turn_id": "t1", "text": "work"})
+        self.assertEqual(runtime.state, before)
+        self.assertEqual(runtime.transcript, {"items": [], "event_sequence": 0})
+        self.assertTrue(runtime.running)
+
     async def test_event_replay_window_is_bounded_and_sequences_are_monotonic(self) -> None:
         bridge = FakeBridge()
         runtime = active_session.ActiveSession("s1", "first", "/tmp", [], bridge)
@@ -215,11 +305,11 @@ class ActiveSessionTest(unittest.IsolatedAsyncioTestCase):
         ))
         await _wait_for_async(lambda: runtime.event_sequence == 1)
 
-        self.assertEqual(runtime.projection.approval, approval)
-        self.assertIsNone(runtime.projection.question)
-        self.assertEqual(runtime.projection.permission_preset, "full_access")
-        self.assertEqual(list(runtime.projection.jobs), ["j1"])
-        self.assertEqual(runtime.projection.context_window, {"input_tokens": 1})
+        self.assertEqual(runtime.state["approval"], approval)
+        self.assertIsNone(runtime.state["question"])
+        self.assertEqual(runtime.state["permission_preset"], "full_access")
+        self.assertEqual([job["job_id"] for job in runtime.state["jobs"]], ["j1"])
+        self.assertEqual(runtime.state["context_window"], {"input_tokens": 1})
 
     async def test_plan_updates_replace_the_cached_snapshot(self) -> None:
         bridge = FakeBridge()
@@ -241,46 +331,49 @@ class ActiveSessionTest(unittest.IsolatedAsyncioTestCase):
         bridge.emit({"type": "plan_updated", "plan": second})
         await _wait_for_async(lambda: runtime.event_sequence == 2)
 
-        self.assertEqual(runtime.projection.plan, second)
+        self.assertEqual(runtime.state["plan"], second)
 
     async def test_owner_close_does_not_relabel_the_runtime_as_failed(self) -> None:
         bridge = FakeBridge()
         runtime = active_session.ActiveSession("s1", "first", "/tmp", [], bridge)
-        runtime.projection.phase = "idle"
+        runtime.state["phase"] = "idle"
 
         await runtime.close()
 
-        self.assertEqual(runtime.projection.phase, "idle")
+        self.assertEqual(runtime.state["phase"], "idle")
 
     async def test_clean_bridge_exit_does_not_relabel_the_runtime_as_failed(self) -> None:
         bridge = FakeBridge()
         bridge.returncode = 0
         runtime = active_session.ActiveSession("s1", "first", "/tmp", [], bridge)
-        runtime.projection.phase = "idle"
+        runtime.state["phase"] = "idle"
 
         bridge.emit(None)
         await _wait_for_async(lambda: runtime.done)
 
-        self.assertEqual(runtime.projection.phase, "idle")
+        self.assertEqual(runtime.state["phase"], "idle")
 
-    async def test_bridge_exit_during_a_turn_marks_the_runtime_failed(self) -> None:
+    async def test_bridge_exit_does_not_invent_a_runtime_transition(self) -> None:
         bridge = FakeBridge()
         bridge.returncode = 0
         runtime = active_session.ActiveSession("s1", "first", "/tmp", [], bridge)
-        runtime.projection.phase = "running"
+        runtime.state["phase"] = "running"
 
         bridge.emit(None)
         await _wait_for_async(lambda: runtime.done)
 
-        self.assertEqual(runtime.projection.phase, "failed")
+        self.assertEqual(runtime.state["phase"], "running")
+        self.assertFalse(runtime.attachable)
 
 
 @unittest.skipIf(TestClient is None, "Install the gui extra to test the GUI")
-class RuntimeProjectionTest(unittest.TestCase):
-    def test_runtime_state_replaces_warnings_including_with_an_empty_list(self) -> None:
-        projection = runtime_projection.RuntimeProjection("first", "/tmp")
+class RuntimeSnapshotTest(unittest.IsolatedAsyncioTestCase):
+    async def test_runtime_state_replaces_warnings_including_with_an_empty_list(self) -> None:
+        bridge = FakeBridge()
+        runtime = active_session.ActiveSession("s1", "first", "/tmp", [], bridge)
+        self.addAsyncCleanup(runtime.close)
 
-        projection.apply_bridge_message(
+        bridge.emit(
             bridge_protocol.runtime_state_message(
                 phase="running",
                 turn_id="t1",
@@ -293,7 +386,7 @@ class RuntimeProjectionTest(unittest.TestCase):
                 runtime_warnings=("warning",),
             )
         )
-        projection.apply_bridge_message(
+        bridge.emit(
             bridge_protocol.runtime_state_message(
                 phase="idle",
                 turn_id=None,
@@ -306,10 +399,23 @@ class RuntimeProjectionTest(unittest.TestCase):
             )
         )
 
-        self.assertEqual(projection.runtime_warnings, ())
+        await _wait_for_async(lambda: runtime.event_sequence == 2)
+        self.assertEqual(runtime.state["runtime_warnings"], [])
 
 @unittest.skipIf(TestClient is None, "Install the gui extra to test the GUI")
 class GuiTest(unittest.TestCase):
+    def test_new_bridge_ignores_the_previous_process_cursor(self) -> None:
+        bridge = FakeBridge(replies={"open_session": [{"type": "session_ready", "session_id": "s1"}]})
+        with self.client(bridge) as client:
+            with client.websocket_connect("/api/session") as socket:
+                socket.send_json({
+                    "type": "open_session", "session_id": "s1", "attachment_id": "page",
+                    "after_event": 1000,
+                })
+                message = socket.receive_json()
+                self.assertEqual(message["type"], "session_ready")
+                self.assertEqual(message["transcript"]["event_sequence"], 1)
+
     def setUp(self) -> None:
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
@@ -368,7 +474,10 @@ class GuiTest(unittest.TestCase):
         return client
 
     def test_server_builds_open_session_from_browser_session_choices(self) -> None:
-        bridge = FakeBridge(replies={"user_turn": [{"type": "bye"}, None]})
+        bridge = FakeBridge(replies={
+            "open_session": [{"type": "session_ready", "session_id": "resumed"}],
+            "user_turn": [{"type": "bye"}, None],
+        })
         with self.client(bridge) as client:
             with client.websocket_connect("/api/session") as socket:
                 socket.send_json(
@@ -380,6 +489,7 @@ class GuiTest(unittest.TestCase):
                         "workspace": "/",
                     }
                 )
+                self.assertEqual(socket.receive_json()["type"], "session_ready")
                 socket.send_json(
                     {"type": "user_turn", "turn_id": "t1", "text": "hi"}
                 )
@@ -486,8 +596,8 @@ class GuiTest(unittest.TestCase):
                 session = client.get("/api/sessions/s1").json()
                 active_sessions = client.get("/api/active-sessions").json()
 
-                self.assertEqual(session["event_sequence"], 0)
-                self.assertEqual(active_sessions[0]["event_sequence"], 0)
+                self.assertEqual(session["event_sequence"], 1)
+                self.assertEqual(active_sessions[0]["event_sequence"], 1)
 
                 with client.websocket_connect("/api/session") as second:
                     second.send_json(
@@ -500,7 +610,6 @@ class GuiTest(unittest.TestCase):
                             "after_event": session["event_sequence"],
                         }
                     )
-                    self.assertEqual(second.receive_json()["type"], "session_ready")
                     self.assertEqual(
                         second.receive_json()["type"], "assistant_delta"
                     )
@@ -530,6 +639,7 @@ class GuiTest(unittest.TestCase):
             replies={
                 "open_session": [{"type": "session_ready", "session_id": "s1"}],
                 "user_turn": [
+                    {"type": "assistant_message", "turn_id": "t1", "content": "world"},
                     {"type": "turn_completed", "turn_id": "t1", "usage": None}
                 ],
             }
@@ -543,6 +653,7 @@ class GuiTest(unittest.TestCase):
                 socket.send_json(
                     {"type": "user_turn", "turn_id": "t1", "text": "hello"}
                 )
+                self.assertEqual(socket.receive_json()["type"], "assistant_message")
                 self.assertEqual(socket.receive_json()["type"], "turn_completed")
 
             stored = Session("s1")
@@ -560,8 +671,8 @@ class GuiTest(unittest.TestCase):
                 [item["content"] for item in session["items"]],
                 ["hello", "world"],
             )
-            self.assertEqual(session["event_sequence"], 2)
-            self.assertEqual(active_sessions[0]["event_sequence"], 2)
+            self.assertEqual(session["event_sequence"], 3)
+            self.assertEqual(active_sessions[0]["event_sequence"], 3)
 
             with client.websocket_connect("/api/session") as second:
                 second.send_json(
@@ -577,7 +688,7 @@ class GuiTest(unittest.TestCase):
                 state = second.receive_json()
 
         self.assertEqual(state["type"], "runtime_state")
-        self.assertEqual(state["event_sequence"], 2)
+        self.assertEqual(state["event_sequence"], 3)
 
     def test_deleting_a_session_closes_its_idle_runtime_first(self) -> None:
         stored = Session("s1")
@@ -708,12 +819,14 @@ class GuiTest(unittest.TestCase):
                 first.send_json(
                     {"type": "permission_set", "preset": "full_access"}
                 )
+                self.assertEqual(first.receive_json()["phase"], "starting")
+                changed = first.receive_json()
                 self.assertEqual(
-                    first.receive_json(),
+                    {key: changed[key] for key in ("type", "preset", "event_sequence")},
                     {
                         "type": "permission_changed",
                         "preset": "full_access",
-                        "event_sequence": 2,
+                        "event_sequence": 3,
                     },
                 )
 
@@ -724,7 +837,7 @@ class GuiTest(unittest.TestCase):
                         "session_id": "s1",
                         "attachment_id": "page-1",
                         "attach_only": True,
-                        "after_event": 2,
+                        "after_event": 3,
                     }
                 )
                 self.assertEqual(
@@ -733,7 +846,7 @@ class GuiTest(unittest.TestCase):
                 )
                 second.send_json({"type": "cancel", "turn_id": "t1"})
 
-        self.assertEqual(bridge.sent[-1]["type"], "permission_set")
+        self.assertEqual(bridge.sent[-2]["type"], "permission_set")
 
     def test_changes_permission_before_any_turn_without_starting_execution(self) -> None:
         bridge = FakeBridge(
@@ -1053,7 +1166,7 @@ class GuiTest(unittest.TestCase):
             ["open_session", "user_turn"],
         )
 
-    def test_cancel_interrupts_the_bridge_without_being_forwarded(
+    def test_cancel_is_forwarded_to_the_bridge(
         self,
     ) -> None:
         bridge = FakeBridge(replies={"open_session": [{"type": "session_ready"}]})
@@ -1072,7 +1185,7 @@ class GuiTest(unittest.TestCase):
         self.assertEqual(bridge.cancelled, 1)
         self.assertEqual(
             [m["type"] for m in bridge.sent],
-            ["open_session", "user_turn"],
+            ["open_session", "user_turn", "cancel"],
         )
 
     def test_reconnects_to_the_same_runtime_and_restores_approval(self) -> None:
@@ -1116,7 +1229,7 @@ class GuiTest(unittest.TestCase):
                     }
                 )
                 state = second.receive_json()
-                self.assertEqual(state["phase"], "starting")
+                self.assertEqual(state["phase"], "waiting_approval")
                 self.assertEqual(state["approval"]["request_id"], "t1:1")
                 second.send_json(
                     {
@@ -1182,6 +1295,7 @@ class GuiTest(unittest.TestCase):
                 first.send_json(
                     {"type": "user_turn", "turn_id": "t1", "text": "hi"}
                 )
+                self.assertEqual(first.receive_json()["phase"], "starting")
 
                 with client.websocket_connect("/api/session") as second:
                     second.send_json(
@@ -1227,6 +1341,7 @@ class GuiTest(unittest.TestCase):
                 first.send_json(
                     {"type": "user_turn", "turn_id": "t1", "text": "hi"}
                 )
+                self.assertEqual(first.receive_json()["phase"], "starting")
 
                 with client.websocket_connect("/api/session") as second:
                     second.send_json(
@@ -1235,7 +1350,7 @@ class GuiTest(unittest.TestCase):
                             "session_id": "shared",
                             "attachment_id": "page-2",
                             "attach_only": True,
-                            "after_event": 1,
+                            "after_event": 2,
                             "takeover": True,
                         }
                     )
@@ -1269,6 +1384,7 @@ class GuiTest(unittest.TestCase):
                 first.send_json(
                     {"type": "user_turn", "turn_id": "t1", "text": "hi"}
                 )
+                self.assertEqual(first.receive_json()["phase"], "starting")
 
             self.assertFalse(bridge.closed)
             bridge.emit(
@@ -1294,7 +1410,7 @@ class GuiTest(unittest.TestCase):
                         "session_id": "shared",
                         "attachment_id": "page-1",
                         "attach_only": True,
-                        "after_event": 1,
+                        "after_event": 2,
                     }
                 )
                 delta = second.receive_json()
@@ -1333,6 +1449,7 @@ class GuiTest(unittest.TestCase):
                     "attach_only": True,
                 })
                 replay = second.receive_json()
+                self.assertTrue(second.receive_json()["replayed"])
                 current = second.receive_json()
                 self.assertEqual(replay["phase"], "inactive")
                 self.assertTrue(replay["replayed"])
@@ -1437,6 +1554,7 @@ class GuiTest(unittest.TestCase):
                     {"type": "user_turn", "turn_id": "t1", "text": "one"}
                 )
                 _wait_for(client, lambda: len(bridges[0].sent) == 2)
+                self.assertEqual(first.receive_json()["phase"], "starting")
 
                 # Open and run a second session while the first turn is active.
                 with client.websocket_connect("/api/session") as second:
@@ -1449,6 +1567,7 @@ class GuiTest(unittest.TestCase):
                         {"type": "user_turn", "turn_id": "t2", "text": "two"}
                     )
                     _wait_for(client, lambda: len(bridges[1].sent) == 2)
+                    self.assertEqual(second.receive_json()["phase"], "starting")
                     self.assertEqual(
                         {
                             item["session_id"]: item["phase"]

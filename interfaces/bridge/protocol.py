@@ -131,6 +131,7 @@ def runtime_state_message(
     event_sequence: int | None = None,
     runtime_warnings: tuple[str, ...] = (),
     plan: PlanSnapshot | dict[str, object] | None = None,
+    workspace: str | None = None,
 ) -> dict[str, object]:
     """Describe the execution plane independently from Session readiness.
 
@@ -152,6 +153,8 @@ def runtime_state_message(
     }
     if event_sequence is not None:
         message["event_sequence"] = event_sequence
+    if workspace is not None:
+        message["workspace"] = workspace
     return message
 
 

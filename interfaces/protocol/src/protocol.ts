@@ -178,38 +178,46 @@ export type UserQuestion = {
   allow_free_text: boolean;
 };
 
+export type RuntimeState = {
+  /**
+   * Authoritative execution snapshot. The first snapshot after open_session
+   * is the synchronization barrier before commands may be dispatched;
+   * session_ready only describes the Session control plane.
+   */
+  type: 'runtime_state';
+  phase: RuntimePhase;
+  turn_id: string | null;
+  provider: string | null;
+  permission_preset: PermissionPreset;
+  context_window: ContextWindow | null;
+  event_sequence?: number;
+  workspace?: string;
+  jobs: {
+    job_id: string;
+    kind: string;
+    status: 'submitted' | 'running' | 'completed' | 'failed' | 'cancelled';
+  }[];
+  approval: {
+    type: 'approval_request';
+    turn_id: string | null;
+    request_id: string;
+    command: string;
+    kind?: 'shell' | 'mcp';
+    server?: string;
+    tool_name?: string;
+  } | null;
+  question: UserQuestion | null;
+  runtime_warnings?: string[];
+  plan: PlanSnapshot | null;
+};
+
+export type TranscriptCheckpoint = {
+  items: SessionItem[];
+  event_sequence: number;
+};
+
 export type Incoming = (
-  | {
-      /**
-       * Authoritative execution snapshot. The first snapshot after
-       * open_session is the synchronization barrier before commands may be
-       * dispatched; session_ready only describes the Session control plane.
-       */
-      type: 'runtime_state';
-      phase: RuntimePhase;
-      turn_id: string | null;
-      provider: string | null;
-      permission_preset: PermissionPreset;
-      context_window: ContextWindow | null;
-      event_sequence?: number;
-      jobs: {
-        job_id: string;
-        kind: string;
-        status: 'submitted' | 'running' | 'completed' | 'failed' | 'cancelled';
-      }[];
-      approval: {
-        type: 'approval_request';
-        turn_id: string | null;
-        request_id: string;
-        command: string;
-        kind?: 'shell' | 'mcp';
-        server?: string;
-        tool_name?: string;
-      } | null;
-      question: UserQuestion | null;
-      runtime_warnings?: string[];
-      plan: PlanSnapshot | null;
-    }
+  | RuntimeState
   | { type: 'attachment_replaced'; phase: RuntimePhase }
   | {
       type: 'session_ready';
@@ -298,7 +306,15 @@ export type Incoming = (
   | { type: 'turn_cancelled'; turn_id: string }
   | { type: 'turn_failed'; turn_id: string; error: RuntimeFailure }
   | { type: 'fatal'; error: RuntimeFailure }
-) & { event_sequence?: number; replayed?: boolean };
+) & {
+  event_sequence?: number;
+  /** Cursor used by the current snapshot before replaying a pending fatal. */
+  resume_after?: number;
+  runtime?: RuntimeState;
+  /** Replaces the transcript through event_sequence, independent of phase. */
+  transcript?: TranscriptCheckpoint;
+  replayed?: boolean;
+};
 
 export type Outgoing =
   | {

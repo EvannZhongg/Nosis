@@ -213,7 +213,10 @@ describe("SessionSocket synchronization", () => {
     expect(rejected).toHaveBeenCalledWith("provider_set");
     expect(FakeWebSocket.latest.sent).toHaveLength(2);
 
-    FakeWebSocket.latest.receive({ type: "turn_completed", turn_id: "t1", usage: null });
+    FakeWebSocket.latest.receive({
+      type: "turn_completed", turn_id: "t1", usage: null,
+      runtime: { ...snapshot, phase: "idle" },
+    });
     socket.send({ type: "provider_set", provider: "second" });
     expect(FakeWebSocket.latest.sent).toHaveLength(3);
   });

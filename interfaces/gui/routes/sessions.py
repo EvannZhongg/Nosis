@@ -55,23 +55,11 @@ def create_sessions_router(
     async def list_active_sessions() -> list[dict[str, object]]:
         result = []
         for runtime in await active_sessions.list_attachable():
-            projection = runtime.projection
-            items = runtime.items
-            if not runtime.running:
-                items = jsonable_encoder(
-                    store.load(runtime.session_id, recover=True).items
-                )
             result.append(
                 {
                     "session_id": runtime.session_id,
-                    "provider": projection.provider,
-                    "workspace": projection.workspace,
-                    "items": items,
-                    "phase": projection.phase,
-                    "permission_preset": projection.permission_preset,
-                    "context_window": projection.context_window,
-                    "event_sequence": runtime.delivered_event_sequence,
-                    "plan": projection.plan,
+                    **runtime.state,
+                    **runtime.transcript,
                 }
             )
         return result
@@ -94,17 +82,11 @@ def create_sessions_router(
     async def get_session(session_id: str) -> object:
         try:
             runtime = await active_sessions.get(session_id)
-            if runtime is not None and runtime.running:
-                projection = runtime.projection
+            if runtime is not None and runtime.attachable:
                 return {
                     "session_id": runtime.session_id,
-                    "items": runtime.items,
-                    "workspace": projection.workspace,
-                    "provider": projection.provider,
-                    "permission_preset": projection.permission_preset,
-                    "context_window": projection.context_window,
-                    "event_sequence": runtime.delivered_event_sequence,
-                    "plan": projection.plan,
+                    **runtime.state,
+                    **runtime.transcript,
                 }
             session = store.load(session_id, recover=True)
             return jsonable_encoder(
@@ -114,16 +96,8 @@ def create_sessions_router(
                     "workspace": session.workspace,
                     "provider": store.provider_for(session.session_id),
                     "permission_preset": session.permission_preset.value,
-                    "context_window": (
-                        runtime.projection.context_window
-                        if runtime is not None
-                        else None
-                    ),
-                    "event_sequence": (
-                        runtime.delivered_event_sequence
-                        if runtime is not None
-                        else 0
-                    ),
+                    "context_window": None,
+                    "event_sequence": 0,
                     "plan": (
                         plan_snapshot_to_dict(session.plan)
                         if session.plan is not None
@@ -273,13 +247,13 @@ def create_sessions_router(
             await websocket.close()
             return
         attachment = await runtime.attach(
-            after_event,
+            0 if created else after_event,
             attachment_id,
             takeover=takeover,
         )
         if attachment is None:
             await websocket.send_json(
-                attachment_replaced_message(phase=runtime.projection.phase)
+                attachment_replaced_message(phase=runtime.state["phase"])
             )
             await websocket.close()
             return
@@ -372,8 +346,7 @@ async def _relay(
                 continue
             message_type = message.get("type")
             if message_type == "cancel":
-                if message.get("turn_id") == runtime.projection.turn_id:
-                    runtime.cancel_turn()
+                runtime.send(message)
             elif message_type in RELAYED_MESSAGE_TYPES:
                 runtime.send(message)
 

@@ -25,7 +25,7 @@ nosis-gui --workspace ~/projects/my-project
 - 上传附件、下载文件和签发短期图片访问 URL
 - 提供限制在当前 Session Workspace 内的文件树
 
-`ActiveSessionRegistry` 按 Session 保存后台运行的 `ActiveSession`。页面切换或临时断线不会取消 Turn；重新连接可以从 `event_sequence` 继续。一个 Session 同时只有一个控制页面，新页面只有显式 takeover 才替换现有 attachment。
+`ActiveSessionRegistry` 按 Session 保存后台运行的 `ActiveSession`。页面切换或临时断线不会取消 Turn；重新连接可以从 Bridge 分配的 `event_sequence` 继续。宿主缓存 Bridge 的完整运行快照和 transcript 检查点，不再维护运行状态 reducer 或按 phase 推导续传游标。一个 Session 同时只有一个控制页面，新页面只有显式 takeover 才替换现有 attachment。
 
 HTTP / WebSocket 路由按模块拆分：
 

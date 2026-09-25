@@ -34,13 +34,14 @@ Bridge 路由的输入包括：
 - 设置读取及 Provider、Agent、路由更新
 - `shutdown`
 
-Bridge 把 Core 的 `AgentEvent`、Runtime phase、计划、MCP 状态和结束结果转换为协议消息。Tool 的完整大输出不会经协议发送；前端只收到执行状态，模型所需结果和 Artifact 由 Core 处理。
+Bridge 把 Core 的 `AgentEvent`、Runtime phase、计划、MCP 状态和结束结果转换为协议消息。实时 Tool 事件只包含执行状态；会话检查点包含 Core 已规范化的对话内容与 Artifact 引用，大输出仍由 Core 落盘。
 
 ## 执行状态与交互
 
 Bridge 维护的是协议侧投影，而不是另一套 Runtime 状态。它负责：
 
 - 发布包含 phase、turn、授权、提问、Job、计划和上下文窗口的 `runtime_state`
+- 为事件分配序号，并发送与会话内容绑定的 transcript 检查点及续传游标
 - 将同步的授权和用户提问等待转换为协议 request / response
 - 把运行中的新输入转发为 steer
 - 把异常转换成结构化 `turn_failed` 或 `fatal`
@@ -56,6 +57,7 @@ Bridge 维护的是协议侧投影，而不是另一套 Runtime 状态。它负�
 | `__main__.py` | 独立进程入口和协议 stdout 隔离 |
 | `bridge.py` | 消息路由、Runtime 回调、交互等待和状态投影 |
 | `protocol.py` | Python 端编解码与 Core event → 协议消息转换 |
+| `event_stream.py` | 事件序号、会话检查点与续传游标 |
 | `process.py` | Bridge 进程组取消 |
 | `managed_workspaces.py` | scratch Workspace 生命周期辅助 |
 

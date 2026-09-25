@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useRef, useState, useEffect } from "react";
 import { useExternalStoreRuntime, type AppendMessage } from "@assistant-ui/react";
 import { runtimeIsActive, type ContextWindow, type PermissionPreset, type PlanSnapshot, type RuntimePhase, type UserQuestion } from "@nosis/protocol";
-import { createScratchWorkspace, get, releaseActiveSession, selectWorkspace, sessionUrl, uploadAttachments, type ModelOption, type Session, type UserAttachment } from "../api";
+import { createScratchWorkspace, releaseActiveSession, selectWorkspace, uploadAttachments, type ModelOption, type Session, type UserAttachment } from "../api";
 import { SessionSocket } from "../session";
 import { applyMessage, isTurnActivity, toMessages, type Feedback, type TranscriptItem } from "../transcript";
 import { composerConnectionGate } from "./composerState";
@@ -159,7 +159,7 @@ export function useSessionRuntime({
     setAlerts((current) => ({ ...current, [next.id]: next }));
   }, []);
 
-  const endTurn = useCallback(async () => {
+  const endTurn = useCallback(() => {
     runningRef.current = false;
     activeTurnIdRef.current = null;
     awaitingSessionActivityRef.current = false;
@@ -171,17 +171,8 @@ export function useSessionRuntime({
     setApproval(null);
     setQuestion(null);
     setQuestionDraft("");
-    try {
-      // The protocol omits tool output; the stored session has it.
-      const stored = await get<Session>(sessionUrl(session.session_id));
-      // A session without stored items would erase the live transcript.
-      if (stored.items.length) showItems(stored.items);
-      setPlan(stored.plan ?? null);
-    } catch {
-      // A turn without stored transcript items keeps the live transcript.
-    }
     onTurnEnd();
-  }, [session.session_id, onBusyChange, onTurnEnd, showItems]);
+  }, [onBusyChange, onTurnEnd]);
 
   function clearPendingSettings() {
     setPendingPermissionPreset(null);
@@ -329,7 +320,6 @@ export function useSessionRuntime({
           setQuestionDraft("");
         }
         if (applied.permissionPreset !== undefined) setPermissionPreset(applied.permissionPreset);
-        if (message.type === "fatal") eventCounterRef.current = 0;
         if (applied.finished) void endTurn();
       },
       onClose: () => {

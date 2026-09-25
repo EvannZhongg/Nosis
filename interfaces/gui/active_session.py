@@ -6,10 +6,10 @@ from collections import deque
 from fastapi.encoders import jsonable_encoder
 
 from agent_core import JsonlSessionStore, Workspace, plan_snapshot_to_dict
-from interfaces.bridge.protocol import attachment_replaced_message
+from interfaces.bridge.protocol import attachment_replaced_message, runtime_state_message
+from interfaces.bridge.event_stream import runtime_is_active
 
 from .bridge_process import BridgeProcess
-from .runtime_projection import RuntimeProjection
 
 
 EVENT_REPLAY_LIMIT = 512
@@ -31,9 +31,16 @@ class ActiveSession:
         bridge: BridgeProcess,
     ) -> None:
         self.session_id = session_id
-        self.items = items
         self.bridge = bridge
-        self.projection = RuntimeProjection(provider, workspace)
+        self.state = runtime_state_message(
+            phase="inactive", approval=None, question=None, provider=provider,
+            workspace=workspace, permission_preset="ask_for_approval",
+            context_window=None, jobs=[],
+        )
+        self.transcript = {"items": items, "event_sequence": 0}
+        self._pending_turn: str | None = None
+        self._snapshot_ready = asyncio.Event()
+        self._resume_after = 0
         self.done = False
         self._closed = False
         self._fatal_pending = False
@@ -58,6 +65,7 @@ class ActiveSession:
     ] | None:
         claimed = False
         while True:
+            await self._snapshot_ready.wait()
             async with self._lock:
                 replacing = (
                     self._attachment_id is not None
@@ -78,17 +86,7 @@ class ActiveSession:
                         for event in self._events
                         if event["event_sequence"] > after_event
                     ]
-                    state = self.projection.runtime_state(
-                        # The page holds everything the stream emitted, so
-                        # its cursor is the newest event; a pending fatal is
-                        # left out of it so that a page attaching later
-                        # still asks for one.
-                        event_sequence=(
-                            self.delivered_event_sequence
-                            if self._fatal_pending
-                            else self._event_sequence
-                        )
-                    )
+                    state = {**self.state, "event_sequence": self._resume_after}
                     if self.done:
                         queue.put_nowait(None)
                     return queue, events, state
@@ -97,7 +95,7 @@ class ActiveSession:
                 if replacing:
                     previous.put_nowait(
                         attachment_replaced_message(
-                            phase=self.projection.phase
+                            phase=self.state["phase"]
                         )
                     )
                 previous.put_nowait(None)
@@ -117,20 +115,10 @@ class ActiveSession:
                     self._subscriber_detached = None
 
     def send(self, message: dict[str, object]) -> None:
-        self.projection.apply_client_message(message)
         if message.get("type") == "user_turn":
-            content: object = str(message.get("text", ""))
-            attachments = message.get("attachments")
-            if isinstance(attachments, list) and attachments:
-                content = [
-                    {"type": "text", "text": str(message.get("text", ""))},
-                    *attachments,
-                ]
-            self.items.append({"role": "user", "content": content})
+            self._pending_turn = str(message["turn_id"])
+            self._snapshot_ready.clear()
         self.bridge.send(message)
-
-    def cancel_turn(self) -> None:
-        self.bridge.cancel_turn()
 
     def owns_attachment(self, attachment_id: str) -> bool:
         return self._attachment_id == attachment_id
@@ -141,7 +129,9 @@ class ActiveSession:
 
     @property
     def running(self) -> bool:
-        return self.projection.running
+        return not self.done and (
+            self._pending_turn is not None or runtime_is_active(self.state["phase"])
+        )
 
     @property
     def fatal_pending(self) -> bool:
@@ -149,22 +139,6 @@ class ActiveSession:
 
     @property
     def event_sequence(self) -> int:
-        return self._event_sequence
-
-    @property
-    def delivered_event_sequence(self) -> int:
-        """The newest event the items handed out with this Runtime reflect.
-
-        A running Runtime holds only the user turns it accepted, so a page
-        that reads it must still be sent every event it emitted. An idle one
-        is read from its journal, which already holds normal turn events. A
-        fatal is not part of that transcript and remains pending until a page
-        receives it.
-        """
-        if self.running:
-            return 0
-        if self._fatal_pending:
-            return max(0, self._event_sequence - 1)
         return self._event_sequence
 
     def mark_fatal_delivered(self) -> None:
@@ -188,24 +162,37 @@ class ActiveSession:
                 message = await self.bridge.read()
                 if message is None:
                     break
-                self.projection.apply_bridge_message(message)
-                if message.get("type") == "fatal":
-                    self._fatal_pending = True
                 async with self._lock:
-                    self._event_sequence += 1
-                    sequenced = {**message, "event_sequence": self._event_sequence}
-                    self._events.append(sequenced)
+                    self._event_sequence = message["event_sequence"]
+                    self._resume_after = message["resume_after"]
+                    state = (
+                        message if message["type"] == "runtime_state"
+                        else message.get("runtime")
+                    )
+                    if state is not None:
+                        self.state = {
+                            key: value for key, value in state.items()
+                            if key not in {"event_sequence", "resume_after", "transcript"}
+                        }
+                        if self._pending_turn is None or self.state["turn_id"] == self._pending_turn:
+                            self._pending_turn = None
+                            self._snapshot_ready.set()
+                    if "transcript" in message:
+                        self.transcript = message["transcript"]
+                    if message["type"] in {"turn_completed", "turn_cancelled", "turn_failed", "fatal"}:
+                        self._pending_turn = None
+                        self._snapshot_ready.set()
+                    if message["type"] == "fatal":
+                        self._fatal_pending = True
+                    self._events.append(message)
                     if self._subscriber is not None:
-                        self._subscriber.put_nowait(sequenced)
+                        self._subscriber.put_nowait(message)
                 if message.get("type") == "fatal":
                     break
         finally:
             unexpected_exit = not self._closed
-            self.projection.bridge_finished(
-                unexpected=unexpected_exit,
-                returncode=self.bridge.returncode,
-            )
             self.done = True
+            self._snapshot_ready.set()
             if unexpected_exit:
                 self._closed = True
                 await self.bridge.close()
@@ -243,8 +230,8 @@ class ActiveSessionRegistry:
             selected_workspace = str(workspace.path)
             if current is not None and not current.done:
                 same_configuration = (
-                    current.projection.provider == selected_provider
-                    and current.projection.workspace == selected_workspace
+                    current.state["provider"] == selected_provider
+                    and current.state["workspace"] == selected_workspace
                 )
                 if (
                     attach_only
@@ -268,7 +255,7 @@ class ActiveSessionRegistry:
                 jsonable_encoder(stored.items),
                 bridge,
             )
-            runtime.projection.plan = (
+            runtime.state["plan"] = (
                 plan_snapshot_to_dict(stored.plan)
                 if stored.plan is not None
                 else None
@@ -300,7 +287,7 @@ class ActiveSessionRegistry:
             runtime = self._sessions.get(session_id)
             if runtime is None:
                 return False
-            if provider is not None and runtime.projection.provider != provider:
+            if provider is not None and runtime.state["provider"] != provider:
                 return False
             if (
                 attachment_id is not None

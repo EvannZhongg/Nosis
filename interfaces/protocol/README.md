@@ -54,7 +54,13 @@ open_session
 
 ## 事件顺序与恢复
 
-协议消息可以携带 `event_sequence`，GUI 使用 `after_event` 从已知序号后继续接收事件。历史回放消息带 `replayed`，前端应据此避免把旧快照当作新命令确认。
+Bridge 为输出消息分配单调递增的 `event_sequence`。GUI 原样保存序号，并用 `after_event` 请求后续事件；不得根据 phase 推算或重置会话内容的游标。
+
+运行状态变化时，消息本身是 `runtime_state`，或在 `runtime` 字段中携带同一结构的完整快照。GUI 宿主只替换缓存，不根据命令、Tool 或结束事件重建运行状态。尚未收到 Bridge 确认的 Turn 仅作为进程释放与附着的屏障。
+
+`transcript: { items, event_sequence }` 是会话检查点：它替换该游标之前的会话内容。Bridge 在打开 Session、接受用户输入后的首个上下文事件，以及 Turn 结束时发送检查点。HTTP 历史接口返回缓存的 items 和对应游标，无论当前是否正在运行。后续事件从此游标继续，下一 Turn 不会重复回放上一 Turn。
+
+`resume_after` 是重新发送当前运行快照时使用的游标；fatal 不属于会话内容，因此此值停在 fatal 之前，确保断线页面仍能接收该错误。历史回放消息带 `replayed`，前端应据此避免把旧快照当作新命令确认。新 Bridge 的序号重新从 1 开始，宿主建立新进程时忽略上一进程的续传游标。
 
 同一 GUI Session 的页面所有权由 `attachment_id`、`attach_only`、`takeover` 和 `attachment_replaced` 表达。这些字段只处理连接附着，不承载 Session 或 Agent 语义。
 
