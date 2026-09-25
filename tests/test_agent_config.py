@@ -113,13 +113,16 @@ class AgentConfigTest(unittest.TestCase):
                 }
             )
 
-    def test_rejects_non_positive_limit(self) -> None:
-        with self.assertRaises(ValueError):
-            self.load({"max_same_tool_calls": 0, "main_agent": {"tools": ENABLED_TOOLS}})
-
-    def test_rejects_boolean_limit(self) -> None:
-        with self.assertRaises(ValueError):
-            self.load({"max_same_tool_calls": True, "main_agent": {"tools": ENABLED_TOOLS}})
+    def test_rejects_invalid_max_same_tool_calls(self) -> None:
+        for value in (0, True):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    self.load(
+                        {
+                            "max_same_tool_calls": value,
+                            "main_agent": {"tools": ENABLED_TOOLS},
+                        }
+                    )
 
     def test_rejects_non_positive_output_reserve(self) -> None:
         with self.assertRaises(ValueError):

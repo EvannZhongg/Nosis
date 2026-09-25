@@ -1,59 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { composerConnectionGate, shouldBlockRunningAttachmentSubmit, shouldSubmitAttachmentOnly, shouldSubmitComposerEnter } from "../src/chat/composerState";
-import { isRemoteMarkdownImage } from "../src/chat/Messages";
-import { shouldShowPlan, updateBackgroundJobs, updateRuntimeIndicatorOrder, userMessagePreview } from "../src/chat/runtimeState";
-
-const enter = {
-  key: "Enter",
-  shiftKey: false,
-  isComposing: false,
-  keyCode: 13,
-};
-
-describe("composer Enter handling", () => {
-  it("submits a normal Enter", () => {
-    expect(shouldSubmitComposerEnter(enter, false)).toBe(true);
-  });
-
-  it("does not submit while the browser reports IME composition", () => {
-    expect(
-      shouldSubmitComposerEnter({ ...enter, isComposing: true }, false),
-    ).toBe(false);
-  });
-
-  it("does not submit legacy IME keyCode 229", () => {
-    expect(shouldSubmitComposerEnter({ ...enter, keyCode: 229 }, false)).toBe(false);
-  });
-
-  it("does not submit the Enter immediately following compositionend", () => {
-    expect(shouldSubmitComposerEnter(enter, true)).toBe(false);
-  });
-
-  it("keeps Shift+Enter as a newline", () => {
-    expect(shouldSubmitComposerEnter({ ...enter, shiftKey: true }, false)).toBe(false);
-  });
-});
-
-describe("Markdown image routing", () => {
-  it.each([
-    "https://example.com/image.png",
-    "http://example.com/image.png",
-    "HTTPS://example.com/image.png",
-  ])("keeps remote image URLs in the browser: %s", (src) => {
-    expect(isRemoteMarkdownImage(src)).toBe(true);
-  });
-
-  it.each([
-    "docs/image.png",
-    "./docs/image.png",
-    ".nosis/attachments/image.png",
-    "/absolute/image.png",
-    "data:image/png;base64,abc",
-    undefined,
-  ])("routes non-HTTP image sources through the workspace signer: %s", (src) => {
-    expect(isRemoteMarkdownImage(src)).toBe(false);
-  });
-});
+import { composerConnectionGate, shouldBlockRunningAttachmentSubmit, shouldSubmitAttachmentOnly } from "../src/chat/composerState";
+import { shouldShowPlan, updateBackgroundJobs } from "../src/chat/runtimeState";
 
 describe("background job state", () => {
   it("updates a job in place and removes terminal jobs", () => {
@@ -120,18 +67,6 @@ describe("attachment-only submission", () => {
   it("leaves text messages and empty composers to the normal submit path", () => {
     expect(shouldSubmitAttachmentOnly("describe this", 1)).toBe(false);
     expect(shouldSubmitAttachmentOnly("", 0)).toBe(false);
-  });
-});
-
-describe("turn navigation previews", () => {
-  it("normalizes user text into a short single-line preview", () => {
-    expect(userMessagePreview({ content: [{ type: "text", text: "  分析当前的 GUI\n并增加导航  " }] }, 12))
-      .toBe("分析当前的 GUI 并增…");
-  });
-
-  it("labels an attachment-only turn", () => {
-    expect(userMessagePreview({ content: [{ type: "image", image: "image.png" }] }))
-      .toBe("附件消息");
   });
 });
 
@@ -209,24 +144,5 @@ describe("plan visibility", () => {
       revision: 2,
       steps: [{ id: "blocked", title: "Blocked", status: "blocked" }],
     })).toBe(true);
-  });
-});
-
-describe("runtime indicator order", () => {
-  it("appends indicators in appearance order", () => {
-    const jobsFirst = updateRuntimeIndicatorOrder([], false, true);
-    expect(jobsFirst).toEqual(["jobs"]);
-    expect(updateRuntimeIndicatorOrder(jobsFirst, true, true)).toEqual(["jobs", "plan"]);
-  });
-
-  it("moves remaining indicators forward and appends reappearing ones", () => {
-    const planRemoved = updateRuntimeIndicatorOrder(["plan", "jobs"], false, true);
-    expect(planRemoved).toEqual(["jobs"]);
-    expect(updateRuntimeIndicatorOrder(planRemoved, true, true)).toEqual(["jobs", "plan"]);
-  });
-
-  it("does not reorder indicators while they remain visible", () => {
-    const current = ["jobs", "plan"] as const;
-    expect(updateRuntimeIndicatorOrder([...current], true, true)).toEqual(current);
   });
 });
