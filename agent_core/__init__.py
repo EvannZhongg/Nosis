@@ -8,12 +8,12 @@ from .agent import (
     ContextWindowEvent,
     ToolBatchStartedEvent,
     ToolCallEvent,
-    ToolCallLimitExceededError,
     ToolMediaEvent,
     ToolResultEvent,
     UserSteerAppliedEvent,
     JobStatusEvent,
 )
+from .loop_policy import ToolCallLimitExceededError
 from .config import (
     AgentConfig,
     ContextCompressionConfig,

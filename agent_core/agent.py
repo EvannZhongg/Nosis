@@ -18,16 +18,7 @@ from .tool_result import ToolResultNormalizer
 from .tool_batch import ToolBatchExecutor
 from .tools import ToolCall, ToolExecutionContext, ToolResult, ToolSet
 from .turn_control import AgentCancelled, TurnControl, UserSteer
-
-
-class ToolCallLimitExceededError(RuntimeError):
-    def __init__(self, tool_name: str, limit: int) -> None:
-        self.tool_name = tool_name
-        self.limit = limit
-        super().__init__(
-            f"tool call '{tool_name}' exceeded the maximum of "
-            f"{limit} identical consecutive executions"
-        )
+from .loop_policy import ToolCallRepetitionGuard, TurnContinuationPolicy
 
 
 @dataclass(frozen=True)
@@ -230,8 +221,16 @@ class Agent:
         run_item_start = len(self._session.items)
         turn_id = self._session.begin_turn(turn_id)
         model_call_index = 0
-        previous_tool_call_key: tuple[str, str] | None = None
-        identical_tool_calls = 0
+        repetition = ToolCallRepetitionGuard(self._config.max_same_tool_calls)
+        continuation = TurnContinuationPolicy(
+            turn_control, repetition,
+            apply_jobs=lambda: _apply_job_results(
+                self._session, self._execution_context, turn_id, self._now,
+            ),
+            append_steers=lambda steers: _append_steering(
+                self._session, steers, self._now, on_event,
+            ),
+        )
         request_timestamp_utc = self._now().astimezone(timezone.utc)
 
         self._session.add_item(
@@ -241,28 +240,15 @@ class Agent:
             attachments=attachments,
         )
         while True:
-            _raise_if_cancelled(turn_control)
-            applied_jobs, _pending_jobs = _apply_job_results(
-                self._session,
-                self._execution_context,
-                turn_id,
-                self._now,
-            )
-            if applied_jobs:
-                previous_tool_call_key = None
-                identical_tool_calls = 0
+            continuation.raise_if_cancelled()
+            continuation.apply_jobs()
             request = self._context.build_request(self._tools.definitions)
             input_tokens = self._provider.count_input_tokens(request)
             if on_event is not None:
                 on_event(ContextWindowEvent(self._context.window(input_tokens)))
             if self._context.should_archive(input_tokens):
                 self._context.archive()
-                _apply_steering(
-                    self._session,
-                    turn_control,
-                    self._now,
-                    on_event,
-                )
+                continuation.apply_steering()
                 continue
             if input_tokens > self._context.hard_limit:
                 raise ContextWindowExceededError(
@@ -300,7 +286,7 @@ class Agent:
                     request,
                     on_text_delta,
                     on_reasoning_delta,
-                    lambda: _raise_if_cancelled(turn_control),
+                    continuation.raise_if_cancelled,
                 )
             except ProviderProtocolError as error:
                 raise ProviderProtocolError(
@@ -320,29 +306,10 @@ class Agent:
                 total_tokens=(usage.total_tokens if usage is not None else None),
                 has_tool_calls=bool(response.tool_calls),
             )
-            _raise_if_cancelled(turn_control)
+            continuation.raise_if_cancelled()
 
             if response.tool_calls:
-                next_tool_call_key = previous_tool_call_key
-                next_identical_calls = identical_tool_calls
-                for tool_call in response.tool_calls:
-                    tool_call_key = _tool_call_key(tool_call)
-                    if tool_call_key == next_tool_call_key:
-                        next_identical_calls += 1
-                    else:
-                        next_tool_call_key = tool_call_key
-                        next_identical_calls = 1
-
-                    if (
-                        next_identical_calls
-                        > self._config.max_same_tool_calls
-                    ):
-                        raise ToolCallLimitExceededError(
-                            tool_call.name,
-                            self._config.max_same_tool_calls,
-                        )
-                previous_tool_call_key = next_tool_call_key
-                identical_tool_calls = next_identical_calls
+                repetition.check(response.tool_calls)
 
                 assistant_timestamp_utc = self._now().astimezone(timezone.utc)
                 self._session.add_item(
@@ -407,24 +374,9 @@ class Agent:
                     on_result=emit_result,
                     on_media=emit_media,
                 )
-                _raise_if_cancelled(turn_control)
-                applied_jobs, _pending_jobs = _apply_job_results(
-                    self._session,
-                    self._execution_context,
-                    turn_id,
-                    self._now,
-                )
-                if applied_jobs:
-                    previous_tool_call_key = None
-                    identical_tool_calls = 0
-                if _apply_steering(
-                    self._session,
-                    turn_control,
-                    self._now,
-                    on_event,
-                ):
-                    previous_tool_call_key = None
-                    identical_tool_calls = 0
+                continuation.raise_if_cancelled()
+                continuation.apply_jobs()
+                continuation.apply_steering()
                 continue
 
             if response.content is None:
@@ -454,45 +406,11 @@ class Agent:
                     )
                 )
                 on_event(ContextWindowEvent(self.context_window()))
-            applied_jobs, pending_jobs = _apply_job_results(
-                self._session,
-                self._execution_context,
-                turn_id,
-                self._now,
-            )
-            if applied_jobs:
-                previous_tool_call_key = None
-                identical_tool_calls = 0
-                continue
             jobs = self._execution_context.jobs
-            if jobs is not None and pending_jobs:
-                while jobs.has_pending(turn_id):
-                    _raise_if_cancelled(turn_control)
-                    if jobs.wait_for_update(turn_id):
-                        break
-                    if _apply_steering(
-                        self._session,
-                        turn_control,
-                        self._now,
-                        on_event,
-                    ):
-                        previous_tool_call_key = None
-                        identical_tool_calls = 0
-                        break
-                _raise_if_cancelled(turn_control)
+            if continuation.after_response(
+                lambda: jobs.wait_for_update(turn_id) if jobs is not None else False,
+            ):
                 continue
-            if turn_control is not None:
-                steers = turn_control.finish()
-                if steers:
-                    _append_steering(
-                        self._session,
-                        steers,
-                        self._now,
-                        on_event,
-                    )
-                    previous_tool_call_key = None
-                    identical_tool_calls = 0
-                    continue
             return AgentRunResult(
                 request=request,
                 response=response,
@@ -501,26 +419,6 @@ class Agent:
                 request_timestamp_utc=request_timestamp_utc,
                 response_timestamp_utc=response_timestamp_utc,
             )
-
-
-def _raise_if_cancelled(turn_control: TurnControl | None) -> None:
-    if turn_control is not None and turn_control.cancelled:
-        raise AgentCancelled
-
-
-def _apply_steering(
-    session: Session,
-    turn_control: TurnControl | None,
-    now: Callable[[], datetime],
-    on_event: Callable[[AgentEvent], None] | None,
-) -> bool:
-    if turn_control is None:
-        return False
-    steers = turn_control.drain_steering()
-    if not steers:
-        return False
-    _append_steering(session, steers, now, on_event)
-    return True
 
 
 def _append_steering(
@@ -592,13 +490,3 @@ def _apply_job_results(
         origin="job_result",
     )
     return True, pending
-
-
-def _tool_call_key(tool_call: ToolCall) -> tuple[str, str]:
-    normalized_arguments = json.dumps(
-        tool_call.arguments,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return tool_call.name, normalized_arguments

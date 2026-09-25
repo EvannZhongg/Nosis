@@ -1,6 +1,7 @@
 import json
 import threading
 import unittest
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -166,6 +167,33 @@ def clock(*values: datetime):
 
 
 class AgentTest(unittest.TestCase):
+    def test_steering_during_compression_resets_tool_repetition(self) -> None:
+        control = TurnControl()
+        call = ToolCall("call", "echo", {"text": "again"})
+        provider = SteeringProvider(
+            [LLMResponse(content=None, tool_calls=(call,)),
+             LLMResponse(content="compressed"),
+             LLMResponse(content=None, tool_calls=(call,)),
+             LLMResponse(content="done")],
+            control, {2: "try once more"},
+        )
+        provider._input_tokens = iter([1, 800, 1, 1])
+        session = Session("compression-steer")
+        agent = Agent(
+            provider, session, "system", CONSOLIDATOR_PROMPT,
+            replace(AGENT_CONFIG, max_same_tool_calls=1,
+                    context=ContextCompressionConfig(keep_recent_units=1)),
+            tool_set(EchoTool(), session=session),
+            ToolExecutionContext(workspace=TEST_WORKSPACE, session=session),
+        )
+
+        result = agent.run("work", turn_control=control)
+
+        self.assertEqual(result.response.content, "done")
+        self.assertEqual(session.compression_count, 1)
+        self.assertEqual(len([item for item in session.items if item.role == "tool"]), 2)
+        self.assertTrue(any(item.content == "try once more" for item in session.items))
+
     def test_large_context_default_compression_threshold_is_fixed(self) -> None:
         provider = MockProvider([], max_context_tokens=1_048_576)
         context = ContextManager(
