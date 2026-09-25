@@ -1,11 +1,14 @@
+import asyncio
 import os
 import sys
 import time
+import threading
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
-from agent_core import Session, ToolCall, ToolExecutionContext, Workspace
+from agent_core import AgentCancelled, Session, ToolCall, ToolExecutionContext, TurnControl, Workspace
 from agent_core.mcp.config import (
     load_mcp_config,
     load_mcp_server_map,
@@ -275,10 +278,11 @@ class McpToolTest(unittest.TestCase):
 
     def test_qualifies_remote_name_and_delegates_through_context(self) -> None:
         calls = []
+        control = TurnControl()
 
         class Manager:
-            def call_tool(self, server, tool, arguments):
-                calls.append((server, tool, arguments))
+            def call_tool(self, server, tool, arguments, *, cancellation=None):
+                calls.append((server, tool, arguments, cancellation))
                 return {"ok": True}
 
         adapted = McpTool("demo", "echo.text", "Echo", {"type": "object"})
@@ -286,12 +290,13 @@ class McpToolTest(unittest.TestCase):
             workspace=Workspace(Path.cwd()),
             session=Session(),
             mcp=Manager(),
+            cancellation=control,
         )
 
         self.assertEqual(adapted.name, "mcp__demo__echo_text")
         self.assertEqual(adapted.definition(context).name, "mcp__demo__echo_text")
         self.assertEqual(adapted.execute({"text": "hi"}, context), {"ok": True})
-        self.assertEqual(calls, [("demo", "echo.text", {"text": "hi"})])
+        self.assertEqual(calls, [("demo", "echo.text", {"text": "hi"}, control)])
         self.assertEqual(qualified_tool_name("demo", "echo.text"), "mcp__demo__echo_text")
 
     def test_is_unavailable_without_a_manager(self) -> None:
@@ -321,6 +326,59 @@ class McpToolTest(unittest.TestCase):
 
 
 class McpClientManagerTest(unittest.TestCase):
+    def test_cancel_stops_only_the_active_request_and_keeps_the_manager_usable(self) -> None:
+        entered = threading.Event()
+        stopped = threading.Event()
+        calls = []
+
+        class RemoteSession:
+            async def call_tool(self, name, arguments):
+                calls.append(name)
+                if name == "slow":
+                    entered.set()
+                    try:
+                        await asyncio.Event().wait()
+                    finally:
+                        stopped.set()
+                return SimpleNamespace(is_error=False, model_dump=lambda **kw: {"ok": True})
+
+        async def start_server(stack, config):
+            return RemoteSession(), ()
+
+        config = load_mcp_config({"enabled": True, "servers": {
+            "fake": {"transport": "stdio", "command": sys.executable, "call_timeout_seconds": 2},
+        }})
+        manager = McpClientManager(config, Path.cwd())
+        control = TurnControl()
+        errors = []
+
+        def call():
+            try:
+                manager.call_tool("fake", "slow", {}, cancellation=control)
+            except BaseException as error:
+                errors.append(error)
+
+        with patch.object(manager, "_start_server", start_server):
+            manager.start()
+        thread = threading.Thread(target=call, daemon=True)
+        thread.start()
+        try:
+            self.assertTrue(entered.wait(3))
+            control.cancel()
+            thread.join(3)
+            self.assertFalse(thread.is_alive())
+            self.assertTrue(stopped.is_set())
+            self.assertEqual(len(errors), 1)
+            self.assertIsInstance(errors[0], AgentCancelled)
+            with self.assertRaises(AgentCancelled):
+                manager.call_tool("fake", "never-start", {}, cancellation=control)
+            self.assertEqual(manager.call_tool("fake", "echo", {}), {"ok": True})
+            self.assertEqual(calls, ["slow", "echo"])
+        finally:
+            control.cancel()
+            thread.join(3)
+            manager.close()
+
     def test_discovers_calls_and_closes_fake_stdio_server(self) -> None:
         config = load_mcp_config(
             {

@@ -6,8 +6,10 @@ from datetime import datetime, timezone
 
 from agent_core import (
     Agent,
+    AgentCancelled,
     AgentConfig,
     CommandExecutionResult,
+    CommandCancelled,
     ExecutionRouter,
     JobManager,
     LLMProvider,
@@ -87,6 +89,73 @@ class ImmediateExecutor:
 
 
 class BackgroundJobTest(unittest.TestCase):
+    def test_turn_control_cancels_foreground_shell_batches_without_leaking(self) -> None:
+        for count in (1, 2):
+            with self.subTest(count=count):
+                barrier = threading.Barrier(count + 1, timeout=3)
+                release = threading.Event()
+                signals = []
+
+                class ConcurrentShell(ShellTool):
+                    concurrent = True
+
+                class Executor:
+                    def execute(self, command, timeout_seconds=60, cancellation=None):
+                        signals.append(cancellation)
+                        if not release.is_set():
+                            barrier.wait()
+                        while not release.wait(0.01):
+                            if cancellation is not None and cancellation.cancelled:
+                                raise CommandCancelled
+                        return CommandExecutionResult(command, 0, "done", "")
+
+                calls = tuple(ToolCall(f"call-{i}", "shell", {"command": "slow"})
+                              for i in range(count))
+                provider = SequencedProvider([
+                    LLMResponse(None, tool_calls=calls),
+                    LLMResponse(None, tool_calls=calls),
+                    LLMResponse("done"),
+                ])
+                session = Session("foreground")
+                executor = Executor()
+                context = ToolExecutionContext(
+                    workspace=Workspace(Path(__file__).parent), session=session,
+                    execution_router=ExecutionRouter(executor, executor),
+                )
+                agent = Agent(provider, session, "system", CONSOLIDATOR_PROMPT, CONFIG,
+                              ToolCatalog((ConcurrentShell(),)).select(("shell",), context), context)
+                control = TurnControl()
+                errors = []
+
+                def run():
+                    try:
+                        agent.run("run", turn_id="first", turn_control=control)
+                    except BaseException as error:
+                        errors.append(error)
+
+                thread = threading.Thread(target=run, daemon=True)
+                thread.start()
+                try:
+                    barrier.wait()
+                    control.cancel()
+                    thread.join(3)
+                    self.assertFalse(thread.is_alive())
+                    self.assertEqual(len(errors), 1)
+                    self.assertIsInstance(errors[0], AgentCancelled)
+                    self.assertEqual([item.status for item in session.tool_executions.values()],
+                                     ["cancelled"] * count)
+                    self.assertEqual(session.turns["first"].status, "cancelled")
+                    self.assertIsNone(session.turns["first"].error)
+                    self.assertIsNone(context.cancellation)
+                finally:
+                    release.set()
+                    thread.join(3)
+
+                next_control = TurnControl()
+                agent.run("again", turn_id="second", turn_control=next_control)
+                self.assertEqual(signals, [control] * count + [next_control] * count)
+                self.assertEqual(session.turns["second"].status, "completed")
+
     def test_background_shell_does_not_block_the_next_model_call(self) -> None:
         call = ToolCall(
             "call-1",

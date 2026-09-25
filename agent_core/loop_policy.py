@@ -4,7 +4,7 @@ import json
 from typing import Callable
 
 from .tools import ToolCall
-from .turn_control import AgentCancelled, TurnControl, UserSteer
+from .turn_control import TurnControl, UserSteer
 
 
 class ToolCallLimitExceededError(RuntimeError):
@@ -57,8 +57,8 @@ class TurnContinuationPolicy:
         self._append_steers = append_steers
 
     def raise_if_cancelled(self) -> None:
-        if self.control is not None and self.control.cancelled:
-            raise AgentCancelled
+        if self.control is not None:
+            self.control.raise_if_cancelled()
 
     def apply_jobs(self) -> tuple[bool, bool]:
         applied, pending = self._apply_jobs()

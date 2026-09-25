@@ -180,7 +180,7 @@ class Agent:
                 turn_id,
                 turn_control,
             )
-        except KeyboardInterrupt:
+        except (KeyboardInterrupt, AgentCancelled):
             self._cancel_jobs(self._session.current_turn_id)
             self._session.finish_turn("cancelled")
             raise
@@ -194,12 +194,7 @@ class Agent:
         except BaseException as error:
             self._cancel_jobs(self._session.current_turn_id)
             self._session.finish_turn(
-                "cancelled"
-                if (
-                    isinstance(error, AgentCancelled)
-                    or (turn_control is not None and turn_control.cancelled)
-                )
-                else "interrupted",
+                "interrupted",
                 error=runtime_error_info(error),
             )
             raise
@@ -247,7 +242,7 @@ class Agent:
             if on_event is not None:
                 on_event(ContextWindowEvent(self._context.window(input_tokens)))
             if self._context.should_archive(input_tokens):
-                self._context.archive()
+                self._context.archive(continuation.raise_if_cancelled)
                 continuation.apply_steering()
                 continue
             if input_tokens > self._context.hard_limit:
@@ -370,6 +365,7 @@ class Agent:
                 self._tool_batch_executor.execute(
                     response.tool_calls,
                     turn_id=turn_id,
+                    turn_control=turn_control,
                     on_call=emit_call,
                     on_result=emit_result,
                     on_media=emit_media,

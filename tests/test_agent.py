@@ -7,6 +7,7 @@ from pathlib import Path
 
 from agent_core import (
     Agent,
+    AgentCancelled,
     AgentConfig,
     AssistantMessageDeltaEvent,
     AssistantMessageEvent,
@@ -1786,6 +1787,70 @@ class ConcurrentToolBatchTest(unittest.TestCase):
         self.assertEqual(session.tool_executions["call-cancel"].status, "unknown")
         self.assertEqual(session.tool_executions["call-write"].status, "completed")
         self.assertIn("call-write", [item.tool_call_id for item in session.items])
+
+class CooperativeCancellationTest(unittest.TestCase):
+    def test_cancel_after_one_tool_prevents_the_next_side_effect(self) -> None:
+        control = TurnControl()
+        executed = []
+
+        class CancellingTool(EchoTool):
+            def execute(self, arguments, context):
+                executed.append(arguments["text"])
+                control.cancel()
+                return arguments["text"]
+
+        calls = tuple(ToolCall(name, "echo", {"text": name}) for name in ("first", "second"))
+        session = Session()
+        agent = Agent(
+            MockProvider([LLMResponse(None, tool_calls=calls)]), session,
+            "system", CONSOLIDATOR_PROMPT, AGENT_CONFIG,
+            tool_set(CancellingTool(), session=session),
+            ToolExecutionContext(workspace=TEST_WORKSPACE, session=session),
+        )
+        with self.assertRaises(AgentCancelled):
+            agent.run("run both", turn_control=control)
+        self.assertEqual(executed, ["first"])
+        self.assertEqual(session.tool_executions["first"].status, "completed")
+        self.assertEqual(session.tool_executions["second"].status, "cancelled")
+        self.assertIn("first", [item.tool_call_id for item in session.items])
+
+    def test_cancel_during_approval_prevents_tool_execution(self) -> None:
+        control = TurnControl()
+        executed = []
+
+        class Policy:
+            def authorize(self, call, context):
+                control.cancel()
+
+        class RecordingTool(EchoTool):
+            def execute(self, arguments, context):
+                executed.append(arguments)
+                return "done"
+
+        tools = tool_set(RecordingTool(), policy=Policy())
+        with self.assertRaises(AgentCancelled):
+            tools.execute(ToolCall("call", "echo", {"text": "work"}), turn_control=control)
+        self.assertEqual(executed, [])
+
+    def test_compression_observes_cancellation_before_committing_a_summary(self) -> None:
+        control = TurnControl()
+
+        class CancellingProvider(MockProvider):
+            def stream(self, *args):
+                control.cancel()
+                return LLMResponse("summary")
+
+        session = Session()
+        session.add_item("user", "old question")
+        session.add_item("assistant", "old answer")
+        context = ContextManager(
+            CancellingProvider([]), session, "system", CONSOLIDATOR_PROMPT, AGENT_CONFIG,
+        )
+        with self.assertRaises(AgentCancelled):
+            context.archive(control.raise_if_cancelled)
+        self.assertEqual(session.archived_item_cursor, 0)
+        self.assertIsNone(session.archived_summary)
+
 
 class BlockingTool(Tool):
     """Records how many calls are inside execute() at the same time.

@@ -2,6 +2,8 @@
 from dataclasses import replace
 from typing import Iterable
 
+from ..turn_control import TurnControl
+
 from .base import (
     Tool,
     ToolCall,
@@ -88,7 +90,11 @@ class ToolSet:
         tool = self._tools.get(name)
         return tool is not None and tool.concurrent
 
-    def execute(self, call: ToolCall) -> ToolResult:
+    def execute(
+        self, call: ToolCall, *, turn_control: TurnControl | None = None,
+    ) -> ToolResult:
+        if turn_control is not None:
+            turn_control.raise_if_cancelled()
         tool = self._tools.get(call.name)
         if tool is None:
             return ToolResult(
@@ -102,6 +108,8 @@ class ToolSet:
 
         try:
             context = self._context
+            if turn_control is not None:
+                context = replace(context, cancellation=turn_control)
             if context.execution_router is not None:
                 context = replace(
                     context,
@@ -109,6 +117,8 @@ class ToolSet:
                 )
             if self._policy is not None:
                 self._policy.authorize(call, context)
+            if turn_control is not None:
+                turn_control.raise_if_cancelled()
             output = tool.execute(call.arguments, context)
         except Exception as error:
             return ToolResult(

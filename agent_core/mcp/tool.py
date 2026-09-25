@@ -63,4 +63,5 @@ class McpTool(Tool):
             self.server_name,
             self.remote_name,
             arguments,
+            cancellation=context.cancellation,
         )

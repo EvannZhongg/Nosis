@@ -8,6 +8,7 @@ from .base import JSONValue
 
 if TYPE_CHECKING:
     from ..execution.router import ExecutionRouter, ResolvedExecution
+    from ..execution.process import CancellationSignal
     from ..llm import LLMProvider
     from ..mcp.manager import McpClientManager
     from ..plan import PlanManager
@@ -15,7 +16,6 @@ if TYPE_CHECKING:
     from ..skills import SkillRegistry
     from ..subagent import SubagentRuntime
     from ..jobs import JobManager
-    from ..jobs import CancellationToken
     from ..memory import MemoryManager
     from ..image_generation import ImageGenerator
 
@@ -51,7 +51,7 @@ class ToolExecutionContext:
     mcp: "McpClientManager | None" = None
     subagents: "SubagentRuntime | None" = None
     jobs: "JobManager | None" = None
-    cancellation: "CancellationToken | None" = None
+    cancellation: "CancellationSignal | None" = None
     skills: "SkillRegistry | None" = None
     plan: "PlanManager | None" = None
     ask_user: (

@@ -268,14 +268,6 @@ class JobManager:
             )
             return selected, pending
 
-    def has_pending(self, turn_id: str) -> bool:
-        with self._condition:
-            return any(
-                job.turn_id == turn_id
-                and job.status in {"submitted", "running"}
-                for job in self._jobs.values()
-            )
-
     def snapshot(self) -> tuple[JobHandle, ...]:
         with self._condition:
             return tuple(

@@ -104,3 +104,7 @@ class TurnControl:
             self._external_cancelled is not None
             and self._external_cancelled()
         )
+
+    def raise_if_cancelled(self) -> None:
+        if self.cancelled:
+            raise AgentCancelled

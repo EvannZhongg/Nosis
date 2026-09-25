@@ -8,7 +8,7 @@ from .content import ImagePart
 from .session import Session, ToolExecutionStatus
 from .tool_result import ToolResultNormalizer
 from .tools import ToolCall, ToolResult, ToolSet
-from .turn_control import AgentCancelled
+from .turn_control import AgentCancelled, TurnControl
 
 
 ToolCallCallback = Callable[[ToolCall, int, int], None]
@@ -42,6 +42,7 @@ class ToolBatchExecutor:
         calls: tuple[ToolCall, ...],
         *,
         turn_id: str,
+        turn_control: TurnControl | None = None,
         on_call: ToolCallCallback | None = None,
         on_result: ToolResultCallback | None = None,
         on_media: ToolMediaCallback | None = None,
@@ -55,6 +56,7 @@ class ToolBatchExecutor:
                     indexed_calls,
                     completed,
                     turn_id,
+                    turn_control,
                     on_call,
                     on_result,
                 )
@@ -63,6 +65,7 @@ class ToolBatchExecutor:
                     indexed_calls,
                     completed,
                     turn_id,
+                    turn_control,
                     on_call,
                     on_result,
                 )
@@ -84,6 +87,7 @@ class ToolBatchExecutor:
         indexed_calls: tuple[tuple[int, ToolCall], ...],
         completed: dict[int, tuple[ToolCall, ToolResult]],
         turn_id: str,
+        turn_control: TurnControl | None,
         on_call: ToolCallCallback | None,
         on_result: ToolResultCallback | None,
     ) -> None:
@@ -95,7 +99,7 @@ class ToolBatchExecutor:
                 self._session.tool_started(call, turn_id)
                 if on_call is not None:
                     on_call(call, index, tool_count)
-                result = self._tools.execute(call)
+                result = self._tools.execute(call, turn_control=turn_control)
                 completed[index] = (call, result)
                 self._finish_call(call, result, turn_id)
                 active_call = None
@@ -117,6 +121,7 @@ class ToolBatchExecutor:
         indexed_calls: tuple[tuple[int, ToolCall], ...],
         completed: dict[int, tuple[ToolCall, ToolResult]],
         turn_id: str,
+        turn_control: TurnControl | None,
         on_call: ToolCallCallback | None,
         on_result: ToolResultCallback | None,
     ) -> None:
@@ -132,7 +137,9 @@ class ToolBatchExecutor:
                 try:
                     if on_call is not None:
                         on_call(call, index, tool_count)
-                    future = executor.submit(self._tools.execute, call)
+                    future = executor.submit(
+                        self._tools.execute, call, turn_control=turn_control,
+                    )
                 except BaseException as error:
                     self._session.tool_finished(
                         call,

@@ -15,6 +15,8 @@ from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
 
 from ..tools import JSONValue, Tool
+from ..execution.process import CancellationSignal
+from ..turn_control import AgentCancelled
 from .config import McpConfig, McpServerConfig
 from .tool import McpTool
 
@@ -38,6 +40,7 @@ class _Request:
     tool: str
     arguments: dict[str, JSONValue]
     result: queue.Queue[object]
+    cancellation: CancellationSignal | None
 
 
 class _Stop:
@@ -121,10 +124,12 @@ class McpClientManager:
         server: str,
         tool: str,
         arguments: dict[str, JSONValue],
+        *,
+        cancellation: CancellationSignal | None = None,
     ) -> JSONValue:
         config = self._servers[server]
         result_queue: queue.Queue[object] = queue.Queue(maxsize=1)
-        self._requests.put(_Request(server, tool, arguments, result_queue))
+        self._requests.put(_Request(server, tool, arguments, result_queue, cancellation))
         try:
             result = result_queue.get(timeout=config.call_timeout_seconds + 1)
         except queue.Empty as error:
@@ -236,6 +241,10 @@ class McpClientManager:
                         break
                     try:
                         value = await self._call(sessions, request)
+                    except AgentCancelled:
+                        # Do not expose the live server coroutine's traceback
+                        # to the thread consuming the cancellation signal.
+                        request.result.put(AgentCancelled())
                     except BaseException as error:
                         request.result.put(error)
                     else:
@@ -317,13 +326,25 @@ class McpClientManager:
         request: _Request,
     ) -> JSONValue:
         config = self._servers[request.server]
-        result = await asyncio.wait_for(
+        if request.cancellation is not None and request.cancellation.cancelled:
+            raise AgentCancelled
+        task = asyncio.create_task(
             sessions[request.server].call_tool(
                 request.tool,
                 request.arguments,
             ),
-            timeout=config.call_timeout_seconds,
         )
+        try:
+            async with asyncio.timeout(config.call_timeout_seconds):
+                while not task.done():
+                    if request.cancellation is not None and request.cancellation.cancelled:
+                        raise AgentCancelled
+                    await asyncio.wait((task,), timeout=0.1)
+                result = task.result()
+        finally:
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
         data = result.model_dump(mode="json", exclude_none=True)
         if result.is_error:
             message = _error_message(data)

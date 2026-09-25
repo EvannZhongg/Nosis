@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Protocol
 
+from ..turn_control import AgentCancelled
+
 
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 60
 MAX_COMMAND_TIMEOUT_SECONDS = 24 * 60 * 60
@@ -60,7 +62,7 @@ class CancellationSignal(Protocol):
     def cancelled(self) -> bool: ...
 
 
-class CommandCancelled(BaseException):
+class CommandCancelled(AgentCancelled):
     """The Runtime cancelled a running command and its process group."""
 
 

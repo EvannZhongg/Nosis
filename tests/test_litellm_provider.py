@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agent_core import (
+    AgentCancelled,
     FilePart,
     ImagePart,
     LLMRequest,
@@ -19,6 +20,7 @@ from agent_core import (
     ToolCall,
     ToolDefinition,
     TextPart,
+    TurnControl,
 )
 from agent_core.providers import LiteLLMProvider
 
@@ -161,13 +163,14 @@ class LiteLLMProviderTest(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 0.5)
 
     @patch("agent_core.providers.litellm_provider.completion")
-    def test_cancellable_stream_checks_while_waiting_for_a_chunk(
+    def test_cancellable_stream_in_a_worker_checks_while_waiting_for_a_chunk(
         self,
         completion_mock,
     ) -> None:
         entered = threading.Event()
         release = threading.Event()
-        cancelled = threading.Event()
+        control = TurnControl()
+        errors = []
 
         class BlockingStream:
             def __iter__(self):
@@ -184,18 +187,8 @@ class LiteLLMProviderTest(unittest.TestCase):
             max_context_tokens=1000,
         )
 
-        def cancel_after_read_starts() -> None:
-            entered.wait(1)
-            cancelled.set()
-
-        def check_cancelled() -> None:
-            if cancelled.is_set():
-                raise KeyboardInterrupt
-
-        threading.Thread(target=cancel_after_read_starts, daemon=True).start()
-        started = time.monotonic()
-        try:
-            with self.assertRaises(KeyboardInterrupt):
+        def run() -> None:
+            try:
                 provider.stream_cancellable(
                     LLMRequest(
                         system_prompt="Answer.",
@@ -203,12 +196,23 @@ class LiteLLMProviderTest(unittest.TestCase):
                     ),
                     lambda _text: None,
                     None,
-                    check_cancelled,
+                    control.raise_if_cancelled,
                 )
+            except BaseException as error:
+                errors.append(error)
+
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        try:
+            self.assertTrue(entered.wait(2))
+            control.cancel()
+            thread.join(2)
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(len(errors), 1)
+            self.assertIsInstance(errors[0], AgentCancelled)
         finally:
             release.set()
-
-        self.assertLess(time.monotonic() - started, 0.5)
+            thread.join(2)
 
     @patch("agent_core.providers.litellm_provider.get_model_info", return_value={"supports_vision": True})
     @patch("agent_core.providers.litellm_provider.completion")

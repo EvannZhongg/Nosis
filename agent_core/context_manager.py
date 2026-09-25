@@ -1,7 +1,7 @@
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 
 from .config import AgentConfig
 from .content import historical_content
@@ -139,7 +139,7 @@ class ContextManager:
         _, items = self._archivable_items()
         return bool(items)
 
-    def archive(self) -> int:
+    def archive(self, check_cancelled: Callable[[], None] = lambda: None) -> int:
         """Compress the unarchived transcript into the session checkpoint."""
         archive_end, items = self._archivable_items()
         content = _compression_record(items)
@@ -163,7 +163,9 @@ class ContextManager:
             self._provider,
             self._max_generation_tokens,
         )
-        response = self._provider.stream(request, lambda _text: None, None)
+        response = self._provider.stream_cancellable(
+            request, lambda _text: None, None, check_cancelled,
+        )
         summary = response.content.strip() if response.content else ""
         if response.tool_calls or not summary:
             raise ValueError("context consolidator must return text content")

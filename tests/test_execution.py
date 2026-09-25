@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 from agent_core import (
     APPROVAL_REQUIRED_AUTHORITY,
-    CancellationToken,
+    TurnControl,
     CommandCancelled,
     CommandExecutionResult,
     ExecutionRouter,
@@ -147,7 +147,7 @@ class HostCommandExecutorTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             working_directory = Path(directory)
             executor = HostCommandExecutor(working_directory)
-            cancellation = CancellationToken()
+            cancellation = TurnControl()
             command = _python_script_command(
                 working_directory,
                 "import time\n"
