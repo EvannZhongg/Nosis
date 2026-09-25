@@ -1,6 +1,5 @@
 """Newline-delimited JSON adapter for the shared application runtime."""
 
-import _thread
 from itertools import count
 from pathlib import Path
 from queue import Queue
@@ -42,7 +41,9 @@ class Bridge:
         self._reader: Thread | None = None
         self._reader_lock = Lock()
         self._router_lock = Lock()
-        self._waiters: dict[str, Queue[dict[str, object] | BaseException]] = {}
+        self._waiters: dict[
+            str, tuple[str | None, Queue[dict[str, object] | BaseException]]
+        ] = {}
         self._input_closed = False
         self._shutdown_requested = False
         self._session_opened = False
@@ -163,7 +164,7 @@ class Bridge:
             with self._router_lock:
                 waiter = self._waiters.get(request_id)
                 if waiter is not None:
-                    waiter.put(message)
+                    waiter[1].put(message)
             return
         if message_type == "permission_set" and not self._session_opened:
             self._messages.put(message)
@@ -207,39 +208,40 @@ class Bridge:
 
     def _route_cancel(self, message: dict[str, object]) -> None:
         turn_id = message.get("turn_id")
-        cancelled = self.host.turns.cancel(turn_id)
+        cancelled = isinstance(turn_id, str) and self.host.turns.cancel(turn_id)
         with self._router_lock:
-            waiters = tuple(self._waiters.values()) if cancelled else ()
+            waiters = tuple(
+                waiter
+                for waiter_turn_id, waiter in self._waiters.values()
+                if cancelled and waiter_turn_id == turn_id
+            )
         for waiter in waiters:
             waiter.put(Cancelled())
-        if cancelled:
-            _thread.interrupt_main()
 
 
     def _route_shutdown(self, *, notify_commands: bool = True) -> None:
         with self._router_lock:
             self._input_closed = True
             self._shutdown_requested = True
-            cancelled = self.host.turns.shutdown()
-            waiters = tuple(self._waiters.values())
+            self.host.turns.shutdown()
+            waiters = tuple(waiter for _, waiter in self._waiters.values())
         for waiter in waiters:
             waiter.put(Cancelled())
-        if cancelled:
-            _thread.interrupt_main()
         if notify_commands:
             self._messages.put(None)
 
 
     def _register_interaction(
-        self, request_id: str
+        self, request_id: str, turn_id: str | None
     ) -> Queue[dict[str, object] | BaseException]:
         waiter: Queue[dict[str, object] | BaseException] = Queue()
         with self._router_lock:
-            self._waiters[request_id] = waiter
+            self._waiters[request_id] = (turn_id, waiter)
             if (
                 self._input_closed
                 or (
                     self.host.turns.control is not None
+                    and self.host.turns.turn_id == turn_id
                     and self.host.turns.control.cancelled
                 )
             ):
@@ -274,11 +276,12 @@ class Bridge:
         # Serialized so concurrent tool calls queue their prompts instead of
         # racing for each other's answers; the user still answers one at a time.
         with self._interaction_lock:
-            request_id = f"{self.host.turns.turn_id}:{next(self._interaction_ids)}"
-            waiter = self._register_interaction(request_id)
+            turn_id = self.host.turns.turn_id
+            request_id = f"{turn_id}:{next(self._interaction_ids)}"
+            waiter = self._register_interaction(request_id, turn_id)
             self._approval = {
                 "type": "approval_request",
-                "turn_id": self.host.turns.turn_id,
+                "turn_id": turn_id,
                 "request_id": request_id,
                 "command": command,
                 "kind": kind,
@@ -306,12 +309,13 @@ class Bridge:
         allow_free_text: bool,
     ) -> object:
         with self._interaction_lock:
-            request_id = f"{self.host.turns.turn_id}:{next(self._interaction_ids)}"
-            waiter = self._register_interaction(request_id)
+            turn_id = self.host.turns.turn_id
+            request_id = f"{turn_id}:{next(self._interaction_ids)}"
+            waiter = self._register_interaction(request_id, turn_id)
             self._approval = None
             self._question = {
                 "type": "user_question",
-                "turn_id": self.host.turns.turn_id,
+                "turn_id": turn_id,
                 "request_id": request_id,
                 "question": question,
                 "options": options,

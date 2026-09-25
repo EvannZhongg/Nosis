@@ -929,6 +929,79 @@ class BridgeApprovalTest(unittest.TestCase):
         self.assertIn("t1", bridge.host.turns._pending_cancels)
 
 
+class BridgeCancellationTest(unittest.TestCase):
+    def test_input_cancels_interactions_in_a_worker_turn(self) -> None:
+        for interaction in ("approval", "question"):
+            for command in ('{"type":"cancel","turn_id":"t1"}',
+                            '{"type":"shutdown"}', None):
+                with self.subTest(interaction=interaction, command=command):
+                    bridge, _ = make_bridge([command] if command is not None else [])
+                    results = []
+                    errors = []
+
+                    class WaitingAgent:
+                        def run(self, *args, **kwargs):
+                            if interaction == "approval":
+                                bridge.request_permission("command")
+                            else:
+                                bridge.request_user_choice("Question?", [], True)
+                            raise AssertionError("cancelled interaction returned an answer")
+
+                    def run():
+                        try:
+                            results.append(bridge.host.turns.run_turn(
+                                "t1", "work",
+                                lambda: SimpleNamespace(
+                                    agent=WaitingAgent(), memory=None, runtime_warnings=(),
+                                ),
+                                lambda: (),
+                            ))
+                        except BaseException as error:
+                            errors.append(error)
+
+                    thread = threading.Thread(target=run, daemon=True)
+                    thread.start()
+                    try:
+                        thread.join(3)
+                        self.assertFalse(thread.is_alive())
+                        self.assertEqual(errors, [])
+                        self.assertEqual([result.status for result in results], ["cancelled"])
+                        self.assertEqual(bridge._waiters, {})
+                    finally:
+                        bridge.close()
+                        thread.join(3)
+
+    def test_cancel_is_scoped_to_its_turn_and_bridge(self) -> None:
+        first, _ = make_bridge([])
+        second, _ = make_bridge([])
+        try:
+            for bridge in (first, second):
+                bridge.host.turns.turn_id = "t1"
+                bridge.host.turns.control = TurnControl()
+            with patch.object(first, "_start_reader"), patch.object(second, "_start_reader"):
+                current = first._register_interaction("t1:1", "t1")
+                unrelated = first._register_interaction("other:1", "other")
+                other_session = second._register_interaction("t1:1", "t1")
+                first.host.turns.enqueue("queued")
+                first._route_message({"type": "cancel", "turn_id": "queued"})
+                first._route_message({"type": "cancel", "turn_id": "stale"})
+                self.assertTrue(current.empty())
+                first._route_message({"type": "cancel", "turn_id": "t1"})
+                self.assertIsInstance(current.get_nowait(), Cancelled)
+                self.assertTrue(unrelated.empty())
+                self.assertTrue(other_session.empty())
+                self.assertFalse(second.host.turns.control.cancelled)
+                late = first._register_interaction("t1:2", "t1")
+                self.assertIsInstance(late.get_nowait(), Cancelled)
+                second._route_message({
+                    "type": "approval_response", "request_id": "t1:1", "approved": True,
+                })
+                self.assertTrue(second._wait_for_interaction(other_session)["approved"])
+        finally:
+            first.close()
+            second.close()
+
+
 class BridgeUserQuestionTest(unittest.TestCase):
     OPTIONS = [
         {"id": "memory", "label": "Memory"},
