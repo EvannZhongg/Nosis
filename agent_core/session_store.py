@@ -5,7 +5,7 @@ import os
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable
+from typing import BinaryIO, Iterable
 
 from .content import FilePart, ImagePart, text_content
 from .permissions import PermissionPreset
@@ -224,12 +224,11 @@ class JsonlSessionStore:
         if path is None:
             raise ValueError(f"session has no journal path: {session_id!r}")
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as file:
+        with path.open("a+b") as file:
+            _prepare_journal_append(file)
             for event in events:
-                file.write(
-                    json.dumps(_event_to_dict(event), ensure_ascii=False)
-                    + "\n"
-                )
+                record = json.dumps(_event_to_dict(event), ensure_ascii=False)
+                file.write(record.encode("utf-8") + b"\n")
             file.flush()
             os.fsync(file.fileno())
 
@@ -279,6 +278,38 @@ def _event_to_dict(event: JournalEvent) -> dict[str, object]:
         "tool_call_id": event.tool_call_id,
         "payload": event.payload,
     }
+
+
+def _prepare_journal_append(file: BinaryIO) -> None:
+    end = file.seek(0, os.SEEK_END)
+    if not end:
+        return
+    file.seek(end - 1)
+    if file.read(1) == b"\n":
+        return
+
+    cursor = end
+    start = 0
+    while cursor:
+        chunk_start = max(0, cursor - 4096)
+        file.seek(chunk_start)
+        chunk = file.read(cursor - chunk_start)
+        newline = chunk.rfind(b"\n")
+        if newline != -1:
+            start = chunk_start + newline + 1
+            break
+        cursor = chunk_start
+
+    file.seek(start)
+    tail = file.read(end - start)
+    try:
+        json.loads(tail)
+    except json.JSONDecodeError:
+        # Only an unfinished final record can be discarded during replay.
+        file.truncate(start)
+    else:
+        file.write(b"\n")
+    file.seek(0, os.SEEK_END)
 
 
 def _event_from_dict(data: dict[str, object]) -> JournalEvent:
