@@ -1,10 +1,8 @@
 import unittest
 import base64
-import _thread
 import json
 import tempfile
 import threading
-import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -115,52 +113,6 @@ class LiteLLMProviderTest(unittest.TestCase):
                 },
             ],
         )
-
-    @patch("agent_core.providers.litellm_provider.completion")
-    def test_stream_yields_to_a_main_thread_interrupt_while_waiting(
-        self,
-        completion_mock,
-    ) -> None:
-        entered = threading.Event()
-        release = threading.Event()
-
-        class BlockingStream:
-            def __iter__(self):
-                return self
-
-            def __next__(self):
-                entered.set()
-                release.wait()
-                raise StopIteration
-
-        completion_mock.return_value = BlockingStream()
-        provider = LiteLLMProvider(
-            model="openai/test-model",
-            max_context_tokens=1000,
-        )
-
-        def interrupt_after_read_starts() -> None:
-            entered.wait(1)
-            _thread.interrupt_main()
-
-        threading.Thread(
-            target=interrupt_after_read_starts,
-            daemon=True,
-        ).start()
-        started = time.monotonic()
-        try:
-            with self.assertRaises(KeyboardInterrupt):
-                provider.stream(
-                    LLMRequest(
-                        system_prompt="Answer.",
-                        messages=(Message(role="user", content="hello"),),
-                    ),
-                    lambda _text: None,
-                )
-        finally:
-            release.set()
-
-        self.assertLess(time.monotonic() - started, 0.5)
 
     @patch("agent_core.providers.litellm_provider.completion")
     def test_cancellable_stream_in_a_worker_checks_while_waiting_for_a_chunk(

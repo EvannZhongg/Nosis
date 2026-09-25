@@ -21,7 +21,7 @@ from .tools.catalog import ToolCatalog
 from .tools.context import ToolExecutionContext
 from .tools.base import ToolPolicy
 from .tools.builtin import AnalyzeImageTool, ReadImageTool, ReadSkillTool
-from .jobs import CancellationToken
+from .execution.process import CancellationSignal
 from .turn_control import TurnControl
 from .workspace_instructions import WorkspaceInstructions
 
@@ -141,7 +141,7 @@ class SubagentRuntime:
         role_name: str,
         task: str,
         parent: ToolExecutionContext,
-        cancellation: CancellationToken | None = None,
+        cancellation: CancellationSignal | None = None,
     ) -> str:
         from .agent import Agent
 

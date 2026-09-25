@@ -8,7 +8,7 @@ from pathlib import Path
 
 from agent_core import (
     AgentConfig,
-    CancellationToken,
+    AgentCancelled,
     JobManager,
     JsonlSessionStore,
     LLMProvider,
@@ -24,12 +24,14 @@ from agent_core import (
     ToolConfig,
     ToolDefinition,
     ToolExecutionContext,
+    TurnControl,
     Workspace,
     WorkspaceInstruction,
     WorkspaceInstructions,
     builtin_catalog,
 )
 from agent_core.llm import LLMRequest
+from agent_core.execution.process import CancellationSignal
 from agent_core.session_paths import session_directory, workspace_key
 
 
@@ -209,6 +211,58 @@ class SubagentRoleRegistryTest(unittest.TestCase):
 
 
 class SubagentToolTest(unittest.TestCase):
+    def test_foreground_call_propagates_turn_cancellation_into_child_loop(self) -> None:
+        entered = threading.Event()
+        release = threading.Event()
+
+        class WaitingProvider(StaticProvider):
+            def stream_cancellable(self, request, on_text_delta, on_reasoning_delta,
+                                   check_cancelled):
+                entered.set()
+                while not release.wait(0.01):
+                    check_cancelled()
+                return LLMResponse("unexpected completion")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tool_context = context(root, (role("worker", "Waits.", provider=WaitingProvider()),))
+            tools = builtin_catalog().select(("subagent",), tool_context)
+            control = TurnControl()
+            errors = []
+
+            def run() -> None:
+                try:
+                    tools.execute(
+                        ToolCall("delegate", "subagent", {"role": "worker", "task": "work"}),
+                        turn_control=control,
+                    )
+                except BaseException as error:
+                    errors.append(error)
+
+            thread = threading.Thread(target=run, daemon=True)
+            thread.start()
+            try:
+                self.assertTrue(entered.wait(3))
+                control.cancel()
+                thread.join(3)
+                self.assertFalse(thread.is_alive())
+                self.assertEqual(len(errors), 1)
+                self.assertIsInstance(errors[0], AgentCancelled)
+            finally:
+                release.set()
+                thread.join(3)
+
+            store = JsonlSessionStore(
+                session_directory(tool_context.sessions_directory, root,
+                                  tool_context.session.session_id) / "subagents",
+                group_by_workspace=False,
+            )
+            transcript = next(store.directory.rglob("*.jsonl"))
+            child = store.load(transcript.parent.name)
+            self.assertEqual([turn.status for turn in child.turns.values()], ["cancelled"])
+            self.assertEqual([item.role for item in child.items], ["user"])
+            self.assertIsNone(tool_context.cancellation)
+
     def test_exposes_every_role_in_its_schema(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             definition = SubagentTool().definition(
@@ -601,7 +655,7 @@ class SubagentRuntimeTest(unittest.TestCase):
                 role_name: str,
                 task: str,
                 parent: ToolExecutionContext,
-                cancellation: CancellationToken | None = None,
+                cancellation: CancellationSignal | None = None,
             ) -> str:
                 barrier.wait()
                 return original_run(role_name, task, parent, cancellation)

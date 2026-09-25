@@ -94,4 +94,6 @@ class SubagentTool(Tool):
                 ),
             )
             return handle.to_dict()
-        return context.subagents.run(role.strip(), task.strip(), context)
+        return context.subagents.run(
+            role.strip(), task.strip(), context, cancellation=context.cancellation,
+        )
