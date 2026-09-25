@@ -348,6 +348,51 @@ class SessionJournalTest(unittest.TestCase):
 
             self.assertEqual([item.content for item in loaded.items], ["durable"])
 
+    def test_append_discards_a_truncated_final_record(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = JsonlSessionStore(root / "sessions")
+            store.bind_workspace("s", root)
+            session = Session("s")
+            session.begin_turn("turn-1")
+            session.add_item("user", "durable")
+            store.append_events("s", session.journal, workspace=root)
+            path = next((root / "sessions").rglob("s.jsonl"))
+            with path.open("ab") as file:
+                file.write(b'{"seq":999' + b" " * 5000)
+
+            resumed = store.load("s", recover=False)
+            resumed.add_item("assistant", "after restart")
+            store.append_events("s", [resumed.journal[-1]], workspace=root)
+
+            loaded = store.load("s", recover=False)
+            self.assertEqual(
+                [item.content for item in loaded.items],
+                ["durable", "after restart"],
+            )
+
+    def test_append_preserves_a_complete_final_record_without_newline(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = JsonlSessionStore(root / "sessions")
+            store.bind_workspace("s", root)
+            session = Session("s")
+            session.begin_turn("turn-1")
+            session.add_item("user", "durable")
+            store.append_events("s", session.journal, workspace=root)
+            path = next((root / "sessions").rglob("s.jsonl"))
+            path.write_bytes(path.read_bytes().rstrip(b"\r\n"))
+
+            resumed = store.load("s", recover=False)
+            resumed.add_item("assistant", "after restart")
+            store.append_events("s", [resumed.journal[-1]], workspace=root)
+
+            loaded = store.load("s", recover=False)
+            self.assertEqual(
+                [item.content for item in loaded.items],
+                ["durable", "after restart"],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
