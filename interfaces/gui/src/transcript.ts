@@ -23,7 +23,7 @@ export type Applied = {
   } | null;
   question?: UserQuestion | null;
   permissionPreset?: PermissionPreset;
-  /** Set once the turn ended, so the caller can reload the session. */
+  /** Set once the turn ended, so the caller can clean up turn-local state. */
   finished?: boolean;
 };
 

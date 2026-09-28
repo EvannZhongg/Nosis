@@ -606,6 +606,18 @@ describe('App', () => {
       content: 'completed answer',
       timestamp_utc: '2026-09-15T12:00:00Z',
     });
+    emit({
+      type: 'runtime_state',
+      phase: 'idle',
+      turn_id: null,
+      provider: 'test',
+      permission_preset: 'ask_for_approval',
+      context_window: null,
+      jobs: [],
+      approval: null,
+      question: null,
+      plan: null,
+    });
     emit({ type: 'turn_completed', turn_id: 't1', usage: null });
 
     await waitFor(() => {

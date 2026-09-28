@@ -413,6 +413,11 @@ describe('reducer', () => {
 
   it('records usage when a turn completes', () => {
     let state = ready();
+    state = reducer(state, { type: 'submit', turnId: 't1', text: 'work' });
+    state = reducer(state, {
+      type: 'message',
+      message: { ...RUNTIME_READY, phase: 'idle', turn_id: null },
+    });
     state = reducer(state, {
       type: 'message',
       message: {
@@ -468,6 +473,11 @@ describe('reducer', () => {
 
   it('reports a cancelled turn', () => {
     let state = ready();
+    state = reducer(state, { type: 'submit', turnId: 't1', text: 'work' });
+    state = reducer(state, {
+      type: 'message',
+      message: { ...RUNTIME_READY, phase: 'idle', turn_id: null },
+    });
     state = reducer(state, {
       type: 'message',
       message: { type: 'turn_cancelled', turn_id: 't1' },
@@ -478,6 +488,11 @@ describe('reducer', () => {
 
   it('keeps the session usable after a failed turn', () => {
     let state = ready();
+    state = reducer(state, { type: 'submit', turnId: 't1', text: 'work' });
+    state = reducer(state, {
+      type: 'message',
+      message: { ...RUNTIME_READY, phase: 'idle', turn_id: null },
+    });
     state = reducer(state, {
       type: 'message',
       message: {
@@ -487,6 +502,27 @@ describe('reducer', () => {
       },
     });
     expect(state.status).toBe('idle');
+    expect(state.entries.at(-1)).toMatchObject({ level: 'error' });
+  });
+
+  it('keeps a startup failure unavailable after the turn error arrives', () => {
+    let state = ready();
+    state = reducer(state, { type: 'submit', turnId: 't1', text: 'work' });
+    state = reducer(state, {
+      type: 'message',
+      message: { ...RUNTIME_READY, phase: 'failed', turn_id: null },
+    });
+    state = reducer(state, {
+      type: 'message',
+      message: {
+        type: 'turn_failed',
+        turn_id: 't1',
+        error: { type: 'RuntimeError', message: 'startup failed', details: {} },
+      },
+    });
+
+    expect(state.status).toBe('runtime_failed');
+    expect(state.turnId).toBeNull();
     expect(state.entries.at(-1)).toMatchObject({ level: 'error' });
   });
 

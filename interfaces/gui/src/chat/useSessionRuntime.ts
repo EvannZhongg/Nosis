@@ -39,7 +39,6 @@ export function useSessionRuntime({
   onWorkspaceChange,
 }: SessionRuntimeOptions) {
   const [items, setItems] = useState<TranscriptItem[]>(session.items);
-  const [running, setRunning] = useState(false);
   const [runtimePhase, setRuntimePhase] = useState<RuntimePhase>("inactive");
   const [pendingSteers, setPendingSteers] = useState(0);
   const [jobs, setJobs] = useState<Record<string, BackgroundJob>>({});
@@ -72,7 +71,7 @@ export function useSessionRuntime({
   // Socket callbacks fire outside React's render, so the transcript and
   // turn state they fold onto are kept in refs.
   const itemsRef = useRef(items);
-  const runningRef = useRef(false);
+  const runtimePhaseRef = useRef<RuntimePhase>("inactive");
   const attachmentReplacedRef = useRef(false);
   const attachmentSubmitRef = useRef(false);
   const awaitingSessionActivityRef = useRef(false);
@@ -87,6 +86,7 @@ export function useSessionRuntime({
   const configurationPending = permissionSaving || providerSaving || workspaceSaving;
   const displayedProvider = pendingProvider ?? provider;
   const displayedWorkspace = pendingWorkspace ?? workspaceDraft;
+  const running = runtimeIsActive(runtimePhase);
   const interactionActive = approval !== null || question !== null;
   const backgroundDisconnected = backgroundActive && socketRef.current === null;
   const composerGate = composerConnectionGate({
@@ -108,6 +108,12 @@ export function useSessionRuntime({
     setItems(next);
   }, []);
 
+  const applyRuntimePhase = useCallback((phase: RuntimePhase) => {
+    runtimePhaseRef.current = phase;
+    setRuntimePhase(phase);
+    onBusyChange(runtimeIsActive(phase));
+  }, [onBusyChange]);
+
   useEffect(() => {
     mountedRef.current = true;
     return () => {
@@ -121,7 +127,7 @@ export function useSessionRuntime({
 
   useEffect(() => {
     const releaseOnPageLeave = () => {
-      if (!runningRef.current) {
+      if (!runtimeIsActive(runtimePhaseRef.current)) {
         void releaseActiveSession(session.session_id, socketModelRef.current || provider, attachmentId).catch(() => undefined);
       }
     };
@@ -160,19 +166,16 @@ export function useSessionRuntime({
   }, []);
 
   const endTurn = useCallback(() => {
-    runningRef.current = false;
     activeTurnIdRef.current = null;
     awaitingSessionActivityRef.current = false;
-    setRunning(false);
     setPendingSteers(0);
     setJobs({});
     setReconnecting(false);
-    onBusyChange(false);
     setApproval(null);
     setQuestion(null);
     setQuestionDraft("");
     onTurnEnd();
-  }, [onBusyChange, onTurnEnd]);
+  }, [onTurnEnd]);
 
   function clearPendingSettings() {
     setPendingPermissionPreset(null);
@@ -219,11 +222,7 @@ export function useSessionRuntime({
           setAttaching(false);
           setApproval(null);
           setQuestion(null);
-          const active = runtimeIsActive(message.phase);
-          setRuntimePhase(message.phase);
-          runningRef.current = active;
-          setRunning(active);
-          onBusyChange(active);
+          applyRuntimePhase(message.phase);
           socket.close();
           return;
         }
@@ -243,12 +242,8 @@ export function useSessionRuntime({
             socketModelRef.current = message.provider;
             onProviderChange(message.provider);
           }
-          const active = runtimeIsActive(message.phase);
-          setRuntimePhase(message.phase);
-          runningRef.current = active;
+          applyRuntimePhase(message.phase);
           activeTurnIdRef.current = message.turn_id;
-          setRunning(active);
-          onBusyChange(active);
           setApproval(message.approval ? {
             requestId: message.approval.request_id,
             command: message.approval.command,
@@ -320,7 +315,7 @@ export function useSessionRuntime({
           setQuestionDraft("");
         }
         if (applied.permissionPreset !== undefined) setPermissionPreset(applied.permissionPreset);
-        if (applied.finished) void endTurn();
+        if (applied.finished) endTurn();
       },
       onClose: () => {
         // A stale socket can close after a replacement has already been
@@ -331,11 +326,11 @@ export function useSessionRuntime({
         socketModelRef.current = "";
         setAttaching(false);
         clearPendingSettings();
-        if (runningRef.current && !attachmentReplacedRef.current) {
+        if (runtimeIsActive(runtimePhaseRef.current) && !attachmentReplacedRef.current) {
           setReconnecting(true);
           reconnectTimeoutRef.current = setTimeout(() => {
             reconnectTimeoutRef.current = null;
-            if (mountedRef.current && runningRef.current && socketRef.current === null && !attachmentReplacedRef.current) {
+            if (mountedRef.current && runtimeIsActive(runtimePhaseRef.current) && socketRef.current === null && !attachmentReplacedRef.current) {
               connect({ attachOnly: true });
             }
           }, 1000);
@@ -347,7 +342,7 @@ export function useSessionRuntime({
         // leave the idle UI quiet. The close callback clears the socket so
         // the next message can establish a fresh connection.
         if (socketRef.current !== socket) return;
-        if (!runningRef.current) showAlert({ kind: "alert", id: "connection", level: "error", text: "无法连接 Nosis。" });
+        if (!runtimeIsActive(runtimePhaseRef.current)) showAlert({ kind: "alert", id: "connection", level: "error", text: "无法连接 Nosis。" });
       },
     });
     socketRef.current = socket;
@@ -363,7 +358,7 @@ export function useSessionRuntime({
   async function submitMessage(text: string) {
     if (!text && pendingFiles.length === 0) return;
     if (attachmentSubmitRef.current) return;
-    if (runningRef.current) {
+    if (runtimeIsActive(runtimePhaseRef.current)) {
       const turnId = activeTurnIdRef.current;
       if (pendingFiles.length > 0) {
         showToast({ kind: "toast", level: "info", text: "任务运行中不能发送附件；待发送内容已保留，请停止或等待当前任务结束。" });
@@ -392,10 +387,7 @@ export function useSessionRuntime({
       setPendingFiles([]);
     }
     showItems([...itemsRef.current, { role: "user", content: attachments.length ? [{ type: "text", text }, ...attachments] : text }]);
-    runningRef.current = true;
-    setRuntimePhase("starting");
-    setRunning(true);
-    onBusyChange(true);
+    applyRuntimePhase("starting");
     if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
     setToast(null);
     setAlerts({});

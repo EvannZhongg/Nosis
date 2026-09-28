@@ -590,10 +590,9 @@ class Bridge:
         self._approval = self._question = None
         self._runtime_warnings = ()
         self._jobs.clear()
+        self._emit_runtime_state(self._phase)
         if result.status == "failed":
             self.emit("turn_failed", turn_id=turn_id, error=runtime_failure_to_dict(result.error))
-            if result.startup_failed:
-                self._emit_runtime_state("failed")
         elif result.status == "cancelled":
             self.emit("turn_cancelled", turn_id=turn_id)
         elif not self._shutdown_requested:

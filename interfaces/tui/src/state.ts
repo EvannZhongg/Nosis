@@ -674,12 +674,11 @@ function applyMessage(state: State, message: Incoming): State {
     }
 
     case 'turn_completed':
-      return { ...state, status: 'idle', turnId: null, approval: null, question: null, pendingSteers: 0, usage: message.usage };
+      return { ...state, turnId: null, approval: null, question: null, pendingSteers: 0, usage: message.usage };
 
     case 'turn_cancelled':
       return {
         ...state,
-        status: 'idle',
         turnId: null,
         approval: null,
         question: null,
@@ -698,7 +697,6 @@ function applyMessage(state: State, message: Incoming): State {
     case 'turn_failed':
       return {
         ...state,
-        status: 'idle',
         turnId: null,
         approval: null,
         question: null,

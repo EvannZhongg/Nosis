@@ -32,7 +32,6 @@ export function App() {
   const [providers, setProviders] = useState<ModelOption[]>([]);
   const [defaultProvider, setDefaultProvider] = useState("");
   const [providerBySession, setProviderBySession] = useState<Record<string, string>>({});
-  const [activeTurnIds, setActiveTurnIds] = useState<Set<string>>(new Set());
   const [expandedWorkspaces, setExpandedWorkspaces] = useState<Set<string>>(new Set());
   const [settingsSection, setSettingsSection] = useState<SettingsSection | null>(null);
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
@@ -105,11 +104,6 @@ export function App() {
   }, [settingsMenuOpen]);
   useEffect(() => {
     get<ActiveSession[]>("/api/active-sessions").then(async (activeSessions) => {
-      setActiveTurnIds(new Set(
-        activeSessions
-          .filter((session) => runtimeIsActive(session.phase))
-          .map((session) => session.session_id),
-      ));
       setBusyBySession((all) => ({
         ...all,
         ...Object.fromEntries(activeSessions.map((session) => [session.session_id, runtimeIsActive(session.phase)])),
@@ -284,10 +278,9 @@ export function App() {
         {error && <div className="error-banner" role="alert">{error}</div>}
         {!restoringSession && chatSessions.map((current) => {
           const provider = providerBySession[current.session_id] ?? defaultProvider;
-          return <div key={current.session_id} style={{ display: current.session_id === selectedSessionId ? "contents" : "none" }}><Chat session={current} selected={current.session_id === selectedSessionId} contextWindow={current.session_id === selectedSessionId ? contextWindow : contextBySession[current.session_id] ?? current.context_window ?? null} workspaceOptions={sessionGroups.map((group) => group.workspace)} backgroundActive={activeTurnIds.has(current.session_id)}
+          return <div key={current.session_id} style={{ display: current.session_id === selectedSessionId ? "contents" : "none" }}><Chat session={current} selected={current.session_id === selectedSessionId} contextWindow={current.session_id === selectedSessionId ? contextWindow : contextBySession[current.session_id] ?? current.context_window ?? null} workspaceOptions={sessionGroups.map((group) => group.workspace)} backgroundActive={Boolean(busyBySession[current.session_id])}
             providers={providers} provider={provider} onProviderChange={(value) => setProviderBySession((all) => ({ ...all, [current.session_id]: value }))} onBusyChange={(value) => {
               setBusyBySession((all) => ({ ...all, [current.session_id]: value }));
-              setActiveTurnIds((all) => { const next = new Set(all); if (value) next.add(current.session_id); else next.delete(current.session_id); return next; });
             }} onContextWindowChange={(value) => setContextBySession((all) => ({ ...all, [current.session_id]: value }))} onTurnEnd={() => {
             void refreshSessions();
             setWorkspaceVersion((value) => value + 1);

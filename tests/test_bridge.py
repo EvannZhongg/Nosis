@@ -1442,7 +1442,10 @@ class InterruptedTurnTest(unittest.TestCase):
         )
         self.bridge.run_turn({"turn_id": "t1", "text": "do the work"})
 
-        self.assertEqual(emitted(self.stdout)[-1]["type"], "turn_cancelled")
+        messages = emitted(self.stdout)
+        self.assertEqual(messages[-2]["type"], "runtime_state")
+        self.assertEqual(messages[-2]["phase"], "idle")
+        self.assertEqual(messages[-1]["type"], "turn_cancelled")
         self.assertEqual(memory.calls, ["begin", "discard"])
         self.assertEqual(
             [message.content for message in self.stored_items()],
@@ -1458,7 +1461,10 @@ class InterruptedTurnTest(unittest.TestCase):
         self.bridge.run_turn({"turn_id": "t1", "text": "remember this"})
 
         self.assertEqual(memory.calls, ["begin", "reconcile"])
-        self.assertEqual(emitted(self.stdout)[-1]["type"], "turn_completed")
+        messages = emitted(self.stdout)
+        self.assertEqual(messages[-2]["type"], "runtime_state")
+        self.assertEqual(messages[-2]["phase"], "idle")
+        self.assertEqual(messages[-1]["type"], "turn_completed")
 
     def test_discards_memory_candidates_when_a_turn_fails(self) -> None:
         plane = self.bridge.host.planes.ensure(self.bridge.host.sessions)
@@ -1478,7 +1484,10 @@ class InterruptedTurnTest(unittest.TestCase):
             )
         )
 
-        failure = emitted(self.stdout)[-1]
+        messages = emitted(self.stdout)
+        self.assertEqual(messages[-2]["type"], "runtime_state")
+        self.assertEqual(messages[-2]["phase"], "idle")
+        failure = messages[-1]
         self.assertEqual(failure["type"], "turn_failed")
         self.assertEqual(failure["error"]["type"], "ValueError")
         self.assertEqual(
@@ -1489,7 +1498,10 @@ class InterruptedTurnTest(unittest.TestCase):
     def test_journal_records_a_turn_that_produced_nothing(self) -> None:
         self.start_turn(FailingAgent(self.session))
 
-        failure = emitted(self.stdout)[-1]
+        messages = emitted(self.stdout)
+        self.assertEqual(messages[-2]["type"], "runtime_state")
+        self.assertEqual(messages[-2]["phase"], "idle")
+        failure = messages[-1]
         self.assertEqual(failure["type"], "turn_failed")
         self.assertEqual(failure["error"]["type"], "ValueError")
         # The failed turn is a fact even though it produced no messages.
@@ -1617,7 +1629,10 @@ class InterruptedTurnTest(unittest.TestCase):
 
         self.start_turn(ScriptedAgent(self.session, error=KeyboardInterrupt()))
 
-        failure = emitted(self.stdout)[-1]
+        messages = emitted(self.stdout)
+        self.assertEqual(messages[-2]["type"], "runtime_state")
+        self.assertEqual(messages[-2]["phase"], "idle")
+        failure = messages[-1]
         self.assertEqual(failure["type"], "turn_failed")
 
         # The bridge keeps serving turns once storage recovers.
@@ -1626,7 +1641,10 @@ class InterruptedTurnTest(unittest.TestCase):
             ScriptedAgent(self.session, error=KeyboardInterrupt()),
             text="second try",
         )
-        self.assertEqual(emitted(self.stdout)[-1]["type"], "turn_cancelled")
+        messages = emitted(self.stdout)
+        self.assertEqual(messages[-2]["type"], "runtime_state")
+        self.assertEqual(messages[-2]["phase"], "idle")
+        self.assertEqual(messages[-1]["type"], "turn_cancelled")
         self.assertEqual(
             [message.content for message in self.stored_items()],
             ["second try"],
