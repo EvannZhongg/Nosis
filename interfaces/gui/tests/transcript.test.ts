@@ -72,7 +72,7 @@ describe("applyMessage", () => {
       {
         type: "context_window", turn_id: "t2", input_tokens: 10,
         max_input_tokens: 100, max_context_tokens: 120, output_reserve_tokens: 20,
-        compression_threshold: 80, compression_count: 0, event_sequence: 15,
+        compression_threshold: 80, compression_count: 0, compression_summary: null, event_sequence: 15,
         transcript: { items: checkpoint, event_sequence: 15 },
       },
       { type: "assistant_delta", turn_id: "t2", text: "new answer", model_call_index: 1, event_sequence: 16 },
@@ -191,6 +191,7 @@ describe("applyMessage", () => {
         output_reserve_tokens: 100,
         compression_threshold: 720,
         compression_count: 0,
+        compression_summary: null,
       },
       runtime_warnings: ["Skipping invalid skill."],
       plan: null,
@@ -246,6 +247,7 @@ describe("applyMessage", () => {
       output_reserve_tokens: 100,
       compression_threshold: 720,
       compression_count: 2,
+      compression_summary: "Archived context",
     });
 
     expect(applied.contextWindow?.compression_count).toBe(2);

@@ -7,12 +7,16 @@ function formatTokens(value: number): string {
 
 export function ContextWindowIndicator({ window }: { window: ContextWindow | null }) {
   const [open, setOpen] = useState(false);
+  const [summaryOpen, setSummaryOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     if (!open) return;
     const closeOnOutsidePointer = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+      if (!rootRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+        setSummaryOpen(false);
+      }
     };
     document.addEventListener("pointerdown", closeOnOutsidePointer);
     return () => document.removeEventListener("pointerdown", closeOnOutsidePointer);
@@ -39,8 +43,19 @@ export function ContextWindowIndicator({ window }: { window: ContextWindow | nul
         <div><dt>剩余输入空间</dt><dd>{formatTokens(remaining)}</dd></div>
         <div><dt>压缩触发点</dt><dd>{formatTokens(window.compression_threshold)}</dd></div>
         <div><dt>模型总窗口</dt><dd>{formatTokens(window.max_context_tokens)}</dd></div>
-        <div><dt>压缩次数</dt><dd>{window.compression_count}</dd></div>
+        <div className="context-compression-row">
+          <button type="button" className="context-compression-toggle" aria-expanded={summaryOpen && Boolean(window.compression_summary)} onClick={() => {
+            if (window.compression_summary) setSummaryOpen((value) => !value);
+          }}>
+            <span>压缩次数</span>
+            <span>{window.compression_count}</span>
+          </button>
+        </div>
       </dl>
+    </div>}
+    {open && summaryOpen && window.compression_summary && <div className="context-summary-popover" role="dialog" aria-label="当前压缩总结">
+      <div className="context-popover-title">当前压缩总结</div>
+      <p>{window.compression_summary}</p>
     </div>}
   </div>;
 }

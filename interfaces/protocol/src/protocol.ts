@@ -55,6 +55,7 @@ export type ContextWindow = {
   output_reserve_tokens: number;
   compression_threshold: number;
   compression_count: number;
+  compression_summary: string | null;
 };
 
 export type PlanStepStatus = 'pending' | 'in_progress' | 'completed' | 'blocked';

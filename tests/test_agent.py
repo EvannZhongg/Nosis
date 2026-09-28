@@ -214,6 +214,29 @@ class AgentTest(unittest.TestCase):
 
         self.assertEqual(window.max_input_tokens, 1_040_384)
         self.assertEqual(window.compression_threshold, 200_000)
+        self.assertIsNone(window.compression_summary)
+
+    def test_context_window_includes_current_compression_summary(self) -> None:
+        provider = MockProvider([], max_context_tokens=1_000)
+        session = Session("session-1")
+        session.set_archived_summary("Keep the active task and its constraints.", 0)
+        context = ContextManager(
+            provider,
+            session,
+            "You are helpful.",
+            CONSOLIDATOR_PROMPT,
+            AgentConfig(
+                max_same_tool_calls=5,
+                output_reserve_tokens=100,
+                tools=ToolConfig(enabled=()),
+                workspace_instruction_files=(),
+            ),
+        )
+
+        self.assertEqual(
+            context.window(0).compression_summary,
+            "Keep the active task and its constraints.",
+        )
 
     def test_applies_steering_after_a_tool_batch_commits(self) -> None:
         control = TurnControl()

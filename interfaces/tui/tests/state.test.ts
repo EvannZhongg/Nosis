@@ -29,6 +29,7 @@ const RUNTIME_READY = {
     output_reserve_tokens: 100,
     compression_threshold: 720,
     compression_count: 0,
+    compression_summary: null,
   },
   plan: null,
 };
@@ -442,6 +443,7 @@ describe('reducer', () => {
         output_reserve_tokens: 100,
         compression_threshold: 720,
         compression_count: 2,
+        compression_summary: "Archived context",
       },
     });
     expect(state.contextWindow?.input_tokens).toBe(120);

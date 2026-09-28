@@ -216,6 +216,11 @@ pre { overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-famil
 .context-popover dt, .context-popover dd { margin: 0; font-size: 11px; }
 .context-popover dt { color: #8d96a5; }
 .context-popover dd { color: #4e596b; font-variant-numeric: tabular-nums; }
+.context-popover .context-compression-row { display: block; padding-bottom: 0; }
+.context-compression-toggle { display: flex; align-items: center; justify-content: space-between; gap: 14px; width: 100%; padding: 6px 0; border: 0; background: transparent; color: #4e596b; text-align: left; font-size: 11px; }
+.context-compression-toggle:hover, .context-compression-toggle[aria-expanded="true"] { color: #40568a; }
+.context-summary-popover { position: absolute; z-index: 11; right: calc(100% + 8px); bottom: 0; width: min(340px, calc(100vw - 48px)); max-height: min(45vh, 280px); padding: 14px; border: 1px solid #dfe4ed; border-radius: 10px; background: #fff; box-shadow: 0 12px 30px #20385c1c; color: #596477; overflow-y: auto; }
+.context-summary-popover p { margin: 0; color: #697487; font-size: 11px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
 .send-button { display: grid; place-items: center; border: 0; background: #556b97; color: white; width: 30px; height: 30px; border-radius: 8px; }
 .send-button:disabled { background: #e9edf3; color: #a9b2c2; opacity: 1; }
 .composer-footer { height: 37px; display: grid; place-items: center; font-size: 9px; letter-spacing: .3px; color: #b4bbc5; }

@@ -207,6 +207,7 @@ class ProtocolTest(unittest.TestCase):
                         output_reserve_tokens=100,
                         compression_threshold=720,
                         compression_count=2,
+                        compression_summary="Current summary",
                     )
                 ),
                 "t1",
@@ -220,6 +221,7 @@ class ProtocolTest(unittest.TestCase):
                 "output_reserve_tokens": 100,
                 "compression_threshold": 720,
                 "compression_count": 2,
+                "compression_summary": "Current summary",
             },
         )
 
@@ -2634,6 +2636,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
                         output_reserve_tokens=100,
                         compression_threshold=720,
                         compression_count=3,
+                        compression_summary="Archived context",
                     )
                 ),
                 "t1",
@@ -2650,6 +2653,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
                     "output_reserve_tokens": 100,
                     "compression_threshold": 720,
                     "compression_count": 3,
+                    "compression_summary": "Archived context",
                 },
             )
 

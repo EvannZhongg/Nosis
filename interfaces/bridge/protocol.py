@@ -75,7 +75,7 @@ def runtime_failure_to_dict(error: RuntimeErrorInfo) -> dict[str, object]:
     }
 
 
-def context_window_to_dict(window: ContextWindow) -> dict[str, int]:
+def context_window_to_dict(window: ContextWindow) -> dict[str, object]:
     return {
         "input_tokens": window.input_tokens,
         "max_input_tokens": window.max_input_tokens,
@@ -83,6 +83,7 @@ def context_window_to_dict(window: ContextWindow) -> dict[str, int]:
         "output_reserve_tokens": window.output_reserve_tokens,
         "compression_threshold": window.compression_threshold,
         "compression_count": window.compression_count,
+        "compression_summary": window.compression_summary,
     }
 
 
@@ -126,7 +127,7 @@ def runtime_state_message(
     question: dict[str, object] | None,
     provider: str | None,
     permission_preset: str,
-    context_window: dict[str, int] | None,
+    context_window: dict[str, object] | None,
     jobs: list[dict[str, object]],
     event_sequence: int | None = None,
     runtime_warnings: tuple[str, ...] = (),

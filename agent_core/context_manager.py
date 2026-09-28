@@ -47,6 +47,7 @@ class ContextWindow:
     output_reserve_tokens: int
     compression_threshold: int
     compression_count: int
+    compression_summary: str | None
 
 
 class ContextManager:
@@ -111,6 +112,7 @@ class ContextManager:
             output_reserve_tokens=self._output_reserve_tokens,
             compression_threshold=self.limits.compression_threshold,
             compression_count=self._session.compression_count,
+            compression_summary=self._session.archived_summary,
         )
 
     def build_request(
