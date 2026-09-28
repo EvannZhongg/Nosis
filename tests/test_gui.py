@@ -441,6 +441,7 @@ class GuiTest(unittest.TestCase):
             "provider": {"request_timeout_seconds": 300, "max_retries": 2},
             "scratch_workspace_root": str(self.root / "scratch"),
             "workspace_instruction_files": ["AGENTS.md"],
+            "skills": {"global_paths": ["skills"], "workspace_paths": []},
             "context": {"compression": {"enabled": True, "trigger_ratio": None, "keep_recent_units": 4}},
             "main_agent": {"tools": {"read_file": True}},
             "subagent_roles": {},

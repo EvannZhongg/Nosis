@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
 
+from agent_core import AgentConfig, DirectorySkillSource
 from agent_core.memory import MemoryStore
 from agent_core.providers import LiteLLMProvider
 
@@ -84,6 +85,41 @@ def memory_store(directory: Path) -> MemoryStore:
         directory / "MEMORY.md",
         directory / "sessions",
     )
+
+
+def configured_skill_sources(
+    config_directory: Path,
+    agent_config: AgentConfig,
+    workspace: Path | None = None,
+) -> tuple[DirectorySkillSource, ...]:
+    """Resolve configured standalone Skill roots in registration order."""
+    directories = _resolve_skill_paths(
+        agent_config.skills.global_paths,
+        config_directory,
+    )
+    if workspace is not None:
+        directories += _resolve_skill_paths(
+            agent_config.skills.workspace_paths,
+            workspace,
+        )
+
+    sources = []
+    seen = set()
+    for directory in directories:
+        resolved = directory.expanduser().resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        sources.append(DirectorySkillSource(resolved))
+    return tuple(sources)
+
+
+def _resolve_skill_paths(paths: tuple[str, ...], base: Path) -> tuple[Path, ...]:
+    resolved = []
+    for value in paths:
+        path = Path(value).expanduser()
+        resolved.append(path if path.is_absolute() else base / path)
+    return tuple(resolved)
 
 
 def initialize_config_directory(directory: Path) -> tuple[Path, ...]:

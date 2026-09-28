@@ -26,6 +26,16 @@ class ProviderRequestConfig:
 
 
 @dataclass(frozen=True)
+class SkillConfig:
+    global_paths: tuple[str, ...] = ("~/.nosis/skills",)
+    workspace_paths: tuple[str, ...] = (
+        "skills",
+        ".agents/skills",
+        ".nosis/skills",
+    )
+
+
+@dataclass(frozen=True)
 class SubagentRoleConfig:
     """A sub-agent role: what it is for, and which tools it may use.
 
@@ -45,6 +55,7 @@ class AgentConfig:
     workspace_instruction_files: tuple[str, ...]
     max_generation_tokens: int | None = None
     provider: ProviderRequestConfig = field(default_factory=ProviderRequestConfig)
+    skills: SkillConfig = field(default_factory=SkillConfig)
     context: ContextCompressionConfig = field(
         default_factory=ContextCompressionConfig
     )
@@ -72,6 +83,7 @@ def load_agent_config(path: Path) -> AgentConfig:
         "max_generation_tokens",
     )
     provider = _provider_config(data.get("provider"))
+    skills = _skill_config(data.get("skills"))
     workspace_instruction_files = _workspace_instruction_files(
         data.get("workspace_instruction_files")
     )
@@ -88,6 +100,7 @@ def load_agent_config(path: Path) -> AgentConfig:
         workspace_instruction_files=workspace_instruction_files,
         max_generation_tokens=max_generation_tokens,
         provider=provider,
+        skills=skills,
         subagent_roles=subagent_roles,
         context=context,
         mcp=mcp,
@@ -118,6 +131,40 @@ def _provider_config(value: object) -> ProviderRequestConfig:
             prefix="provider",
         ),
     )
+
+
+def _skill_config(value: object) -> SkillConfig:
+    if not isinstance(value, dict):
+        raise ValueError("config field 'skills' must be an object")
+    unknown = set(value) - {"global_paths", "workspace_paths"}
+    if unknown:
+        fields = ", ".join(sorted(unknown))
+        raise ValueError(f"unknown field(s) in 'skills': {fields}")
+    return SkillConfig(
+        global_paths=_skill_paths(value.get("global_paths"), "global_paths"),
+        workspace_paths=_skill_paths(
+            value.get("workspace_paths"),
+            "workspace_paths",
+        ),
+    )
+
+
+def _skill_paths(value: object, field: str) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise ValueError(f"config field 'skills.{field}' must be an array")
+    paths = []
+    for item in value:
+        if not isinstance(item, str) or not item.strip():
+            raise ValueError(
+                f"config field 'skills.{field}' must contain non-empty strings"
+            )
+        path = item.strip()
+        if path in paths:
+            raise ValueError(
+                f"config field 'skills.{field}' must not contain duplicate paths"
+            )
+        paths.append(path)
+    return tuple(paths)
 
 
 def _workspace_instruction_files(value: object) -> tuple[str, ...]:

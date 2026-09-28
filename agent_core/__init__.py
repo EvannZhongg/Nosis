@@ -19,6 +19,7 @@ from .config import (
     ContextCompressionConfig,
     MemoryConfig,
     ProviderRequestConfig,
+    SkillConfig,
     SubagentRoleConfig,
     load_agent_config,
 )
@@ -295,6 +296,7 @@ __all__ = [
     "SearchFilesTool",
     "Session",
     "Skill",
+    "SkillConfig",
     "SkillLoader",
     "SkillLocation",
     "SkillRegistry",

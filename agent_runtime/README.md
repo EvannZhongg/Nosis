@@ -65,7 +65,7 @@ RuntimeHost
 | 路径 | 用途 |
 | --- | --- |
 | `provider_config.json` | Provider 定义，主 Agent、视觉、图片生成和角色路由 |
-| `agent_config.json` | Tool、上下文、记忆、子 Agent、MCP、Instructions 与 scratch Workspace |
+| `agent_config.json` | Tool、上下文、记忆、Skill 路径、子 Agent、MCP、Instructions 与 scratch Workspace |
 | `.env` | `${ENV_NAME}` 引用的密钥，由 `settings.py` 读写 |
 | `prompts/` | `Soul.md`、`SubAgent.md`、`Consolidator.md`、`GlobalMemory.md`、`WorkspaceMemory.md` |
 | `skills/` | standalone Skill |
@@ -74,6 +74,8 @@ RuntimeHost
 | `MEMORY.md` | 全局长期记忆 |
 
 仓库内的 [`defaults/`](defaults) 是首次初始化时的安装源。已有配置、Prompt、Skill 或 Plugin 目录不会被默认资源覆盖。
+
+`agent_config.json` 的 `skills.global_paths` 相对配置目录解析、`skills.workspace_paths` 相对当前 Workspace 解析。同名 Skill 保留最先注册的来源，Plugin Skill 排在配置来源之后。
 
 Provider 路由按以下链解析：
 

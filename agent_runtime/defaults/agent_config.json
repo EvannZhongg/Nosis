@@ -11,6 +11,16 @@
     "CLAUDE.md",
     "AGENTS.md"
   ],
+  "skills": {
+    "global_paths": [
+      "~/.nosis/skills"
+    ],
+    "workspace_paths": [
+      "skills",
+      ".agents/skills",
+      ".nosis/skills"
+    ]
+  },
   "context": {
     "compression": {
       "enabled": true,

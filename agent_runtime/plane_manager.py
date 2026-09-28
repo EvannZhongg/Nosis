@@ -13,7 +13,6 @@ from agent_core import (
     MemoryReconciler,
     Session,
     CompositeToolPolicy,
-    DirectorySkillSource,
     ExecutionAuthority,
     ExecutionRouter,
     ExecutionScope,
@@ -59,6 +58,7 @@ from agent_core.mcp.manager import McpClientManager, McpServerStatus
 from agent_core.tools import ROLE_TOOL_NAMES
 
 from .config import (
+    configured_skill_sources,
     configured_role_names,
     default_config_directory,
     load_config_with_name,
@@ -176,7 +176,11 @@ class ExecutionPlaneManager:
         try:
             skills = SkillLoader().load(
                 (
-                    DirectorySkillSource(self._config_directory / "skills"),
+                    *configured_skill_sources(
+                        self._config_directory,
+                        agent_config,
+                        workspace.path,
+                    ),
                     *plugins.skill_sources(),
                 )
             )

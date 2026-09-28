@@ -26,8 +26,10 @@ class ReadSkillTool(Tool):
             name=self.name,
             description=(
                 "Read a range of lines from a registered skill's instructions "
-                "or a referenced UTF-8 text file. Start with SKILL.md and "
-                "load only the ranges and referenced files you need."
+                "or a referenced UTF-8 text file in that skill's directory. "
+                "The registered skill may live outside the workspace. Start "
+                "with SKILL.md and load only the ranges and referenced files "
+                "you need."
             ),
             parameters={
                 "type": "object",

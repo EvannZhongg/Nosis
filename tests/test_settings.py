@@ -22,6 +22,7 @@ AGENT = {
     "provider": {"request_timeout_seconds": 300, "max_retries": 2},
     "scratch_workspace_root": "~/.nosis/workspaces/scratch",
     "workspace_instruction_files": ["AGENTS.md"],
+    "skills": {"global_paths": ["skills"], "workspace_paths": []},
     "context": {"compression": {"enabled": True, "trigger_ratio": None, "keep_recent_units": 4}},
     "main_agent": {"tools": {"read_file": True}},
     "subagent_roles": {},
@@ -52,6 +53,22 @@ class SettingsStoreTest(unittest.TestCase):
             "global_max_tokens": 2000,
             "workspace_max_tokens": 3000,
         })
+
+    def test_snapshot_loads_configured_global_skill_paths(self) -> None:
+        external = self.root / "shared-skills" / "demo"
+        external.mkdir(parents=True)
+        (external / "SKILL.md").write_text(
+            "---\nname: shared\ndescription: Shared skill.\n---\n",
+            encoding="utf-8",
+        )
+        document = json.loads(self.store.agent_path.read_text(encoding="utf-8"))
+        document["skills"]["global_paths"] = ["shared-skills"]
+        self.store.agent_path.write_text(json.dumps(document), encoding="utf-8")
+
+        snapshot = self.store.snapshot()
+
+        self.assertEqual([skill["name"] for skill in snapshot["skills"]], ["shared"])
+
     def test_provider_save_is_validated_and_writes_secret_to_dotenv(self) -> None:
         snapshot = self.store.save_provider("second", {
             "model": "openai/second",

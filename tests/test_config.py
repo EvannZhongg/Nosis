@@ -219,6 +219,17 @@ class ConfigTest(unittest.TestCase):
                 ["CLAUDE.md", "AGENTS.md"],
             )
             self.assertEqual(
+                agent_config["skills"],
+                {
+                    "global_paths": ["~/.nosis/skills"],
+                    "workspace_paths": [
+                        "skills",
+                        ".agents/skills",
+                        ".nosis/skills",
+                    ],
+                },
+            )
+            self.assertEqual(
                 (config_directory / "AGENTS.md").read_text(encoding="utf-8"),
                 "",
             )

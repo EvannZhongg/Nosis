@@ -215,6 +215,27 @@ class ReadSkillToolTest(unittest.TestCase):
         self.assertIn("# Demo", default["content"])
         self.assertIn("1| details", detail["content"])
 
+    def test_reads_a_registered_skill_outside_the_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            skill_path = write_skill(root / "external-skills", "demo")
+            reference = skill_path.parent / "references" / "details.md"
+            reference.parent.mkdir()
+            reference.write_text("external details", encoding="utf-8")
+            context = self.context(
+                workspace,
+                load_skills(root / "external-skills"),
+            )
+
+            result = ReadSkillTool().execute(
+                {"name": "demo-skill", "path": "references/details.md"},
+                context,
+            )
+
+        self.assertIn("external details", result["content"])
+
     def test_reads_skill_in_line_ranges(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

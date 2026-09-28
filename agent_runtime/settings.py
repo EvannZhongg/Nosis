@@ -12,10 +12,14 @@ from threading import RLock
 
 from dotenv import dotenv_values
 
-from agent_core import DirectorySkillSource, SkillLoader, load_agent_config
+from agent_core import SkillLoader, load_agent_config
 from agent_core.tools import ROLE_TOOL_NAMES, TOOL_NAMES
 
-from .config import load_model_options, load_scratch_workspace_root
+from .config import (
+    configured_skill_sources,
+    load_model_options,
+    load_scratch_workspace_root,
+)
 from .plugins import PluginManager
 
 
@@ -184,7 +188,7 @@ class SettingsStore:
         plugins = PluginManager.discover(self.directory / "plugins")
         skills = SkillLoader().load(
             (
-                DirectorySkillSource(self.directory / "skills"),
+                *configured_skill_sources(self.directory, agent_config),
                 *plugins.skill_sources(),
             ),
             warnings=plugins.warnings,
@@ -563,7 +567,7 @@ class SettingsStore:
     def _validate_agent_document(self, document: dict[str, object]) -> None:
         unknown = set(document) - {
             "max_same_tool_calls", "output_reserve_tokens", "max_generation_tokens",
-            "provider", "scratch_workspace_root", "workspace_instruction_files", "context", "memory", "main_agent", "subagent_roles", "mcp",
+            "provider", "scratch_workspace_root", "workspace_instruction_files", "skills", "context", "memory", "main_agent", "subagent_roles", "mcp",
         }
         if unknown:
             raise ValueError(f"unknown agent configuration field(s): {', '.join(sorted(unknown))}")

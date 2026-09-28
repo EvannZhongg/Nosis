@@ -78,7 +78,7 @@ GUI 默认监听 <http://127.0.0.1:8737>。
 | 路径 | 内容 |
 | --- | --- |
 | `~/.nosis/provider_config.json` | Provider、模型和角色路由 |
-| `~/.nosis/agent_config.json` | Tool、上下文、记忆、子 Agent、MCP、Workspace Instructions 与 scratch Workspace 设置 |
+| `~/.nosis/agent_config.json` | Tool、上下文、记忆、Skill 路径、子 Agent、MCP、Workspace Instructions 与 scratch Workspace 设置 |
 | `~/.nosis/.env` | 配置引用的密钥和环境变量 |
 | `~/.nosis/prompts/` | 主 Agent、子 Agent、压缩与记忆 Prompt |
 | `~/.nosis/skills/` | standalone Skill |

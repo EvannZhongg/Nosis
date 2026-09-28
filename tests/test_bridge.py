@@ -1241,6 +1241,10 @@ def open_session_message(
             "request_timeout_seconds": 300,
             "max_retries": 2,
         },
+        "skills": {
+            "global_paths": ["skills"],
+            "workspace_paths": [],
+        },
         **(agent_config if agent_config is not None else {
             "max_same_tool_calls": 5,
             "output_reserve_tokens": 100,
@@ -2080,6 +2084,54 @@ class BridgeSessionOpenTest(unittest.TestCase):
         self.assertIn("read_skill", names)
         self.assertIn("demo-skill: Does demo work.", prompt)
         self.assertNotIn("# Detailed instructions", prompt)
+
+    def test_registers_configured_global_and_workspace_skill_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / "config"
+            workspace = root / "workspace"
+            config.mkdir()
+            workspace.mkdir()
+            for skill_root, name in (
+                (config / "shared-skills", "global-skill"),
+                (workspace / ".project-skills", "workspace-skill"),
+            ):
+                skill = skill_root / name
+                skill.mkdir(parents=True)
+                (skill / "SKILL.md").write_text(
+                    "---\n"
+                    f"name: {name}\n"
+                    f"description: {name} description.\n"
+                    "---\n",
+                    encoding="utf-8",
+                )
+            message = open_session_message(
+                config,
+                agent_config={
+                    "max_same_tool_calls": 5,
+                    "output_reserve_tokens": 100,
+                    "scratch_workspace_root": str(config / "scratch"),
+                    "workspace_instruction_files": ["AGENTS.md"],
+                    "skills": {
+                        "global_paths": ["shared-skills"],
+                        "workspace_paths": [
+                            ".project-skills",
+                            str(workspace / ".project-skills"),
+                        ],
+                    },
+                    "main_agent": {"tools": {}},
+                },
+            )
+            message["workspace"] = str(workspace)
+            bridge, _ = make_bridge([], config)
+
+            bridge.open_session(message)
+            plane = bridge.host.planes.ensure(bridge.host.sessions)
+            skills = plane.agent._execution_context.skills
+
+        assert skills is not None
+        self.assertEqual(skills.names, ("global-skill", "workspace-skill"))
+        self.assertEqual(plane.runtime_warnings, ())
 
     def test_registers_plugin_skills_with_the_plugin_namespace(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
