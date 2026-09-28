@@ -27,10 +27,7 @@ from .builtin import (
     WebFetchTool,
     WebSearchTool,
     WriteFileTool,
-    CreateScheduledTaskTool,
-    DeleteScheduledTaskTool,
-    UpdateScheduledTaskTool,
-    ListScheduledTasksTool,
+    ScheduledTaskTool,
     builtin_catalog,
 )
 from .catalog import ToolCatalog, ToolSet
@@ -75,10 +72,7 @@ __all__ = [
     "WebFetchTool",
     "WebSearchTool",
     "WriteFileTool",
-    "CreateScheduledTaskTool",
-    "DeleteScheduledTaskTool",
-    "UpdateScheduledTaskTool",
-    "ListScheduledTasksTool",
+    "ScheduledTaskTool",
     "builtin_catalog",
     "load_tool_config",
     "resolve_image",

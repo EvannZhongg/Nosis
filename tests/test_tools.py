@@ -39,12 +39,7 @@ from agent_core import (
 )
 from agent_core.permissions import PermissionPreset
 from agent_core.scheduler import CronTrigger, IntervalTrigger, SchedulerService
-from agent_core.tools.builtin.schedule import (
-    CreateScheduledTaskTool,
-    DeleteScheduledTaskTool,
-    ListScheduledTasksTool,
-    UpdateScheduledTaskTool,
-)
+from agent_core.tools.builtin.schedule import ScheduledTaskTool
 from agent_core.tools.budget import MAX_TOOL_RESULT_CHARS
 from agent_core.tools.builtin.read_file import (
     MAX_FILE_SIZE_BYTES as MAX_READ_FILE_SIZE_BYTES,
@@ -125,8 +120,8 @@ def scheduled_context_for(workspace, **fields):
 def execute_scheduled(arguments, context):
     router = context.execution_router
     assert router is not None
-    call = ToolCall("test-call", "create_scheduled_task", arguments)
-    return CreateScheduledTaskTool().execute(
+    call = ToolCall("test-call", "scheduled_task", arguments)
+    return ScheduledTaskTool().execute(
         arguments,
         replace(context, execution=router.resolve(call)),
     )
@@ -245,13 +240,123 @@ class ToolCatalogTest(unittest.TestCase):
 
 
 class ScheduledTaskToolTest(unittest.TestCase):
+    def test_catalog_requires_scheduler_and_execution_router(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            context = scheduled_context_for(
+                Workspace(root), scheduler=SchedulerService(root / "schedule.jsonl")
+            )
+            catalog = builtin_catalog()
+            self.assertEqual(
+                [name for name in catalog.names if "scheduled" in name],
+                ["scheduled_task"],
+            )
+            self.assertEqual(
+                len(catalog.select(("scheduled_task",), context).definitions), 1
+            )
+            for unavailable in (
+                replace(context, scheduler=None),
+                replace(context, execution_router=None),
+            ):
+                self.assertEqual(
+                    catalog.select(("scheduled_task",), unavailable).definitions, ()
+                )
+
+    def test_unified_tool_exposes_all_actions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            scheduler = SchedulerService(root / "schedule.jsonl")
+            context = scheduled_context_for(
+                Workspace(root),
+                sessions_directory=root / "sessions",
+                scheduler=scheduler,
+            )
+            tool = ScheduledTaskTool()
+            created = execute_scheduled(
+                {
+                    "action": "create",
+                    "schedule": {
+                        "prompt": "p",
+                        "trigger": {"type": "interval", "seconds": 60},
+                    },
+                },
+                context,
+            )
+            schedule_id = created["schedule_id"]
+            updated = tool.execute(
+                {
+                    "action": "update",
+                    "schedule_id": schedule_id,
+                    "changes": {"enabled": False},
+                },
+                context,
+            )
+            self.assertFalse(updated["enabled"])
+            listed = tool.execute({"action": "list"}, context)
+            self.assertEqual(listed[0]["schedule_id"], schedule_id)
+            deleted = tool.execute(
+                {"action": "delete", "schedule_id": schedule_id}, context
+            )
+            self.assertEqual(deleted, {"schedule_id": schedule_id, "deleted": True})
+            self.assertEqual(scheduler.schedules, [])
+
+    def test_action_rejects_fields_belonging_to_another_action(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            context = scheduled_context_for(
+                Workspace(root),
+                sessions_directory=root / "sessions",
+                scheduler=SchedulerService(root / "schedule.jsonl"),
+            )
+            tool = ScheduledTaskTool()
+            invalid = (
+                {},
+                {"action": "unknown"},
+                {"action": None},
+                {"action": []},
+                {"action": "create"},
+                {"action": "create", "schedule": None},
+                {"action": "list", "schedule_id": "x"},
+                {"action": "delete"},
+                {"action": "update", "schedule_id": "x"},
+                {"action": "update", "schedule_id": "x", "changes": {}},
+                {"action": "update", "schedule_id": "x", "changes": None},
+                {"action": "update", "schedule_id": "x", "changes": []},
+                {"action": "create", "schedule": {"prompt": "p"}},
+                {
+                    "action": "create",
+                    "schedule": {
+                        "prompt": "p",
+                        "trigger": {"type": "interval", "seconds": 1},
+                        "enabled": True,
+                    },
+                },
+                {
+                    "action": "delete",
+                    "schedule_id": "x",
+                    "changes": {"enabled": False},
+                },
+            )
+            for arguments in invalid:
+                with self.subTest(arguments=arguments):
+                    with self.assertRaises(ValueError):
+                        tool.execute(arguments, context)
+                    self.assertEqual(list(root.iterdir()), [])
+
     def test_create_schema_declares_trigger_properties_without_one_of(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            definition = CreateScheduledTaskTool().definition(
+            definition = ScheduledTaskTool().definition(
                 scheduled_context_for(Workspace(Path(directory)))
             )
 
-        trigger_schema = definition.parameters["properties"]["trigger"]
+        properties = definition.parameters["properties"]
+        self.assertEqual(definition.parameters["required"], ["action"])
+        self.assertEqual(
+            properties["action"]["enum"], ["create", "update", "list", "delete"]
+        )
+        self.assertEqual(properties["changes"]["minProperties"], 1)
+        trigger_schema = properties["schedule"]["properties"]["trigger"]
+        self.assertEqual(properties["changes"]["properties"]["trigger"], trigger_schema)
         self.assertNotIn("oneOf", trigger_schema)
         self.assertEqual(
             trigger_schema["properties"]["type"]["enum"],
@@ -263,7 +368,7 @@ class ScheduledTaskToolTest(unittest.TestCase):
             "(?:Z|[+-][0-9]{2}:[0-9]{2})$",
         )
         self.assertEqual(
-            definition.parameters["properties"]["execution_scope"]["enum"],
+            definition.parameters["properties"]["schedule"]["properties"]["execution_scope"]["enum"],
             ["workspace"],
         )
 
@@ -282,21 +387,24 @@ class ScheduledTaskToolTest(unittest.TestCase):
                 sessions_directory=sessions_directory,
                 scheduler=scheduler,
             )
-            tool = CreateScheduledTaskTool()
+            tool = ScheduledTaskTool()
 
             self.assertEqual(
-                tool.definition(context).parameters["properties"]
-                ["execution_scope"]["enum"],
+                tool.definition(context).parameters["properties"]["schedule"]
+                ["properties"]["execution_scope"]["enum"],
                 ["workspace", "host"],
             )
             result = execute_scheduled(
                 {
-                    "prompt": "host scheduled prompt",
-                    "trigger": {
-                        "type": "once",
-                        "at": "2099-01-01T00:00:00+00:00",
+                    "action": "create",
+                    "schedule": {
+                        "prompt": "host scheduled prompt",
+                        "trigger": {
+                            "type": "once",
+                            "at": "2099-01-01T00:00:00+00:00",
+                        },
+                        "execution_scope": "host",
                     },
-                    "execution_scope": "host",
                 },
                 context,
             )
@@ -327,12 +435,15 @@ class ScheduledTaskToolTest(unittest.TestCase):
             ):
                 execute_scheduled(
                     {
-                        "prompt": "host scheduled prompt",
-                        "trigger": {
-                            "type": "once",
-                            "at": "2099-01-01T00:00:00+00:00",
+                        "action": "create",
+                        "schedule": {
+                            "prompt": "host scheduled prompt",
+                            "trigger": {
+                                "type": "once",
+                                "at": "2099-01-01T00:00:00+00:00",
+                            },
+                            "execution_scope": "host",
                         },
-                        "execution_scope": "host",
                     },
                     context,
                 )
@@ -358,8 +469,8 @@ class ScheduledTaskToolTest(unittest.TestCase):
             )
 
             self.assertEqual(
-                CreateScheduledTaskTool().definition(context).parameters
-                ["properties"]["execution_scope"]["enum"],
+                ScheduledTaskTool().definition(context).parameters
+                ["properties"]["schedule"]["properties"]["execution_scope"]["enum"],
                 ["workspace"],
             )
             with self.assertRaisesRegex(
@@ -368,12 +479,15 @@ class ScheduledTaskToolTest(unittest.TestCase):
             ):
                 execute_scheduled(
                     {
-                        "prompt": "host scheduled prompt",
-                        "trigger": {
-                            "type": "once",
-                            "at": "2099-01-01T00:00:00+00:00",
+                        "action": "create",
+                        "schedule": {
+                            "prompt": "host scheduled prompt",
+                            "trigger": {
+                                "type": "once",
+                                "at": "2099-01-01T00:00:00+00:00",
+                            },
+                            "execution_scope": "host",
                         },
-                        "execution_scope": "host",
                     },
                     context,
                 )
@@ -389,17 +503,20 @@ class ScheduledTaskToolTest(unittest.TestCase):
             )
             created = execute_scheduled(
                 {
-                    "prompt": "scheduled prompt",
-                    "trigger": {"type": "once", "at": "2099-01-01T00:00:00+00:00"},
+                    "action": "create",
+                    "schedule": {
+                        "prompt": "scheduled prompt",
+                        "trigger": {"type": "once", "at": "2099-01-01T00:00:00+00:00"},
+                    },
                 },
                 context,
             )
-            toolset = builtin_catalog().select(("delete_scheduled_task",), context)
+            toolset = builtin_catalog().select(("scheduled_task",), context)
             result = toolset.execute(
                 ToolCall(
                     id="delete-1",
-                    name="delete_scheduled_task",
-                    arguments={"schedule_id": created["schedule_id"]},
+                    name="scheduled_task",
+                    arguments={"action": "delete", "schedule_id": created["schedule_id"]},
                 )
             )
 
@@ -417,8 +534,11 @@ class ScheduledTaskToolTest(unittest.TestCase):
             )
             execute_scheduled(
                 {
-                    "prompt": "scheduled prompt",
-                    "trigger": {"type": "interval", "seconds": 90},
+                    "action": "create",
+                    "schedule": {
+                        "prompt": "scheduled prompt",
+                        "trigger": {"type": "interval", "seconds": 90},
+                    },
                 },
                 context,
             )
@@ -436,21 +556,27 @@ class ScheduledTaskToolTest(unittest.TestCase):
             )
             created = execute_scheduled(
                 {
-                    "prompt": "scheduled prompt",
-                    "trigger": {"type": "interval", "seconds": 1200},
+                    "action": "create",
+                    "schedule": {
+                        "prompt": "scheduled prompt",
+                        "trigger": {"type": "interval", "seconds": 1200},
+                    },
                 },
                 context,
             )
 
-            result = UpdateScheduledTaskTool().execute(
+            result = ScheduledTaskTool().execute(
                 {
+                    "action": "update",
                     "schedule_id": created["schedule_id"],
-                    "trigger": {
-                        "type": "cron",
-                        "expression": "0 10 * * *",
-                        "timezone": "Asia/Shanghai",
+                    "changes": {
+                        "trigger": {
+                            "type": "cron",
+                            "expression": "0 10 * * *",
+                            "timezone": "Asia/Shanghai",
+                        },
+                        "end_at": "2099-12-31T23:59:00+08:00",
                     },
-                    "end_at": "2099-12-31T23:59:00+08:00",
                 },
                 context,
             )
@@ -467,7 +593,7 @@ class ScheduledTaskToolTest(unittest.TestCase):
                 result["end_at"], "2099-12-31T23:59:00+08:00"
             )
 
-    def test_schedule_tools_reject_coercion_and_unknown_arguments(self) -> None:
+    def test_schedule_tool_rejects_coercion_and_unknown_arguments(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             scheduler = SchedulerService(root / "schedule.jsonl")
@@ -478,36 +604,55 @@ class ScheduledTaskToolTest(unittest.TestCase):
             )
             created = execute_scheduled(
                 {
-                    "prompt": "scheduled prompt",
-                    "trigger": {"type": "interval", "seconds": 60},
+                    "action": "create",
+                    "schedule": {
+                        "prompt": "scheduled prompt",
+                        "trigger": {"type": "interval", "seconds": 60},
+                    },
                 },
                 context,
             )
 
             with self.assertRaisesRegex(ValueError, "prompt must be"):
-                UpdateScheduledTaskTool().execute(
-                    {"schedule_id": created["schedule_id"], "prompt": " "},
+                ScheduledTaskTool().execute(
+                    {
+                        "action": "update",
+                        "schedule_id": created["schedule_id"],
+                        "changes": {"prompt": " "},
+                    },
                     context,
                 )
             with self.assertRaisesRegex(ValueError, "enabled must be"):
-                UpdateScheduledTaskTool().execute(
-                    {"schedule_id": created["schedule_id"], "enabled": 1},
+                ScheduledTaskTool().execute(
+                    {
+                        "action": "update",
+                        "schedule_id": created["schedule_id"],
+                        "changes": {"enabled": 1},
+                    },
                     context,
                 )
             with self.assertRaisesRegex(
                 ValueError, "unsupported schedule update field"
             ):
-                UpdateScheduledTaskTool().execute(
-                    {"schedule_id": created["schedule_id"], "unknown": True},
+                ScheduledTaskTool().execute(
+                    {
+                        "action": "update",
+                        "schedule_id": created["schedule_id"],
+                        "changes": {"unknown": True},
+                    },
                     context,
                 )
             with self.assertRaisesRegex(ValueError, "schedule_id must be"):
-                UpdateScheduledTaskTool().execute(
-                    {"schedule_id": 123, "prompt": "updated"},
+                ScheduledTaskTool().execute(
+                    {
+                        "action": "update",
+                        "schedule_id": 123,
+                        "changes": {"prompt": "updated"},
+                    },
                     context,
                 )
             with self.assertRaisesRegex(ValueError, "schedule_id must be"):
-                DeleteScheduledTaskTool().execute({"schedule_id": 123}, context)
+                ScheduledTaskTool().execute({"action": "delete", "schedule_id": 123}, context)
 
     def test_list_includes_trigger_and_end_at(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -520,14 +665,17 @@ class ScheduledTaskToolTest(unittest.TestCase):
             )
             execute_scheduled(
                 {
-                    "prompt": "scheduled prompt",
-                    "trigger": {"type": "interval", "seconds": 1200},
-                    "end_at": "2099-12-31T23:59:00+00:00",
+                    "action": "create",
+                    "schedule": {
+                        "prompt": "scheduled prompt",
+                        "trigger": {"type": "interval", "seconds": 1200},
+                        "end_at": "2099-12-31T23:59:00+00:00",
+                    },
                 },
                 context,
             )
 
-            item = ListScheduledTasksTool().execute({}, context)[0]
+            item = ScheduledTaskTool().execute({"action": "list"}, context)[0]
 
             self.assertEqual(
                 item["trigger"],
@@ -541,21 +689,32 @@ class ScheduledTaskToolTest(unittest.TestCase):
                 Workspace(Path(directory)),
                 scheduler=SchedulerService(Path(directory) / "schedule.jsonl"),
             )
-            tool = CreateScheduledTaskTool()
             with self.assertRaisesRegex(ValueError, "once trigger requires 'at'"):
-                execute_scheduled({"prompt": "p", "trigger": {"type": "once"}}, context)
+                execute_scheduled(
+                    {"action": "create", "schedule": {"prompt": "p", "trigger": {"type": "once"}}},
+                    context,
+                )
             with self.assertRaisesRegex(ValueError, "cron trigger requires 'expression'"):
-                execute_scheduled({"prompt": "p", "trigger": {"type": "cron"}}, context)
+                execute_scheduled(
+                    {"action": "create", "schedule": {"prompt": "p", "trigger": {"type": "cron"}}},
+                    context,
+                )
             with self.assertRaisesRegex(ValueError, "Retry with seconds"):
-                execute_scheduled({"prompt": "p", "trigger": {"type": "interval"}}, context)
+                execute_scheduled(
+                    {"action": "create", "schedule": {"prompt": "p", "trigger": {"type": "interval"}}},
+                    context,
+                )
             with self.assertRaisesRegex(ValueError, "start_at must be"):
                 execute_scheduled(
                     {
-                        "prompt": "p",
-                        "trigger": {
-                            "type": "interval",
-                            "seconds": 60,
-                            "start_at": 123,
+                        "action": "create",
+                        "schedule": {
+                            "prompt": "p",
+                            "trigger": {
+                                "type": "interval",
+                                "seconds": 60,
+                                "start_at": 123,
+                            },
                         },
                     },
                     context,
@@ -563,9 +722,12 @@ class ScheduledTaskToolTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "end_at must be"):
                 execute_scheduled(
                     {
-                        "prompt": "p",
-                        "trigger": {"type": "interval", "seconds": 60},
-                        "end_at": 123,
+                        "action": "create",
+                        "schedule": {
+                            "prompt": "p",
+                            "trigger": {"type": "interval", "seconds": 60},
+                            "end_at": 123,
+                        },
                     },
                     context,
                 )
@@ -577,9 +739,17 @@ class ScheduledTaskToolTest(unittest.TestCase):
                 scheduler=SchedulerService(Path(directory) / "schedule.jsonl"),
             )
             with self.assertRaisesRegex(ValueError, "scheduled task not found"):
-                DeleteScheduledTaskTool().execute({"schedule_id": "missing"}, context)
+                ScheduledTaskTool().execute({"action": "delete", "schedule_id": "missing"}, context)
             with self.assertRaisesRegex(ValueError, "scheduled task not found"):
-                UpdateScheduledTaskTool().execute({"schedule_id": "missing"}, context)
+                ScheduledTaskTool().execute(
+                    {
+                        "action": "update",
+                        "schedule_id": "missing",
+                        "changes": {"enabled": False},
+                    },
+                    context,
+                )
+
     def test_new_schedule_session_inherits_provider_and_caps_permissions(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -600,10 +770,13 @@ class ScheduledTaskToolTest(unittest.TestCase):
 
             result = execute_scheduled(
                 {
-                    "prompt": "scheduled prompt",
-                    "trigger": {
-                        "type": "once",
-                        "at": "2099-01-01T00:00:00+00:00",
+                    "action": "create",
+                    "schedule": {
+                        "prompt": "scheduled prompt",
+                        "trigger": {
+                            "type": "once",
+                            "at": "2099-01-01T00:00:00+00:00",
+                        },
                     },
                 },
                 context,
@@ -622,10 +795,13 @@ class ScheduledTaskToolTest(unittest.TestCase):
             session.permission_preset = PermissionPreset.FULL_ACCESS
             second = execute_scheduled(
                 {
-                    "prompt": "another scheduled prompt",
-                    "trigger": {
-                        "type": "once",
-                        "at": "2099-01-02T00:00:00+00:00",
+                    "action": "create",
+                    "schedule": {
+                        "prompt": "another scheduled prompt",
+                        "trigger": {
+                            "type": "once",
+                            "at": "2099-01-02T00:00:00+00:00",
+                        },
                     },
                 },
                 context,

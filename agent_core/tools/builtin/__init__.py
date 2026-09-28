@@ -15,12 +15,7 @@ from .write_file import WriteFileTool
 from .ask_user import AskUserTool
 from .update_plan import UpdatePlanTool
 from .remember import RememberTool
-from .schedule import (
-    CreateScheduledTaskTool,
-    DeleteScheduledTaskTool,
-    ListScheduledTasksTool,
-    UpdateScheduledTaskTool,
-)
+from .schedule import ScheduledTaskTool
 
 
 def builtin_catalog():
@@ -51,10 +46,7 @@ def builtin_catalog():
             AskUserTool(),
             UpdatePlanTool(),
             RememberTool(),
-            CreateScheduledTaskTool(),
-            UpdateScheduledTaskTool(),
-            ListScheduledTasksTool(),
-            DeleteScheduledTaskTool(),
+            ScheduledTaskTool(),
         )
     )
 
@@ -65,7 +57,7 @@ __all__ = [
     "AskUserTool",
     "EditFileTool",
     "GenerateImageTool",
-    "DeleteScheduledTaskTool",
+    "ScheduledTaskTool",
     "ListDirectoryTool",
     "ReadFileTool",
     "ReadImageTool",
