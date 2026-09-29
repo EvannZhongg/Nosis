@@ -152,10 +152,14 @@ class ContextManager:
         anchors = self._lossless_user_anchor_content()
         if anchors is not None:
             content = f"{anchors}\n\n{content}"
-        messages: list[Message] = [Message(role="user", content=content)]
-        runtime_context = self._runtime_context_message()
-        if runtime_context is not None:
-            messages.append(runtime_context)
+        messages: list[Message] = []
+        archived_context = self._archived_summary_message()
+        if archived_context is not None:
+            messages.append(archived_context)
+        # Keep the material being summarized as the final message. This makes
+        # the consolidator's target unambiguous and avoids summarizing runtime
+        # state that only provides context for the compression.
+        messages.append(Message(role="user", content=content))
         request = LLMRequest(
             system_prompt=self._consolidator_prompt,
             messages=tuple(messages),
@@ -180,11 +184,9 @@ class ContextManager:
 
     def _runtime_context_message(self) -> Message | None:
         sections = ["[Runtime Context]"]
-        if self._session.archived_summary is not None:
-            sections.append(
-                "[Archived Context Summary]\n"
-                f"{self._session.archived_summary}"
-            )
+        archived_context = self._archived_summary_message()
+        if archived_context is not None:
+            sections.append(archived_context.content)
         if self._session.plan is not None and self._session.plan.is_active:
             sections.append(
                 "[Current Plan]\n"
@@ -198,6 +200,17 @@ class ContextManager:
         if len(sections) == 1:
             return None
         return Message(role="system", content="\n\n".join(sections))
+
+    def _archived_summary_message(self) -> Message | None:
+        if self._session.archived_summary is None:
+            return None
+        return Message(
+            role="system",
+            content=(
+                "[Archived Context Summary]\n"
+                f"{self._session.archived_summary}"
+            ),
+        )
 
     def _lossless_user_anchor_content(self) -> str | None:
         return _lossless_user_anchors(

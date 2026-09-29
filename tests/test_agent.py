@@ -405,9 +405,9 @@ class AgentTest(unittest.TestCase):
         self.assertEqual(provider.requests[1].system_prompt, CONSOLIDATOR_PROMPT)
         self.assertIn(
             "[Archived Context Summary]\nfirst summary",
-            provider.requests[1].messages[-1].content,
+            provider.requests[1].messages[0].content,
         )
-        compression_record = provider.requests[1].messages[0].content or ""
+        compression_record = provider.requests[1].messages[-1].content or ""
         self.assertIn("second", compression_record)
         request = context.build_request()
         self.assertEqual(request.system_prompt, "You are helpful.")
@@ -587,7 +587,7 @@ class AgentTest(unittest.TestCase):
         session.add_item("assistant", "almost done")
         context.archive()
 
-        second_record = provider.requests[1].messages[0].content or ""
+        second_record = provider.requests[1].messages[-1].content or ""
         self.assertIn("[Lossless User Anchors]", second_record)
         self.assertIn("complete the migration", second_record)
         self.assertIn("[Conversation Record]", second_record)
