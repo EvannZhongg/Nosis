@@ -29,7 +29,9 @@ class ComputerActionTool(Tool):
             name=self.name,
             description=(
                 "Operate the visible computer interface, then inspect the "
-                "resulting screenshot. Coordinates refer to the latest screenshot."
+                "resulting screenshot. Coordinates refer to the latest screenshot. "
+                "The type action inserts committed text through the clipboard, "
+                "so it is safe with active keyboard input methods."
             ),
             parameters={
                 "type": "object",
@@ -40,8 +42,19 @@ class ComputerActionTool(Tool):
                     "button": {"type": "string", "enum": ["left", "middle", "right"]},
                     "clicks": {"type": "integer", "minimum": 1, "maximum": 3},
                     "text": {"type": "string"},
-                    "key": {"type": "string"},
-                    "keys": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+                    "key": {
+                        "type": "string",
+                        "description": "A PyAutoGUI key name, such as enter, esc, ctrl, or command.",
+                    },
+                    "keys": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 1,
+                        "description": (
+                            "PyAutoGUI key names for a hotkey; Control and Ctrl are "
+                            "accepted aliases for ctrl."
+                        ),
+                    },
                     "amount": {"type": "integer", "minimum": -20, "maximum": 20},
                 },
                 "required": ["action"],
