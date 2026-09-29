@@ -44,7 +44,10 @@ class ComputerActionTool(Tool):
                     "text": {"type": "string"},
                     "key": {
                         "type": "string",
-                        "description": "A PyAutoGUI key name, such as enter, esc, ctrl, or command.",
+                        "description": (
+                            "A key name supported by PyAutoGUI on the current platform, "
+                            "such as enter, esc, or tab."
+                        ),
                     },
                     "keys": {
                         "type": "array",
@@ -52,7 +55,8 @@ class ComputerActionTool(Tool):
                         "minItems": 1,
                         "description": (
                             "PyAutoGUI key names for a hotkey; Control and Ctrl are "
-                            "accepted aliases for ctrl."
+                            "accepted aliases for ctrl. Use command on macOS and ctrl "
+                            "on Windows or Linux."
                         ),
                     },
                     "amount": {"type": "integer", "minimum": -20, "maximum": 20},

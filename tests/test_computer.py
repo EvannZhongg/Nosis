@@ -68,7 +68,7 @@ class HotkeyNormalizationTest(unittest.TestCase):
     def test_rejects_unknown_key_before_pyautogui_can_ignore_it(self) -> None:
         pyautogui = Mock(KEYBOARD_KEYS={"ctrl", "v"})
 
-        with self.assertRaisesRegex(ValueError, "unsupported key: ControlLeft"):
+        with self.assertRaisesRegex(ValueError, "unsupported computer key: ControlLeft"):
             _normalize_hotkey_keys(["ControlLeft", "v"], pyautogui)
 
     def test_rejects_key_without_a_current_platform_mapping(self) -> None:
@@ -79,7 +79,7 @@ class HotkeyNormalizationTest(unittest.TestCase):
             ),
         )
 
-        with self.assertRaisesRegex(ValueError, "unsupported key: Command"):
+        with self.assertRaisesRegex(ValueError, "unsupported computer key: Command"):
             _normalize_hotkey_keys(["Command", "v"], pyautogui)
 
     def test_desktop_control_passes_normalized_keys_to_pyautogui(self) -> None:
@@ -109,7 +109,7 @@ class HotkeyNormalizationTest(unittest.TestCase):
         with patch.dict("sys.modules", {"pyautogui": pyautogui}):
             with patch("agent_runtime.computer.desktop_screenshot_capture", return_value=screenshot):
                 control = desktop_computer_control(Mock())
-                with self.assertRaisesRegex(ValueError, "unsupported key: F13"):
+                with self.assertRaisesRegex(ValueError, "unsupported computer key: F13"):
                     control({"action": "key", "key": "F13"})
 
         pyautogui.press.assert_not_called()

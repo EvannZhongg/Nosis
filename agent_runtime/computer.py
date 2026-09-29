@@ -111,7 +111,7 @@ def _normalize_hotkey_keys(keys: list[str], pyautogui: Any) -> tuple[str, ...]:
         candidate = key.lower() if len(key) == 1 else key.casefold()
         candidate = _HOTKEY_ALIASES.get(candidate, candidate)
         if supported is not None and candidate not in supported:
-            raise ValueError(f"hotkey contains unsupported key: {key}")
+            raise ValueError(f"unsupported computer key: {key}")
         normalized.append(candidate)
     return tuple(normalized)
 
