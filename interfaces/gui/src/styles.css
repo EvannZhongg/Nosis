@@ -13,7 +13,7 @@ svg { flex-shrink: 0; }
 .app-shell { --sessions-width: 224px; --workspace-width: 260px; display: grid; grid-template-columns: var(--sessions-width) minmax(340px, 1fr) var(--workspace-width); height: 100dvh; overflow: hidden; transition: grid-template-columns .18s ease; }
 .app-shell.sessions-collapsed { --sessions-width: 56px; }
 .app-shell.workspace-collapsed { --workspace-width: 52px; }
-.sessions-panel { display: flex; flex-direction: column; padding: 0 16px; border-right: 1px solid #e5e7ec; background: #f6f7f9; min-height: 0; }
+.sessions-panel { --sessions-panel-gutter: 16px; display: flex; flex-direction: column; padding: 0 var(--sessions-panel-gutter); border-right: 1px solid #e5e7ec; background: #f6f7f9; min-height: 0; }
 .sessions-panel.collapsed { align-items: center; padding: 0 7px; }
 .brand { height: 48px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 3px 0 9px; font-size: 23px; font-weight: 650; letter-spacing: -.8px; }
 .brand-dot { color: #7a8ac4; }
@@ -30,7 +30,7 @@ svg { flex-shrink: 0; }
 .new-chat:hover { background: #fdfdff; border-color: #b9c1d3; }
 .section-label { margin: 31px 10px 12px; font-size: 11px; color: #9399a6; letter-spacing: .5px; }
 .chat-section-label { margin-top: 24px; }
-.session-list { flex: 1; overflow-y: auto; }
+.session-list { flex: 1; margin-right: calc(-1 * var(--sessions-panel-gutter)); padding-right: var(--sessions-panel-gutter); overflow-y: auto; }
 .session-row { display: flex; align-items: center; margin-bottom: 4px; border-radius: 6px; }
 .session-button { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; width: 100%; padding: 11px 10px; border: 0; border-radius: 6px; background: transparent; color: #737b8b; text-align: left; font-size: 12px; }
 .session-button span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
@@ -302,7 +302,7 @@ pre { overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-famil
 .tree-error { color: #ab6666; }
 .workspace-footer { margin: 0 18px; height: 54px; display: flex; gap: 7px; align-items: center; border-top: 1px solid #ebedf2; font-size: 10px; color: #a1aab8; }
 @media (max-width: 1080px) { .app-shell { --sessions-width: 190px; --workspace-width: 210px; grid-template-columns: var(--sessions-width) minmax(320px, 1fr) var(--workspace-width); } .app-shell.sessions-collapsed { --sessions-width: 56px; } .app-shell.workspace-collapsed { --workspace-width: 52px; } .messages { padding: 25px 22px; } .composer-area { padding-left: 22px; padding-right: 22px; } }
-@media (max-width: 800px) { .app-shell { --sessions-width: 165px; --workspace-width: 190px; grid-template-columns: var(--sessions-width) minmax(0, 1fr) var(--workspace-width); } .app-shell.sessions-collapsed { --sessions-width: 56px; } .app-shell.workspace-collapsed { --workspace-width: 52px; } .sessions-panel:not(.collapsed) { padding: 0 10px; } .chat-header { padding: 0 18px; } }
+@media (max-width: 800px) { .app-shell { --sessions-width: 165px; --workspace-width: 190px; grid-template-columns: var(--sessions-width) minmax(0, 1fr) var(--workspace-width); } .app-shell.sessions-collapsed { --sessions-width: 56px; } .app-shell.workspace-collapsed { --workspace-width: 52px; } .sessions-panel:not(.collapsed) { --sessions-panel-gutter: 10px; } .chat-header { padding: 0 18px; } }
 @media (max-width: 520px) { .app-shell { --sessions-width: 110px; --workspace-width: 150px; grid-template-columns: var(--sessions-width) minmax(0, 1fr) var(--workspace-width); } .app-shell.sessions-collapsed { --sessions-width: 56px; } .app-shell.workspace-collapsed { --workspace-width: 52px; } .brand { font-size: 20px; padding: 0 3px; } .new-chat { padding: 9px 6px; gap: 5px; font-size: 11px; } .section-label { margin: 25px 3px 10px; } .session-button { padding: 10px 4px; gap: 5px; font-size: 11px; } .sidebar-footer { font-size: 8px; padding: 0; } .messages { padding: 22px 14px; } .assistant-content { padding-left: 0; } .composer-area { padding: 5px 12px 0; } .status-label { display: none; } .welcome { padding: 25px 12px; } .welcome h1 { font-size: 19px; } }
 @media (prefers-reduced-motion: reduce) { .app-shell { transition: none; } .spin, .context-window { animation: none; } .thread-viewport { scroll-behavior: auto; } }
 @media (max-width: 1080px) { .model-selector { max-width: calc(100% - 42px); } }
