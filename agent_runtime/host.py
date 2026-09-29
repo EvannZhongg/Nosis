@@ -7,7 +7,8 @@ from typing import Callable
 from agent_core import (
     AgentEvent, AttachmentPart, CompositeToolPolicy, ContextWindowEvent,
     ExecutionAuthority, FULL_ACCESS_AUTHORITY, McpApprovalPolicy,
-    PermissionPreset, SchedulerService, ShellApprovalPolicy, Workspace,
+    PermissionPreset, SchedulerService, ShellApprovalPolicy,
+    ComputerApprovalPolicy, Workspace,
 )
 
 from .callbacks import RuntimeCallbacks
@@ -45,6 +46,7 @@ class RuntimeHost:
             self.config_directory, self.environment, runtime_callbacks,
             CompositeToolPolicy(
                 ShellApprovalPolicy(self.callbacks.request_permission),
+                ComputerApprovalPolicy(self.callbacks.request_permission),
                 McpApprovalPolicy(
                     self._request_mcp_permission,
                     lambda name: (

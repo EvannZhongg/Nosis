@@ -73,6 +73,7 @@ from .instructions import load_workspace_instructions
 from .plugins import PluginAgent, PluginManager
 from .settings import EnvironmentReloader, SettingsStore, configuration_fingerprint
 from .callbacks import RuntimeCallbacks
+from .computer import desktop_computer_control, desktop_screenshot_capture
 from .session_controller import SessionRuntimeController
 
 
@@ -296,6 +297,8 @@ class ExecutionPlaneManager:
                 ),
                 scheduler=self.scheduler,
                 memory=memory,
+                screenshot=desktop_screenshot_capture(workspace),
+                computer=desktop_computer_control(workspace),
             )
             agent = Agent(
                 provider=main_provider,
@@ -321,6 +324,8 @@ class ExecutionPlaneManager:
                         ),
                         "ask_user",
                         "update_plan",
+                        "computer_screenshot",
+                        "computer_action",
                         *mcp.tool_names,
                         *(("remember",) if memory is not None else ()),
                     ),

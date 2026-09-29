@@ -8,6 +8,7 @@ from agent_core import (
     PermissionPreset,
     Session,
     ShellApprovalPolicy,
+    ComputerApprovalPolicy,
     ToolCall,
     ToolExecutionContext,
     Workspace,
@@ -73,6 +74,17 @@ class ShellApprovalPolicyTest(unittest.TestCase):
         )
 
         self.assertEqual(requested_commands, [])
+
+    def test_computer_action_requests_approval(self) -> None:
+        requests = []
+        policy = ComputerApprovalPolicy(
+            lambda description, **kwargs: requests.append((description, kwargs)) or True
+        )
+        policy.authorize(
+            ToolCall("call-1", "computer_action", {"action": "click"}),
+            context(),
+        )
+        self.assertEqual(requests[0][1]["kind"], "computer")
 
 
 class PermissionControllerTest(unittest.TestCase):

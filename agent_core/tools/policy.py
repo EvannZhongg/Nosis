@@ -55,3 +55,19 @@ class McpApprovalPolicy:
         if not self._request_permission(call):
             raise PermissionError("MCP tool call was not approved")
         return True
+
+
+class ComputerApprovalPolicy:
+    """Ask for approval before sending input-device events."""
+
+    def __init__(self, request_permission: Callable[..., bool]) -> None:
+        self._request_permission = request_permission
+
+    def authorize(self, call: ToolCall, context: ToolExecutionContext) -> bool:
+        if call.name != "computer_action":
+            return False
+        if not self._request_permission(
+            f"{call.name}({call.arguments})", kind="computer"
+        ):
+            raise PermissionError("computer action was not approved")
+        return True

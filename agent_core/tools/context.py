@@ -59,6 +59,10 @@ class ToolExecutionContext:
     ) = None
     scheduler: object | None = None
     memory: "MemoryManager | None" = None
+    # Runtime-provided screenshot capture. Core owns the tool contract while
+    # the Runtime chooses the platform-specific capture implementation.
+    screenshot: Callable[[str], Path] | None = None
+    computer: Callable[[dict[str, JSONValue]], Path] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(

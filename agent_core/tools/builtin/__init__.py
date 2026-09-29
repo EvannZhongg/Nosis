@@ -4,6 +4,8 @@ from .generate_image import GenerateImageTool
 from .list_directory import ListDirectoryTool
 from .read_file import ReadFileTool
 from .read_image import ReadImageTool
+from .computer_screenshot import ComputerScreenshotTool
+from .computer_action import ComputerActionTool
 from .read_skill import ReadSkillTool
 from .search_files import SearchFilesTool
 from .shell import ShellTool
@@ -40,6 +42,8 @@ def builtin_catalog():
             WebSearchTool(),
             WebFetchTool(),
             ReadImageTool(),
+            ComputerScreenshotTool(),
+            ComputerActionTool(),
             AnalyzeImageTool(),
             ReadSkillTool(),
             SubagentTool(),
@@ -61,6 +65,8 @@ __all__ = [
     "ListDirectoryTool",
     "ReadFileTool",
     "ReadImageTool",
+    "ComputerScreenshotTool",
+    "ComputerActionTool",
     "ReadSkillTool",
     "SearchFilesTool",
     "ShellTool",

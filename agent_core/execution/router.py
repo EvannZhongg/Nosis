@@ -60,7 +60,12 @@ class ExecutionRouter:
                     else self._host_executor
                 ),
             )
-        scope = ExecutionScope.HOST if self._host_tool(call.name) else None
+        scope = (
+            ExecutionScope.HOST
+            if call.name in {"computer_action", "computer_screenshot"}
+            or self._host_tool(call.name)
+            else None
+        )
         if scope is not None and not authority.allows(scope):
             raise PermissionError(
                 f"execution scope '{scope.value}' exceeds authority"

@@ -11,6 +11,8 @@ from .base import (
 from .budget import MAX_TOOL_RESULT_CHARS
 from .builtin import (
     AnalyzeImageTool,
+    ComputerScreenshotTool,
+    ComputerActionTool,
     ApplyPatchTool,
     AskUserTool,
     EditFileTool,
@@ -34,13 +36,21 @@ from .catalog import ToolCatalog, ToolSet
 from .config import ROLE_TOOL_NAMES, TOOL_NAMES, ToolConfig, load_tool_config
 from .context import ToolExecutionContext
 from .paths import resolve_image, resolve_readable_path
-from .policy import CompositeToolPolicy, McpApprovalPolicy, ShellApprovalPolicy
+from .policy import (
+    CompositeToolPolicy,
+    ComputerApprovalPolicy,
+    McpApprovalPolicy,
+    ShellApprovalPolicy,
+)
 
 __all__ = [
     "AnalyzeImageTool",
     "ApplyPatchTool",
     "AskUserTool",
     "CompositeToolPolicy",
+    "ComputerApprovalPolicy",
+    "ComputerScreenshotTool",
+    "ComputerActionTool",
     "EditFileTool",
     "GenerateImageTool",
     "JSONValue",

@@ -24,8 +24,10 @@ TOOL_NAMES = (
 # generation is kept on the main Agent so generated media joins the visible
 # parent conversation directly.
 ROLE_TOOL_NAMES = tuple(
-    name for name in TOOL_NAMES if name not in {"subagent", "generate_image"}
-)
+    name
+    for name in TOOL_NAMES
+    if name not in {"subagent", "generate_image"}
+) + ("computer_screenshot", "computer_action")
 
 
 @dataclass(frozen=True)
