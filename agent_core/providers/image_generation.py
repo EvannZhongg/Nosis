@@ -9,6 +9,7 @@ from litellm import image_edit, image_generation
 from ..image_generation import GeneratedImage
 from ..media import MAX_IMAGE_BYTES
 from ..public_url import require_public_url
+from ._utils import get_field
 
 
 class LiteLLMImageGenerator:
@@ -74,8 +75,8 @@ class LiteLLMImageGenerator:
 
         images = []
         for item in getattr(response, "data", ()) or ():
-            payload = _field(item, "b64_json")
-            url = _field(item, "url")
+            payload = get_field(item, "b64_json")
+            url = get_field(item, "url")
             if isinstance(payload, str) and payload:
                 data = _decode_base64(payload)
             elif isinstance(url, str) and url:
@@ -87,7 +88,7 @@ class LiteLLMImageGenerator:
                     f"generated image is {len(data)} bytes, exceeding the "
                     f"maximum of {MAX_IMAGE_BYTES} bytes"
                 )
-            revised_prompt = _field(item, "revised_prompt")
+            revised_prompt = get_field(item, "revised_prompt")
             images.append(
                 GeneratedImage(
                     data=data,
@@ -106,12 +107,6 @@ class LiteLLMImageGenerator:
                 f"{len(images)} image(s), expected {count}"
             )
         return tuple(images[:count])
-
-
-def _field(value: object, name: str) -> object:
-    if isinstance(value, dict):
-        return value.get(name)
-    return getattr(value, name, None)
 
 
 def _decode_base64(value: str) -> bytes:

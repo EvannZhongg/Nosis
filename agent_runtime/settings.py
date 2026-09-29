@@ -13,6 +13,7 @@ from threading import RLock
 from dotenv import dotenv_values
 
 from agent_core import SkillLoader, load_agent_config
+from agent_core.atomic import atomic_write_text
 from agent_core.tools import ROLE_TOOL_NAMES, TOOL_NAMES
 
 from .config import (
@@ -35,29 +36,8 @@ def _read_json(path: Path) -> dict[str, object]:
     return value
 
 
-def _atomic_text(path: Path, text: str, *, mode: int | None = None) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        dir=path.parent,
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-        text=True,
-    )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as file:
-            file.write(text)
-            file.flush()
-            os.fsync(file.fileno())
-        if mode is not None:
-            os.chmod(temporary, mode)
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
 def _atomic_json(path: Path, value: dict[str, object]) -> None:
-    _atomic_text(path, json.dumps(value, ensure_ascii=False, indent=2) + "\n")
+    atomic_write_text(path, json.dumps(value, ensure_ascii=False, indent=2) + "\n")
 
 
 def _dotenv_values(path: Path) -> dict[str, str]:
@@ -85,7 +65,7 @@ def _update_dotenv(path: Path, name: str, value: str | None) -> None:
             output.append(line)
     if not replaced and replacement is not None:
         output.append(replacement)
-    _atomic_text(path, "\n".join(output) + ("\n" if output else ""), mode=0o600)
+    atomic_write_text(path, "\n".join(output) + ("\n" if output else ""), mode=0o600)
 
 
 def configuration_fingerprint(directory: Path) -> str:

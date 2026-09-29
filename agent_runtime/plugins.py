@@ -14,6 +14,7 @@ from agent_core import (
     load_mcp_server_map,
     namespace_mcp_servers,
 )
+from agent_core.path_utils import relative_to_root
 from agent_core.tools import ROLE_TOOL_NAMES
 
 
@@ -327,7 +328,7 @@ def _component_paths(
             )
         resolved = (root / relative).resolve()
         try:
-            resolved.relative_to(root)
+            relative_to_root(resolved, root)
         except ValueError as error:
             raise ValueError(
                 f"plugin field 'components.{field}' must stay inside the plugin"

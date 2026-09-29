@@ -3,7 +3,6 @@
 import json
 import os
 import shutil
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import BinaryIO, Iterable
 
@@ -18,6 +17,7 @@ from .session_paths import (
     workspace_directory,
     workspace_from_key,
 )
+from .time_utils import format_utc as _format_utc, parse_utc as _parse_utc
 
 SESSION_METADATA_FILENAME = "session.json"
 
@@ -420,13 +420,3 @@ def _session_title(path: Path, session_id: str) -> str:
     except (OSError, ValueError):
         pass
     return session_id
-
-
-def _format_utc(value: datetime) -> str:
-    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-def _parse_utc(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(
-        timezone.utc
-    )

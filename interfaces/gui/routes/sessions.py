@@ -281,6 +281,9 @@ def create_sessions_router(
                 # ASGI servers may cancel the handler when the browser drops
                 # the socket. Detaching must not cancel the runtime with it.
                 pass
+        except WebSocketDisconnect:
+            # A browser closing the socket during replay or relay is normal.
+            pass
         finally:
             if fatal_delivered:
                 runtime.mark_fatal_delivered()

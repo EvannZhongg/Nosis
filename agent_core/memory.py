@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +11,7 @@ from threading import Lock
 from typing import Literal
 
 from .llm import LLMProvider, LLMRequest
+from .atomic import atomic_write_text
 from .session import Message
 from .session_paths import workspace_directory, workspace_from_key
 
@@ -91,12 +91,12 @@ class MemoryStore:
         created = []
         with self._locked_files():
             if not self.global_path.exists():
-                _atomic_write(self.global_path, _render_global(MemoryDocument()))
+                atomic_write_text(self.global_path, _render_global(MemoryDocument()))
                 created.append(self.global_path)
             if workspace is not None:
                 path = self.workspace_path(workspace)
                 if not path.exists():
-                    _atomic_write(path, _render_workspace(MemoryDocument()))
+                    atomic_write_text(path, _render_workspace(MemoryDocument()))
                     created.append(path)
         return tuple(created)
 
@@ -141,9 +141,9 @@ class MemoryStore:
             ):
                 raise RuntimeError("workspace memory changed during reconciliation")
             if global_memory is not None:
-                _atomic_write(self.global_path, _render_global(global_memory))
+                atomic_write_text(self.global_path, _render_global(global_memory))
             if workspace_memory is not None:
-                _atomic_write(workspace_path, _render_workspace(workspace_memory))
+                atomic_write_text(workspace_path, _render_workspace(workspace_memory))
 
     def _load_workspace_files(self) -> dict[str, MemoryDocument]:
         if not self.sessions_directory.is_dir():
@@ -400,25 +400,6 @@ def _render_document(document: MemoryDocument, *, level: int) -> str:
 
 def _render_prompt_memory(document: MemoryDocument) -> str:
     return _render_document(document, level=4).rstrip()
-
-
-def _atomic_write(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        dir=path.parent,
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-        text=True,
-    )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as file:
-            file.write(content)
-            file.flush()
-            os.fsync(file.fileno())
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
 
 
 def _lock_file(handle) -> None:

@@ -5,6 +5,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from agent_core import Workspace
+from agent_core.path_utils import is_path_within
 
 
 SCRATCH_WORKSPACE_MARKER = ".nosis-scratch-workspace"
@@ -23,7 +24,7 @@ def create_scratch_workspace(root: Path, workspace_id: str | None = None) -> Wor
     path = resolved_root / identifier
     path.mkdir(parents=True, exist_ok=True)
     workspace = Workspace(path)
-    if not workspace.path.is_relative_to(resolved_root):
+    if not is_path_within(workspace.path, resolved_root):
         raise ValueError("scratch workspace must stay within its configured root")
     (workspace.path / SCRATCH_WORKSPACE_MARKER).touch(exist_ok=True)
     return workspace

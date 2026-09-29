@@ -2,12 +2,11 @@ import errno
 import os
 import re
 from dataclasses import dataclass
-from pathlib import Path
 
 from ...path_utils import path_for_comparison
 from ..base import JSONValue, Tool, ToolDefinition
 from ..context import ToolExecutionContext
-from .write_file import write_bytes_atomic
+from ...atomic import atomic_write_bytes
 
 
 @dataclass(frozen=True)
@@ -81,7 +80,7 @@ class ApplyPatchTool(Tool):
                 file_path.unlink()
             else:
                 assert change.content is not None
-                write_bytes_atomic(file_path, change.content.encode("utf-8"))
+                atomic_write_bytes(file_path, change.content.encode("utf-8"))
 
         return {
             "files": [

@@ -3,7 +3,7 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-from ...path_utils import path_for_comparison
+from ...path_utils import is_path_within, path_for_comparison
 from ..base import JSONValue, Tool, ToolDefinition
 from ..budget import output_fits
 from ..context import ToolExecutionContext
@@ -350,7 +350,7 @@ def _iter_directory_files(
     for entry in entries:
         relative_path = entry.relative_to(search_root)
         try:
-            if entry.is_symlink() or _escapes_search_root(entry, search_root):
+            if entry.is_symlink() or not is_path_within(entry, search_root):
                 if matches_path_glob(relative_path, glob):
                     stats.skipped_files += 1
                 continue
@@ -397,17 +397,6 @@ def _content_matches(
                 for line_index in range(index + 1, stop)
             ]
         yield match
-
-
-def _escapes_search_root(entry: Path, search_root: Path) -> bool:
-    """Reject links and Windows junctions that leave the search root.
-
-    Windows directory junctions are reparse points rather than symlinks,
-    so resolving every entry is necessary even after the symlink check.
-    """
-    return not path_for_comparison(entry.resolve()).is_relative_to(
-        path_for_comparison(search_root)
-    )
 
 
 def _result_fits(

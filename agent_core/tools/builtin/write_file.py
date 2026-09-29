@@ -1,8 +1,8 @@
 import errno
 import os
-import tempfile
 from pathlib import Path
 
+from ...atomic import atomic_write_bytes
 from ..base import JSONValue, Tool, ToolDefinition
 from ..context import ToolExecutionContext
 from ...path_utils import path_for_comparison
@@ -76,7 +76,7 @@ class WriteFileTool(Tool):
             directory.mkdir()
 
         data = content.encode("utf-8")
-        write_bytes_atomic(file_path, data)
+        atomic_write_bytes(file_path, data)
 
         workspace_path = path_for_comparison(workspace.path)
         return {
@@ -121,27 +121,3 @@ def _missing_parent_directories(path: Path, workspace_path: Path) -> list[Path]:
 
     missing.reverse()
     return missing
-
-
-def write_bytes_atomic(path: Path, data: bytes) -> None:
-    temporary_path: str | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="wb",
-            dir=path.parent,
-            prefix=f".{path.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as temporary:
-            temporary_path = temporary.name
-            temporary.write(data)
-            temporary.flush()
-            os.fsync(temporary.fileno())
-        os.replace(temporary_path, path)
-        temporary_path = None
-    finally:
-        if temporary_path is not None:
-            try:
-                os.unlink(temporary_path)
-            except FileNotFoundError:
-                pass

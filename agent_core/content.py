@@ -65,9 +65,7 @@ def historical_content(content: Content) -> str | None:
     has_image = any(isinstance(part, ImagePart) for part in parts)
     files = [part for part in parts if isinstance(part, FilePart)]
     sections = [text] if text else []
-    if text and has_image:
-        sections.append("[Image attachment omitted from historical context]")
-    elif has_image:
+    if has_image:
         sections.append("[Image attachment omitted from historical context]")
     if files:
         sections.append(

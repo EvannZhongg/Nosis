@@ -8,6 +8,8 @@ from typing import Iterable
 from agent_core.errors import ProviderProtocolError
 from agent_core.tools import ToolCall
 
+from ._utils import get_field
+
 
 @dataclass
 class _ToolCallState:
@@ -87,10 +89,10 @@ class ToolCallStreamAssembler:
         state = self._resolve(index, tool_call_id)
         self._bind_identity(state, index, tool_call_id)
 
-        function = _get_field(call, "function")
+        function = get_field(call, "function")
         if function is None:
             return
-        name = _non_empty_string(_get_field(function, "name"))
+        name = _non_empty_string(get_field(function, "name"))
         if name is not None:
             if state.name is not None and state.name != name:
                 self._raise_for_state(
@@ -100,7 +102,7 @@ class ToolCallStreamAssembler:
                     incoming_name=name,
                 )
             state.name = name
-        arguments = _get_field(function, "arguments")
+        arguments = get_field(function, "arguments")
         if isinstance(arguments, str):
             if arguments:
                 state.argument_fragments.append(arguments)
@@ -211,7 +213,7 @@ class ToolCallStreamAssembler:
         )
 
     def _tool_call_index(self, call: object) -> int | None:
-        value = _get_field(call, "index")
+        value = get_field(call, "index")
         if value is None:
             return None
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
@@ -224,7 +226,7 @@ class ToolCallStreamAssembler:
         return value
 
     def _tool_call_id(self, call: object) -> str | None:
-        value = _get_field(call, "id")
+        value = get_field(call, "id")
         if value is None:
             return None
         if not isinstance(value, str) or not value:
@@ -436,12 +438,6 @@ def _argument_error_details(
         "argument_chunk_lengths": [len(fragment) for fragment in fragments],
         "arguments_sha256": sha256(joined.encode("utf-8")).hexdigest(),
     }
-
-
-def _get_field(value: object, name: str) -> object:
-    if isinstance(value, dict):
-        return value.get(name)
-    return getattr(value, name, None)
 
 
 def _non_empty_string(value: object) -> str | None:

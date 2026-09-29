@@ -3,7 +3,7 @@ from collections.abc import Iterator
 from heapq import nsmallest
 from pathlib import Path
 
-from ...path_utils import path_for_comparison
+from ...path_utils import is_path_within, path_for_comparison
 from ..base import JSONValue, Tool, ToolDefinition
 from ..context import ToolExecutionContext
 from ..globs import matches_path_glob
@@ -145,7 +145,7 @@ def _iter_entries(directory_path: Path, recursive: bool) -> Iterator[Path]:
                     if (
                         recursive
                         and item.is_dir(follow_symlinks=False)
-                        and not _escapes_directory(entry, directory_path)
+                        and is_path_within(entry, directory_path)
                     ):
                         directories.append(entry)
         except OSError:
@@ -165,13 +165,6 @@ def _matching_entries(
             cursor is None or name > cursor
         ):
             yield name, entry
-
-
-def _escapes_directory(entry: Path, root: Path) -> bool:
-    """Reject Windows junctions that resolve outside the requested tree."""
-    return not path_for_comparison(entry.resolve()).is_relative_to(
-        path_for_comparison(root)
-    )
 
 
 def _entry_type(entry: Path) -> str:

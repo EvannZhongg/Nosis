@@ -13,6 +13,7 @@ from .errors import (
 from .permissions import PermissionPreset
 from .plan import PlanSnapshot, plan_snapshot_from_dict, plan_snapshot_to_dict
 from .tools import ToolCall
+from .time_utils import format_utc as _format_utc, parse_utc as _parse_utc
 
 MessageRole = Literal["system", "user", "assistant", "tool"]
 MessageOrigin = Literal["conversation", "tool_media", "job_result"]
@@ -714,13 +715,3 @@ def _content_to_dict(message: Message) -> object:
                 }
             )
     return result
-
-
-def _format_utc(value: datetime) -> str:
-    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-def _parse_utc(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(
-        timezone.utc
-    )

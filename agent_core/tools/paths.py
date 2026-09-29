@@ -10,7 +10,7 @@ from pathlib import Path
 
 from ..content import ImagePart
 from ..media import ImageInfo, probe_image
-from ..path_utils import path_for_comparison
+from ..path_utils import relative_to_root
 from .context import ToolExecutionContext
 
 
@@ -35,9 +35,7 @@ def resolve_readable_path(
             sessions_directory / relative.relative_to(SESSION_MARKER)
         ).resolve()
         try:
-            path_for_comparison(resolved).relative_to(
-                path_for_comparison(sessions_directory)
-            )
+            relative_to_root(resolved, sessions_directory)
         except ValueError as error:
             raise ValueError(
                 "session artifact path must stay within sessions"
@@ -45,9 +43,7 @@ def resolve_readable_path(
         return resolved, relative.as_posix()
     workspace = context.workspace
     resolved = workspace.resolve_path(path)
-    return resolved, path_for_comparison(resolved).relative_to(
-        path_for_comparison(workspace.path)
-    ).as_posix()
+    return resolved, relative_to_root(resolved, workspace.path).as_posix()
 
 
 def resolve_image(
@@ -69,9 +65,7 @@ def resolve_image(
     resolved, _display = resolve_readable_path(path, context)
     info = probe_image(resolved)
     try:
-        stored = path_for_comparison(resolved).relative_to(
-            path_for_comparison(context.workspace.path)
-        ).as_posix()
+        stored = relative_to_root(resolved, context.workspace.path).as_posix()
     except ValueError:
         stored = str(resolved)
     return ImagePart(

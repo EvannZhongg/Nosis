@@ -4,7 +4,7 @@ from pathlib import Path
 
 from ..base import JSONValue, Tool, ToolDefinition
 from ..context import ToolExecutionContext
-from ...path_utils import path_for_comparison
+from ...path_utils import relative_to_root
 from .read_file import (
     DEFAULT_READ_LIMIT,
     MAX_FILE_SIZE_BYTES,
@@ -150,9 +150,7 @@ def _resolve_skill_path(directory: Path, path: str) -> Path:
         raise ValueError("read_skill path must be relative to the skill directory")
     resolved = (directory / path).resolve()
     try:
-        path_for_comparison(resolved).relative_to(
-            path_for_comparison(directory)
-        )
+        relative_to_root(resolved, directory)
     except ValueError as error:
         raise ValueError(
             "read_skill path must stay inside the skill directory"

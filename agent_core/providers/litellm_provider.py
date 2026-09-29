@@ -25,6 +25,7 @@ from agent_core.session import Message
 from agent_core.tools import AnalyzeImageTool, ToolDefinition
 
 from .tool_call_stream import ToolCallStreamAssembler
+from ._utils import get_field
 
 
 class LiteLLMProvider(LLMProvider):
@@ -233,7 +234,7 @@ class LiteLLMProvider(LLMProvider):
             if not choices:
                 continue
 
-            delta = _get_field(choices[0], "delta")
+            delta = get_field(choices[0], "delta")
             if delta is None:
                 continue
 
@@ -244,19 +245,19 @@ class LiteLLMProvider(LLMProvider):
             # forms before deciding that the response is empty; otherwise a
             # perfectly valid streamed answer is discarded and Agent raises
             # ``LLM response must contain content or tool calls``.
-            text = _text_from_content(_get_field(delta, "content"))
+            text = _text_from_content(get_field(delta, "content"))
             if text:
                 content += text
                 on_text_delta(text)
 
             for field in ("reasoning_content", "reasoning", "thinking"):
-                value = _get_field(delta, field)
+                value = get_field(delta, field)
                 if isinstance(value, str) and value:
                     reasoning += value
                     if on_reasoning_delta is not None:
                         on_reasoning_delta(value)
 
-            tool_calls.add_batch(_get_field(delta, "tool_calls") or [])
+            tool_calls.add_batch(get_field(delta, "tool_calls") or [])
 
         return LLMResponse(
             content=content or None,
@@ -579,12 +580,6 @@ def _tool_definition_to_dict(tool: ToolDefinition) -> dict[str, object]:
     }
 
 
-def _get_field(value: object, name: str) -> object:
-    if isinstance(value, dict):
-        return value.get(name)
-    return getattr(value, name, None)
-
-
 def _text_from_content(value: object) -> str:
     """Extract text from string or OpenAI-style content blocks.
 
@@ -597,5 +592,5 @@ def _text_from_content(value: object) -> str:
         return value
     if isinstance(value, (list, tuple)):
         return "".join(_text_from_content(item) for item in value)
-    text = _get_field(value, "text")
+    text = get_field(value, "text")
     return text if isinstance(text, str) else ""
