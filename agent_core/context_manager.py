@@ -184,9 +184,9 @@ class ContextManager:
 
     def _runtime_context_message(self) -> Message | None:
         sections = ["[Runtime Context]"]
-        archived_context = self._archived_summary_message()
-        if archived_context is not None:
-            sections.append(archived_context.content)
+        archived_summary = self._archived_summary_text()
+        if archived_summary is not None:
+            sections.append(archived_summary)
         if self._session.plan is not None and self._session.plan.is_active:
             sections.append(
                 "[Current Plan]\n"
@@ -202,15 +202,16 @@ class ContextManager:
         return Message(role="system", content="\n\n".join(sections))
 
     def _archived_summary_message(self) -> Message | None:
-        if self._session.archived_summary is None:
+        content = self._archived_summary_text()
+        if content is None:
             return None
-        return Message(
-            role="system",
-            content=(
-                "[Archived Context Summary]\n"
-                f"{self._session.archived_summary}"
-            ),
-        )
+        return Message(role="system", content=content)
+
+    def _archived_summary_text(self) -> str | None:
+        summary = self._session.archived_summary
+        if summary is None:
+            return None
+        return f"[Archived Context Summary]\n{summary}"
 
     def _lossless_user_anchor_content(self) -> str | None:
         return _lossless_user_anchors(
