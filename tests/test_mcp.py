@@ -1,4 +1,6 @@
 import asyncio
+import base64
+import tempfile
 import os
 import sys
 import time
@@ -8,7 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from agent_core import AgentCancelled, Session, ToolCall, ToolExecutionContext, TurnControl, Workspace
+from agent_core import AgentCancelled, ImagePart, Session, ToolCall, ToolExecutionContext, ToolOutput, TurnControl, Workspace
 from agent_core.mcp.config import (
     load_mcp_config,
     load_mcp_server_map,
@@ -18,6 +20,7 @@ from agent_core.mcp.config import (
 from agent_core.mcp.tool import McpTool, qualified_tool_name
 from agent_core.mcp.manager import McpClientManager
 from agent_core.tools.policy import McpApprovalPolicy
+from tests.test_media import png_bytes
 
 
 class McpConfigTest(unittest.TestCase):
@@ -309,6 +312,38 @@ class McpToolTest(unittest.TestCase):
                 )
             )
         )
+
+    def test_converts_standard_image_content_to_tool_media(self) -> None:
+        class Manager:
+            def call_tool(self, server, tool, arguments, *, cancellation=None):
+                return {
+                    "content": [
+                        {
+                            "type": "image",
+                            "data": base64.b64encode(png_bytes(12, 8)).decode(),
+                            "mime_type": "image/png",
+                        }
+                    ],
+                    "is_error": False,
+                }
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+            context = ToolExecutionContext(
+                workspace=workspace, session=Session(), mcp=Manager()
+            )
+            output = McpTool(
+                "demo", "screenshot", "Capture", {"type": "object"}
+            ).execute({}, context)
+
+            self.assertIsInstance(output, ToolOutput)
+            assert isinstance(output, ToolOutput)
+            self.assertEqual(len(output.attachments), 1)
+            self.assertIsInstance(output.attachments[0], ImagePart)
+            self.assertTrue(
+                (workspace.path / output.attachments[0].path).is_file()
+            )
+            self.assertNotIn("data", output.output["content"][0])
 
     def test_approval_policy_only_prompts_required_tools(self) -> None:
         prompts = []
