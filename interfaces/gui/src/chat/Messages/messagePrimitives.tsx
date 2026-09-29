@@ -28,7 +28,11 @@ function CopyableTable({ node: _node, children, ...props }: ComponentPropsWithou
   </div>;
 }
 
-const MARKDOWN_COMPONENTS = { img: MarkdownImage, pre: CopyablePre, table: CopyableTable };
+function MarkdownLink({ node: _node, ...props }: ComponentPropsWithoutRef<"a"> & { node?: unknown }) {
+  return <a {...props} target="_blank" rel="noopener noreferrer" />;
+}
+
+const MARKDOWN_COMPONENTS = { a: MarkdownLink, img: MarkdownImage, pre: CopyablePre, table: CopyableTable };
 
 export function MessageTimestamp({ className = "" }: { className?: string } = {}) {
   const createdAt = useAuiState((state) => state.message.createdAt);
