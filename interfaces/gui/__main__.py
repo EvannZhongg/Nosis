@@ -1,6 +1,7 @@
 """Command-line entry point for the GUI server."""
 
 import argparse
+import importlib
 from pathlib import Path
 
 from agent_core import JsonlSessionStore, Workspace
@@ -13,9 +14,24 @@ from agent_runtime.settings import SettingsStore
 from .server import HOST, PORT, STATIC_PATH, create_app
 
 
+def _require_websocket_backend() -> None:
+    """Fail early with an actionable message when Uvicorn cannot serve WS."""
+    for module_name in ("websockets", "wsproto"):
+        try:
+            importlib.import_module(module_name)
+        except ModuleNotFoundError:
+            continue
+        return
+    raise SystemExit(
+        "Nosis GUI requires a WebSocket backend. Install the GUI dependencies "
+        "with `uv sync --extra gui` or `python -m pip install -e \".[gui]\"`, then retry."
+    )
+
+
 def main(argv: list[str] | None = None) -> None:
     import uvicorn
 
+    _require_websocket_backend()
     config_directory = default_config_directory()
     parser = argparse.ArgumentParser(prog="nosis-gui")
     parser.add_argument("--workspace", type=Path, default=None)

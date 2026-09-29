@@ -2,6 +2,15 @@
 
 `interfaces/gui` 是 Nosis 的图形交互层，由 FastAPI 服务和 React + assistant-ui 前端组成。FastAPI 管理浏览器连接、文件与设置 API，并为每个活动 Session 托管独立 Bridge 进程；浏览器不直接运行 Agent 或 Tool。
 
+GUI 依赖是可选依赖。使用项目环境启动前先安装 GUI extra：
+
+```bash
+uv sync --extra gui
+# 或：python -m pip install -e ".[gui]"
+```
+
+其中包含 Uvicorn 的 WebSocket 后端；Windows、macOS 与 Linux 使用相同命令。若缺少该依赖，`nosis-gui` 会在启动时直接提示安装命令。
+
 ## 启动
 
 ```bash

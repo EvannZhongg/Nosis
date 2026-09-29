@@ -2170,6 +2170,11 @@ class GuiTest(unittest.TestCase):
 
 class GuiStartupTest(unittest.TestCase):
     @unittest.skipIf(TestClient is None, "Install the gui extra to test the GUI")
+    def test_reports_missing_websocket_backend(self) -> None:
+        with patch.object(gui_main.importlib, "import_module", side_effect=ModuleNotFoundError):
+            with self.assertRaisesRegex(SystemExit, "uv sync --extra gui"):
+                gui_main._require_websocket_backend()
+
     def test_initializes_shared_default_configuration(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

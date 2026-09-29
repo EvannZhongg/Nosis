@@ -34,6 +34,12 @@ npm run build
 uv tool install --editable ".[gui]"
 ```
 
+如果使用 `uv sync` 创建项目环境，请同时安装 GUI extra，否则 Uvicorn 无法提供 Session WebSocket：
+
+```bash
+uv sync --extra gui
+```
+
 先在当前目录启动一次 TUI：
 
 ```bash
@@ -101,6 +107,8 @@ source .venv/bin/activate
 python -m pip install -e ".[gui]"
 python -m unittest discover -s tests -v
 ```
+
+GUI extra 包含 FastAPI、Uvicorn、WebSocket 后端和 multipart 支持；Windows、macOS 与 Linux 使用相同的安装方式。
 
 前端构建、类型检查和测试：
 
