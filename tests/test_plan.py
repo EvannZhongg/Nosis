@@ -235,11 +235,13 @@ class PlanPersistenceTest(unittest.TestCase):
         )
         manager = ContextManager(_Provider(), session, "System", "Consolidate.", _config())
 
-        prompt = manager.build_request().system_prompt
+        request = manager.build_request()
 
-        self.assertIn("[Current Plan]", prompt)
-        self.assertIn('"goal": "Persistent plan"', prompt)
-        self.assertIn('"status": "in_progress"', prompt)
+        self.assertEqual(request.system_prompt, "System")
+        runtime_context = request.messages[-1].content
+        self.assertIn("[Current Plan]", runtime_context)
+        self.assertIn('"goal": "Persistent plan"', runtime_context)
+        self.assertIn('"status": "in_progress"', runtime_context)
 
     def test_completed_plan_is_not_injected_into_the_model_request(self) -> None:
         session = Session("session-1")

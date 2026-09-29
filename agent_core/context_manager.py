@@ -6,6 +6,7 @@ from typing import Callable, Iterable
 from .config import AgentConfig
 from .content import historical_content
 from .llm import LLMProvider, LLMRequest, with_generation_limit
+from .memory import MemoryContext
 from .plan import plan_snapshot_to_dict
 from .projection import ContextUnit, project_context_units
 from .session import Message, Session, UserAnchor
@@ -61,11 +62,13 @@ class ContextManager:
         consolidator_prompt: str,
         config: AgentConfig,
         media_root: Path | None = None,
+        memory_context: MemoryContext | None = None,
     ) -> None:
         self._provider = provider
         self._session = session
         self._system_prompt = system_prompt
         self._consolidator_prompt = consolidator_prompt
+        self._memory_context = memory_context
         self._output_reserve_tokens = config.output_reserve_tokens
         self._max_generation_tokens = config.max_generation_tokens
         self._media_root = media_root
@@ -123,10 +126,11 @@ class ContextManager:
         anchor = self._lossless_user_anchor_message()
         if anchor is not None:
             messages.insert(0, anchor)
+        runtime_context = self._runtime_context_message()
+        if runtime_context is not None:
+            messages.append(runtime_context)
         return LLMRequest(
-            system_prompt=self._system_prompt_with_summary(
-                self._system_prompt
-            ),
+            system_prompt=self._system_prompt,
             messages=tuple(messages),
             tools=tuple(tools),
             media_root=self._media_root,
@@ -148,16 +152,13 @@ class ContextManager:
         anchors = self._lossless_user_anchor_content()
         if anchors is not None:
             content = f"{anchors}\n\n{content}"
+        messages: list[Message] = [Message(role="user", content=content)]
+        runtime_context = self._runtime_context_message()
+        if runtime_context is not None:
+            messages.append(runtime_context)
         request = LLMRequest(
-            system_prompt=self._system_prompt_with_summary(
-                self._consolidator_prompt
-            ),
-            messages=(
-                Message(
-                    role="user",
-                    content=content,
-                ),
-            ),
+            system_prompt=self._consolidator_prompt,
+            messages=tuple(messages),
             media_root=self._media_root,
         )
         request = with_generation_limit(
@@ -177,8 +178,8 @@ class ContextManager:
         )
         return self._session.archived_item_cursor
 
-    def _system_prompt_with_summary(self, base: str) -> str:
-        sections = [base]
+    def _runtime_context_message(self) -> Message | None:
+        sections = ["[Runtime Context]"]
         if self._session.archived_summary is not None:
             sections.append(
                 "[Archived Context Summary]\n"
@@ -192,7 +193,11 @@ class ContextManager:
                     ensure_ascii=False,
                 )
             )
-        return "\n\n".join(sections)
+        if self._memory_context is not None:
+            sections.append(self._memory_context.prompt_section())
+        if len(sections) == 1:
+            return None
+        return Message(role="system", content="\n\n".join(sections))
 
     def _lossless_user_anchor_content(self) -> str | None:
         return _lossless_user_anchors(

@@ -359,10 +359,10 @@ class AgentTest(unittest.TestCase):
              if message.role == "user"],
             ["new request"],
         )
-        self.assertTrue(
-            provider.requests[1].system_prompt.endswith(
-                "[Archived Context Summary]\nold turn summary"
-            )
+        self.assertEqual(provider.requests[1].system_prompt, "You are helpful.")
+        self.assertIn(
+            "[Archived Context Summary]\nold turn summary",
+            provider.requests[1].messages[-1].content,
         )
         self.assertEqual(
             [message.role for message in session.items],
@@ -402,20 +402,20 @@ class AgentTest(unittest.TestCase):
         self.assertEqual(session.archived_item_cursor, 4)
         self.assertEqual(session.archived_summary, "second summary")
         self.assertEqual(session.compression_count, 2)
-        self.assertTrue(
-            provider.requests[1].system_prompt.endswith(
-                "[Archived Context Summary]\nfirst summary"
-            )
+        self.assertEqual(provider.requests[1].system_prompt, CONSOLIDATOR_PROMPT)
+        self.assertIn(
+            "[Archived Context Summary]\nfirst summary",
+            provider.requests[1].messages[-1].content,
         )
         compression_record = provider.requests[1].messages[0].content or ""
         self.assertIn("second", compression_record)
         request = context.build_request()
-        self.assertTrue(
-            request.system_prompt.endswith(
-                "[Archived Context Summary]\nsecond summary"
-            )
+        self.assertEqual(request.system_prompt, "You are helpful.")
+        self.assertIn(
+            "[Archived Context Summary]\nsecond summary",
+            request.messages[-1].content,
         )
-        self.assertNotIn("first summary", request.system_prompt)
+        self.assertNotIn("first summary", request.messages[-1].content)
         self.assertEqual(
             [message.content for message in request.messages
              if message.role == "user"],
@@ -498,7 +498,7 @@ class AgentTest(unittest.TestCase):
         self.assertIn("keep it concise", anchors)
         self.assertIn(
             "[Archived Context Summary]\nlossy state",
-            request.system_prompt,
+            request.messages[-1].content,
         )
 
     def test_context_does_not_duplicate_user_anchor_still_in_recent_tail(self) -> None:
@@ -1464,10 +1464,10 @@ class AgentTest(unittest.TestCase):
         self.assertIn('{"ok": true, "output": {"text": "A"}}', consolidation_record)
         self.assertIn('{"ok": true, "output": {"text": "B"}}', consolidation_record)
         resumed = provider.requests[4]
-        self.assertTrue(
-            resumed.system_prompt.endswith(
-                "[Archived Context Summary]\nactive turn checkpoint"
-            )
+        self.assertEqual(resumed.system_prompt, "You are helpful.")
+        self.assertIn(
+            "[Archived Context Summary]\nactive turn checkpoint",
+            resumed.messages[-1].content,
         )
         anchor = resumed.messages[0]
         self.assertEqual(anchor.role, "user")

@@ -2357,10 +2357,13 @@ class BridgeSessionOpenTest(unittest.TestCase):
             bridge.open_session(message)
             plane = bridge.host.planes.ensure(bridge.host.sessions)
 
-            prompt = plane.agent._context._system_prompt
+            request = plane.agent._context.build_request()
+            prompt = request.system_prompt
+            runtime_context = request.messages[-1].content
 
         self.assertTrue(prompt.startswith(f"Custom prompt for {root.resolve()}"))
-        self.assertIn("## Long-term Memory", prompt)
+        self.assertNotIn("## Long-term Memory", prompt)
+        self.assertIn("## Long-term Memory", runtime_context)
 
     def test_injects_global_and_workspace_instructions_without_persisting_them(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2468,14 +2471,11 @@ class BridgeSessionOpenTest(unittest.TestCase):
             third_plane = bridge.host.planes.ensure(bridge.host.sessions)
 
             self.assertIsNot(third_plane, first_plane)
-            self.assertIn(
-                "Prefer concise responses.",
-                third_plane.agent._context._system_prompt,
-            )
-            self.assertIn(
-                "current request has highest priority",
-                third_plane.agent._context._system_prompt,
-            )
+            request = third_plane.agent._context.build_request()
+            self.assertNotIn("Prefer concise responses.", request.system_prompt)
+            runtime_context = request.messages[-1].content
+            self.assertIn("Prefer concise responses.", runtime_context)
+            self.assertIn("current request has highest priority", runtime_context)
 
     def test_rebuilds_runtime_when_the_configured_instruction_list_changes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

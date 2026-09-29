@@ -305,9 +305,9 @@ class ExecutionPlaneManager:
                     workspace,
                     skills,
                     instructions=instructions,
-                    memory=memory_context,
                 ),
                 consolidator_prompt=prompts.consolidator,
+                memory_context=memory_context,
                 config=agent_config,
                 tools=catalog.select(
                     (

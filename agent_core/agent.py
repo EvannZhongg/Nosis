@@ -19,6 +19,7 @@ from .tool_batch import ToolBatchExecutor
 from .tools import ToolCall, ToolExecutionContext, ToolResult, ToolSet
 from .turn_control import AgentCancelled, TurnControl, UserSteer
 from .loop_policy import ToolCallRepetitionGuard, TurnContinuationPolicy
+from .memory import MemoryContext
 
 
 @dataclass(frozen=True)
@@ -128,6 +129,7 @@ class Agent:
         context: ToolExecutionContext,
         now: Callable[[], datetime] | None = None,
         tool_result_normalizer: ToolResultNormalizer | None = None,
+        memory_context: MemoryContext | None = None,
     ) -> None:
         self._provider = provider
         self._session = session
@@ -156,6 +158,7 @@ class Agent:
             session=session,
             system_prompt=system_prompt,
             consolidator_prompt=consolidator_prompt,
+            memory_context=memory_context,
             config=config,
             media_root=context.workspace.path,
         )
