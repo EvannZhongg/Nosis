@@ -14,6 +14,8 @@ TOOL_NAMES = (
     "web_fetch",
     "subagent",
     "scheduled_task",
+    "computer_screenshot",
+    "computer_action",
 )
 
 # ``read_image``, ``analyze_image`` and ``read_skill`` are absent by design:
@@ -26,8 +28,13 @@ TOOL_NAMES = (
 ROLE_TOOL_NAMES = tuple(
     name
     for name in TOOL_NAMES
-    if name not in {"subagent", "generate_image"}
-) + ("computer_screenshot", "computer_action")
+    if name not in {
+        "subagent",
+        "generate_image",
+        "computer_screenshot",
+        "computer_action",
+    }
+)
 
 
 @dataclass(frozen=True)

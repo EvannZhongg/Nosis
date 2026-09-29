@@ -86,6 +86,19 @@ class ShellApprovalPolicyTest(unittest.TestCase):
         )
         self.assertEqual(requests[0][1]["kind"], "computer")
 
+    def test_computer_screenshot_requests_approval(self) -> None:
+        requests = []
+        policy = ComputerApprovalPolicy(
+            lambda description, **kwargs: requests.append((description, kwargs)) or True
+        )
+
+        policy.authorize(
+            ToolCall("call-1", "computer_screenshot", {"label": "desktop"}),
+            context(),
+        )
+
+        self.assertEqual(requests[0][1]["kind"], "computer")
+
 
 class PermissionControllerTest(unittest.TestCase):
     def test_full_access_defaults_to_host(self) -> None:

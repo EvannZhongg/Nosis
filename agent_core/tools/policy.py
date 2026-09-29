@@ -64,7 +64,7 @@ class ComputerApprovalPolicy:
         self._request_permission = request_permission
 
     def authorize(self, call: ToolCall, context: ToolExecutionContext) -> bool:
-        if call.name != "computer_action":
+        if call.name not in {"computer_action", "computer_screenshot"}:
             return False
         if not self._request_permission(
             f"{call.name}({call.arguments})", kind="computer"

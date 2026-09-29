@@ -356,6 +356,21 @@ describe('reducer', () => {
     expect(state.status).toBe('running');
   });
 
+  it('preserves the approval kind for computer interactions', () => {
+    const state = reducer(ready(), {
+      type: 'message',
+      message: {
+        type: 'approval_request',
+        turn_id: 't1',
+        request_id: 't1:1',
+        command: "computer_screenshot({'label': 'desktop'})",
+        kind: 'computer',
+      },
+    });
+
+    expect(state.approval?.kind).toBe('computer');
+  });
+
   it('tracks a user question and selects the recommended option', () => {
     let state = ready();
     state = reducer(state, {

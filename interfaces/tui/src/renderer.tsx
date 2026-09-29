@@ -357,11 +357,18 @@ function Option({
 
 export function ApprovalPrompt({
   command,
+  kind,
   choice,
 }: {
   command: string;
+  kind?: 'shell' | 'computer' | 'mcp';
   choice: ApprovalChoice;
 }): React.ReactElement {
+  const title = kind === 'computer'
+    ? 'Computer interaction requires approval'
+    : kind === 'mcp'
+      ? 'MCP tool call requires approval'
+      : 'Shell command requires approval';
   return (
     <Box
       marginTop={1}
@@ -371,7 +378,7 @@ export function ApprovalPrompt({
       paddingX={1}
     >
       <Text color="yellow" bold>
-        Shell command requires approval
+        {title}
       </Text>
       <Box marginTop={1}>
         <Text>{command}</Text>

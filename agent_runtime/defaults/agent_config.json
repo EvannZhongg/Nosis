@@ -41,7 +41,9 @@
       "web_search": false,
       "web_fetch": true,
       "subagent": true,
-      "scheduled_task": true
+      "scheduled_task": true,
+      "computer_screenshot": true,
+      "computer_action": true
     }
   },
   "subagent_roles": {

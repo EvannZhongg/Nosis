@@ -392,7 +392,7 @@ export function App(props: AppProps): React.ReactElement {
 
         {state.approval ? (
           <Box flexShrink={0}>
-            <ApprovalPrompt command={state.approval.command} choice={state.approval.choice} />
+            <ApprovalPrompt command={state.approval.command} kind={state.approval.kind} choice={state.approval.choice} />
           </Box>
         ) : null}
         {state.question ? (

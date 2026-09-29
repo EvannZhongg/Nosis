@@ -203,7 +203,7 @@ export type RuntimeState = {
     turn_id: string | null;
     request_id: string;
     command: string;
-    kind?: 'shell' | 'mcp';
+    kind?: 'shell' | 'computer' | 'mcp';
     server?: string;
     tool_name?: string;
   } | null;
@@ -289,7 +289,7 @@ export type Incoming = (
       turn_id: string | null;
       request_id: string;
       command: string;
-      kind?: 'shell' | 'mcp';
+      kind?: 'shell' | 'computer' | 'mcp';
       server?: string;
       tool_name?: string;
     }

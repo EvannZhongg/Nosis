@@ -108,8 +108,8 @@ async function typeDraft(
   await waitFor(() => expect(lastFrame()).toContain(text));
 }
 
-const requestApproval = (command: string): void => {
-  emit({ type: 'approval_request', turn_id: 't1', request_id: 't1:1', command });
+const requestApproval = (command: string, kind?: 'shell' | 'computer' | 'mcp'): void => {
+  emit({ type: 'approval_request', turn_id: 't1', request_id: 't1:1', command, kind });
 };
 
 const requestQuestion = (allowFreeText = true): void => {
@@ -656,6 +656,22 @@ describe('App', () => {
     const modelLine = lineContaining(lastFrame(), 'test/model');
     expect(approvalLine).toBeLessThan(inputLine);
     expect(modelLine).toBe(inputLine + 2);
+  });
+
+  it('labels computer approvals distinctly', async () => {
+    const { lastFrame } = renderApp();
+    await waitForReady(lastFrame);
+
+    requestApproval("computer_action({'action': 'click'})", 'computer');
+    await waitFor(() => expect(lastFrame()).toContain('Computer interaction requires approval'));
+  });
+
+  it('labels MCP approvals distinctly', async () => {
+    const { lastFrame } = renderApp();
+    await waitForReady(lastFrame);
+
+    requestApproval('mcp__server__tool({})', 'mcp');
+    await waitFor(() => expect(lastFrame()).toContain('MCP tool call requires approval'));
   });
 
   it('uses one status line before and after startup', async () => {

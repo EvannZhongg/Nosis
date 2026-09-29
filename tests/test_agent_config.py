@@ -11,6 +11,7 @@ from agent_core import (
     ToolConfig,
     load_agent_config,
 )
+from agent_core.tools.config import ROLE_TOOL_NAMES, TOOL_NAMES
 
 
 ENABLED_TOOLS = {
@@ -442,6 +443,29 @@ class AgentConfigTest(unittest.TestCase):
                 }
             )
 
+    def test_computer_tools_are_main_agent_only(self) -> None:
+        self.assertIn("computer_screenshot", TOOL_NAMES)
+        self.assertIn("computer_action", TOOL_NAMES)
+        self.assertNotIn("computer_screenshot", ROLE_TOOL_NAMES)
+        self.assertNotIn("computer_action", ROLE_TOOL_NAMES)
+
+    def test_main_agent_can_configure_computer_tools(self) -> None:
+        config = self.load(
+            {
+                "main_agent": {
+                    "tools": {
+                        "computer_screenshot": True,
+                        "computer_action": True,
+                    }
+                }
+            }
+        )
+
+        self.assertEqual(
+            config.tools.enabled,
+            ("computer_screenshot", "computer_action"),
+        )
+
 
 class SubagentRoleConfigTest(unittest.TestCase):
     def load(self, roles: dict) -> AgentConfig:
@@ -516,6 +540,17 @@ class SubagentRoleConfigTest(unittest.TestCase):
                         "description": "Reads.",
                         "provider": "openai",
                         "tools": {},
+                    }
+                }
+            )
+
+    def test_rejects_computer_tools_for_a_role(self) -> None:
+        with self.assertRaisesRegex(ValueError, "computer_action"):
+            self.load(
+                {
+                    "researcher": {
+                        "description": "Reads.",
+                        "tools": {"computer_action": True},
                     }
                 }
             )

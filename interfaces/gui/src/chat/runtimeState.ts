@@ -6,7 +6,7 @@ type JobStatusMessage = Extract<Incoming, { type: "job_status" }>;
 export type Approval = {
   requestId: string;
   command: string;
-  kind?: "shell" | "mcp";
+  kind?: "shell" | "computer" | "mcp";
   server?: string;
   toolName?: string;
 };

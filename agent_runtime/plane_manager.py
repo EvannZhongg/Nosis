@@ -198,6 +198,21 @@ class ExecutionPlaneManager:
                 ),
                 max_retries=agent_config.provider.max_retries,
             )
+            computer_tools = tuple(
+                name
+                for name in ("computer_screenshot", "computer_action")
+                if agent_config.tools.is_enabled(name)
+            )
+            computer_tool_warnings = (
+                (
+                    "Configured computer tool(s) "
+                    f"{', '.join(computer_tools)} are unavailable because "
+                    "the main model does not support image input (visual input).",
+                )
+                if computer_tools
+                and "image" not in main_provider.capabilities.input_modalities
+                else ()
+            )
             image_generator = None
             if agent_config.tools.is_enabled("generate_image"):
                 image_config = load_image_generation_config(config_path)
@@ -324,8 +339,6 @@ class ExecutionPlaneManager:
                         ),
                         "ask_user",
                         "update_plan",
-                        "computer_screenshot",
-                        "computer_action",
                         *mcp.tool_names,
                         *(("remember",) if memory is not None else ()),
                     ),
@@ -351,6 +364,7 @@ class ExecutionPlaneManager:
                     *mcp_warnings,
                     *agent_warnings,
                     *skills.warnings,
+                    *computer_tool_warnings,
                 ),
             )
         except BaseException:

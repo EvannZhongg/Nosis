@@ -63,7 +63,7 @@ export type State = {
   approval: {
     requestId: string;
     command: string;
-    kind?: 'shell' | 'mcp';
+    kind?: 'shell' | 'computer' | 'mcp';
     server?: string;
     toolName?: string;
     choice: ApprovalChoice;

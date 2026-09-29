@@ -17,7 +17,7 @@ export type Applied = {
   approval?: {
     requestId: string;
     command: string;
-    kind?: 'shell' | 'mcp';
+    kind?: 'shell' | 'computer' | 'mcp';
     server?: string;
     toolName?: string;
   } | null;
