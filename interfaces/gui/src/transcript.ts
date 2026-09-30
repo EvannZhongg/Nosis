@@ -102,18 +102,16 @@ export function applyMessage(
       return { items, contextWindow: message };
 
     case "tool_batch_started": {
-      const visibleCalls = message.tool_calls.filter((call) => call.name !== "update_plan");
-      if (visibleCalls.length === 0) return { items };
+      if (message.tool_calls.length === 0) return { items };
       return {
         items: [
           ...items,
-          { role: "assistant", content: null, tool_calls: visibleCalls },
+          { role: "assistant", content: null, tool_calls: message.tool_calls },
         ],
       };
     }
 
     case "tool_result":
-      if (message.name === "update_plan") return { items };
       return {
         items: [
           ...items,
@@ -340,7 +338,6 @@ function itemParts(
     }
   }
   for (const call of item.tool_calls ?? []) {
-    if (call.name === "update_plan") continue;
     parts.push({
       type: "tool-call",
       toolCallId: call.id,

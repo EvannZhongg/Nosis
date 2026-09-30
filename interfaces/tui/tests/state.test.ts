@@ -62,8 +62,25 @@ describe('plan', () => {
         },
       },
     });
-    expect(state.plan?.steps[0]?.status).toBe('completed');
+    expect(state.plan).toBeNull();
     expect(state.entries).toEqual([]);
+  });
+
+  it('shows update_plan as a normal live tool call', () => {
+    const state = reducer(ready(), {
+      type: 'message',
+      message: {
+        type: 'tool_call',
+        turn_id: 't1',
+        tool_call: { id: 'plan-call', name: 'update_plan', arguments: { goal: 'Ship', steps: [] } },
+        tool_index: 1,
+        tool_count: 1,
+      },
+    });
+
+    expect(state.entries).toMatchObject([
+      { kind: 'tool', id: 'plan-call', name: 'update_plan', state: 'running' },
+    ]);
   });
 });
 

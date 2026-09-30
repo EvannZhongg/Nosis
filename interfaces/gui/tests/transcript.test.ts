@@ -89,7 +89,7 @@ describe("applyMessage", () => {
     expect(result.items).toEqual([{ role: "assistant", content: "persisted" }]);
   });
 
-  it("keeps update_plan out of the ordinary tool transcript", () => {
+  it("keeps update_plan in the ordinary tool transcript", () => {
     const messages = toMessages([
       {
         role: "assistant",
@@ -103,10 +103,12 @@ describe("applyMessage", () => {
       },
     ]);
 
-    expect(messages[0]?.content).toEqual([]);
+    expect(messages[0]?.content).toMatchObject([
+      { type: "tool-call", toolCallId: "plan-call", toolName: "update_plan" },
+    ]);
   });
 
-  it("filters live update_plan calls and results from the transcript", () => {
+  it("keeps live update_plan calls and results in the transcript", () => {
     const { items } = fold([
       {
         type: "tool_batch_started",
@@ -128,7 +130,20 @@ describe("applyMessage", () => {
       },
     ]);
 
-    expect(items).toEqual([]);
+    expect(items).toEqual([
+      {
+        role: "assistant",
+        content: null,
+        tool_calls: [
+          { id: "plan-call", name: "update_plan", arguments: { goal: "Ship", steps: [] } },
+        ],
+      },
+      {
+        role: "tool",
+        tool_call_id: "plan-call",
+        content: JSON.stringify({ ok: true }),
+      },
+    ]);
   });
 
   it("reports permission state from session readiness and later changes", () => {
