@@ -29,18 +29,68 @@ class ComputerActionTool(Tool):
             name=self.name,
             description=(
                 "Operate the visible computer interface, then inspect the "
-                "resulting screenshot. Coordinates refer to the latest screenshot. "
+                "resulting screenshot. The screenshot is the bounding rectangle "
+                "of the full virtual desktop. Coordinates are zero-based, "
+                "non-negative pixels relative to its top-left corner. The Runtime "
+                "maps them to OS input coordinates as (input_x, input_y) = "
+                "(x + virtual_desktop_left, y + virtual_desktop_top), including "
+                "when a monitor is left of or above the primary display. Use "
+                "coordinates from the latest screenshot; a display layout, "
+                "resolution, or scale change ends computer control with an error. "
                 "The type action inserts committed text through the clipboard, "
                 "so it is safe with active keyboard input methods."
             ),
             parameters={
                 "type": "object",
                 "properties": {
-                    "action": {"type": "string", "enum": ["click", "move", "type", "key", "hotkey", "scroll"]},
-                    "x": {"type": "integer", "minimum": 0},
-                    "y": {"type": "integer", "minimum": 0},
+                    "action": {
+                        "type": "string",
+                        "enum": [
+                            "click",
+                            "move",
+                            "drag",
+                            "mouse_down",
+                            "mouse_up",
+                            "type",
+                            "key",
+                            "hotkey",
+                            "scroll",
+                            "wait",
+                        ],
+                        "description": (
+                            "Coordinate actions require x and y. Drag additionally "
+                            "requires to_x and to_y. Scroll additionally requires a "
+                            "non-zero amount. Wait optionally accepts seconds."
+                        ),
+                    },
+                    "x": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "X coordinate in the latest screenshot.",
+                    },
+                    "y": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "Y coordinate in the latest screenshot.",
+                    },
+                    "to_x": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "Drag destination X coordinate.",
+                    },
+                    "to_y": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "Drag destination Y coordinate.",
+                    },
                     "button": {"type": "string", "enum": ["left", "middle", "right"]},
                     "clicks": {"type": "integer", "minimum": 1, "maximum": 3},
+                    "duration": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 10,
+                        "description": "Movement or drag duration in seconds.",
+                    },
                     "text": {"type": "string"},
                     "key": {
                         "type": "string",
@@ -59,7 +109,21 @@ class ComputerActionTool(Tool):
                             "on Windows or Linux."
                         ),
                     },
-                    "amount": {"type": "integer", "minimum": -20, "maximum": 20},
+                    "amount": {
+                        "type": "integer",
+                        "minimum": -20,
+                        "maximum": 20,
+                        "description": (
+                            "Non-zero vertical wheel amount. Scroll requires x and "
+                            "y so the target is independent of prior pointer state."
+                        ),
+                    },
+                    "seconds": {
+                        "type": "number",
+                        "exclusiveMinimum": 0,
+                        "maximum": 10,
+                        "description": "Wait duration; defaults to one second.",
+                    },
                 },
                 "required": ["action"],
                 "additionalProperties": False,
@@ -71,7 +135,18 @@ class ComputerActionTool(Tool):
         if computer is None:
             raise ValueError("computer control is unavailable")
         action = arguments.get("action")
-        if not isinstance(action, str) or action not in {"click", "move", "type", "key", "hotkey", "scroll"}:
+        if not isinstance(action, str) or action not in {
+            "click",
+            "move",
+            "drag",
+            "mouse_down",
+            "mouse_up",
+            "type",
+            "key",
+            "hotkey",
+            "scroll",
+            "wait",
+        }:
             raise ValueError("computer_action requires a supported action")
         path = computer(arguments)
         if not isinstance(path, Path):

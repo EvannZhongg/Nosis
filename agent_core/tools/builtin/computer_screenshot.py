@@ -30,8 +30,11 @@ class ComputerScreenshotTool(Tool):
         return ToolDefinition(
             name=self.name,
             description=(
-                "Capture the current computer display and inspect it visually. "
-                "Use this when you need to observe the desktop or an active app."
+                "Capture the full virtual desktop and inspect it visually. The "
+                "returned image uses the same logical-pixel coordinate space as "
+                "computer_action: (0, 0) is the image's top-left corner, even when "
+                "the OS virtual desktop begins at a negative coordinate. Use this "
+                "when you need to observe the desktop or an active app."
             ),
             parameters={
                 "type": "object",

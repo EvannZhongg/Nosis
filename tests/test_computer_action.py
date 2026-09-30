@@ -7,6 +7,37 @@ from tests.test_media import png_bytes
 
 
 class ComputerActionToolTest(unittest.TestCase):
+    def test_definition_declares_coordinate_mapping_and_complete_actions(self) -> None:
+        tool = ComputerActionTool()
+        context = ToolExecutionContext(
+            workspace=Workspace(Path.cwd()),
+            session=Session(),
+            vision_input=True,
+            computer=lambda _arguments: Path("unused"),
+        )
+
+        definition = tool.definition(context)
+        actions = definition.parameters["properties"]["action"]["enum"]
+
+        self.assertIn("virtual_desktop_left", definition.description)
+        self.assertEqual(
+            set(actions),
+            {
+                "click",
+                "move",
+                "drag",
+                "mouse_down",
+                "mouse_up",
+                "type",
+                "key",
+                "hotkey",
+                "scroll",
+                "wait",
+            },
+        )
+        self.assertIn("to_x", definition.parameters["properties"])
+        self.assertIn("seconds", definition.parameters["properties"])
+
     def test_action_is_followed_by_a_screenshot_attachment(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

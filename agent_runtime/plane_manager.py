@@ -73,7 +73,7 @@ from .instructions import load_workspace_instructions
 from .plugins import PluginAgent, PluginManager
 from .settings import EnvironmentReloader, SettingsStore, configuration_fingerprint
 from .callbacks import RuntimeCallbacks
-from .computer import desktop_computer_control, desktop_screenshot_capture
+from .computer import DesktopComputer
 from .session_controller import SessionRuntimeController
 
 
@@ -174,6 +174,7 @@ class ExecutionPlaneManager:
         workspace_executor: SandboxedCommandExecutor | None = None
         host_executor: HostCommandExecutor | None = None
         execution_router: ExecutionRouter | None = None
+        desktop: DesktopComputer | None = None
         try:
             skills = SkillLoader().load(
                 (
@@ -213,6 +214,14 @@ class ExecutionPlaneManager:
                 and "image" not in main_provider.capabilities.input_modalities
                 else ()
             )
+            if (
+                computer_tools
+                and "image" in main_provider.capabilities.input_modalities
+            ):
+                desktop = DesktopComputer(
+                    workspace,
+                    input_enabled="computer_action" in computer_tools,
+                )
             image_generator = None
             if agent_config.tools.is_enabled("generate_image"):
                 image_config = load_image_generation_config(config_path)
@@ -312,8 +321,17 @@ class ExecutionPlaneManager:
                 ),
                 scheduler=self.scheduler,
                 memory=memory,
-                screenshot=desktop_screenshot_capture(workspace),
-                computer=desktop_computer_control(workspace),
+                screenshot=(
+                    desktop.capture
+                    if desktop is not None
+                    and "computer_screenshot" in computer_tools
+                    else None
+                ),
+                computer=(
+                    desktop.control
+                    if desktop is not None and "computer_action" in computer_tools
+                    else None
+                ),
             )
             agent = Agent(
                 provider=main_provider,
@@ -359,6 +377,7 @@ class ExecutionPlaneManager:
                 jobs=jobs,
                 mcp=mcp,
                 context_window=agent.context_window(),
+                computer=desktop,
                 runtime_warnings=(
                     *plugins.warnings,
                     *mcp_warnings,
@@ -369,8 +388,12 @@ class ExecutionPlaneManager:
             )
         except BaseException:
             try:
-                if jobs is not None:
-                    jobs.close()
+                try:
+                    if desktop is not None:
+                        desktop.close()
+                finally:
+                    if jobs is not None:
+                        jobs.close()
             finally:
                 try:
                     mcp.close()

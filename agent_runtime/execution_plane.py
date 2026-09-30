@@ -14,6 +14,8 @@ from agent_core import (
 )
 from agent_core.mcp.manager import McpClientManager
 
+from .computer import DesktopComputer
+
 
 @dataclass(eq=False)
 class ExecutionPlane:
@@ -30,6 +32,7 @@ class ExecutionPlane:
     jobs: JobManager
     mcp: McpClientManager
     context_window: ContextWindow
+    computer: DesktopComputer | None = None
     runtime_warnings: tuple[str, ...] = ()
 
     def matches(
@@ -52,12 +55,16 @@ class ExecutionPlane:
 
     def close(self) -> None:
         try:
-            self.jobs.close()
+            if self.computer is not None:
+                self.computer.close()
         finally:
             try:
-                self.mcp.close()
+                self.jobs.close()
             finally:
-                self.execution_router.close()
+                try:
+                    self.mcp.close()
+                finally:
+                    self.execution_router.close()
 
 
 __all__ = ["ExecutionPlane"]
