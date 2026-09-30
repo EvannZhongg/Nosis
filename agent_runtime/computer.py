@@ -72,6 +72,18 @@ class _DesktopLayout:
             raise ValueError("coordinates fall outside every display in the virtual desktop")
         return input_x, input_y
 
+    def interior_point(self, x: int, y: int) -> tuple[int, int]:
+        screen = next(
+            (candidate for candidate in self.screens if candidate.contains(x, y)),
+            None,
+        )
+        if screen is None or screen.width < 3 or screen.height < 3:
+            raise RuntimeError("cannot move the pointer away from the desktop fail-safe")
+        return (
+            min(max(x, screen.left + 1), screen.left + screen.width - 2),
+            min(max(y, screen.top + 1), screen.top + screen.height - 2),
+        )
+
 
 class DesktopComputer:
     """One checked coordinate space shared by desktop screenshots and input."""
@@ -91,6 +103,8 @@ class DesktopComputer:
         self._source_sizes: tuple[tuple[int, int], ...] | None = None
         self._pyautogui: Any | None = None
         self._held_buttons: set[str] = set()
+        self._last_pointer_position: tuple[int, int] | None = None
+        self._pending_clipboard: str | None = None
 
         # MSS establishes the native desktop coordinate space on Windows. It
         # must run before PyAutoGUI imports its older process-DPI setup.
@@ -119,18 +133,33 @@ class DesktopComputer:
             if pyautogui is None:
                 raise RuntimeError("computer input is unavailable")
 
+            # A paste key event is queued asynchronously by the OS. Restore the
+            # old clipboard only on the next action, after the target app had a
+            # full model turn to consume it.
+            self._restore_pending_clipboard()
+
             # Capture first so a display layout or scale change cannot silently
             # reuse coordinates from an older screenshot.
             self._capture_image()
             self._check_input_geometry()
             action = arguments.get("action")
+            if action in {
+                "click",
+                "move",
+                "drag",
+                "mouse_down",
+                "mouse_up",
+                "type",
+                "key",
+                "hotkey",
+                "scroll",
+            }:
+                self._recover_owned_failsafe(pyautogui)
+                self._last_pointer_position = None
             if action in {"click", "move", "mouse_down", "mouse_up", "scroll"}:
                 x, y = self._input_coordinates(arguments, "x", "y")
                 if action == "click":
                     button = _button(arguments)
-                    pyautogui.moveTo(
-                        x, y, duration=_duration(arguments, default=0.0)
-                    )
                     clicks = arguments.get("clicks", 1)
                     if (
                         not isinstance(clicks, int)
@@ -138,7 +167,13 @@ class DesktopComputer:
                         or not 1 <= clicks <= 3
                     ):
                         raise ValueError("click requires clicks between 1 and 3")
-                    pyautogui.click(button=button, clicks=clicks)
+                    pyautogui.click(
+                        x=x,
+                        y=y,
+                        button=button,
+                        clicks=clicks,
+                        duration=_duration(arguments, default=0.0),
+                    )
                 elif action == "move":
                     duration = _duration(arguments, default=0.0)
                     if len(self._held_buttons) == 1:
@@ -159,30 +194,32 @@ class DesktopComputer:
                     button = _button(arguments)
                     if button in self._held_buttons:
                         raise RuntimeError(f"mouse button is already held: {button}")
-                    pyautogui.moveTo(
-                        x, y, duration=_duration(arguments, default=0.0)
+                    pyautogui.mouseDown(
+                        x=x,
+                        y=y,
+                        button=button,
+                        duration=_duration(arguments, default=0.0),
                     )
-                    pyautogui.mouseDown(button=button)
                     self._held_buttons.add(button)
                 elif action == "mouse_up":
                     button = _button(arguments)
                     duration = _duration(arguments, default=0.0)
                     if button in self._held_buttons:
-                        pyautogui.dragTo(
-                            x,
-                            y,
-                            duration=duration,
-                            button=button,
-                            mouseDownUp=False,
-                        )
+                        try:
+                            pyautogui.dragTo(
+                                x,
+                                y,
+                                duration=duration,
+                                button=button,
+                                mouseDownUp=False,
+                            )
+                        finally:
+                            _release_mouse_button(pyautogui, button, x, y)
+                            self._held_buttons.discard(button)
                     else:
                         pyautogui.moveTo(x, y, duration=duration)
-                    pyautogui.mouseUp(button=button)
-                    self._held_buttons.discard(button)
+                        _release_mouse_button(pyautogui, button, x, y)
                 elif action == "scroll":
-                    pyautogui.moveTo(
-                        x, y, duration=_duration(arguments, default=0.0)
-                    )
                     amount = arguments.get("amount")
                     if (
                         not isinstance(amount, int)
@@ -193,7 +230,11 @@ class DesktopComputer:
                         raise ValueError(
                             "scroll requires a non-zero amount between -20 and 20"
                         )
-                    pyautogui.scroll(amount)
+                    pyautogui.moveTo(
+                        x, y, duration=_duration(arguments, default=0.0)
+                    )
+                    _scroll_at(pyautogui, amount, x, y)
+                self._last_pointer_position = (x, y)
             elif action == "drag":
                 if self._held_buttons:
                     raise RuntimeError(
@@ -203,17 +244,34 @@ class DesktopComputer:
                 end_x, end_y = self._input_coordinates(arguments, "to_x", "to_y")
                 button = _button(arguments)
                 pyautogui.moveTo(start_x, start_y)
-                pyautogui.dragTo(
-                    end_x,
-                    end_y,
-                    duration=_duration(arguments, default=0.5),
-                    button=button,
-                )
+                _press_mouse_button(pyautogui, button, start_x, start_y)
+                self._held_buttons.add(button)
+                try:
+                    if _is_failsafe_point(pyautogui, (start_x, start_y)):
+                        safe_x, safe_y = self._required_layout().interior_point(
+                            start_x, start_y
+                        )
+                        _drag_pointer_direct(
+                            pyautogui, safe_x, safe_y, button
+                        )
+                    pyautogui.dragTo(
+                        end_x,
+                        end_y,
+                        duration=_duration(arguments, default=0.5),
+                        button=button,
+                        mouseDownUp=False,
+                    )
+                finally:
+                    _release_mouse_button(pyautogui, button, end_x, end_y)
+                    self._held_buttons.discard(button)
+                self._last_pointer_position = (end_x, end_y)
             elif action == "type":
                 text = arguments.get("text")
                 if not isinstance(text, str):
                     raise ValueError("type requires text")
-                _paste_text(pyautogui, text)
+                self._pending_clipboard = _paste_text(
+                    pyautogui, text, restore=False
+                )
             elif action == "key":
                 key = arguments.get("key")
                 if not isinstance(key, str) or not key:
@@ -246,11 +304,31 @@ class DesktopComputer:
 
     def close(self) -> None:
         with self._lock:
-            pyautogui = self._pyautogui
-            if pyautogui is not None:
-                for button in tuple(self._held_buttons):
-                    _release_mouse_button(pyautogui, button)
-            self._held_buttons.clear()
+            try:
+                self._restore_pending_clipboard()
+            finally:
+                pyautogui = self._pyautogui
+                if pyautogui is not None:
+                    for button in tuple(self._held_buttons):
+                        _release_mouse_button(pyautogui, button)
+                self._held_buttons.clear()
+
+    def _restore_pending_clipboard(self) -> None:
+        if self._pending_clipboard is None:
+            return
+        try:
+            import pyperclip
+        except ImportError as error:
+            raise RuntimeError(
+                "could not restore the clipboard after computer type"
+            ) from error
+        try:
+            pyperclip.copy(self._pending_clipboard)
+        except pyperclip.PyperclipException as error:
+            raise RuntimeError(
+                "could not restore the clipboard after computer type"
+            ) from error
+        self._pending_clipboard = None
 
     def _input_coordinates(
         self,
@@ -263,6 +341,29 @@ class DesktopComputer:
             _coordinate(arguments, x_name),
             _coordinate(arguments, y_name),
         )
+
+    def _recover_owned_failsafe(self, pyautogui: Any) -> None:
+        current = tuple(int(value) for value in pyautogui.position())
+        if current != self._last_pointer_position:
+            self._last_pointer_position = None
+            return
+        if not _is_failsafe_point(pyautogui, current):
+            return
+        safe_x, safe_y = self._required_layout().interior_point(*current)
+        if self._held_buttons:
+            if sys.platform == "darwin" and len(self._held_buttons) != 1:
+                raise RuntimeError(
+                    "cannot recover from fail-safe while multiple mouse buttons are held"
+                )
+            _drag_pointer_direct(
+                pyautogui,
+                safe_x,
+                safe_y,
+                next(iter(self._held_buttons)),
+            )
+        else:
+            _move_pointer_direct(pyautogui, safe_x, safe_y)
+        self._last_pointer_position = (safe_x, safe_y)
 
     def _capture_image(
         self,
@@ -391,14 +492,61 @@ def _button(arguments: dict[str, JSONValue]) -> str:
     return str(value)
 
 
-def _release_mouse_button(pyautogui: Any, button: str) -> None:
+def _is_failsafe_point(pyautogui: Any, point: tuple[int, int]) -> bool:
+    points = getattr(pyautogui, "FAILSAFE_POINTS", ())
+    if not isinstance(points, (list, tuple, set, frozenset)):
+        return False
+    return point in {tuple(candidate) for candidate in points}
+
+
+def _move_pointer_direct(pyautogui: Any, x: int, y: int) -> None:
+    move = getattr(pyautogui.platformModule, "_moveTo", None)
+    if not callable(move):  # pragma: no cover - all supported backends provide it
+        raise RuntimeError("PyAutoGUI mouse movement backend is unavailable")
+    move(x, y)
+
+
+def _drag_pointer_direct(
+    pyautogui: Any, x: int, y: int, button: str
+) -> None:
+    if sys.platform == "darwin":
+        drag = getattr(pyautogui.platformModule, "_dragTo", None)
+        if not callable(drag):  # pragma: no cover - PyAutoGUI provides it on macOS
+            raise RuntimeError("PyAutoGUI mouse drag backend is unavailable")
+        drag(x, y, button)
+    else:
+        _move_pointer_direct(pyautogui, x, y)
+
+
+def _press_mouse_button(
+    pyautogui: Any, button: str, x: int | None = None, y: int | None = None
+) -> None:
+    if x is None or y is None:
+        x, y = pyautogui.position()
+    press = getattr(pyautogui.platformModule, "_mouseDown", None)
+    if not callable(press):  # pragma: no cover - all supported backends provide it
+        raise RuntimeError("PyAutoGUI mouse press backend is unavailable")
+    press(x, y, button)
+
+
+def _release_mouse_button(
+    pyautogui: Any, button: str, x: int | None = None, y: int | None = None
+) -> None:
     """Release held input during teardown without triggering corner fail-safe."""
 
-    x, y = pyautogui.position()
+    if x is None or y is None:
+        x, y = pyautogui.position()
     release = getattr(pyautogui.platformModule, "_mouseUp", None)
     if not callable(release):  # pragma: no cover - all supported backends provide it
         raise RuntimeError("PyAutoGUI mouse release backend is unavailable")
     release(x, y, button)
+
+
+def _scroll_at(pyautogui: Any, amount: int, x: int, y: int) -> None:
+    scroll = getattr(pyautogui.platformModule, "_scroll", None)
+    if not callable(scroll):  # pragma: no cover - all supported backends provide it
+        raise RuntimeError("PyAutoGUI scroll backend is unavailable")
+    scroll(amount * 120 if sys.platform == "win32" else amount, x, y)
 
 
 _HOTKEY_ALIASES = {
@@ -429,7 +577,9 @@ def _normalize_hotkey_keys(keys: list[str], pyautogui: Any) -> tuple[str, ...]:
     return tuple(normalized)
 
 
-def _paste_text(pyautogui: Any, text: str) -> None:
+def _paste_text(
+    pyautogui: Any, text: str, *, restore: bool = True
+) -> str | None:
     """Insert text as one committed paste, so an active IME cannot compose it."""
 
     try:
@@ -449,10 +599,19 @@ def _paste_text(pyautogui: Any, text: str) -> None:
         pyautogui.hotkey("command" if sys.platform == "darwin" else "ctrl", "v")
         # Some applications read the clipboard after the key event returns.
         time.sleep(0.05)
+    except BaseException:
+        if not restore:
+            try:
+                pyperclip.copy(previous)
+            except pyperclip.PyperclipException:
+                pass
+        raise
     finally:
-        try:
-            pyperclip.copy(previous)
-        except pyperclip.PyperclipException:
-            # The text was already delivered; failure to restore must not turn a
-            # successful computer action into a failed one.
-            pass
+        if restore:
+            try:
+                pyperclip.copy(previous)
+            except pyperclip.PyperclipException:
+                # The text was already delivered; failure to restore must not turn a
+                # successful computer action into a failed one.
+                pass
+    return previous if not restore else None

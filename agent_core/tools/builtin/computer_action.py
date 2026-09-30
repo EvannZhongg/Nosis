@@ -114,8 +114,9 @@ class ComputerActionTool(Tool):
                         "minimum": -20,
                         "maximum": 20,
                         "description": (
-                            "Non-zero vertical wheel amount. Scroll requires x and "
-                            "y so the target is independent of prior pointer state."
+                            "Non-zero logical wheel detents; positive scrolls up and "
+                            "negative scrolls down. Scroll requires x and y so the "
+                            "target is independent of prior pointer state."
                         ),
                     },
                     "seconds": {

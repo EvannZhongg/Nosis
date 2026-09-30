@@ -141,6 +141,7 @@ class DesktopComputerTest(unittest.TestCase):
         self.pyautogui = Mock(KEYBOARD_KEYS={"enter", "ctrl", "v"})
         self.pyautogui.size.return_value = (200, 100)
         self.pyautogui.position.return_value = (50, 0)
+        self.pyautogui.FAILSAFE_POINTS = []
         platform = patch("agent_runtime.computer.sys.platform", "win32")
         platform.start()
         self.addCleanup(platform.stop)
@@ -167,8 +168,13 @@ class DesktopComputerTest(unittest.TestCase):
 
         computer.control({"action": "click", "x": 10, "y": 10})
 
-        self.pyautogui.moveTo.assert_called_with(-90, -40, duration=0.0)
-        self.pyautogui.click.assert_called_once_with(button="left", clicks=1)
+        self.pyautogui.click.assert_called_once_with(
+            x=-90,
+            y=-40,
+            button="left",
+            clicks=1,
+            duration=0.0,
+        )
 
     def test_rejects_union_area_that_is_not_on_a_display(self) -> None:
         computer = self.computer()
@@ -200,12 +206,21 @@ class DesktopComputerTest(unittest.TestCase):
             computer.close()
 
         self.pyautogui.dragTo.assert_called_once_with(
-            50, 0, duration=0.75, button="right"
+            50,
+            0,
+            duration=0.75,
+            button="right",
+            mouseDownUp=False,
         )
-        self.pyautogui.scroll.assert_called_once_with(-3)
+        self.pyautogui.platformModule._scroll.assert_called_once_with(-360, 50, 0)
         sleep.assert_called_once_with(1.25)
-        self.pyautogui.mouseDown.assert_called_once_with(button="left")
-        self.pyautogui.platformModule._mouseUp.assert_called_once_with(50, 0, "left")
+        self.pyautogui.mouseDown.assert_called_once_with(
+            x=50, y=0, button="left", duration=0.0
+        )
+        self.assertEqual(
+            self.pyautogui.platformModule._mouseUp.call_args_list,
+            [call(50, 0, "right"), call(50, 0, "left")],
+        )
         self.assertIn(call(50, 0, duration=0.0), self.pyautogui.moveTo.call_args_list)
 
     def test_move_and_mouse_up_emit_drag_motion_while_button_is_held(self) -> None:
@@ -236,7 +251,37 @@ class DesktopComputerTest(unittest.TestCase):
                 ),
             ],
         )
-        self.pyautogui.mouseUp.assert_called_once_with(button="left")
+        self.pyautogui.platformModule._mouseUp.assert_called_once_with(70, 20, "left")
+
+    def test_recovers_only_from_a_failsafe_corner_left_by_the_tool(self) -> None:
+        computer = self.computer()
+        self.pyautogui.FAILSAFE_POINTS = [
+            (0, 0),
+            (199, 0),
+            (0, 99),
+            (199, 99),
+        ]
+
+        computer.control({"action": "move", "x": 100, "y": 50})
+        self.pyautogui.position.return_value = (0, 0)
+        computer.control({"action": "key", "key": "Enter"})
+
+        self.pyautogui.platformModule._moveTo.assert_called_once_with(1, 1)
+        self.pyautogui.press.assert_called_once_with("enter")
+
+    def test_does_not_bypass_a_user_owned_failsafe_corner(self) -> None:
+        class FailSafeException(Exception):
+            pass
+
+        computer = self.computer()
+        self.pyautogui.FAILSAFE_POINTS = [(0, 0)]
+        self.pyautogui.position.return_value = (0, 0)
+        self.pyautogui.press.side_effect = FailSafeException("corner")
+
+        with self.assertRaisesRegex(FailSafeException, "corner"):
+            computer.control({"action": "key", "key": "Enter"})
+
+        self.pyautogui.platformModule._moveTo.assert_not_called()
 
     def test_rejects_layout_changes_before_sending_input(self) -> None:
         computer = self.computer()
@@ -277,6 +322,25 @@ class DesktopComputerTest(unittest.TestCase):
 
         self.pyautogui.press.assert_called_once_with("enter")
         self.pyautogui.hotkey.assert_called_once_with("ctrl", "v")
+
+    @patch("agent_runtime.computer.time.sleep")
+    @patch("pyperclip.copy")
+    @patch("pyperclip.paste", return_value="old clipboard")
+    def test_type_defers_clipboard_restore_until_next_action(
+        self, paste, copy, sleep
+    ) -> None:
+        computer = self.computer()
+
+        computer.control({"action": "type", "text": "new text"})
+        self.assertEqual(copy.call_args_list, [call("new text")])
+
+        computer.control({"action": "key", "key": "Enter"})
+
+        self.assertEqual(
+            copy.call_args_list,
+            [call("new text"), call("old clipboard")],
+        )
+        self.pyautogui.press.assert_called_once_with("enter")
 
 
 if __name__ == "__main__":
