@@ -167,6 +167,10 @@ class DesktopComputer:
                         or not 1 <= clicks <= 3
                     ):
                         raise ValueError("click requires clicks between 1 and 3")
+                    # PyAutoGUI can move to a fail-safe corner and then raise
+                    # before returning. Record ownership before that call so a
+                    # following action can move the pointer back inside.
+                    self._last_pointer_position = (x, y)
                     pyautogui.click(
                         x=x,
                         y=y,

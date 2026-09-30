@@ -283,6 +283,27 @@ class DesktopComputerTest(unittest.TestCase):
 
         self.pyautogui.platformModule._moveTo.assert_not_called()
 
+    def test_click_failure_at_corner_is_recoverable_on_the_next_action(self) -> None:
+        class FailSafeException(Exception):
+            pass
+
+        computer = self.computer()
+        self.pyautogui.FAILSAFE_POINTS = [(0, 0)]
+
+        def click_reaches_corner_then_fails(**_kwargs):
+            self.pyautogui.position.return_value = (0, 0)
+            raise FailSafeException("corner")
+
+        self.pyautogui.click.side_effect = click_reaches_corner_then_fails
+        with self.assertRaisesRegex(FailSafeException, "corner"):
+            computer.control({"action": "click", "x": 100, "y": 50})
+
+        self.pyautogui.click.side_effect = None
+        computer.control({"action": "key", "key": "Enter"})
+
+        self.pyautogui.platformModule._moveTo.assert_called_once_with(1, 1)
+        self.pyautogui.press.assert_called_once_with("enter")
+
     def test_rejects_layout_changes_before_sending_input(self) -> None:
         computer = self.computer()
         self.screenshots.monitors = [
