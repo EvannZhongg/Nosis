@@ -25,7 +25,7 @@
       "key": "${GEMINI_KEY}"
     },
     "deepseek": {
-      "model": "deepseek/deepseek-chat",
+      "model": "deepseek/deepseek-flash",
       "url": "https://api.deepseek.com",
       "key": "${DEEPSEEK_KEY}"
     },
