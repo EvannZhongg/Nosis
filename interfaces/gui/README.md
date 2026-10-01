@@ -9,7 +9,7 @@ uv sync --extra gui
 # 或：python -m pip install -e ".[gui]"
 ```
 
-其中包含 Uvicorn 的 WebSocket 后端；Windows、macOS 与 Linux 使用相同命令。若缺少该依赖，`nosis-gui` 会在启动时直接提示安装命令。
+其中包含 Uvicorn 的 WebSocket 后端；Windows、macOS 与 Linux 使用相同命令。若缺少 WebSocket 后端，`nosis-gui` 会在启动时直接提示安装命令。
 
 ## 启动
 
@@ -66,11 +66,16 @@ React 应用提供可折叠的 Session 列表、对话区和 Workspace 文件树
 
 | 模块 | 职责 |
 | --- | --- |
+| `src/main.tsx` | React 入口 |
 | `src/App.tsx` | 应用布局、多 Session、设置入口和 Workspace 分组 |
 | `src/Chat.tsx` | 单 Session 对话容器 |
 | `src/chat/useSessionRuntime.ts` | 协议连接与 assistant-ui Runtime 适配 |
+| `src/chat/runtimeState.ts` | Job、计划与审批请求的运行状态投影 |
+| `src/chat/composerState.ts` | 输入框的提交与附件提交判定 |
 | `src/transcript.ts` | 协议事件到 transcript 的纯状态投影 |
-| `src/session.ts` | WebSocket client 与 NDJSON 消息接口 |
+| `src/chat/Transcript.tsx` | transcript 视口与滚动 |
+| `src/chat/TurnNavigation.tsx` | 按 Turn 跳转的导航条 |
+| `src/session.ts` | 浏览器到服务端的 WebSocket client 与 JSON 消息接口 |
 | `src/chat/Composer.tsx` | 输入、附件、Provider、权限和 Workspace 控件 |
 | `src/chat/Messages/` | assistant、user、Tool 与媒体消息渲染 |
 | `src/chat/RuntimeIndicators/` | Context Window、计划和后台 Job |

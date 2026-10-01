@@ -19,11 +19,11 @@ RuntimeHost
 
 `ExecutionPlane` 持有一次完整执行所需的对象：
 
-- Workspace 和选定 Provider
+- Workspace 与选定的 Provider 名称
 - 已解析的 Agent 配置及配置 fingerprint
 - Workspace Instructions 及其 fingerprint
-- Agent、Tool Catalog / ToolSet 与执行路由
-- Memory、MCP Client、后台 Job 和上下文窗口
+- 已装配的 Agent（含其 Tool）与执行路由
+- Memory、MCP Client、桌面能力、后台 Job 和上下文窗口
 
 `ExecutionPlaneManager.ensure()` 在首个 `user_turn` 到来时延迟装配。Workspace、Provider、配置或 Instructions 变化时，旧 plane 整体关闭并在下一次使用时重新创建，避免部分组件仍使用旧状态。
 
@@ -31,6 +31,7 @@ RuntimeHost
 
 - 创建主 Provider、视觉 Provider 和图片生成 Provider
 - 建立宿主与平台沙箱执行器，并施加 Runtime authority 上限
+- 装配桌面截图与输入能力
 - 从内置 Catalog 按主 Agent 和子 Agent 角色选择 Tool
 - 注入 Session、Plan、Memory、Scheduler、权限、图片和用户交互能力
 - 加载 standalone Skill、Plugin Skill、Plugin Agent 与 MCP Server
@@ -136,7 +137,7 @@ standalone Skill 与 MCP 使用同一套 Core registry / manager，不存在 Plu
 
 `attachments.py` 验证前端提交的附件确实位于当前 Workspace，探测图片格式，并转换为 Core 的 `ImagePart` 或 `FilePart`。
 
-`ScheduledTurnRunner` 为 Scheduler 创建独立 `RuntimeHost`，以任务绑定的 Workspace 和 Provider 执行 Turn。`workspace` scope 使用 Workspace-only authority，`host` scope 使用 Host authority；两者都不提供交互式授权或用户提问能力，因此只能在预先声明的 scope 内无人值守执行。
+`ScheduledTurnRunner` 为 Scheduler 创建独立 `RuntimeHost`，在任务绑定的 Workspace 中执行 Turn；Provider 沿用 Session 已保存或默认的选择。`workspace` scope 使用 Workspace-only authority，`host` scope 使用 Host authority；两者都不提供交互式授权或用户提问能力，因此只能在预先声明的 scope 内无人值守执行。
 
 ## 模块索引
 
@@ -153,4 +154,5 @@ standalone Skill 与 MCP 使用同一套 Core registry / manager，不存在 Plu
 | `plugins.py` | Plugin manifest、Skill、MCP 与 Agent component 发现 |
 | `instructions.py` | Workspace Instructions 来源读取与 fingerprint |
 | `attachments.py` | 入站附件解析 |
+| `computer.py` | 桌面截图与输入的平台能力 |
 | `callbacks.py` | Runtime 对宿主的回调接口 |

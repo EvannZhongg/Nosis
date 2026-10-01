@@ -16,7 +16,7 @@ nosis --temporary
 
 ## 交互模型
 
-TUI 在启动或切换 Session 时先发送 `open_session`，等待 `session_ready` 与首个 `runtime_state` 后才允许提交命令。普通消息通过 `user_turn` 发送；Turn 执行中提交的新输入转为 `user_steer`。
+TUI 在启动或切换 Session 时先发送 `open_session`，收到首个 `runtime_state` 后才允许提交命令。普通消息通过 `user_turn` 发送；Turn 执行中提交的新输入转为 `user_steer`。
 
 界面由结构化协议状态驱动，展示：
 
@@ -43,10 +43,10 @@ TUI 在启动或切换 Session 时先发送 `open_session`，等待 `session_rea
 | `Enter` | 提交输入或确认选项 |
 | `Ctrl+J` | 输入换行 |
 | `Shift+Enter` | 支持 kitty keyboard protocol 时输入换行 |
-| `↑` / `↓` | 移动输入光标或列表选择 |
+| `↑` / `↓` | 在候选列表中上下选择（输入光标用 `←` / `→` 移动） |
 | `Esc` | 关闭列表、拒绝授权或取消当前 Turn |
-| `Ctrl+C` | 取消当前 Turn；空输入时退出 |
-| `Ctrl+D` | 退出 |
+| `Ctrl+C` | 取消当前 Turn；空闲时清空草稿，空输入时退出 |
+| `Ctrl+D` | 空输入且空闲时退出 |
 
 TUI 只在已知支持的终端环境启用 kitty keyboard protocol，不进行可能把探测响应写入输入框的主动探测。
 

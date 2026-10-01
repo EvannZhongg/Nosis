@@ -23,8 +23,21 @@ interfaces → agent_runtime → agent_core
 | `agent.py` | Agent Loop、执行事件和终止条件 |
 | `tool_batch.py` | Tool 批次调度、结果回灌、Journal 记录与清理 |
 | `turn_control.py` | Turn 取消和用户 steering mailbox |
+| `loop_policy.py` | 调用上限、重复调用防护与 Turn 续跑策略 |
 | `errors.py` | Runtime 错误的结构化表示 |
 | `prompting.py` | 主 Agent 与子 Agent system prompt 渲染 |
+
+## 基础类型与配置
+
+与前端无关的基础类型，以及 Core 侧的配置结构定义和文件加载；配置目录的位置与来源仍由 `agent_runtime` 决定。
+
+| 模块 | 职责 |
+| --- | --- |
+| `config.py` | `AgentConfig` 及上下文、记忆、Provider、Skill、子 Agent 角色等配置结构与 `load_agent_config` |
+| `workspace.py` | `Workspace` 类型与路径包含校验 |
+| `path_utils.py` | 路径比较与包含判断 |
+| `atomic.py` | 文件原子写入 |
+| `time_utils.py` | UTC 时间序列化 |
 
 ## 上下文与内容
 
@@ -62,15 +75,16 @@ interfaces → agent_runtime → agent_core
 
 内置 Tool 覆盖：
 
-- Workspace 文件读取、搜索、列举、写入和 patch
+- Workspace 文件读取、搜索、列举、写入、编辑和 patch
 - Shell 命令执行
 - Web Search 与 Web Fetch
 - 图片读取、分析与生成
+- 桌面截图与输入
 - Skill 读取和子 Agent 派发
 - 用户提问、计划更新与长期记忆写入
 - 定时任务创建、修改、查询和删除
 
-`ask_user`、`update_plan`、`remember` 等 Tool 依赖注入的 Runtime 能力，不把应用决策复制到 Tool 内。图片生成只面向主 Agent；角色可见性由装配阶段选择。
+`ask_user`、`update_plan`、`remember` 等 Tool 依赖注入的 Runtime 能力，不把应用决策复制到 Tool 内。图片生成与桌面自动化只面向主 Agent；角色可见性由装配阶段选择。
 
 `tools/` 内的主要分工：
 
@@ -80,7 +94,9 @@ interfaces → agent_runtime → agent_core
 | `catalog.py` | Catalog 与按名称选取的 ToolSet |
 | `config.py` | Tool 开关配置结构 |
 | `context.py` | 每次调用所需的 Workspace、Session、执行器等依赖 |
-| `policy.py` | Shell 与 MCP 的授权策略组合 |
+| `paths.py` | 读取路径解析与 Workspace 包含校验 |
+| `globs.py` | 文件路径 glob 匹配 |
+| `policy.py` | Shell、桌面自动化与 MCP 的授权策略组合 |
 | `budget.py` | Tool 结果大小预算 |
 | `builtin/` | 内置 Tool 实现 |
 
@@ -99,8 +115,8 @@ Shell 通过 `ExecutionRouter` 根据 `ExecutionScope` 和当前 `ExecutionAutho
 `execution/` 负责进程超时、取消、输出 spool、平台 shell 和沙箱路由：
 
 - macOS 使用 Seatbelt。
-- Linux 使用 bubblewrap；缺失或 namespace 初始化失败时明确报错，不回退宿主执行。
-- Windows 使用 Restricted Token，Shell 方言为 PowerShell 7。
+- Linux 使用 bubblewrap；缺失时报错，namespace 初始化失败时保留原始诊断，两者都不回退宿主执行。
+- Windows 使用 Restricted Token（`windows_sandbox.py`），Shell 方言为 PowerShell 7。
 
 沙箱策略使用结构化的文件系统、网络、临时目录和进程隔离能力描述；平台 backend 负责把策略翻译成具体 OS 约束。
 
