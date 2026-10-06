@@ -4,7 +4,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from agent_core import DirectorySkillSource, ProviderCapabilities, SkillLoader
+from agent_core import (
+    DirectorySkillSource,
+    ProviderCapabilities,
+    SkillLoader,
+    load_agent_config,
+)
 from agent_core.providers import LiteLLMProvider
 from agent_runtime.config import (
     ModelConfig,
@@ -212,8 +217,31 @@ class ConfigTest(unittest.TestCase):
                 agent_config["scratch_workspace_root"],
                 "~/.nosis/workspaces/scratch",
             )
-            # The built-in MCP plugin only loads while MCP is switched on.
+            # Built-in MCP servers and MCP plugins share the global switch.
             self.assertTrue(agent_config["mcp"]["enabled"])
+            parallel = agent_config["mcp"]["servers"]["parallel"]
+            self.assertEqual(
+                parallel,
+                {
+                    "enabled": True,
+                    "transport": "streamable_http",
+                    "url": "https://search.parallel.ai/mcp",
+                    "tools": {
+                        "enabled": ["web_search", "web_fetch"],
+                        "approval": "always",
+                    },
+                },
+            )
+            loaded_agent_config = load_agent_config(created[1])
+            self.assertEqual(
+                [server.identifier for server in loaded_agent_config.mcp.servers],
+                ["parallel"],
+            )
+            self.assertTrue(loaded_agent_config.mcp.servers[0].enabled)
+            self.assertEqual(
+                loaded_agent_config.mcp.servers[0].tools.enabled,
+                frozenset({"web_search", "web_fetch"}),
+            )
             self.assertEqual(
                 agent_config["workspace_instruction_files"],
                 ["CLAUDE.md", "AGENTS.md"],

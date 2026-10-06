@@ -102,6 +102,29 @@ class SettingsStoreTest(unittest.TestCase):
             {"request_timeout_seconds": 300, "max_retries": 2},
         )
 
+    def test_mcp_toggle_preserves_server_configuration(self) -> None:
+        document = json.loads(
+            (self.root / "agent_config.json").read_text(encoding="utf-8")
+        )
+        parallel = {
+            "enabled": True,
+            "transport": "streamable_http",
+            "url": "https://search.parallel.ai/mcp",
+        }
+        document["mcp"]["servers"]["parallel"] = parallel
+        (self.root / "agent_config.json").write_text(
+            json.dumps(document),
+            encoding="utf-8",
+        )
+
+        self.store.save_agent({"mcp_enabled": True})
+
+        updated = json.loads(
+            (self.root / "agent_config.json").read_text(encoding="utf-8")
+        )
+        self.assertTrue(updated["mcp"]["enabled"])
+        self.assertEqual(updated["mcp"]["servers"]["parallel"], parallel)
+
     def test_agent_update_reports_missing_scratch_workspace_root(self) -> None:
         document = json.loads(
             (self.root / "agent_config.json").read_text(encoding="utf-8")

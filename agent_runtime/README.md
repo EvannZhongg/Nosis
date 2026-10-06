@@ -78,6 +78,8 @@ RuntimeHost
 
 `agent_config.json` 的 `skills.global_paths` 相对配置目录解析、`skills.workspace_paths` 相对当前 Workspace 解析。同名 Skill 保留最先注册的来源，Plugin Skill 排在配置来源之后。
 
+默认 Agent 配置开启 MCP，并直接注册 `parallel` Server，通过 [Parallel Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp) 提供 `web_search` 与 `web_fetch`。该服务的匿名请求无需 API Key，但有用量限制；查询和 URL 会发送给 Parallel。两个 Tool 默认均需调用授权，可通过 `mcp.enabled` 总开关或 `mcp.servers.parallel.enabled` 单独停用。
+
 Provider 路由按以下链解析：
 
 ```text

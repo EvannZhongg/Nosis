@@ -126,6 +126,7 @@ Windows 上 Shell Tool 使用 PowerShell 7，因此需要另外安装 PowerShell
 ## Contributors
 
 - [AKArrok](https://github.com/AKArrok)：提出并验证 Session Journal 尾记录追加问题（[#2](https://github.com/EvannZhongg/Nosis/pull/2)）。
+- [George Pickett](https://github.com/georgeatparallel)：贡献 Parallel Search MCP 集成（[#4](https://github.com/EvannZhongg/Nosis/pull/4)）。
 - [Pocket99](https://github.com/Pocket99)：贡献最初的 GUI，含会话、Workspace 浏览与模型切换（[#1](https://github.com/EvannZhongg/Nosis/pull/1)）。
 
 ## 许可
