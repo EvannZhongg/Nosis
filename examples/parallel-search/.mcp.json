@@ -1,0 +1,13 @@
+{
+  "search": {
+    "type": "http",
+    "url": "https://search.parallel.ai/mcp",
+    "headers": {
+      "User-Agent": "Nosis/0.1.0"
+    },
+    "tools": {
+      "enabled": ["web_search", "web_fetch"],
+      "approval": "always"
+    }
+  }
+}

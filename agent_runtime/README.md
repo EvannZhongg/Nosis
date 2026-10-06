@@ -133,6 +133,8 @@ GUI HTTP API 和 Bridge 设置消息都复用该服务。
 
 standalone Skill 与 MCP 使用同一套 Core registry / manager，不存在 Plugin 专用执行路径。
 
+可运行的远程 HTTP MCP Plugin 示例见 [`Parallel Search`](../examples/parallel-search/README.md)，包含手动安装、授权与停用说明。
+
 ## 附件与定时任务
 
 `attachments.py` 验证前端提交的附件确实位于当前 Workspace，探测图片格式，并转换为 Core 的 `ImagePart` 或 `FilePart`。

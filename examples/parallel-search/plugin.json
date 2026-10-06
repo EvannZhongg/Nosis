@@ -1,0 +1,9 @@
+{
+  "name": "parallel-search",
+  "version": "0.1.0",
+  "description": "Optional web search and page extraction through Parallel Search MCP",
+  "capabilities": ["mcp"],
+  "components": {
+    "mcp": [".mcp.json"]
+  }
+}

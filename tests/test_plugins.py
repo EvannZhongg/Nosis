@@ -1,4 +1,5 @@
 import json
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -93,6 +94,27 @@ class PluginLoaderTest(unittest.TestCase):
                 PluginLoader().load(manifest)
 
 class PluginManagerTest(unittest.TestCase):
+    def test_parallel_search_example_loads_from_the_plugin_directory(self) -> None:
+        example = Path(__file__).resolve().parents[1] / "examples" / "parallel-search"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            shutil.copytree(example, root / "parallel-search")
+            manager = PluginManager.discover(root)
+            servers, warnings = manager.load_mcp_servers()
+
+        self.assertEqual(manager.warnings, ())
+        self.assertEqual(warnings, ())
+        self.assertEqual(len(servers), 1)
+        server = servers[0]
+        self.assertEqual(server.identifier, "parallel-search:search")
+        self.assertEqual(server.transport, "streamable_http")
+        self.assertEqual(server.url, "https://search.parallel.ai/mcp")
+        self.assertEqual(server.headers, {"User-Agent": "Nosis/0.1.0"})
+        self.assertEqual(server.tools.enabled, frozenset({"web_search", "web_fetch"}))
+        self.assertIsNone(server.tools.require_approval)
+        self.assertEqual(server.startup_timeout_seconds, 15)
+        self.assertEqual(server.call_timeout_seconds, 60)
+
     def test_loads_namespaced_agents_with_body_and_default_tools(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
