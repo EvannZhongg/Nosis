@@ -1,6 +1,8 @@
-<div align="center"><img src="docs/nosis-banner.png" alt="Nosis" width="560"></div>
-
-**English** · [简体中文](README.zh-CN.md)
+<div align="center">
+  <img src="docs/nosis-banner.png" alt="Nosis" width="560">
+  <br><br>
+  <b>English</b> &middot; <a href="README.zh-CN.md">简体中文</a>
+</div>
 
 Nosis is an open-source, lightweight personal agent application. It provides local workspace operations, human approval, session persistence, context management, long-term memory, plans, subagents, scheduled tasks, and Skill / Plugin / MCP extensibility — with both a TUI and a GUI.
 

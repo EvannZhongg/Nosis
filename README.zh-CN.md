@@ -1,6 +1,8 @@
-<div align="center"><img src="docs/nosis-banner.png" alt="Nosis" width="560"></div>
-
-[English](README.md) · **简体中文**
+<div align="center">
+  <img src="docs/nosis-banner.png" alt="Nosis" width="560">
+  <br><br>
+  <a href="README.md">English</a> &middot; <b>简体中文</b>
+</div>
 
 Nosis 是一个开源的轻量级个人 Agent 应用。它提供本地 Workspace 操作、人工授权、会话持久化、上下文管理、长期记忆、计划、子 Agent、定时任务，以及 Skill、Plugin、MCP 扩展能力，并同时提供 TUI 和 GUI。
 
