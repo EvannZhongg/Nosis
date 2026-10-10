@@ -122,13 +122,19 @@ Shell 通过 `ExecutionRouter` 根据 `ExecutionScope` 和当前 `ExecutionAutho
 
 ## Provider 与模型协议
 
-`LLMProvider` 定义模型调用接口、能力信息、流式响应和 token usage。当前实现通过 LiteLLM 接入文本与视觉模型，并有独立的图片生成 Provider 实现。
+`LLMProvider` 定义模型调用接口、能力信息、流式响应和 token usage。`OpenAIProvider` 使用原生 SDK 实现 Responses 与 Chat Completions 协议，官方服务和中转使用同一实现；其他服务商路由由 `LiteLLMProvider` 承担。
+
+`ModelProvider` 共享媒体序列化、token 估算、模型信息和可取消的流读取。模型上下文窗口、输出限制和视觉能力仍从 LiteLLM 的模型目录取得：保留其联网更新及库内置目录，未知模型必须显式配置 `max_context_tokens`，不猜测窗口大小。
+
+Responses 工具参数从 `response.completed` 的完整 output 读取，推理及加密状态通过消息的 `provider_data` 写入 Session Journal，后续请求原样回传；加密推理的 token 数使用服务端 usage 纳入上下文估算。Bridge 的呈现消息和 GUI 的会话读取响应不携带该状态。原生 SDK 流中断或协议异常会报错，不通过强制工具选择重新请求。
 
 `ToolCallStreamAssembler` 负责把流式 Tool Call 分片组装为结构化参数，并在协议异常时提供不包含完整敏感参数的定位信息。
 
 | 模块 | 职责 |
 | --- | --- |
 | `llm.py` | Provider 抽象、请求、响应与能力类型 |
+| `providers/base.py` | 模型元数据、token 估算、媒体与取消机制 |
+| `providers/openai_provider.py` | 原生 Responses 与 Chat Completions 协议 |
 | `providers/litellm_provider.py` | LiteLLM 文本和视觉适配 |
 | `providers/tool_call_stream.py` | 流式 Tool Call 组装与校验 |
 | `image_generation.py` | 图片生成抽象 |

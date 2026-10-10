@@ -87,7 +87,9 @@ Provider 路由按以下链解析：
 ```
 
 空字符串表示继续继承。图片生成使用独立 `image_generation` 配置；模型请求超时和额外重试次数来自 `agent_config.json` 的 `provider` 字段。
-每个 `provider_config.json` 的 `providers.<name>` 条目都可以单独配置可选的 `reasoning_effort`，值为 `none`、`minimal`、`low`、`medium`、`high` 或 `max`；运行时会按已知模型的原生协议转换它。省略该字段时不添加任何推理参数，使用上游默认值。自建 OpenAI-compatible 服务可在同一 provider 条目中通过可选的 `reasoning_parameters` 传递少量原始参数，例如 `{"extra_body": {"enable_thinking": true}}`。请求超时和重试次数仍来自 `agent_config.json` 的 `provider` 字段。
+每个 `provider_config.json` 的 `providers.<name>` 条目可以配置 `api: "responses"` 或 `api: "chat_completions"`，按协议选择原生 OpenAI SDK；与中转域名无关，也不在失败后切换协议。显式选择协议时，`model` 是原样发送的服务端模型 ID，例如 `gpt-6-astra` 或 `openai/gpt-5`（后者适用于要求该 ID 的网关）。省略 `api` 时，无路由前缀或使用 `openai/` 前缀的模型默认使用 Responses，移除路由前缀 `openai/`；其他带前缀的服务商路由使用 LiteLLM。协议选择不依赖联网模型目录。主 Agent、视觉和子 Agent 共用同一装配入口。
+
+可选的 `reasoning_effort` 值为 `none`、`minimal`、`low`、`medium`、`high`、`xhigh` 或 `max`；具体模型只支持其中的子集。原生 Responses 发送 `reasoning.effort`，原生 Chat Completions 发送 `reasoning_effort`，其他路由保留其参数映射。省略该字段时使用上游默认值。`reasoning_parameters` 可以覆盖推理参数，`extra_body` 用于网关扩展字段，例如 `{"extra_body": {"enable_thinking": true}}`；原生 Chat 的额外推理字段也通过 SDK 的扩展 body 发送。请求超时和重试次数来自 `agent_config.json` 的 `provider` 字段。
 
 ## 设置服务
 

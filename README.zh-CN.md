@@ -24,7 +24,7 @@ GUI ── FastAPI ─┘
 - **完整 Agent Loop**：支持流式响应、Tool 批次、上下文压缩、steer、取消、计划和后台 Job。
 - **可恢复 Session**：对话和执行事件写入 append-only JSONL Journal，TUI 与 GUI 可读取同一类 Session。
 - **记忆与定时任务**：维护全局及 Workspace 长期记忆，并可创建 one-shot、interval 和 cron 任务。
-- **模型与媒体**：通过 LiteLLM 接入模型，可为主 Agent、视觉、图片生成及不同子 Agent 角色独立路由 Provider。
+- **模型与媒体**：OpenAI-compatible 端点通过原生 OpenAI SDK 接入，其他路由及图片生成使用 LiteLLM；可为主 Agent、视觉、图片生成及不同子 Agent 角色独立路由 Provider。
 - **扩展系统**：支持 standalone Skill、Plugin 提供的 Skill / Agent / MCP 组件，以及独立 MCP Server。
 - **两个前端**：TUI 适合终端工作流；GUI 提供多会话、附件、文件树、设置、记忆和定时任务管理。
 

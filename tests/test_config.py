@@ -10,7 +10,7 @@ from agent_core import (
     SkillLoader,
     load_agent_config,
 )
-from agent_core.providers import LiteLLMProvider
+from agent_core.providers import ModelProvider
 from agent_runtime.config import (
     ModelConfig,
     configured_role_names,
@@ -528,7 +528,7 @@ class ConfigTest(unittest.TestCase):
                         "providers": {
                             "gateway": {
                                 "model": "gpt-6-astra",
-                                "reasoning_effort": " MINIMUM ",
+                                "reasoning_effort": " MINIMAL ",
                                 "reasoning_parameters": {
                                     "extra_body": {"enable_thinking": True},
                                 },
@@ -558,6 +558,9 @@ class ConfigTest(unittest.TestCase):
             ("reasoning_effort", "balanced"),
             ("reasoning_parameters", []),
             ("reasoning_parameters", {"typo": True}),
+            ("reasoning_parameters", {"thinking": True}),
+            ("api", "automatic"),
+            ("api", []),
         ):
             with tempfile.TemporaryDirectory() as directory:
                 path = Path(directory) / "config.json"
@@ -577,6 +580,15 @@ class ConfigTest(unittest.TestCase):
                 )
                 with self.subTest(field=field), self.assertRaises(ValueError):
                     load_config(path)
+
+    def test_loads_explicit_relay_protocol(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            path.write_text(json.dumps({
+                "main_agent": {"provider": "relay"},
+                "providers": {"relay": {"model": "custom-model", "api": "chat_completions"}},
+            }), encoding="utf-8")
+            self.assertEqual(load_config(path).api, "chat_completions")
 
     def test_strips_whitespace_from_provider_configuration(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -806,7 +818,7 @@ class ProviderResolutionTest(unittest.TestCase):
             )
 
             with patch.object(
-                LiteLLMProvider, "capabilities_for_model", _CAPABILITIES_PATCH
+                ModelProvider, "capabilities_for_model", _CAPABILITIES_PATCH
             ):
                 self.assertEqual(
                     load_config(path, role="coder").model, "openai/shared"
@@ -827,7 +839,7 @@ class ProviderResolutionTest(unittest.TestCase):
             )
 
             with patch.object(
-                LiteLLMProvider, "capabilities_for_model", _CAPABILITIES_PATCH
+                ModelProvider, "capabilities_for_model", _CAPABILITIES_PATCH
             ):
                 self.assertEqual(
                     load_config(path, role="coder").model, "openai/special"
@@ -842,7 +854,7 @@ class ProviderResolutionTest(unittest.TestCase):
             path = self.write(directory)
 
             with patch.object(
-                LiteLLMProvider, "capabilities_for_model", _CAPABILITIES_PATCH
+                ModelProvider, "capabilities_for_model", _CAPABILITIES_PATCH
             ):
                 self.assertIsNone(load_vision_config(path))
                 self.assertIsNone(load_vision_config(path, role="coder"))
@@ -855,7 +867,7 @@ class ProviderResolutionTest(unittest.TestCase):
             )
 
             with patch.object(
-                LiteLLMProvider, "capabilities_for_model", _CAPABILITIES_PATCH
+                ModelProvider, "capabilities_for_model", _CAPABILITIES_PATCH
             ):
                 with self.assertRaisesRegex(
                     ValueError, "does not support image input"

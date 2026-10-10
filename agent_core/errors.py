@@ -10,16 +10,22 @@ class RuntimeErrorInfo:
     details: dict[str, object] = field(default_factory=dict)
 
 
-class ProviderProtocolError(RuntimeError):
-    """A provider stream violated the Tool Call protocol."""
-
+class ProviderError(RuntimeError):
     def __init__(self, message: str, *, details: dict[str, object]) -> None:
         super().__init__(message)
         self.details = details
 
 
+class ProviderProtocolError(ProviderError):
+    """A provider stream violated the Tool Call protocol."""
+
+
+class ProviderStreamError(ProviderError):
+    """A provider response stream ended before it could be completed."""
+
+
 def runtime_error_info(error: BaseException) -> RuntimeErrorInfo:
-    details = error.details if isinstance(error, ProviderProtocolError) else {}
+    details = error.details if isinstance(error, ProviderError) else {}
     return RuntimeErrorInfo(
         type=type(error).__name__,
         message=str(error),

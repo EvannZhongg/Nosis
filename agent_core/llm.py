@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable
 
@@ -31,6 +31,7 @@ class LLMResponse:
     reasoning: str | None = None
     tool_calls: tuple[ToolCall, ...] = ()
     usage: TokenUsage | None = None
+    provider_data: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

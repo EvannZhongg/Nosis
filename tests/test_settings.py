@@ -170,6 +170,23 @@ class SettingsStoreTest(unittest.TestCase):
             before,
         )
 
+    def test_provider_protocol_round_trip(self) -> None:
+        from agent_runtime.config import load_config
+        for api in ("responses", "chat_completions", None):
+            snapshot = self.store.save_provider("relay", {"model": "custom-model", "api": api})
+            provider = next(p for p in snapshot["providers"] if p["id"] == "relay")
+            self.assertEqual(provider["api"], api)
+            self.assertEqual(load_config(self.store.provider_path, "relay").api, api)
+
+    def test_invalid_protocol_and_nested_reasoning_do_not_replace_config(self) -> None:
+        before = self.store.provider_path.read_text(encoding="utf-8")
+        for settings in ({"api": "automatic"}, {"api": []},
+                         {"reasoning_parameters": {"thinking": True}},
+                         {"reasoning_parameters": {"extra_body": {"reasoning": "high"}}}):
+            with self.subTest(settings=settings), self.assertRaises(ValueError):
+                self.store.save_provider("first", {"model": "gpt-6-astra", **settings})
+            self.assertEqual(self.store.provider_path.read_text(encoding="utf-8"), before)
+
     def test_preserves_dotenv_comments_and_unrelated_values(self) -> None:
         (self.root / ".env").write_text("# local values\nOTHER=value\nFIRST_KEY=old\n", encoding="utf-8")
         self.store.save_provider("first", {

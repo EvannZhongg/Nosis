@@ -1,28 +1,13 @@
-"""Provider-specific reasoning parameter normalization.
+"""Translate effort settings into request parameters for a model route."""
 
-The public setting is a semantic effort level.  This module translates that
-intent into the wire parameters understood by the selected model route.  It is
-kept independent from LiteLLM so native provider adapters can consume the same
-result when they are introduced.
-"""
-
-from dataclasses import dataclass
+from copy import deepcopy
 from typing import Mapping
 
 
-SEMANTIC_EFFORTS = frozenset({"none", "minimal", "low", "medium", "high", "max"})
+SEMANTIC_EFFORTS = frozenset({"none", "minimal", "low", "medium", "high", "xhigh", "max"})
 _CUSTOM_PARAMETER_NAMES = frozenset(
     {"reasoning_effort", "thinking", "thinking_level", "reasoning", "extra_body"}
 )
-
-
-@dataclass(frozen=True)
-class ProviderSpec:
-    name: str
-    prefixes: tuple[str, ...] = ()
-    reasoning_effort_remap: Mapping[str, str] | None = None
-    thinking_style: str | None = None
-    gateway_reasoning_style: bool = False
 
 
 _MISTRAL_EFFORTS = {
@@ -31,34 +16,15 @@ _MISTRAL_EFFORTS = {
     "low": "none",
     "medium": "high",
     "high": "high",
+    "xhigh": "high",
     "max": "high",
 }
-
-_DASHSCOPE_EFFORTS = {"minimal": "minimum"}
-
-PROVIDER_SPECS: tuple[ProviderSpec, ...] = (
-    ProviderSpec("openrouter", ("openrouter/",), gateway_reasoning_style=True),
-    ProviderSpec("anthropic", ("anthropic/",), thinking_style="anthropic"),
-    ProviderSpec("bedrock", ("bedrock/",), thinking_style="bedrock_adaptive"),
-    ProviderSpec("mistral", ("mistral/",), reasoning_effort_remap=_MISTRAL_EFFORTS),
-    ProviderSpec("dashscope", ("dashscope/",), reasoning_effort_remap=_DASHSCOPE_EFFORTS),
-    ProviderSpec("xai", ("xai/",), thinking_style="xai"),
-    ProviderSpec("moonshot", ("moonshot/",), thinking_style="moonshot"),
-    ProviderSpec("deepseek", ("deepseek/",), thinking_style="deepseek"),
-    ProviderSpec("openai", ("openai/",), thinking_style="openai"),
-    ProviderSpec("azure", ("azure/",), thinking_style="openai"),
-    ProviderSpec("gemini", ("gemini/",), thinking_style="gemini"),
-    ProviderSpec("vertex_ai", ("vertex_ai/",), thinking_style="gemini"),
-)
-
 
 def normalize_semantic_effort(value: str) -> str:
     """Normalize the small public effort vocabulary."""
     if not isinstance(value, str) or not value.strip():
         raise ValueError("reasoning_effort must be a non-empty string")
     normalized = value.strip().lower()
-    if normalized == "minimum":
-        normalized = "minimal"
     if normalized not in SEMANTIC_EFFORTS:
         allowed = ", ".join(sorted(SEMANTIC_EFFORTS))
         raise ValueError(
@@ -71,22 +37,23 @@ def validate_reasoning_parameters(
     value: Mapping[str, object] | None,
 ) -> dict[str, object]:
     """Validate and copy custom reasoning request parameters."""
-    parameters = dict(value or {})
+    parameters = deepcopy(dict(value or {}))
     unknown = set(parameters) - _CUSTOM_PARAMETER_NAMES
     if unknown:
         names = ", ".join(sorted(unknown))
         raise ValueError(
             "reasoning_parameters contains unsupported field(s): " + names
         )
+    for name in {"thinking", "reasoning", "extra_body"} & parameters.keys():
+        if not isinstance(parameters[name], dict):
+            raise ValueError(f"reasoning_parameters.{name} must be an object")
+    for name in {"reasoning_effort", "thinking_level"} & parameters.keys():
+        if not isinstance(parameters[name], str) or not parameters[name].strip():
+            raise ValueError(f"reasoning_parameters.{name} must be a non-empty string")
+    extra_body = parameters.get("extra_body", {})
+    if "reasoning" in extra_body and not isinstance(extra_body["reasoning"], dict):
+        raise ValueError("reasoning_parameters.extra_body.reasoning must be an object")
     return parameters
-
-
-def provider_spec(model: str) -> ProviderSpec | None:
-    lowered = model.strip().lower()
-    for spec in PROVIDER_SPECS:
-        if lowered.startswith(spec.prefixes):
-            return spec
-    return None
 
 
 def reasoning_arguments(
@@ -94,7 +61,7 @@ def reasoning_arguments(
     effort: str | None,
     custom_parameters: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
-    """Return LiteLLM/native-adapter-neutral request parameters.
+    """Return request parameters; explicit values override mapped defaults.
 
     ``custom_parameters`` is intentionally an escape hatch for self-hosted
     OpenAI-compatible services.  An omitted effort leaves the request
@@ -104,26 +71,17 @@ def reasoning_arguments(
     if effort is None:
         return arguments
     semantic_effort = normalize_semantic_effort(effort)
-    spec = provider_spec(model)
+    route = model.strip().lower().partition("/")[0]
     mapped = (
-        spec.reasoning_effort_remap.get(semantic_effort, semantic_effort)
-        if spec is not None and spec.reasoning_effort_remap is not None
+        _MISTRAL_EFFORTS[semantic_effort] if route == "mistral"
+        else "minimum" if route == "dashscope" and semantic_effort == "minimal"
         else semantic_effort
     )
 
-    if spec is None or spec.thinking_style in {"openai", "deepseek"}:
-        arguments.setdefault("reasoning_effort", mapped)
-    elif spec.gateway_reasoning_style:
-        arguments.setdefault("extra_body", {})
-        extra_body = arguments["extra_body"]
-        if not isinstance(extra_body, dict):
-            raise ValueError("reasoning_parameters.extra_body must be an object")
-        extra_body.setdefault("reasoning", {})
-        reasoning = extra_body["reasoning"]
-        if not isinstance(reasoning, dict):
-            raise ValueError("reasoning_parameters.extra_body.reasoning must be an object")
+    if route == "openrouter":
+        reasoning = arguments.setdefault("extra_body", {}).setdefault("reasoning", {})
         reasoning.setdefault("effort", mapped)
-    elif spec.thinking_style == "anthropic":
+    elif route == "anthropic":
         arguments.setdefault(
             "thinking",
             {"type": "disabled"}
@@ -133,7 +91,7 @@ def reasoning_arguments(
                 "budget_tokens": _anthropic_budget(semantic_effort),
             },
         )
-    elif spec.thinking_style == "bedrock_adaptive":
+    elif route == "bedrock":
         arguments.setdefault(
             "extra_body",
             {
@@ -142,14 +100,14 @@ def reasoning_arguments(
                 },
             },
         )
-    elif spec.thinking_style == "xai":
+    elif route == "xai":
         arguments.setdefault(
             "extra_body",
             {"reasoning": {"summary": "concise", "effort": mapped}},
         )
-    elif spec.thinking_style == "gemini":
+    elif route in {"gemini", "vertex_ai"}:
         arguments.setdefault("thinking_level", mapped)
-    elif spec.thinking_style == "moonshot":
+    elif route == "moonshot":
         model_name = model.lower().rsplit("/", 1)[-1]
         if "k3" in model_name:
             arguments.setdefault("reasoning_effort", "max")
@@ -168,16 +126,14 @@ def _anthropic_budget(effort: str) -> int:
         "low": 2048,
         "medium": 4096,
         "high": 8192,
+        "xhigh": 16384,
         "max": 16384,
     }[effort]
 
 
 __all__ = [
-    "PROVIDER_SPECS",
     "SEMANTIC_EFFORTS",
-    "ProviderSpec",
     "normalize_semantic_effort",
-    "provider_spec",
     "reasoning_arguments",
     "validate_reasoning_parameters",
 ]

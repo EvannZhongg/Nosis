@@ -9,7 +9,7 @@ from agent_core.providers.reasoning import (
 
 class ReasoningAdapterTest(unittest.TestCase):
     def test_normalizes_effort(self) -> None:
-        self.assertEqual(normalize_semantic_effort(" MINIMUM "), "minimal")
+        self.assertEqual(normalize_semantic_effort(" MINIMAL "), "minimal")
 
     def test_rejects_unknown_effort(self) -> None:
         with self.assertRaises(ValueError):
@@ -50,6 +50,24 @@ class ReasoningAdapterTest(unittest.TestCase):
     def test_rejects_unknown_custom_parameter(self) -> None:
         with self.assertRaisesRegex(ValueError, "unsupported field.*typo"):
             validate_reasoning_parameters({"typo": True})
+
+    def test_custom_parameter_types_are_validated(self) -> None:
+        for parameters in ({"thinking": True}, {"reasoning": "high"},
+                           {"extra_body": []}, {"reasoning_effort": False},
+                           {"thinking_level": ""}, {"extra_body": {"reasoning": "high"}}):
+            with self.subTest(parameters=parameters), self.assertRaises(ValueError):
+                validate_reasoning_parameters(parameters)
+
+    def test_mapping_does_not_mutate_custom_parameters(self) -> None:
+        original = {"extra_body": {"reasoning": {"exclude": True}}}
+        high = reasoning_arguments("openrouter/openai/gpt-5", "high", original)
+        low = reasoning_arguments("openrouter/openai/gpt-5", "low", original)
+        self.assertEqual(high["extra_body"]["reasoning"]["effort"], "high")
+        self.assertEqual(low["extra_body"]["reasoning"]["effort"], "low")
+        self.assertEqual(original, {"extra_body": {"reasoning": {"exclude": True}}})
+
+    def test_xhigh_is_a_distinct_effort(self) -> None:
+        self.assertEqual(reasoning_arguments("openai/gpt-6-astra", "xhigh"), {"reasoning_effort": "xhigh"})
 
     def test_kimi_k3_only_uses_max(self) -> None:
         self.assertEqual(

@@ -1,11 +1,10 @@
 from .image_generation import LiteLLMImageGenerator
 from .litellm_provider import LiteLLMProvider
+from .base import ModelProvider
+from .openai_provider import OPENAI_APIS, OpenAIProvider
 from .reasoning import (
-    PROVIDER_SPECS,
     SEMANTIC_EFFORTS,
-    ProviderSpec,
     normalize_semantic_effort,
-    provider_spec,
     reasoning_arguments,
     validate_reasoning_parameters,
 )
@@ -13,11 +12,11 @@ from .reasoning import (
 __all__ = [
     "LiteLLMImageGenerator",
     "LiteLLMProvider",
-    "PROVIDER_SPECS",
+    "ModelProvider",
+    "OpenAIProvider",
+    "OPENAI_APIS",
     "SEMANTIC_EFFORTS",
-    "ProviderSpec",
     "normalize_semantic_effort",
-    "provider_spec",
     "reasoning_arguments",
     "validate_reasoning_parameters",
 ]

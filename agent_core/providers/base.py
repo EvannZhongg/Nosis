@@ -1,0 +1,549 @@
+import json
+from abc import abstractmethod
+from contextvars import copy_context
+from pathlib import Path
+from queue import Empty, Full, Queue
+from threading import Event, Thread
+from types import GeneratorType
+from typing import Callable, Iterable, Iterator
+
+from litellm import (
+    get_model_info,
+    token_counter,
+)
+
+from agent_core.llm import (
+    LLMProvider,
+    LLMRequest,
+    LLMResponse,
+    ProviderCapabilities,
+)
+from agent_core.content import FilePart, ImagePart, TextPart
+from agent_core.media import (
+    UnsupportedImageError,
+    encode_data_url,
+    probe_image,
+)
+from agent_core.path_utils import path_for_comparison
+from agent_core.session import Message
+from agent_core.tools import AnalyzeImageTool, ToolDefinition
+
+from ._utils import get_field
+from .reasoning import normalize_semantic_effort, validate_reasoning_parameters
+
+
+class ModelProvider(LLMProvider):
+    _CANCEL_POLL_SECONDS = 0.1
+
+    def __init__(
+        self,
+        model: str,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        max_context_tokens: int | None = None,
+        media_root: Path | None = None,
+        request_timeout_seconds: int = 300,
+        max_retries: int = 2,
+        reasoning_effort: str | None = None,
+        reasoning_parameters: dict[str, object] | None = None,
+    ) -> None:
+        self._model = model
+        self._base_url = base_url
+        self._api_key = api_key
+        self._media_root = media_root.expanduser().resolve() if media_root is not None else None
+        if (
+            isinstance(request_timeout_seconds, bool)
+            or not isinstance(request_timeout_seconds, int)
+            or request_timeout_seconds < 1
+        ):
+            raise ValueError("request_timeout_seconds must be a positive integer")
+        if (
+            isinstance(max_retries, bool)
+            or not isinstance(max_retries, int)
+            or max_retries < 0
+        ):
+            raise ValueError("max_retries must be a non-negative integer")
+        self._request_timeout_seconds = request_timeout_seconds
+        self._max_retries = max_retries
+        self._reasoning_effort = (
+            normalize_semantic_effort(reasoning_effort)
+            if reasoning_effort is not None
+            else None
+        )
+        self._reasoning_parameters = validate_reasoning_parameters(reasoning_parameters)
+        self._model_info: dict[str, object] | None = None
+        self._model_info_loaded = False
+        if max_context_tokens is not None:
+            if (
+                isinstance(max_context_tokens, bool)
+                or not isinstance(max_context_tokens, int)
+                or max_context_tokens < 1
+            ):
+                raise ValueError(
+                    "max_context_tokens must be a positive integer"
+                )
+            self._max_context_tokens = max_context_tokens
+        else:
+            try:
+                model_info = self._get_model_info()
+            except Exception as error:
+                raise ValueError(
+                    f"LiteLLM has no context limit metadata for model "
+                    f"'{model}'; configure 'max_context_tokens' for this "
+                    "provider"
+                ) from error
+            self._max_context_tokens = _get_model_max_context_tokens(
+                model_info,
+                model,
+            )
+        self._capabilities: ProviderCapabilities | None = None
+
+    @property
+    def capabilities(self) -> ProviderCapabilities:
+        if self._capabilities is None:
+            self._capabilities = self.capabilities_for_model(
+                self._model,
+                self._base_url,
+            )
+        return self._capabilities
+
+    @classmethod
+    def capabilities_for_model(
+        cls,
+        model: str,
+        base_url: str | None = None,
+    ) -> ProviderCapabilities:
+        modalities = {"text"}
+        try:
+            info = get_model_info(model=model, api_base=base_url)
+            if info.get("supports_vision") is True:
+                modalities.add("image")
+        except Exception:
+            # Capability discovery must not prevent text-only providers
+            # from being used when LiteLLM has no model metadata.
+            pass
+        return ProviderCapabilities(frozenset(modalities))
+
+    @property
+    def max_context_tokens(self) -> int:
+        return self._max_context_tokens
+
+    @property
+    def max_output_tokens(self) -> int | None:
+        try:
+            model_info = self._get_model_info()
+        except Exception:
+            return None
+        value = model_info.get("max_output_tokens")
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or value < 1
+        ):
+            return None
+        return value
+
+    def _get_model_info(self) -> dict[str, object]:
+        if not self._model_info_loaded:
+            self._model_info = get_model_info(
+                model=self._model,
+                api_base=self._base_url,
+            )
+            self._model_info_loaded = True
+        assert self._model_info is not None
+        return self._model_info
+
+    def count_input_tokens(self, request: LLMRequest) -> int:
+        """Price the request without encoding any image.
+
+        Images are counted from their pixel dimensions and the text is
+        counted by the tokenizer, so a context check reads image headers
+        rather than whole files.  Encoding here would cost a full read
+        and a base64 pass per image on every iteration of the agent
+        loop, and the tokenizer does not inspect a data URL anyway: it
+        prices one by a flat per-image constant regardless of size.
+        """
+        messages = _request_messages(request, self, encode_media=False)
+        tools = _request_tools(request)
+        text_tokens = token_counter(
+            model=self._model,
+            messages=messages,
+            tools=tools or None,
+        )
+        return text_tokens + _media_tokens(request, self)
+
+    def stream(
+        self,
+        request: LLMRequest,
+        on_text_delta: Callable[[str], None],
+        on_reasoning_delta: Callable[[str], None] | None = None,
+    ) -> LLMResponse:
+        return self._stream(
+            request,
+            on_text_delta,
+            on_reasoning_delta,
+            check_cancelled=lambda: None,
+        )
+
+    def stream_cancellable(
+        self,
+        request: LLMRequest,
+        on_text_delta: Callable[[str], None],
+        on_reasoning_delta: Callable[[str], None] | None,
+        check_cancelled: Callable[[], None],
+    ) -> LLMResponse:
+        return self._stream(
+            request,
+            on_text_delta,
+            on_reasoning_delta,
+            check_cancelled=check_cancelled,
+        )
+
+    @abstractmethod
+    def _stream(
+        self,
+        request: LLMRequest,
+        on_text_delta: Callable[[str], None],
+        on_reasoning_delta: Callable[[str], None] | None,
+        *,
+        check_cancelled: Callable[[], None],
+    ) -> LLMResponse:
+        raise NotImplementedError
+
+
+_STREAM_END = object()
+
+
+def _cancellable_chunks(
+    create_stream: Callable[[], Iterable[object]],
+    check_cancelled: Callable[[], None],
+    poll_seconds: float,
+) -> Iterator[object]:
+    """Yield a synchronous provider stream without blocking cancellation checks."""
+    queue: Queue[object | BaseException] = Queue(maxsize=1)
+    stopped = Event()
+    stream: Iterable[object] | None = None
+
+    def publish(item: object | BaseException) -> bool:
+        while not stopped.is_set():
+            try:
+                queue.put(item, timeout=poll_seconds)
+                return True
+            except Full:
+                continue
+        return False
+
+    def read_stream() -> None:
+        nonlocal stream
+        try:
+            stream = create_stream()
+            for chunk in stream:
+                if not publish(chunk):
+                    return
+        except BaseException as error:
+            if not publish(error):
+                return
+        finally:
+            try:
+                close = getattr(stream, "close", None)
+                if close is not None:
+                    close()
+            except Exception as error:
+                publish(error)
+            finally:
+                publish(_STREAM_END)
+
+    reader = Thread(
+        target=copy_context().run,
+        args=(read_stream,),
+        name="provider-stream-reader",
+        daemon=True,
+    )
+    reader.start()
+    try:
+        while True:
+            check_cancelled()
+            try:
+                item = queue.get(timeout=poll_seconds)
+            except Empty:
+                continue
+            check_cancelled()
+            if item is _STREAM_END:
+                return
+            if isinstance(item, BaseException):
+                raise item
+            yield item
+    finally:
+        stopped.set()
+        close = getattr(stream, "close", None)
+        # A generator can only be closed by its reader while it is executing.
+        if close is not None and not isinstance(stream, GeneratorType):
+            close()
+
+
+def _request_messages(
+    request: LLMRequest,
+    provider: ModelProvider | None = None,
+    *,
+    encode_media: bool = True,
+) -> list[dict[str, object]]:
+    return [
+        {"role": "system", "content": request.system_prompt},
+        *[
+            _message_to_dict(
+                message,
+                include_images=(
+                    provider is None
+                    or "image" in provider.capabilities.input_modalities
+                ),
+                # Only point the model at the tool when it actually has it.
+                can_analyze_images=any(
+                    tool.name == AnalyzeImageTool.name for tool in request.tools
+                ),
+                media_root=_media_root(request, provider),
+                encode_media=encode_media,
+            )
+            for message in request.messages
+        ],
+    ]
+
+
+def _media_root(
+    request: LLMRequest,
+    provider: "ModelProvider | None",
+) -> Path | None:
+    if request.media_root is not None:
+        return request.media_root
+    if provider is not None:
+        return provider._media_root
+    return None
+
+
+def _media_tokens(
+    request: LLMRequest,
+    provider: "ModelProvider | None",
+) -> int:
+    """Sum the estimated cost of every image the request will send."""
+    if provider is not None and "image" not in provider.capabilities.input_modalities:
+        return 0
+    media_root = _media_root(request, provider)
+    total = 0
+    for message in request.messages:
+        for part in message.parts:
+            if not isinstance(part, ImagePart):
+                continue
+            try:
+                path = _resolve_media_path(part.path, media_root)
+                info = probe_image(path)
+            except (FileNotFoundError, ValueError, UnsupportedImageError):
+                # An unreadable image is sent as a short text notice, so
+                # it costs nothing beyond what the tokenizer counted.
+                continue
+            total += info.token_estimate
+    return total
+
+
+def _request_tools(request: LLMRequest) -> list[dict[str, object]]:
+    return [_tool_definition_to_dict(tool) for tool in request.tools]
+
+
+def _get_model_max_context_tokens(
+    model_info: dict[str, object],
+    model: str,
+) -> int:
+    max_context_tokens = model_info.get("max_input_tokens")
+    if (
+        isinstance(max_context_tokens, bool)
+        or not isinstance(max_context_tokens, int)
+        or max_context_tokens < 1
+    ):
+        raise ValueError(
+            f"LiteLLM has no context limit metadata for model '{model}'; "
+            "configure 'max_context_tokens' for this provider"
+        )
+    return max_context_tokens
+
+
+def _message_to_dict(
+    message: Message,
+    *,
+    include_images: bool = True,
+    can_analyze_images: bool = False,
+    media_root: Path | None = None,
+    encode_media: bool = True,
+) -> dict[str, object]:
+    data: dict[str, object] = {
+        "role": message.role,
+        "content": _content_to_provider_format(
+            message,
+            include_images=include_images,
+            can_analyze_images=can_analyze_images,
+            media_root=media_root,
+            encode_media=encode_media,
+        ),
+    }
+    if message.reasoning is not None:
+        data["reasoning_content"] = message.reasoning
+    if message.tool_calls:
+        data["tool_calls"] = [
+            {
+                "id": tool_call.id,
+                "type": "function",
+                "function": {
+                    "name": tool_call.name,
+                    "arguments": json.dumps(
+                        tool_call.arguments,
+                        ensure_ascii=False,
+                    ),
+                },
+            }
+            for tool_call in message.tool_calls
+        ]
+    if message.tool_call_id is not None:
+        data["tool_call_id"] = message.tool_call_id
+    return data
+
+
+def _content_to_provider_format(
+    message: Message,
+    *,
+    include_images: bool = True,
+    can_analyze_images: bool = False,
+    media_root: Path | None = None,
+    encode_media: bool = True,
+) -> object:
+    parts = message.parts
+    if not parts:
+        return None
+    if all(isinstance(part, TextPart) for part in parts):
+        return "".join(part.text for part in parts)
+    files = [part for part in parts if isinstance(part, FilePart)]
+    file_notice = _attached_files_notice(files)
+    if not include_images:
+        # This model cannot see an image, so the attachment is named rather
+        # than sent. Naming the tool it does not have would only invite a
+        # call that fails, so the hint depends on the registered tool set.
+        text = "".join(part.text for part in parts if isinstance(part, TextPart))
+        paths = [part.path for part in parts if isinstance(part, ImagePart)]
+        heading = (
+            f"Attached images (use {AnalyzeImageTool.name} if needed):"
+            if can_analyze_images
+            else "Attached images (this model cannot read them):"
+        )
+        listed = "\n".join(f"- {path}" for path in paths)
+        sections = [text] if text else []
+        if paths:
+            sections.append(f"{heading}\n{listed}")
+        if file_notice:
+            sections.append(file_notice)
+        return "\n\n".join(sections)
+    rendered: list[dict[str, object]] = []
+    for part in parts:
+        if isinstance(part, TextPart):
+            if part.text:
+                rendered.append({"type": "text", "text": part.text})
+        elif isinstance(part, ImagePart):
+            try:
+                path = _resolve_media_path(part.path, media_root)
+            except FileNotFoundError:
+                rendered.append(
+                    {
+                        "type": "text",
+                        "text": (
+                            "[Image attachment unavailable in this workspace: "
+                            f"{part.path}]"
+                        ),
+                    }
+                )
+                continue
+            if not encode_media:
+                # Counting tokens never needs the bytes: the caller adds
+                # each image's estimated cost separately. A placeholder
+                # keeps the message shape intact for the tokenizer.
+                rendered.append({"type": "text", "text": f"[image {part.path}]"})
+                continue
+            rendered.append(
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": encode_data_url(path, part.mime_type)
+                    },
+                }
+            )
+    if file_notice:
+        rendered.append({"type": "text", "text": file_notice})
+    return rendered
+
+
+def _attached_files_notice(files: list[FilePart]) -> str:
+    if not files:
+        return ""
+    lines = [
+        "Attached files are available at these workspace-relative paths. "
+        "Use the available tools to inspect or process them as appropriate:"
+    ]
+    for part in files:
+        lines.append(
+            "- filename="
+            + json.dumps(part.filename, ensure_ascii=False)
+            + ", path="
+            + json.dumps(part.path, ensure_ascii=False)
+            + ", mime_type="
+            + json.dumps(part.mime_type, ensure_ascii=False)
+            + f", size_bytes={part.size_bytes}"
+        )
+    return "\n".join(lines)
+
+
+def _resolve_media_path(path: str, media_root: Path | None) -> Path:
+    candidate = Path(path)
+    was_relative = not candidate.is_absolute()
+    if was_relative:
+        if media_root is None:
+            raise ValueError(
+                "relative image paths require a provider media_root"
+            )
+        candidate = media_root / candidate
+    resolved = candidate.expanduser().resolve()
+    if was_relative and media_root is not None:
+        # Both sides must be resolved before being compared: a root that
+        # still contains a symlink (macOS serves /var as /private/var)
+        # would not be a prefix of the resolved candidate, and a
+        # legitimate path would be rejected as an escape.
+        root = media_root.expanduser().resolve()
+        try:
+            path_for_comparison(resolved).relative_to(
+                path_for_comparison(root)
+            )
+        except ValueError as error:
+            raise ValueError("image path must stay within media_root") from error
+    if not resolved.is_file():
+        raise FileNotFoundError(f"image attachment does not exist: {path}")
+    return resolved
+
+
+def _tool_definition_to_dict(tool: ToolDefinition) -> dict[str, object]:
+    return {
+        "type": "function",
+        "function": {
+            "name": tool.name,
+            "description": tool.description,
+            "parameters": tool.parameters,
+        },
+    }
+
+
+def _text_from_content(value: object) -> str:
+    """Extract text from string or OpenAI-style content blocks.
+
+    LiteLLM normally exposes streamed deltas as strings, but adapters for
+    some providers expose a list of typed blocks.  Only the text field is
+    considered so metadata or image blocks cannot accidentally become part
+    of the assistant message.
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (list, tuple)):
+        return "".join(_text_from_content(item) for item in value)
+    text = get_field(value, "text")
+    return text if isinstance(text, str) else ""

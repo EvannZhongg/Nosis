@@ -7,7 +7,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
 
-from agent_core import JsonlSessionStore, Workspace, plan_snapshot_to_dict
+from agent_core import JsonlSessionStore, Workspace, message_to_dict, plan_snapshot_to_dict
 from agent_runtime.settings import SettingsStore
 from interfaces.bridge.managed_workspaces import (
     delete_scratch_workspace,
@@ -92,7 +92,10 @@ def create_sessions_router(
             return jsonable_encoder(
                 {
                     "session_id": session.session_id,
-                    "items": session.items,
+                    "items": [
+                        message_to_dict(item, include_provider_data=False)
+                        for item in session.items
+                    ],
                     "workspace": session.workspace,
                     "provider": store.provider_for(session.session_id),
                     "permission_preset": session.permission_preset.value,

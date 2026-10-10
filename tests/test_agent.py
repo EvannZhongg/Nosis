@@ -20,6 +20,7 @@ from agent_core import (
     LLMResponse,
     Message,
     ProviderProtocolError,
+    ProviderStreamError,
     ReasoningDeltaEvent,
     Session,
     Tool,
@@ -137,6 +138,19 @@ class ProtocolFailingProvider(MockProvider):
                 "provider": "deepseek",
                 "model": "deepseek/deepseek-flash",
                 "reason": "ambiguous_arguments",
+            },
+        )
+
+
+class StreamFailingProvider(MockProvider):
+    def stream(self, request, on_text_delta, on_reasoning_delta=None):
+        self.requests.append(request)
+        raise ProviderStreamError(
+            "provider stream ended before the response completed",
+            details={
+                "phase": "response_stream",
+                "reason": "mid_stream_disconnect",
+                "attempt_count": 3,
             },
         )
 
@@ -875,6 +889,33 @@ class AgentTest(unittest.TestCase):
         self.assertEqual(error.details["phase"], "tool_call_assembly")
         self.assertEqual(error.details["model_call_index"], 1)
 
+    def test_persists_stream_error_with_model_call_index(self) -> None:
+        provider = StreamFailingProvider([])
+        session = Session(session_id="session-1")
+        agent = Agent(
+            provider=provider,
+            session=session,
+            system_prompt="You are helpful.",
+            consolidator_prompt=CONSOLIDATOR_PROMPT,
+            config=AGENT_CONFIG,
+            tools=tool_set(session=session),
+            context=ToolExecutionContext(
+                workspace=TEST_WORKSPACE, session=session
+            ),
+            now=clock(REQUEST_TIME),
+        )
+
+        with self.assertRaises(ProviderStreamError):
+            agent.run("hello", turn_id="turn-1")
+
+        error = session.turns["turn-1"].error
+        self.assertIsNotNone(error)
+        assert error is not None
+        self.assertEqual(error.type, "ProviderStreamError")
+        self.assertEqual(error.details["phase"], "response_stream")
+        self.assertEqual(error.details["attempt_count"], 3)
+        self.assertEqual(error.details["model_call_index"], 1)
+
     def test_rejects_context_before_calling_provider(self) -> None:
         provider = MockProvider(["unused"], input_tokens=901)
         session = Session(session_id="session-1")
@@ -1112,8 +1153,9 @@ class AgentTest(unittest.TestCase):
                     content="I'll use the echo tool.",
                     tool_calls=(tool_call,),
                     reasoning="I need to inspect the requested input first.",
+                    provider_data={"native_state": "tool-round"},
                 ),
-                LLMResponse(content="tool completed"),
+                LLMResponse(content="tool completed", provider_data={"native_state": "final"}),
             ]
         )
         session = Session(session_id="session-1")
@@ -1168,6 +1210,7 @@ class AgentTest(unittest.TestCase):
                 timestamp_utc=TOOL_CALL_TIME,
                 tool_calls=(tool_call,),
                 reasoning="I need to inspect the requested input first.",
+                provider_data={"native_state": "tool-round"},
             ),
         )
         self.assertEqual(second_request_messages[3].tool_call_id, "call-1")
@@ -1202,6 +1245,7 @@ class AgentTest(unittest.TestCase):
                     timestamp_utc=TOOL_CALL_TIME,
                     tool_calls=(tool_call,),
                     reasoning="I need to inspect the requested input first.",
+                    provider_data={"native_state": "tool-round"},
                 ),
                 Message(
                     role="tool",
@@ -1213,6 +1257,7 @@ class AgentTest(unittest.TestCase):
                     role="assistant",
                     content="tool completed",
                     timestamp_utc=RESPONSE_TIME,
+                    provider_data={"native_state": "final"},
                 ),
             ],
         )

@@ -1704,7 +1704,9 @@ class GuiTest(unittest.TestCase):
         session = Session("from-tui")
         session.begin_turn("turn-1")
         session.add_item("user", "TUI 对话")
-        session.add_item("assistant", "你好")
+        session.add_item("assistant", "你好", provider_data={
+            "openai_responses": [{"type": "reasoning", "encrypted_content": "native-state"}],
+        })
         session.finish_turn("completed")
         self.store.append_events("from-tui", session.journal, workspace=self.root)
         with self.client() as client:
@@ -1723,6 +1725,12 @@ class GuiTest(unittest.TestCase):
 
         self.assertEqual(data["items"][0]["content"], "TUI 对话")
         self.assertEqual(data["permission_preset"], "ask_for_approval")
+        self.assertNotIn("provider_data", data["items"][1])
+        self.assertNotIn("native-state", json.dumps(data))
+        self.assertEqual(
+            self.store.load("from-tui").items[1].provider_data["openai_responses"][0]["encrypted_content"],
+            "native-state",
+        )
 
     def test_schedule_listing_includes_latest_run_and_session_availability(self) -> None:
         scheduler = SchedulerService(

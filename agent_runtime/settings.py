@@ -15,6 +15,7 @@ from dotenv import dotenv_values
 from agent_core import SkillLoader, load_agent_config
 from agent_core.atomic import atomic_write_text
 from agent_core.providers import (
+    OPENAI_APIS,
     normalize_semantic_effort,
     validate_reasoning_parameters,
 )
@@ -160,6 +161,7 @@ class SettingsStore:
                 "max_context_tokens": raw.get("max_context_tokens"),
                 "reasoning_effort": raw.get("reasoning_effort"),
                 "reasoning_parameters": raw.get("reasoning_parameters", {}),
+                "api": raw.get("api"),
                 "credential": {
                     "source": "env" if reference else "inline" if key_value else "none",
                     "env_name": reference.group(1) if reference else None,
@@ -309,7 +311,7 @@ class SettingsStore:
             raise ValueError("provider settings must be an object")
         allowed = {
             "model", "url", "max_context_tokens", "reasoning_effort",
-            "reasoning_parameters", "api_key", "set_default",
+            "reasoning_parameters", "api", "api_key", "set_default",
         }
         unknown = set(payload) - allowed
         if unknown:
@@ -333,6 +335,9 @@ class SettingsStore:
             raise ValueError("reasoning_parameters must be an object")
         if reasoning_parameters is not None:
             reasoning_parameters = validate_reasoning_parameters(reasoning_parameters)
+        api = payload.get("api")
+        if api is not None and (not isinstance(api, str) or api not in OPENAI_APIS):
+            raise ValueError("provider api must be responses or chat_completions")
         api_key = payload.get("api_key", {"action": "keep"})
         if not isinstance(api_key, dict) or api_key.get("action") not in {"keep", "set", "clear"}:
             raise ValueError("api_key.action must be keep, set, or clear")
@@ -364,6 +369,11 @@ class SettingsStore:
                 entry.pop("reasoning_parameters", None)
             else:
                 entry["reasoning_parameters"] = dict(reasoning_parameters)
+        if "api" in payload:
+            if api is None:
+                entry.pop("api", None)
+            else:
+                entry["api"] = api
 
         action = api_key["action"]
         old_key = entry.get("key")
@@ -499,7 +509,7 @@ class SettingsStore:
                     raise ValueError(f"provider '{provider}' must be an object")
                 unknown = set(value) - {
                     "model", "url", "key", "max_context_tokens",
-                    "reasoning_effort", "reasoning_parameters",
+                    "reasoning_effort", "reasoning_parameters", "api",
                 }
                 if unknown:
                     raise ValueError(f"unknown field(s) for provider '{provider}': {', '.join(sorted(unknown))}")
@@ -522,6 +532,9 @@ class SettingsStore:
                     )
                 if parameters is not None:
                     validate_reasoning_parameters(parameters)
+                api = value.get("api")
+                if api is not None and (not isinstance(api, str) or api not in OPENAI_APIS):
+                    raise ValueError("provider api must be responses or chat_completions")
             for label in ("main_agent", "subagent"):
                 route = document.get(label, {})
                 if not isinstance(route, dict):

@@ -8,7 +8,8 @@ from pathlib import Path
 from agent_core import AgentConfig, DirectorySkillSource
 from agent_core.memory import MemoryStore
 from agent_core.providers import (
-    LiteLLMProvider,
+    ModelProvider,
+    OPENAI_APIS,
     normalize_semantic_effort,
     validate_reasoning_parameters,
 )
@@ -35,6 +36,7 @@ class ModelConfig:
     max_context_tokens: int | None = None
     reasoning_effort: str | None = None
     reasoning_parameters: dict[str, object] = field(default_factory=dict)
+    api: str | None = None
 
 
 @dataclass(frozen=True)
@@ -376,6 +378,9 @@ def load_config_with_name(
             f"provider '{provider}' field 'reasoning_parameters' must be an object"
         )
     reasoning_parameters = validate_reasoning_parameters(reasoning_parameters)
+    api = selected.get("api")
+    if api is not None and (not isinstance(api, str) or api not in OPENAI_APIS):
+        raise ValueError("provider api must be responses or chat_completions")
     if key and key.startswith("${") and key.endswith("}"):
         key_env = key[2:-1]
         if not key_env:
@@ -397,6 +402,7 @@ def load_config_with_name(
         max_context_tokens=max_context_tokens,
         reasoning_effort=reasoning_effort,
         reasoning_parameters=reasoning_parameters,
+        api=api,
     )
 
 
@@ -484,7 +490,7 @@ def load_image_generation_config(
 
 
 def _is_vision_capable(config: ModelConfig) -> bool:
-    return "image" in LiteLLMProvider.capabilities_for_model(
+    return "image" in ModelProvider.capabilities_for_model(
         config.model,
         config.url,
     ).input_modalities

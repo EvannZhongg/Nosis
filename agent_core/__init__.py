@@ -53,7 +53,9 @@ from .execution import (
     platform_workspace_sandbox_backend,
 )
 from .errors import (
+    ProviderError,
     ProviderProtocolError,
+    ProviderStreamError,
     RuntimeErrorInfo,
     runtime_error_info,
 )
@@ -285,8 +287,10 @@ __all__ = [
     "PlanStep",
     "PlanStepStatus",
     "ProviderCapabilities",
+    "ProviderError",
     "ProviderRequestConfig",
     "ProviderProtocolError",
+    "ProviderStreamError",
     "ProcessIsolation",
     "ReadFileTool",
     "ReadImageTool",

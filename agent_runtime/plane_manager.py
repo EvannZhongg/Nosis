@@ -53,7 +53,8 @@ from agent_core import (
 )
 from agent_core.prompting import render_system_prompt
 from agent_core.path_utils import path_for_comparison
-from agent_core.providers import LiteLLMImageGenerator, LiteLLMProvider
+from agent_core.llm import LLMProvider
+from agent_core.providers import LiteLLMImageGenerator, LiteLLMProvider, OpenAIProvider
 from agent_core.mcp.manager import McpClientManager, McpServerStatus
 from agent_core.tools import ROLE_TOOL_NAMES
 
@@ -188,19 +189,7 @@ class ExecutionPlaneManager:
             )
             prompts = load_prompt_templates(self._config_directory / "prompts")
 
-            main_provider = LiteLLMProvider(
-                model=config.model,
-                base_url=config.url,
-                api_key=config.key,
-                max_context_tokens=config.max_context_tokens,
-                media_root=workspace.path,
-                request_timeout_seconds=(
-                    agent_config.provider.request_timeout_seconds
-                ),
-                max_retries=agent_config.provider.max_retries,
-                reasoning_effort=config.reasoning_effort,
-                reasoning_parameters=config.reasoning_parameters,
-            )
+            main_provider = self._provider_for(config, workspace, agent_config)
             computer_tools = tuple(
                 name
                 for name in ("computer_screenshot", "computer_action")
@@ -418,10 +407,10 @@ class ExecutionPlaneManager:
         config,
         workspace: Workspace,
         agent_config,
-    ) -> LiteLLMProvider | None:
+    ) -> LLMProvider | None:
         if config is None:
             return None
-        return LiteLLMProvider(
+        arguments = dict(
             model=config.model,
             base_url=config.url,
             api_key=config.key,
@@ -434,6 +423,14 @@ class ExecutionPlaneManager:
             reasoning_effort=config.reasoning_effort,
             reasoning_parameters=config.reasoning_parameters,
         )
+        if config.api is not None:
+            return OpenAIProvider(**arguments, api=config.api)
+        route, separator, wire_model = config.model.partition("/")
+        if not separator or route == "openai":
+            return OpenAIProvider(
+                **arguments, wire_model=wire_model if separator else config.model,
+            )
+        return LiteLLMProvider(**arguments)
 
 
     def _subagent_runtime(

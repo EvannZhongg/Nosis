@@ -1,206 +1,18 @@
-import json
-from contextvars import copy_context
-from pathlib import Path
-from queue import Empty, Full, Queue
-from threading import Event, Thread
-from typing import Callable, Iterable, Iterator
+from typing import Callable
 
-from litellm import (
-    completion,
-    get_model_info,
-    token_counter,
-)
+from litellm import completion
+from litellm.exceptions import MidStreamFallbackError
 
-from agent_core.llm import (
-    LLMProvider,
-    LLMRequest,
-    LLMResponse,
-    ProviderCapabilities,
-    TokenUsage,
-)
-from agent_core.content import FilePart, ImagePart, TextPart
-from agent_core.errors import ProviderProtocolError
-from agent_core.media import (
-    UnsupportedImageError,
-    encode_data_url,
-    probe_image,
-)
-from agent_core.path_utils import path_for_comparison
-from agent_core.session import Message
-from agent_core.tools import AnalyzeImageTool, ToolDefinition
+from agent_core.errors import ProviderStreamError
+from agent_core.llm import LLMRequest, LLMResponse, TokenUsage
 
-from .tool_call_stream import ToolCallStreamAssembler
+from .base import ModelProvider, _cancellable_chunks, _request_messages, _request_tools, _text_from_content
 from ._utils import get_field
-from .reasoning import normalize_semantic_effort, reasoning_arguments
+from .reasoning import reasoning_arguments
+from .tool_call_stream import ToolCallStreamAssembler
 
 
-class LiteLLMProvider(LLMProvider):
-    _CANCEL_POLL_SECONDS = 0.1
-
-    def __init__(
-        self,
-        model: str,
-        base_url: str | None = None,
-        api_key: str | None = None,
-        max_context_tokens: int | None = None,
-        media_root: Path | None = None,
-        request_timeout_seconds: int = 300,
-        max_retries: int = 2,
-        reasoning_effort: str | None = None,
-        reasoning_parameters: dict[str, object] | None = None,
-    ) -> None:
-        self._model = model
-        self._base_url = base_url
-        self._api_key = api_key
-        self._media_root = media_root.expanduser().resolve() if media_root is not None else None
-        if (
-            isinstance(request_timeout_seconds, bool)
-            or not isinstance(request_timeout_seconds, int)
-            or request_timeout_seconds < 1
-        ):
-            raise ValueError("request_timeout_seconds must be a positive integer")
-        if (
-            isinstance(max_retries, bool)
-            or not isinstance(max_retries, int)
-            or max_retries < 0
-        ):
-            raise ValueError("max_retries must be a non-negative integer")
-        self._request_timeout_seconds = request_timeout_seconds
-        self._max_retries = max_retries
-        self._reasoning_effort = (
-            normalize_semantic_effort(reasoning_effort)
-            if reasoning_effort is not None
-            else None
-        )
-        self._reasoning_parameters = dict(reasoning_parameters or {})
-        self._model_info: dict[str, object] | None = None
-        self._model_info_loaded = False
-        if max_context_tokens is not None:
-            if (
-                isinstance(max_context_tokens, bool)
-                or not isinstance(max_context_tokens, int)
-                or max_context_tokens < 1
-            ):
-                raise ValueError(
-                    "max_context_tokens must be a positive integer"
-                )
-            self._max_context_tokens = max_context_tokens
-        else:
-            try:
-                model_info = self._get_model_info()
-            except Exception as error:
-                raise ValueError(
-                    f"LiteLLM has no context limit metadata for model "
-                    f"'{model}'; configure 'max_context_tokens' for this "
-                    "provider"
-                ) from error
-            self._max_context_tokens = _get_model_max_context_tokens(
-                model_info,
-                model,
-            )
-        self._capabilities: ProviderCapabilities | None = None
-
-    @property
-    def capabilities(self) -> ProviderCapabilities:
-        if self._capabilities is None:
-            self._capabilities = self.capabilities_for_model(
-                self._model,
-                self._base_url,
-            )
-        return self._capabilities
-
-    @classmethod
-    def capabilities_for_model(
-        cls,
-        model: str,
-        base_url: str | None = None,
-    ) -> ProviderCapabilities:
-        modalities = {"text"}
-        try:
-            info = get_model_info(model=model, api_base=base_url)
-            if info.get("supports_vision") is True:
-                modalities.add("image")
-        except Exception:
-            # Capability discovery must not prevent text-only providers
-            # from being used when LiteLLM has no model metadata.
-            pass
-        return ProviderCapabilities(frozenset(modalities))
-
-    @property
-    def max_context_tokens(self) -> int:
-        return self._max_context_tokens
-
-    @property
-    def max_output_tokens(self) -> int | None:
-        try:
-            model_info = self._get_model_info()
-        except Exception:
-            return None
-        value = model_info.get("max_output_tokens")
-        if (
-            isinstance(value, bool)
-            or not isinstance(value, int)
-            or value < 1
-        ):
-            return None
-        return value
-
-    def _get_model_info(self) -> dict[str, object]:
-        if not self._model_info_loaded:
-            self._model_info = get_model_info(
-                model=self._model,
-                api_base=self._base_url,
-            )
-            self._model_info_loaded = True
-        assert self._model_info is not None
-        return self._model_info
-
-    def count_input_tokens(self, request: LLMRequest) -> int:
-        """Price the request without encoding any image.
-
-        Images are counted from their pixel dimensions and the text is
-        counted by the tokenizer, so a context check reads image headers
-        rather than whole files.  Encoding here would cost a full read
-        and a base64 pass per image on every iteration of the agent
-        loop, and the tokenizer does not inspect a data URL anyway: it
-        prices one by a flat per-image constant regardless of size.
-        """
-        messages = _request_messages(request, self, encode_media=False)
-        tools = _request_tools(request)
-        text_tokens = token_counter(
-            model=self._model,
-            messages=messages,
-            tools=tools or None,
-        )
-        return text_tokens + _media_tokens(request, self)
-
-    def stream(
-        self,
-        request: LLMRequest,
-        on_text_delta: Callable[[str], None],
-        on_reasoning_delta: Callable[[str], None] | None = None,
-    ) -> LLMResponse:
-        return self._stream(
-            request,
-            on_text_delta,
-            on_reasoning_delta,
-            check_cancelled=lambda: None,
-        )
-
-    def stream_cancellable(
-        self,
-        request: LLMRequest,
-        on_text_delta: Callable[[str], None],
-        on_reasoning_delta: Callable[[str], None] | None,
-        check_cancelled: Callable[[], None],
-    ) -> LLMResponse:
-        return self._stream(
-            request,
-            on_text_delta,
-            on_reasoning_delta,
-            check_cancelled=check_cancelled,
-        )
-
+class LiteLLMProvider(ModelProvider):
     def _stream(
         self,
         request: LLMRequest,
@@ -237,110 +49,57 @@ class LiteLLMProvider(LLMProvider):
                 request.max_generation_tokens
             )
 
-        forced_tool: str | None = None
-        consumed_usage: list[TokenUsage] = []
-        attempt_count = 0
-        attempt_argument_chunk_counts: list[int] = []
-        while True:
-            attempt_count += 1
-            arguments = dict(base_arguments)
-            if forced_tool is not None:
-                arguments["tool_choice"] = {
-                    "type": "function",
-                    "function": {"name": forced_tool},
-                }
-
-            content = ""
-            reasoning_text = ""
-            tool_calls = ToolCallStreamAssembler(self._model)
-            usage = None
-
-            try:
-                chunks = _cancellable_chunks(
-                    lambda: completion(**arguments),
-                    check_cancelled,
-                    self._CANCEL_POLL_SECONDS,
-                )
-                for chunk in chunks:
-                    chunk_usage = getattr(chunk, "usage", None)
-                    if chunk_usage is not None:
-                        usage = chunk_usage
-
-                    choices = getattr(chunk, "choices", None) or []
-                    if not choices:
-                        continue
-
-                    delta = get_field(choices[0], "delta")
-                    if delta is None:
-                        continue
-
-                    # Most OpenAI-compatible providers stream ``content`` as a
-                    # string. Some adapters return the same text as structured
-                    # content blocks instead.
-                    text = _text_from_content(get_field(delta, "content"))
-                    if text:
-                        content += text
-                        on_text_delta(text)
-
-                    for field in (
-                        "reasoning_content",
-                        "reasoning",
-                        "thinking",
-                    ):
-                        value = get_field(delta, field)
-                        if isinstance(value, str) and value:
-                            reasoning_text += value
-                            if on_reasoning_delta is not None:
-                                on_reasoning_delta(value)
-
-                    tool_calls.add_batch(
-                        get_field(delta, "tool_calls") or []
-                    )
-
-                attempt_usage = _token_usage(usage)
-                if attempt_usage is not None:
-                    consumed_usage.append(attempt_usage)
-                assembled_calls = tool_calls.finish()
-            except ProviderProtocolError as error:
-                attempt_argument_chunk_counts.append(
-                    tool_calls.argument_fragment_count
-                )
-                tool_name = error.details.get("tool_name")
-                can_recover = (
-                    error.details.get("reason") == "missing_arguments"
-                    and forced_tool is None
-                    and not content
-                    and isinstance(tool_name, str)
-                    and any(tool.name == tool_name for tool in request.tools)
-                )
-                if not can_recover:
-                    raise ProviderProtocolError(
-                        str(error),
-                        details={
-                            **error.details,
-                            "attempt_count": attempt_count,
-                            "recovery_attempted": forced_tool is not None,
-                            "forced_tool": forced_tool,
-                            "attempt_argument_chunk_counts": list(
-                                attempt_argument_chunk_counts
-                            ),
-                        },
-                    ) from error
-                forced_tool = tool_name
-                continue
-
-            attempt_argument_chunk_counts.append(
-                tool_calls.argument_fragment_count
-            )
-            return LLMResponse(
-                content=content or None,
-                reasoning=reasoning_text or None,
-                tool_calls=assembled_calls,
-                usage=_sum_usage(consumed_usage),
-            )
-
-
-_STREAM_END = object()
+        content = ""
+        reasoning_text = ""
+        tool_calls = ToolCallStreamAssembler(self._model)
+        usage = None
+        chunks = _cancellable_chunks(
+            lambda: completion(**base_arguments),
+            check_cancelled,
+            self._CANCEL_POLL_SECONDS,
+        )
+        try:
+            for chunk in chunks:
+                chunk_usage = getattr(chunk, "usage", None)
+                if chunk_usage is not None:
+                    usage = chunk_usage
+                choices = getattr(chunk, "choices", None) or []
+                if not choices:
+                    continue
+                delta = get_field(choices[0], "delta")
+                if delta is None:
+                    continue
+                text = _text_from_content(get_field(delta, "content"))
+                if text:
+                    content += text
+                    on_text_delta(text)
+                for field in ("reasoning_content", "reasoning", "thinking"):
+                    value = get_field(delta, field)
+                    if isinstance(value, str) and value:
+                        reasoning_text += value
+                        if on_reasoning_delta is not None:
+                            on_reasoning_delta(value)
+                tool_calls.add_batch(get_field(delta, "tool_calls") or [])
+        except MidStreamFallbackError as error:
+            raise ProviderStreamError(
+                "provider stream ended before the response completed: " + str(error),
+                details={
+                    "phase": "response_stream",
+                    "model": self._model,
+                    "reason": "mid_stream_disconnect",
+                    "partial_content_length": len(content),
+                    "partial_reasoning_length": len(reasoning_text),
+                    "argument_chunk_count": tool_calls.argument_fragment_count,
+                },
+            ) from error
+        finally:
+            chunks.close()
+        return LLMResponse(
+            content=content or None,
+            reasoning=reasoning_text or None,
+            tool_calls=tool_calls.finish(),
+            usage=_token_usage(usage),
+        )
 
 
 def _token_usage(usage: object | None) -> TokenUsage | None:
@@ -351,333 +110,3 @@ def _token_usage(usage: object | None) -> TokenUsage | None:
         output_tokens=getattr(usage, "completion_tokens"),
         total_tokens=getattr(usage, "total_tokens"),
     )
-
-
-def _sum_usage(values: list[TokenUsage]) -> TokenUsage | None:
-    if not values:
-        return None
-    return TokenUsage(
-        input_tokens=sum(value.input_tokens for value in values),
-        output_tokens=sum(value.output_tokens for value in values),
-        total_tokens=sum(value.total_tokens for value in values),
-    )
-
-
-def _cancellable_chunks(
-    create_stream: Callable[[], Iterable[object]],
-    check_cancelled: Callable[[], None],
-    poll_seconds: float,
-) -> Iterator[object]:
-    """Yield a synchronous provider stream without blocking cancellation checks."""
-    queue: Queue[object | BaseException] = Queue(maxsize=1)
-    stopped = Event()
-
-    def publish(item: object | BaseException) -> bool:
-        while not stopped.is_set():
-            try:
-                queue.put(item, timeout=poll_seconds)
-                return True
-            except Full:
-                continue
-        return False
-
-    def read_stream() -> None:
-        try:
-            for chunk in create_stream():
-                if not publish(chunk):
-                    return
-        except BaseException as error:
-            if not publish(error):
-                return
-        publish(_STREAM_END)
-
-    reader = Thread(
-        target=copy_context().run,
-        args=(read_stream,),
-        name="litellm-stream-reader",
-        daemon=True,
-    )
-    reader.start()
-    try:
-        while True:
-            check_cancelled()
-            try:
-                item = queue.get(timeout=poll_seconds)
-            except Empty:
-                continue
-            check_cancelled()
-            if item is _STREAM_END:
-                return
-            if isinstance(item, BaseException):
-                raise item
-            yield item
-    finally:
-        stopped.set()
-
-
-def _request_messages(
-    request: LLMRequest,
-    provider: LiteLLMProvider | None = None,
-    *,
-    encode_media: bool = True,
-) -> list[dict[str, object]]:
-    return [
-        {"role": "system", "content": request.system_prompt},
-        *[
-            _message_to_dict(
-                message,
-                include_images=(
-                    provider is None
-                    or "image" in provider.capabilities.input_modalities
-                ),
-                # Only point the model at the tool when it actually has it.
-                can_analyze_images=any(
-                    tool.name == AnalyzeImageTool.name for tool in request.tools
-                ),
-                media_root=_media_root(request, provider),
-                encode_media=encode_media,
-            )
-            for message in request.messages
-        ],
-    ]
-
-
-def _media_root(
-    request: LLMRequest,
-    provider: "LiteLLMProvider | None",
-) -> Path | None:
-    if request.media_root is not None:
-        return request.media_root
-    if provider is not None:
-        return provider._media_root
-    return None
-
-
-def _media_tokens(
-    request: LLMRequest,
-    provider: "LiteLLMProvider | None",
-) -> int:
-    """Sum the estimated cost of every image the request will send."""
-    if provider is not None and "image" not in provider.capabilities.input_modalities:
-        return 0
-    media_root = _media_root(request, provider)
-    total = 0
-    for message in request.messages:
-        for part in message.parts:
-            if not isinstance(part, ImagePart):
-                continue
-            try:
-                path = _resolve_media_path(part.path, media_root)
-                info = probe_image(path)
-            except (FileNotFoundError, ValueError, UnsupportedImageError):
-                # An unreadable image is sent as a short text notice, so
-                # it costs nothing beyond what the tokenizer counted.
-                continue
-            total += info.token_estimate
-    return total
-
-
-def _request_tools(request: LLMRequest) -> list[dict[str, object]]:
-    return [_tool_definition_to_dict(tool) for tool in request.tools]
-
-
-def _get_model_max_context_tokens(
-    model_info: dict[str, object],
-    model: str,
-) -> int:
-    max_context_tokens = model_info.get("max_input_tokens")
-    if (
-        isinstance(max_context_tokens, bool)
-        or not isinstance(max_context_tokens, int)
-        or max_context_tokens < 1
-    ):
-        raise ValueError(
-            f"LiteLLM has no context limit metadata for model '{model}'; "
-            "configure 'max_context_tokens' for this provider"
-        )
-    return max_context_tokens
-
-
-def _message_to_dict(
-    message: Message,
-    *,
-    include_images: bool = True,
-    can_analyze_images: bool = False,
-    media_root: Path | None = None,
-    encode_media: bool = True,
-) -> dict[str, object]:
-    data: dict[str, object] = {
-        "role": message.role,
-        "content": _content_to_provider_format(
-            message,
-            include_images=include_images,
-            can_analyze_images=can_analyze_images,
-            media_root=media_root,
-            encode_media=encode_media,
-        ),
-    }
-    if message.reasoning is not None:
-        data["reasoning_content"] = message.reasoning
-    if message.tool_calls:
-        data["tool_calls"] = [
-            {
-                "id": tool_call.id,
-                "type": "function",
-                "function": {
-                    "name": tool_call.name,
-                    "arguments": json.dumps(
-                        tool_call.arguments,
-                        ensure_ascii=False,
-                    ),
-                },
-            }
-            for tool_call in message.tool_calls
-        ]
-    if message.tool_call_id is not None:
-        data["tool_call_id"] = message.tool_call_id
-    return data
-
-
-def _content_to_provider_format(
-    message: Message,
-    *,
-    include_images: bool = True,
-    can_analyze_images: bool = False,
-    media_root: Path | None = None,
-    encode_media: bool = True,
-) -> object:
-    parts = message.parts
-    if not parts:
-        return None
-    if all(isinstance(part, TextPart) for part in parts):
-        return "".join(part.text for part in parts)
-    files = [part for part in parts if isinstance(part, FilePart)]
-    file_notice = _attached_files_notice(files)
-    if not include_images:
-        # This model cannot see an image, so the attachment is named rather
-        # than sent. Naming the tool it does not have would only invite a
-        # call that fails, so the hint depends on the registered tool set.
-        text = "".join(part.text for part in parts if isinstance(part, TextPart))
-        paths = [part.path for part in parts if isinstance(part, ImagePart)]
-        heading = (
-            f"Attached images (use {AnalyzeImageTool.name} if needed):"
-            if can_analyze_images
-            else "Attached images (this model cannot read them):"
-        )
-        listed = "\n".join(f"- {path}" for path in paths)
-        sections = [text] if text else []
-        if paths:
-            sections.append(f"{heading}\n{listed}")
-        if file_notice:
-            sections.append(file_notice)
-        return "\n\n".join(sections)
-    rendered: list[dict[str, object]] = []
-    for part in parts:
-        if isinstance(part, TextPart):
-            if part.text:
-                rendered.append({"type": "text", "text": part.text})
-        elif isinstance(part, ImagePart):
-            try:
-                path = _resolve_media_path(part.path, media_root)
-            except FileNotFoundError:
-                rendered.append(
-                    {
-                        "type": "text",
-                        "text": (
-                            "[Image attachment unavailable in this workspace: "
-                            f"{part.path}]"
-                        ),
-                    }
-                )
-                continue
-            if not encode_media:
-                # Counting tokens never needs the bytes: the caller adds
-                # each image's estimated cost separately. A placeholder
-                # keeps the message shape intact for the tokenizer.
-                rendered.append({"type": "text", "text": f"[image {part.path}]"})
-                continue
-            rendered.append(
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": encode_data_url(path, part.mime_type)
-                    },
-                }
-            )
-    if file_notice:
-        rendered.append({"type": "text", "text": file_notice})
-    return rendered
-
-
-def _attached_files_notice(files: list[FilePart]) -> str:
-    if not files:
-        return ""
-    lines = [
-        "Attached files are available at these workspace-relative paths. "
-        "Use the available tools to inspect or process them as appropriate:"
-    ]
-    for part in files:
-        lines.append(
-            "- filename="
-            + json.dumps(part.filename, ensure_ascii=False)
-            + ", path="
-            + json.dumps(part.path, ensure_ascii=False)
-            + ", mime_type="
-            + json.dumps(part.mime_type, ensure_ascii=False)
-            + f", size_bytes={part.size_bytes}"
-        )
-    return "\n".join(lines)
-
-
-def _resolve_media_path(path: str, media_root: Path | None) -> Path:
-    candidate = Path(path)
-    was_relative = not candidate.is_absolute()
-    if was_relative:
-        if media_root is None:
-            raise ValueError(
-                "relative image paths require a provider media_root"
-            )
-        candidate = media_root / candidate
-    resolved = candidate.expanduser().resolve()
-    if was_relative and media_root is not None:
-        # Both sides must be resolved before being compared: a root that
-        # still contains a symlink (macOS serves /var as /private/var)
-        # would not be a prefix of the resolved candidate, and a
-        # legitimate path would be rejected as an escape.
-        root = media_root.expanduser().resolve()
-        try:
-            path_for_comparison(resolved).relative_to(
-                path_for_comparison(root)
-            )
-        except ValueError as error:
-            raise ValueError("image path must stay within media_root") from error
-    if not resolved.is_file():
-        raise FileNotFoundError(f"image attachment does not exist: {path}")
-    return resolved
-
-
-def _tool_definition_to_dict(tool: ToolDefinition) -> dict[str, object]:
-    return {
-        "type": "function",
-        "function": {
-            "name": tool.name,
-            "description": tool.description,
-            "parameters": tool.parameters,
-        },
-    }
-
-
-def _text_from_content(value: object) -> str:
-    """Extract text from string or OpenAI-style content blocks.
-
-    LiteLLM normally exposes streamed deltas as strings, but adapters for
-    some providers expose a list of typed blocks.  Only the text field is
-    considered so metadata or image blocks cannot accidentally become part
-    of the assistant message.
-    """
-    if isinstance(value, str):
-        return value
-    if isinstance(value, (list, tuple)):
-        return "".join(_text_from_content(item) for item in value)
-    text = get_field(value, "text")
-    return text if isinstance(text, str) else ""

@@ -13,7 +13,7 @@ from .llm import (
 )
 from .session import Message, Session
 from .content import AttachmentPart, ImagePart
-from .errors import ProviderProtocolError, runtime_error_info
+from .errors import ProviderError, runtime_error_info
 from .tool_result import ToolResultNormalizer
 from .tool_batch import ToolBatchExecutor
 from .tools import ToolCall, ToolExecutionContext, ToolResult, ToolSet
@@ -286,8 +286,8 @@ class Agent:
                     on_reasoning_delta,
                     continuation.raise_if_cancelled,
                 )
-            except ProviderProtocolError as error:
-                raise ProviderProtocolError(
+            except ProviderError as error:
+                raise type(error)(
                     str(error),
                     details={
                         **error.details,
@@ -316,6 +316,7 @@ class Agent:
                     timestamp_utc=assistant_timestamp_utc,
                     tool_calls=response.tool_calls,
                     reasoning=response.reasoning,
+                    provider_data=response.provider_data,
                 )
                 if response.content and on_event is not None:
                     on_event(
@@ -395,6 +396,7 @@ class Agent:
                 response.content,
                 timestamp_utc=response_timestamp_utc,
                 reasoning=response.reasoning,
+                provider_data=response.provider_data,
             )
             if on_event is not None:
                 on_event(

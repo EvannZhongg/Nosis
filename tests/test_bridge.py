@@ -54,7 +54,7 @@ from agent_core.scheduler import (
 )
 from agent_core.llm import TokenUsage
 from agent_core.projection import project_context_units
-from agent_core.providers import LiteLLMProvider
+from agent_core.providers import ModelProvider
 from agent_core.subagent import vision_aware_tool_names
 from agent_core.tools.config import ROLE_TOOL_NAMES, TOOL_NAMES
 from interfaces.bridge.bridge import Bridge, Cancelled
@@ -1887,7 +1887,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
             )
 
             with patch.object(
-                LiteLLMProvider,
+                ModelProvider,
                 "capabilities_for_model",
                 classmethod(
                     lambda cls, model, base_url=None: ProviderCapabilities(
@@ -2940,7 +2940,7 @@ class AnalyzeImageDerivationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             bridge, _ = make_bridge([], Path(directory))
             with patch.object(
-                LiteLLMProvider, "capabilities_for_model", _CAPABILITIES_PATCH
+                ModelProvider, "capabilities_for_model", _CAPABILITIES_PATCH
             ):
                 bridge.open_session(
                     open_session_message(
@@ -2952,14 +2952,17 @@ class AnalyzeImageDerivationTest(unittest.TestCase):
                             "providers": {
                                 "main": {
                                     "model": main_model,
+                                    "api": "chat_completions",
                                     "max_context_tokens": 1000,
                                 },
                                 "seeing": {
                                     "model": VISION_MODEL,
+                                    "api": "chat_completions",
                                     "max_context_tokens": 1000,
                                 },
                                 "blind": {
                                     "model": TEXT_MODEL,
+                                    "api": "chat_completions",
                                     "max_context_tokens": 1000,
                                 },
                             },

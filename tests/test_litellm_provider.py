@@ -6,6 +6,8 @@ import threading
 from pathlib import Path
 from unittest.mock import patch
 
+from litellm.exceptions import MidStreamFallbackError
+
 from agent_core import (
     AgentCancelled,
     FilePart,
@@ -13,6 +15,7 @@ from agent_core import (
     LLMRequest,
     ProviderCapabilities,
     ProviderProtocolError,
+    ProviderStreamError,
     Message,
     TokenUsage,
     ToolCall,
@@ -27,9 +30,14 @@ def chunk(
     content: object | None = None,
     tool_calls: list[dict] | None = None,
     usage: object | None = None,
+    reasoning: str | None = None,
 ) -> object:
     """Build a streamed chunk shaped like a LiteLLM delta."""
-    delta = {"content": content, "tool_calls": tool_calls}
+    delta = {
+        "content": content,
+        "tool_calls": tool_calls,
+        "reasoning_content": reasoning,
+    }
     choice = {"delta": delta, "finish_reason": None}
     return type(
         "Chunk",
@@ -50,8 +58,17 @@ USAGE = type(
 
 
 class LiteLLMProviderTest(unittest.TestCase):
+    @staticmethod
+    def _interrupted_stream(*chunks):
+        yield from chunks
+        raise MidStreamFallbackError(
+            message="connection closed",
+            model="test-model",
+            llm_provider="openai",
+        )
+
     def test_omits_empty_text_from_an_image_only_message(self) -> None:
-        from agent_core.providers.litellm_provider import (
+        from agent_core.providers.base import (
             _content_to_provider_format,
         )
 
@@ -77,7 +94,7 @@ class LiteLLMProviderTest(unittest.TestCase):
         self.assertEqual(content[0]["type"], "image_url")
 
     def test_describes_attached_files_as_workspace_paths(self) -> None:
-        from agent_core.providers.litellm_provider import (
+        from agent_core.providers.base import (
             _content_to_provider_format,
         )
 
@@ -166,7 +183,7 @@ class LiteLLMProviderTest(unittest.TestCase):
             release.set()
             thread.join(2)
 
-    @patch("agent_core.providers.litellm_provider.get_model_info", return_value={"supports_vision": True})
+    @patch("agent_core.providers.base.get_model_info", return_value={"supports_vision": True})
     @patch("agent_core.providers.litellm_provider.completion")
     def test_resolves_relative_image_against_explicit_media_root(
         self,
@@ -208,7 +225,7 @@ class LiteLLMProviderTest(unittest.TestCase):
         )
 
     def test_relative_image_without_media_root_is_rejected(self) -> None:
-        from agent_core.providers.litellm_provider import _content_to_provider_format
+        from agent_core.providers.base import _content_to_provider_format
 
         with self.assertRaisesRegex(ValueError, "media_root"):
             _content_to_provider_format(
@@ -222,7 +239,7 @@ class LiteLLMProviderTest(unittest.TestCase):
         self,
     ) -> None:
         """A text-only model is told how to reach the image it cannot see."""
-        from agent_core.providers.litellm_provider import (
+        from agent_core.providers.base import (
             _content_to_provider_format,
         )
 
@@ -247,7 +264,7 @@ class LiteLLMProviderTest(unittest.TestCase):
 
     def test_does_not_name_a_tool_the_model_does_not_have(self) -> None:
         """Pointing at an unregistered tool would only invite a failed call."""
-        from agent_core.providers.litellm_provider import (
+        from agent_core.providers.base import (
             _content_to_provider_format,
         )
 
@@ -289,7 +306,7 @@ class LiteLLMProviderTest(unittest.TestCase):
             "capabilities",
             property(lambda self: ProviderCapabilities(frozenset({"text"}))),
         ):
-            from agent_core.providers.litellm_provider import _request_messages
+            from agent_core.providers.base import _request_messages
 
             without = _request_messages(
                 LLMRequest(system_prompt="s", messages=(message,)),
@@ -307,7 +324,7 @@ class LiteLLMProviderTest(unittest.TestCase):
         self.assertNotIn("analyze_image", without[1]["content"])
         self.assertIn("use analyze_image", with_tool[1]["content"])
 
-    @patch("agent_core.providers.litellm_provider.get_model_info", return_value={"supports_vision": True})
+    @patch("agent_core.providers.base.get_model_info", return_value={"supports_vision": True})
     @patch("agent_core.providers.litellm_provider.completion")
     def test_missing_image_from_another_workspace_becomes_text_notice(
         self,
@@ -338,7 +355,7 @@ class LiteLLMProviderTest(unittest.TestCase):
         self.assertEqual(sent[0]["type"], "text")
         self.assertIn("unavailable", sent[0]["text"])
 
-    @patch("agent_core.providers.litellm_provider.token_counter")
+    @patch("agent_core.providers.base.token_counter")
     @patch("agent_core.providers.litellm_provider.completion")
     def test_passes_configured_model_url_key_and_output_limit(
         self,
@@ -404,6 +421,127 @@ class LiteLLMProviderTest(unittest.TestCase):
             max_retries=4,
             stream_options={"include_usage": True},
             max_completion_tokens=100,
+        )
+
+    @patch("agent_core.providers.litellm_provider.completion")
+    def test_does_not_retry_interrupted_stream_before_visible_output(
+        self,
+        completion_mock,
+    ) -> None:
+        partial_tool = chunk(tool_calls=[{
+            "index": 0,
+            "id": "partial-call",
+            "function": {"name": "read_file", "arguments": '{"path"'},
+        }])
+        completion_mock.side_effect = [
+            self._interrupted_stream(partial_tool),
+            iter([chunk(content="recovered")]),
+        ]
+        provider = LiteLLMProvider(
+            model="openai/test-model",
+            max_context_tokens=1000,
+            max_retries=2,
+        )
+
+        with self.assertRaises(ProviderStreamError) as raised:
+            provider.stream(
+                LLMRequest(
+                    system_prompt="Answer.",
+                    messages=(Message(role="user", content="hello"),),
+                ),
+                lambda _: None,
+            )
+        self.assertEqual(raised.exception.details["argument_chunk_count"], 1)
+        self.assertEqual(completion_mock.call_count, 1)
+
+    @patch("agent_core.providers.litellm_provider.completion")
+    def test_does_not_retry_interrupted_stream_after_visible_output(
+        self,
+        completion_mock,
+    ) -> None:
+        completion_mock.return_value = self._interrupted_stream(
+            chunk(content="partial")
+        )
+        provider = LiteLLMProvider(
+            model="openai/test-model",
+            max_context_tokens=1000,
+            max_retries=2,
+        )
+
+        with self.assertRaises(ProviderStreamError) as raised:
+            provider.stream(
+                LLMRequest(
+                    system_prompt="Answer.",
+                    messages=(Message(role="user", content="hello"),),
+                ),
+                lambda _text: None,
+            )
+
+        self.assertEqual(completion_mock.call_count, 1)
+        self.assertEqual(
+            raised.exception.details["partial_content_length"],
+            len("partial"),
+        )
+
+    @patch("agent_core.providers.litellm_provider.completion")
+    def test_reports_interrupted_stream_without_repeating_empty_output(
+        self,
+        completion_mock,
+    ) -> None:
+        completion_mock.side_effect = [
+            self._interrupted_stream(),
+            self._interrupted_stream(),
+            self._interrupted_stream(),
+        ]
+        provider = LiteLLMProvider(
+            model="openai/test-model",
+            max_context_tokens=1000,
+            max_retries=2,
+        )
+
+        with self.assertRaises(ProviderStreamError) as raised:
+            provider.stream(
+                LLMRequest(
+                    system_prompt="Answer.",
+                    messages=(Message(role="user", content="hello"),),
+                ),
+                lambda _text: None,
+            )
+
+        self.assertEqual(completion_mock.call_count, 1)
+        self.assertEqual(raised.exception.details["reason"], "mid_stream_disconnect")
+        self.assertEqual(raised.exception.details["argument_chunk_count"], 0)
+
+    @patch("agent_core.providers.litellm_provider.completion")
+    def test_does_not_retry_interrupted_stream_after_reasoning_output(
+        self,
+        completion_mock,
+    ) -> None:
+        completion_mock.return_value = self._interrupted_stream(
+            chunk(reasoning="partial reasoning")
+        )
+        provider = LiteLLMProvider(
+            model="openai/test-model",
+            max_context_tokens=1000,
+            max_retries=2,
+        )
+
+        reasoning_deltas = []
+        with self.assertRaises(ProviderStreamError) as raised:
+            provider.stream(
+                LLMRequest(
+                    system_prompt="Answer.",
+                    messages=(Message(role="user", content="hello"),),
+                ),
+                lambda _text: None,
+                reasoning_deltas.append,
+            )
+
+        self.assertEqual(completion_mock.call_count, 1)
+        self.assertEqual(reasoning_deltas, ["partial reasoning"])
+        self.assertEqual(
+            raised.exception.details["partial_reasoning_length"],
+            len("partial reasoning"),
         )
 
     @patch("agent_core.providers.litellm_provider.completion")
@@ -618,7 +756,7 @@ class LiteLLMProviderTest(unittest.TestCase):
         )
 
     @patch("agent_core.providers.litellm_provider.completion")
-    def test_recovers_tool_call_without_argument_fragments(
+    def test_does_not_repeat_or_force_a_tool_call_without_arguments(
         self,
         completion_mock,
     ) -> None:
@@ -661,28 +799,22 @@ class LiteLLMProviderTest(unittest.TestCase):
             },
         )
 
-        response = provider.stream(
-            LLMRequest(
-                system_prompt="You are helpful.",
-                messages=(Message(role="user", content="read it"),),
-                tools=(tool,),
-            ),
-            lambda _text: None,
-        )
+        with self.assertRaises(ProviderProtocolError) as raised:
+            provider.stream(
+                LLMRequest(
+                    system_prompt="You are helpful.",
+                    messages=(Message(role="user", content="read it"),),
+                    tools=(tool,),
+                ),
+                lambda _text: None,
+            )
 
-        self.assertEqual(
-            response.tool_calls,
-            (ToolCall("call-2", "read_file", {"path": "README.md"}),),
-        )
-        self.assertEqual(response.usage, TokenUsage(24, 10, 34))
-        self.assertEqual(completion_mock.call_count, 2)
-        self.assertEqual(
-            completion_mock.call_args_list[1].kwargs["tool_choice"],
-            {"type": "function", "function": {"name": "read_file"}},
-        )
+        self.assertEqual(raised.exception.details["reason"], "missing_arguments")
+        self.assertEqual(completion_mock.call_count, 1)
+        self.assertNotIn("tool_choice", completion_mock.call_args.kwargs)
 
     @patch("agent_core.providers.litellm_provider.completion")
-    def test_rejects_second_tool_call_without_argument_fragments(
+    def test_missing_arguments_reports_fragment_count(
         self,
         completion_mock,
     ) -> None:
@@ -717,13 +849,8 @@ class LiteLLMProviderTest(unittest.TestCase):
             )
 
         self.assertEqual(raised.exception.details["reason"], "missing_arguments")
-        self.assertEqual(raised.exception.details["attempt_count"], 2)
-        self.assertTrue(raised.exception.details["recovery_attempted"])
-        self.assertEqual(raised.exception.details["forced_tool"], "read_file")
-        self.assertEqual(
-            raised.exception.details["attempt_argument_chunk_counts"],
-            [0, 0],
-        )
+        self.assertEqual(raised.exception.details["argument_chunk_count"], 0)
+        self.assertEqual(completion_mock.call_count, 1)
 
     @patch("agent_core.providers.litellm_provider.completion")
     def test_missing_arguments_with_text_reports_no_recovery(
@@ -760,13 +887,9 @@ class LiteLLMProviderTest(unittest.TestCase):
                 lambda _text: None,
             )
 
-        self.assertEqual(raised.exception.details["attempt_count"], 1)
-        self.assertFalse(raised.exception.details["recovery_attempted"])
-        self.assertIsNone(raised.exception.details["forced_tool"])
-        self.assertEqual(
-            raised.exception.details["attempt_argument_chunk_counts"],
-            [0],
-        )
+        self.assertEqual(raised.exception.details["reason"], "missing_arguments")
+        self.assertEqual(raised.exception.details["argument_chunk_count"], 0)
+        self.assertEqual(completion_mock.call_count, 1)
 
     @patch("agent_core.providers.litellm_provider.completion")
     def test_parses_cumulative_and_repeated_streamed_tool_arguments(
@@ -988,13 +1111,7 @@ class LiteLLMProviderTest(unittest.TestCase):
             )
 
         self.assertEqual(raised.exception.details["reason"], "ambiguous_order")
-        self.assertEqual(raised.exception.details["attempt_count"], 1)
-        self.assertFalse(raised.exception.details["recovery_attempted"])
-        self.assertIsNone(raised.exception.details["forced_tool"])
-        self.assertEqual(
-            raised.exception.details["attempt_argument_chunk_counts"],
-            [2],
-        )
+        self.assertEqual(completion_mock.call_count, 1)
 
     @patch("agent_core.providers.litellm_provider.completion")
     def test_rejects_an_anonymous_initial_fragment(
@@ -1591,7 +1708,7 @@ class LiteLLMProviderTest(unittest.TestCase):
         self.assertNotIn("x" * 20, str(raised.exception.details))
 
     @patch(
-        "agent_core.providers.litellm_provider.token_counter",
+        "agent_core.providers.base.token_counter",
         return_value=42,
     )
     def test_counts_tools_as_part_of_input(
@@ -1645,7 +1762,7 @@ class LiteLLMProviderTest(unittest.TestCase):
             ],
         )
 
-    @patch("agent_core.providers.litellm_provider.get_model_info")
+    @patch("agent_core.providers.base.get_model_info")
     def test_uses_litellm_context_limit_when_not_configured(
         self,
         get_model_info_mock,
@@ -1667,7 +1784,7 @@ class LiteLLMProviderTest(unittest.TestCase):
             api_base="https://example.com/v1",
         )
 
-    @patch("agent_core.providers.litellm_provider.get_model_info")
+    @patch("agent_core.providers.base.get_model_info")
     def test_configured_context_limit_skips_litellm_metadata(
         self,
         get_model_info_mock,
@@ -1687,7 +1804,7 @@ class LiteLLMProviderTest(unittest.TestCase):
                 max_context_tokens=0,
             )
 
-    @patch("agent_core.providers.litellm_provider.get_model_info")
+    @patch("agent_core.providers.base.get_model_info")
     def test_requires_config_for_model_without_context_metadata(
         self,
         get_model_info_mock,
@@ -1700,7 +1817,7 @@ class LiteLLMProviderTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             LiteLLMProvider(model="custom/model")
 
-    @patch("agent_core.providers.litellm_provider.get_model_info")
+    @patch("agent_core.providers.base.get_model_info")
     def test_requires_config_when_model_metadata_lookup_fails(
         self,
         get_model_info_mock,
@@ -1713,7 +1830,7 @@ class LiteLLMProviderTest(unittest.TestCase):
         ):
             LiteLLMProvider(model="custom/model")
 
-    @patch("agent_core.providers.litellm_provider.get_model_info")
+    @patch("agent_core.providers.base.get_model_info")
     def test_unknown_output_limit_is_none(
         self,
         get_model_info_mock,

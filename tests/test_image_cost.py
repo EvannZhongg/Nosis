@@ -12,10 +12,8 @@ from unittest.mock import patch
 from agent_core.content import ImagePart, TextPart
 from agent_core.llm import LLMRequest
 from agent_core.media import clear_encoded_cache, estimate_image_tokens
-from agent_core.providers.litellm_provider import (
-    LiteLLMProvider,
-    _request_messages,
-)
+from agent_core.providers import LiteLLMProvider
+from agent_core.providers.base import _request_messages
 from agent_core.session import Message
 
 from tests.test_media import png_bytes
@@ -75,7 +73,7 @@ class ImageTokenCountingTest(unittest.TestCase):
         image = self.write("a.png", 16, 16)
 
         with patch(
-            "agent_core.providers.litellm_provider.encode_data_url"
+            "agent_core.providers.base.encode_data_url"
         ) as encode:
             self.provider().count_input_tokens(self.request(image))
 

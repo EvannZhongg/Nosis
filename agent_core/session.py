@@ -43,6 +43,7 @@ class Message:
     tool_call_id: str | None = None
     reasoning: str | None = None
     origin: MessageOrigin = "conversation"
+    provider_data: dict[str, object] = field(default_factory=dict)
 
     @property
     def parts(self):
@@ -540,6 +541,7 @@ class Session:
         attachments: tuple[AttachmentPart, ...] = (),
         origin: MessageOrigin = "conversation",
         user_source: UserAnchorSource = "user_input",
+        provider_data: dict[str, object] | None = None,
     ) -> None:
         if attachments:
             parts = list(content_parts(content))
@@ -553,6 +555,7 @@ class Session:
             tool_call_id,
             reasoning,
             origin,
+            provider_data or {},
         )
         self._event(
             "message_appended",
@@ -592,7 +595,9 @@ class Session:
         return event
 
 
-def message_to_dict(message: Message) -> dict[str, object]:
+def message_to_dict(
+    message: Message, *, include_provider_data: bool = True,
+) -> dict[str, object]:
     data: dict[str, object] = {
         "role": message.role,
         "content": _content_to_dict(message),
@@ -608,6 +613,8 @@ def message_to_dict(message: Message) -> dict[str, object]:
         data["tool_call_id"] = message.tool_call_id
     if message.reasoning is not None:
         data["reasoning"] = message.reasoning
+    if include_provider_data and message.provider_data:
+        data["provider_data"] = message.provider_data
     if message.origin != "conversation":
         data["origin"] = message.origin
     return data
@@ -691,6 +698,7 @@ def message_from_dict(data: dict[str, object]) -> Message:
             if data.get("origin") in {"tool_media", "job_result"}
             else "conversation"
         ),
+        provider_data=dict(data.get("provider_data", {})),
     )
 
 

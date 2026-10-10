@@ -100,7 +100,7 @@ class Bridge:
             } or (type == "context_window" and self._checkpoint_turn == fields.get("turn_id")):
                 session = self.host.sessions.session
                 if session is not None:
-                    items = [message_to_dict(item) for item in session.items]
+                    items = [message_to_dict(item, include_provider_data=False) for item in session.items]
                 self._checkpoint_turn = None
             self._stdout.write(encode(self._stream.publish(
                 message, state=state, items=items,
@@ -405,7 +405,7 @@ class Bridge:
             raise RuntimeError("received 'load_session' before 'open_session'")
         self.emit(
             **session_items_message(
-                [message_to_dict(item) for item in self.host.sessions.session.items]
+                [message_to_dict(item, include_provider_data=False) for item in self.host.sessions.session.items]
             )
         )
 

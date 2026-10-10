@@ -83,6 +83,7 @@ export type ProviderSetting = {
   max_context_tokens: number | null;
   reasoning_effort?: string | null;
   reasoning_parameters?: { readonly [key: string]: JSONValue };
+  api?: 'responses' | 'chat_completions' | null;
   credential: {
     source: 'env' | 'inline' | 'none';
     env_name: string | null;
