@@ -45,6 +45,10 @@ class ToolCallStreamAssembler:
         for call, index, tool_call_id in calls:
             self._add(call, index, tool_call_id)
 
+    @property
+    def argument_fragment_count(self) -> int:
+        return sum(len(state.argument_fragments) for state in self._states)
+
     def finish(self) -> tuple[ToolCall, ...]:
         indexed = [state.index is not None for state in self._states]
         if any(indexed) and not all(indexed):

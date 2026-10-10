@@ -156,6 +156,20 @@ class SettingsStoreTest(unittest.TestCase):
                 "api_key": {"action": "set", "value": "first\nSECOND=leak"},
             })
 
+    def test_rejects_unknown_reasoning_parameter_before_saving(self) -> None:
+        before = self.store.provider_path.read_text(encoding="utf-8")
+
+        with self.assertRaisesRegex(ValueError, "unsupported field.*typo"):
+            self.store.save_provider("first", {
+                "model": "openai/first",
+                "reasoning_parameters": {"typo": True},
+            })
+
+        self.assertEqual(
+            self.store.provider_path.read_text(encoding="utf-8"),
+            before,
+        )
+
     def test_preserves_dotenv_comments_and_unrelated_values(self) -> None:
         (self.root / ".env").write_text("# local values\nOTHER=value\nFIRST_KEY=old\n", encoding="utf-8")
         self.store.save_provider("first", {

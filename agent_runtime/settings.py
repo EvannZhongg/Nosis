@@ -14,6 +14,10 @@ from dotenv import dotenv_values
 
 from agent_core import SkillLoader, load_agent_config
 from agent_core.atomic import atomic_write_text
+from agent_core.providers import (
+    normalize_semantic_effort,
+    validate_reasoning_parameters,
+)
 from agent_core.tools import ROLE_TOOL_NAMES, TOOL_NAMES
 
 from .config import (
@@ -323,12 +327,12 @@ class SettingsStore:
             raise ValueError("max_context_tokens must be a positive integer or null")
         reasoning_effort = payload.get("reasoning_effort")
         if reasoning_effort is not None:
-            from agent_core.providers import normalize_semantic_effort
-
             reasoning_effort = normalize_semantic_effort(reasoning_effort)
         reasoning_parameters = payload.get("reasoning_parameters")
         if reasoning_parameters is not None and not isinstance(reasoning_parameters, dict):
             raise ValueError("reasoning_parameters must be an object")
+        if reasoning_parameters is not None:
+            reasoning_parameters = validate_reasoning_parameters(reasoning_parameters)
         api_key = payload.get("api_key", {"action": "keep"})
         if not isinstance(api_key, dict) or api_key.get("action") not in {"keep", "set", "clear"}:
             raise ValueError("api_key.action must be keep, set, or clear")
@@ -510,14 +514,14 @@ class SettingsStore:
                     raise ValueError(f"provider '{provider}' max_context_tokens must be positive")
                 effort = value.get("reasoning_effort")
                 if effort is not None:
-                    from agent_core.providers import normalize_semantic_effort
-
                     normalize_semantic_effort(effort)
                 parameters = value.get("reasoning_parameters")
                 if parameters is not None and not isinstance(parameters, dict):
                     raise ValueError(
                         f"provider '{provider}' reasoning_parameters must be an object"
                     )
+                if parameters is not None:
+                    validate_reasoning_parameters(parameters)
             for label in ("main_agent", "subagent"):
                 route = document.get(label, {})
                 if not isinstance(route, dict):

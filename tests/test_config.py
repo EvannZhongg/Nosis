@@ -557,6 +557,7 @@ class ConfigTest(unittest.TestCase):
         for field, value in (
             ("reasoning_effort", "balanced"),
             ("reasoning_parameters", []),
+            ("reasoning_parameters", {"typo": True}),
         ):
             with tempfile.TemporaryDirectory() as directory:
                 path = Path(directory) / "config.json"

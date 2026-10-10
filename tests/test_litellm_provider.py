@@ -717,6 +717,56 @@ class LiteLLMProviderTest(unittest.TestCase):
             )
 
         self.assertEqual(raised.exception.details["reason"], "missing_arguments")
+        self.assertEqual(raised.exception.details["attempt_count"], 2)
+        self.assertTrue(raised.exception.details["recovery_attempted"])
+        self.assertEqual(raised.exception.details["forced_tool"], "read_file")
+        self.assertEqual(
+            raised.exception.details["attempt_argument_chunk_counts"],
+            [0, 0],
+        )
+
+    @patch("agent_core.providers.litellm_provider.completion")
+    def test_missing_arguments_with_text_reports_no_recovery(
+        self,
+        completion_mock,
+    ) -> None:
+        completion_mock.return_value = iter([
+            chunk(
+                content="I will read it.",
+                tool_calls=[{
+                    "index": 0,
+                    "id": "call-1",
+                    "function": {"name": "read_file", "arguments": ""},
+                }],
+            )
+        ])
+        provider = LiteLLMProvider(
+            model="openai/test-model",
+            max_context_tokens=1000,
+        )
+        tool = ToolDefinition(
+            name="read_file",
+            description="Read a file.",
+            parameters={"type": "object", "properties": {}},
+        )
+
+        with self.assertRaises(ProviderProtocolError) as raised:
+            provider.stream(
+                LLMRequest(
+                    system_prompt="You are helpful.",
+                    messages=(Message(role="user", content="read it"),),
+                    tools=(tool,),
+                ),
+                lambda _text: None,
+            )
+
+        self.assertEqual(raised.exception.details["attempt_count"], 1)
+        self.assertFalse(raised.exception.details["recovery_attempted"])
+        self.assertIsNone(raised.exception.details["forced_tool"])
+        self.assertEqual(
+            raised.exception.details["attempt_argument_chunk_counts"],
+            [0],
+        )
 
     @patch("agent_core.providers.litellm_provider.completion")
     def test_parses_cumulative_and_repeated_streamed_tool_arguments(
@@ -938,6 +988,13 @@ class LiteLLMProviderTest(unittest.TestCase):
             )
 
         self.assertEqual(raised.exception.details["reason"], "ambiguous_order")
+        self.assertEqual(raised.exception.details["attempt_count"], 1)
+        self.assertFalse(raised.exception.details["recovery_attempted"])
+        self.assertIsNone(raised.exception.details["forced_tool"])
+        self.assertEqual(
+            raised.exception.details["attempt_argument_chunk_counts"],
+            [2],
+        )
 
     @patch("agent_core.providers.litellm_provider.completion")
     def test_rejects_an_anonymous_initial_fragment(

@@ -67,6 +67,20 @@ def normalize_semantic_effort(value: str) -> str:
     return normalized
 
 
+def validate_reasoning_parameters(
+    value: Mapping[str, object] | None,
+) -> dict[str, object]:
+    """Validate and copy custom reasoning request parameters."""
+    parameters = dict(value or {})
+    unknown = set(parameters) - _CUSTOM_PARAMETER_NAMES
+    if unknown:
+        names = ", ".join(sorted(unknown))
+        raise ValueError(
+            "reasoning_parameters contains unsupported field(s): " + names
+        )
+    return parameters
+
+
 def provider_spec(model: str) -> ProviderSpec | None:
     lowered = model.strip().lower()
     for spec in PROVIDER_SPECS:
@@ -86,13 +100,7 @@ def reasoning_arguments(
     OpenAI-compatible services.  An omitted effort leaves the request
     untouched, preserving the upstream model default.
     """
-    arguments = dict(custom_parameters or {})
-    unknown = set(arguments) - _CUSTOM_PARAMETER_NAMES
-    if unknown:
-        names = ", ".join(sorted(unknown))
-        raise ValueError(
-            "reasoning_parameters contains unsupported field(s): " + names
-        )
+    arguments = validate_reasoning_parameters(custom_parameters)
     if effort is None:
         return arguments
     semantic_effort = normalize_semantic_effort(effort)
@@ -171,4 +179,5 @@ __all__ = [
     "normalize_semantic_effort",
     "provider_spec",
     "reasoning_arguments",
+    "validate_reasoning_parameters",
 ]

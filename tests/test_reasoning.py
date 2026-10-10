@@ -3,6 +3,7 @@ import unittest
 from agent_core.providers.reasoning import (
     normalize_semantic_effort,
     reasoning_arguments,
+    validate_reasoning_parameters,
 )
 
 
@@ -45,6 +46,10 @@ class ReasoningAdapterTest(unittest.TestCase):
             ),
             {"extra_body": {"enable_thinking": True}},
         )
+
+    def test_rejects_unknown_custom_parameter(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unsupported field.*typo"):
+            validate_reasoning_parameters({"typo": True})
 
     def test_kimi_k3_only_uses_max(self) -> None:
         self.assertEqual(

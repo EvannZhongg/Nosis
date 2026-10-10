@@ -239,7 +239,10 @@ class LiteLLMProvider(LLMProvider):
 
         forced_tool: str | None = None
         consumed_usage: list[TokenUsage] = []
+        attempt_count = 0
+        attempt_argument_chunk_counts: list[int] = []
         while True:
+            attempt_count += 1
             arguments = dict(base_arguments)
             if forced_tool is not None:
                 arguments["tool_choice"] = {
@@ -252,47 +255,56 @@ class LiteLLMProvider(LLMProvider):
             tool_calls = ToolCallStreamAssembler(self._model)
             usage = None
 
-            chunks = _cancellable_chunks(
-                lambda: completion(**arguments),
-                check_cancelled,
-                self._CANCEL_POLL_SECONDS,
-            )
-            for chunk in chunks:
-                chunk_usage = getattr(chunk, "usage", None)
-                if chunk_usage is not None:
-                    usage = chunk_usage
-
-                choices = getattr(chunk, "choices", None) or []
-                if not choices:
-                    continue
-
-                delta = get_field(choices[0], "delta")
-                if delta is None:
-                    continue
-
-                # Most OpenAI-compatible providers stream ``content`` as a
-                # string. Some adapters return the same text as structured
-                # content blocks instead.
-                text = _text_from_content(get_field(delta, "content"))
-                if text:
-                    content += text
-                    on_text_delta(text)
-
-                for field in ("reasoning_content", "reasoning", "thinking"):
-                    value = get_field(delta, field)
-                    if isinstance(value, str) and value:
-                        reasoning_text += value
-                        if on_reasoning_delta is not None:
-                            on_reasoning_delta(value)
-
-                tool_calls.add_batch(get_field(delta, "tool_calls") or [])
-
-            attempt_usage = _token_usage(usage)
-            if attempt_usage is not None:
-                consumed_usage.append(attempt_usage)
             try:
+                chunks = _cancellable_chunks(
+                    lambda: completion(**arguments),
+                    check_cancelled,
+                    self._CANCEL_POLL_SECONDS,
+                )
+                for chunk in chunks:
+                    chunk_usage = getattr(chunk, "usage", None)
+                    if chunk_usage is not None:
+                        usage = chunk_usage
+
+                    choices = getattr(chunk, "choices", None) or []
+                    if not choices:
+                        continue
+
+                    delta = get_field(choices[0], "delta")
+                    if delta is None:
+                        continue
+
+                    # Most OpenAI-compatible providers stream ``content`` as a
+                    # string. Some adapters return the same text as structured
+                    # content blocks instead.
+                    text = _text_from_content(get_field(delta, "content"))
+                    if text:
+                        content += text
+                        on_text_delta(text)
+
+                    for field in (
+                        "reasoning_content",
+                        "reasoning",
+                        "thinking",
+                    ):
+                        value = get_field(delta, field)
+                        if isinstance(value, str) and value:
+                            reasoning_text += value
+                            if on_reasoning_delta is not None:
+                                on_reasoning_delta(value)
+
+                    tool_calls.add_batch(
+                        get_field(delta, "tool_calls") or []
+                    )
+
+                attempt_usage = _token_usage(usage)
+                if attempt_usage is not None:
+                    consumed_usage.append(attempt_usage)
                 assembled_calls = tool_calls.finish()
             except ProviderProtocolError as error:
+                attempt_argument_chunk_counts.append(
+                    tool_calls.argument_fragment_count
+                )
                 tool_name = error.details.get("tool_name")
                 can_recover = (
                     error.details.get("reason") == "missing_arguments"
@@ -302,10 +314,24 @@ class LiteLLMProvider(LLMProvider):
                     and any(tool.name == tool_name for tool in request.tools)
                 )
                 if not can_recover:
-                    raise
+                    raise ProviderProtocolError(
+                        str(error),
+                        details={
+                            **error.details,
+                            "attempt_count": attempt_count,
+                            "recovery_attempted": forced_tool is not None,
+                            "forced_tool": forced_tool,
+                            "attempt_argument_chunk_counts": list(
+                                attempt_argument_chunk_counts
+                            ),
+                        },
+                    ) from error
                 forced_tool = tool_name
                 continue
 
+            attempt_argument_chunk_counts.append(
+                tool_calls.argument_fragment_count
+            )
             return LLMResponse(
                 content=content or None,
                 reasoning=reasoning_text or None,

@@ -7,7 +7,11 @@ from pathlib import Path
 
 from agent_core import AgentConfig, DirectorySkillSource
 from agent_core.memory import MemoryStore
-from agent_core.providers import LiteLLMProvider, normalize_semantic_effort
+from agent_core.providers import (
+    LiteLLMProvider,
+    normalize_semantic_effort,
+    validate_reasoning_parameters,
+)
 
 
 DEFAULT_CONFIG_FILENAMES = (
@@ -371,6 +375,7 @@ def load_config_with_name(
         raise ValueError(
             f"provider '{provider}' field 'reasoning_parameters' must be an object"
         )
+    reasoning_parameters = validate_reasoning_parameters(reasoning_parameters)
     if key and key.startswith("${") and key.endswith("}"):
         key_env = key[2:-1]
         if not key_env:
@@ -391,7 +396,7 @@ def load_config_with_name(
         key=key,
         max_context_tokens=max_context_tokens,
         reasoning_effort=reasoning_effort,
-        reasoning_parameters=dict(reasoning_parameters),
+        reasoning_parameters=reasoning_parameters,
     )
 
 

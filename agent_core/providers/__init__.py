@@ -7,6 +7,7 @@ from .reasoning import (
     normalize_semantic_effort,
     provider_spec,
     reasoning_arguments,
+    validate_reasoning_parameters,
 )
 
 __all__ = [
@@ -18,4 +19,5 @@ __all__ = [
     "normalize_semantic_effort",
     "provider_spec",
     "reasoning_arguments",
+    "validate_reasoning_parameters",
 ]
