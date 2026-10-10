@@ -64,19 +64,6 @@
   },
   "mcp": {
     "enabled": true,
-    "servers": {
-      "parallel": {
-        "enabled": true,
-        "transport": "streamable_http",
-        "url": "https://search.parallel.ai/mcp",
-        "tools": {
-          "enabled": [
-            "web_search",
-            "web_fetch"
-          ],
-          "approval": "always"
-        }
-      }
-    }
+    "servers": {}
   }
 }

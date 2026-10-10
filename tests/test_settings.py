@@ -106,12 +106,12 @@ class SettingsStoreTest(unittest.TestCase):
         document = json.loads(
             (self.root / "agent_config.json").read_text(encoding="utf-8")
         )
-        parallel = {
+        server = {
             "enabled": True,
             "transport": "streamable_http",
-            "url": "https://search.parallel.ai/mcp",
+            "url": "https://example.test/mcp",
         }
-        document["mcp"]["servers"]["parallel"] = parallel
+        document["mcp"]["servers"]["demo"] = server
         (self.root / "agent_config.json").write_text(
             json.dumps(document),
             encoding="utf-8",
@@ -123,7 +123,7 @@ class SettingsStoreTest(unittest.TestCase):
             (self.root / "agent_config.json").read_text(encoding="utf-8")
         )
         self.assertTrue(updated["mcp"]["enabled"])
-        self.assertEqual(updated["mcp"]["servers"]["parallel"], parallel)
+        self.assertEqual(updated["mcp"]["servers"]["demo"], server)
 
     def test_agent_update_reports_missing_scratch_workspace_root(self) -> None:
         document = json.loads(
