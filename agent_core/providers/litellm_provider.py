@@ -5,7 +5,11 @@ from queue import Empty, Full, Queue
 from threading import Event, Thread
 from typing import Callable, Iterable, Iterator
 
-from litellm import completion, get_model_info, token_counter
+from litellm import (
+    completion,
+    get_model_info,
+    token_counter,
+)
 
 from agent_core.llm import (
     LLMProvider,
@@ -15,6 +19,7 @@ from agent_core.llm import (
     TokenUsage,
 )
 from agent_core.content import FilePart, ImagePart, TextPart
+from agent_core.errors import ProviderProtocolError
 from agent_core.media import (
     UnsupportedImageError,
     encode_data_url,
@@ -26,6 +31,7 @@ from agent_core.tools import AnalyzeImageTool, ToolDefinition
 
 from .tool_call_stream import ToolCallStreamAssembler
 from ._utils import get_field
+from .reasoning import normalize_semantic_effort, reasoning_arguments
 
 
 class LiteLLMProvider(LLMProvider):
@@ -40,6 +46,8 @@ class LiteLLMProvider(LLMProvider):
         media_root: Path | None = None,
         request_timeout_seconds: int = 300,
         max_retries: int = 2,
+        reasoning_effort: str | None = None,
+        reasoning_parameters: dict[str, object] | None = None,
     ) -> None:
         self._model = model
         self._base_url = base_url
@@ -59,6 +67,12 @@ class LiteLLMProvider(LLMProvider):
             raise ValueError("max_retries must be a non-negative integer")
         self._request_timeout_seconds = request_timeout_seconds
         self._max_retries = max_retries
+        self._reasoning_effort = (
+            normalize_semantic_effort(reasoning_effort)
+            if reasoning_effort is not None
+            else None
+        )
+        self._reasoning_parameters = dict(reasoning_parameters or {})
         self._model_info: dict[str, object] | None = None
         self._model_info_loaded = False
         if max_context_tokens is not None:
@@ -195,7 +209,7 @@ class LiteLLMProvider(LLMProvider):
         *,
         check_cancelled: Callable[[], None],
     ) -> LLMResponse:
-        arguments = dict(
+        base_arguments = dict(
             model=self._model,
             base_url=self._base_url,
             api_key=self._api_key,
@@ -207,73 +221,120 @@ class LiteLLMProvider(LLMProvider):
             # explicitly; it arrives in a final usage-only chunk.
             stream_options={"include_usage": True},
         )
+        reasoning = reasoning_arguments(
+            self._model,
+            self._reasoning_effort,
+            self._reasoning_parameters,
+        )
+        base_arguments.update(reasoning)
+        if "reasoning_effort" in reasoning:
+            base_arguments["allowed_openai_params"] = ["reasoning_effort"]
         tools = _request_tools(request)
         if tools:
-            arguments["tools"] = tools
+            base_arguments["tools"] = tools
         if request.max_generation_tokens is not None:
-            arguments["max_completion_tokens"] = (
+            base_arguments["max_completion_tokens"] = (
                 request.max_generation_tokens
             )
 
-        content = ""
-        reasoning = ""
-        tool_calls = ToolCallStreamAssembler(self._model)
-        usage = None
+        forced_tool: str | None = None
+        consumed_usage: list[TokenUsage] = []
+        while True:
+            arguments = dict(base_arguments)
+            if forced_tool is not None:
+                arguments["tool_choice"] = {
+                    "type": "function",
+                    "function": {"name": forced_tool},
+                }
 
-        chunks = _cancellable_chunks(
-            lambda: completion(**arguments),
-            check_cancelled,
-            self._CANCEL_POLL_SECONDS,
-        )
-        for chunk in chunks:
-            chunk_usage = getattr(chunk, "usage", None)
-            if chunk_usage is not None:
-                usage = chunk_usage
+            content = ""
+            reasoning_text = ""
+            tool_calls = ToolCallStreamAssembler(self._model)
+            usage = None
 
-            choices = getattr(chunk, "choices", None) or []
-            if not choices:
-                continue
-
-            delta = get_field(choices[0], "delta")
-            if delta is None:
-                continue
-
-            # Most OpenAI-compatible providers stream ``content`` as a
-            # string.  Some LiteLLM adapters (notably multimodal providers)
-            # return the same text as structured content blocks instead,
-            # e.g. ``[{"type": "text", "text": "..."}]``.  Normalise both
-            # forms before deciding that the response is empty; otherwise a
-            # perfectly valid streamed answer is discarded and Agent raises
-            # ``LLM response must contain content or tool calls``.
-            text = _text_from_content(get_field(delta, "content"))
-            if text:
-                content += text
-                on_text_delta(text)
-
-            for field in ("reasoning_content", "reasoning", "thinking"):
-                value = get_field(delta, field)
-                if isinstance(value, str) and value:
-                    reasoning += value
-                    if on_reasoning_delta is not None:
-                        on_reasoning_delta(value)
-
-            tool_calls.add_batch(get_field(delta, "tool_calls") or [])
-
-        return LLMResponse(
-            content=content or None,
-            reasoning=reasoning or None,
-            tool_calls=tool_calls.finish(),
-            usage=TokenUsage(
-                input_tokens=usage.prompt_tokens,
-                output_tokens=usage.completion_tokens,
-                total_tokens=usage.total_tokens,
+            chunks = _cancellable_chunks(
+                lambda: completion(**arguments),
+                check_cancelled,
+                self._CANCEL_POLL_SECONDS,
             )
-            if usage is not None
-            else None,
-        )
+            for chunk in chunks:
+                chunk_usage = getattr(chunk, "usage", None)
+                if chunk_usage is not None:
+                    usage = chunk_usage
+
+                choices = getattr(chunk, "choices", None) or []
+                if not choices:
+                    continue
+
+                delta = get_field(choices[0], "delta")
+                if delta is None:
+                    continue
+
+                # Most OpenAI-compatible providers stream ``content`` as a
+                # string. Some adapters return the same text as structured
+                # content blocks instead.
+                text = _text_from_content(get_field(delta, "content"))
+                if text:
+                    content += text
+                    on_text_delta(text)
+
+                for field in ("reasoning_content", "reasoning", "thinking"):
+                    value = get_field(delta, field)
+                    if isinstance(value, str) and value:
+                        reasoning_text += value
+                        if on_reasoning_delta is not None:
+                            on_reasoning_delta(value)
+
+                tool_calls.add_batch(get_field(delta, "tool_calls") or [])
+
+            attempt_usage = _token_usage(usage)
+            if attempt_usage is not None:
+                consumed_usage.append(attempt_usage)
+            try:
+                assembled_calls = tool_calls.finish()
+            except ProviderProtocolError as error:
+                tool_name = error.details.get("tool_name")
+                can_recover = (
+                    error.details.get("reason") == "missing_arguments"
+                    and forced_tool is None
+                    and not content
+                    and isinstance(tool_name, str)
+                    and any(tool.name == tool_name for tool in request.tools)
+                )
+                if not can_recover:
+                    raise
+                forced_tool = tool_name
+                continue
+
+            return LLMResponse(
+                content=content or None,
+                reasoning=reasoning_text or None,
+                tool_calls=assembled_calls,
+                usage=_sum_usage(consumed_usage),
+            )
 
 
 _STREAM_END = object()
+
+
+def _token_usage(usage: object | None) -> TokenUsage | None:
+    if usage is None:
+        return None
+    return TokenUsage(
+        input_tokens=getattr(usage, "prompt_tokens"),
+        output_tokens=getattr(usage, "completion_tokens"),
+        total_tokens=getattr(usage, "total_tokens"),
+    )
+
+
+def _sum_usage(values: list[TokenUsage]) -> TokenUsage | None:
+    if not values:
+        return None
+    return TokenUsage(
+        input_tokens=sum(value.input_tokens for value in values),
+        output_tokens=sum(value.output_tokens for value in values),
+        total_tokens=sum(value.total_tokens for value in values),
+    )
 
 
 def _cancellable_chunks(

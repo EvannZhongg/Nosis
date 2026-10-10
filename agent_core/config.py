@@ -113,7 +113,10 @@ def _provider_config(value: object) -> ProviderRequestConfig:
         return ProviderRequestConfig()
     if not isinstance(value, dict):
         raise ValueError("config field 'provider' must be an object")
-    unknown = set(value) - {"request_timeout_seconds", "max_retries"}
+    unknown = set(value) - {
+        "request_timeout_seconds",
+        "max_retries",
+    }
     if unknown:
         fields = ", ".join(sorted(unknown))
         raise ValueError(f"unknown field(s) in 'provider': {fields}")

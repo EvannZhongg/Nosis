@@ -407,6 +407,56 @@ class LiteLLMProviderTest(unittest.TestCase):
         )
 
     @patch("agent_core.providers.litellm_provider.completion")
+    def test_adds_model_specific_reasoning_parameters(self, completion_mock) -> None:
+        completion_mock.return_value = iter([chunk(content="ok")])
+        provider = LiteLLMProvider(
+            model="openrouter/openai/gpt-5",
+            max_context_tokens=1000,
+            reasoning_effort="high",
+        )
+
+        provider.stream(
+            LLMRequest(
+                system_prompt="Answer.",
+                messages=(Message(role="user", content="hello"),),
+            ),
+            lambda _text: None,
+        )
+
+        self.assertEqual(
+            completion_mock.call_args.kwargs["extra_body"],
+            {"reasoning": {"effort": "high"}},
+        )
+
+    @patch("agent_core.providers.litellm_provider.completion")
+    def test_allows_reasoning_effort_for_custom_openai_route(
+        self,
+        completion_mock,
+    ) -> None:
+        completion_mock.return_value = iter([chunk(content="ok")])
+        provider = LiteLLMProvider(
+            model="gpt-6-astra",
+            base_url="https://gateway.example/v1",
+            max_context_tokens=1000,
+            reasoning_effort="high",
+        )
+
+        provider.stream(
+            LLMRequest(
+                system_prompt="Answer.",
+                messages=(Message(role="user", content="hello"),),
+            ),
+            lambda _text: None,
+        )
+
+        arguments = completion_mock.call_args.kwargs
+        self.assertEqual(arguments["reasoning_effort"], "high")
+        self.assertEqual(
+            arguments["allowed_openai_params"],
+            ["reasoning_effort"],
+        )
+
+    @patch("agent_core.providers.litellm_provider.completion")
     def test_parses_structured_text_content_blocks(self, completion_mock) -> None:
         """Adapters may expose streamed text as OpenAI-style blocks."""
         completion_mock.return_value = iter(
@@ -568,6 +618,107 @@ class LiteLLMProviderTest(unittest.TestCase):
         )
 
     @patch("agent_core.providers.litellm_provider.completion")
+    def test_recovers_tool_call_without_argument_fragments(
+        self,
+        completion_mock,
+    ) -> None:
+        missing = chunk(
+            tool_calls=[
+                {
+                    "index": 0,
+                    "id": "call-1",
+                    "function": {"name": "read_file", "arguments": ""},
+                }
+            ],
+            usage=USAGE,
+        )
+        complete = chunk(
+            tool_calls=[
+                {
+                    "index": 0,
+                    "id": "call-2",
+                    "function": {
+                        "name": "read_file",
+                        "arguments": '{"path":"README.md"}',
+                    },
+                }
+            ],
+            usage=USAGE,
+        )
+        completion_mock.side_effect = [iter([missing]), iter([complete])]
+        provider = LiteLLMProvider(
+            model="openai/test-model",
+            max_context_tokens=1000,
+        )
+        tool = ToolDefinition(
+            name="read_file",
+            description="Read a file.",
+            parameters={
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"],
+                "additionalProperties": False,
+            },
+        )
+
+        response = provider.stream(
+            LLMRequest(
+                system_prompt="You are helpful.",
+                messages=(Message(role="user", content="read it"),),
+                tools=(tool,),
+            ),
+            lambda _text: None,
+        )
+
+        self.assertEqual(
+            response.tool_calls,
+            (ToolCall("call-2", "read_file", {"path": "README.md"}),),
+        )
+        self.assertEqual(response.usage, TokenUsage(24, 10, 34))
+        self.assertEqual(completion_mock.call_count, 2)
+        self.assertEqual(
+            completion_mock.call_args_list[1].kwargs["tool_choice"],
+            {"type": "function", "function": {"name": "read_file"}},
+        )
+
+    @patch("agent_core.providers.litellm_provider.completion")
+    def test_rejects_second_tool_call_without_argument_fragments(
+        self,
+        completion_mock,
+    ) -> None:
+        missing = chunk(
+            tool_calls=[
+                {
+                    "index": 0,
+                    "id": "call-1",
+                    "function": {"name": "read_file", "arguments": ""},
+                }
+            ]
+        )
+        completion_mock.side_effect = [iter([missing]), iter([missing])]
+        provider = LiteLLMProvider(
+            model="openai/test-model",
+            max_context_tokens=1000,
+        )
+        tool = ToolDefinition(
+            name="read_file",
+            description="Read a file.",
+            parameters={"type": "object", "properties": {}},
+        )
+
+        with self.assertRaises(ProviderProtocolError) as raised:
+            provider.stream(
+                LLMRequest(
+                    system_prompt="You are helpful.",
+                    messages=(Message(role="user", content="read it"),),
+                    tools=(tool,),
+                ),
+                lambda _text: None,
+            )
+
+        self.assertEqual(raised.exception.details["reason"], "missing_arguments")
+
+    @patch("agent_core.providers.litellm_provider.completion")
     def test_parses_cumulative_and_repeated_streamed_tool_arguments(
         self,
         completion_mock,
@@ -664,11 +815,22 @@ class LiteLLMProviderTest(unittest.TestCase):
             model="openai/test-model",
             max_context_tokens=1000,
         )
+        tool = ToolDefinition(
+            name="read_file",
+            description="Read a file.",
+            parameters={
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"],
+                "additionalProperties": False,
+            },
+        )
 
         response = provider.stream(
             LLMRequest(
                 system_prompt="You are helpful.",
                 messages=(Message(role="user", content="read both"),),
+                tools=(tool,),
             ),
             lambda _text: None,
         )
@@ -679,6 +841,11 @@ class LiteLLMProviderTest(unittest.TestCase):
                 ToolCall("call-1", "read_file", {"path": "a.txt"}),
                 ToolCall("call-2", "read_file", {"path": "b.txt"}),
             ),
+        )
+        self.assertEqual(completion_mock.call_count, 1)
+        self.assertNotIn(
+            "parallel_tool_calls",
+            completion_mock.call_args.kwargs,
         )
 
     @patch("agent_core.providers.litellm_provider.completion")

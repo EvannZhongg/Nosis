@@ -81,6 +81,8 @@ export type ProviderSetting = {
   model: string;
   url: string | null;
   max_context_tokens: number | null;
+  reasoning_effort?: string | null;
+  reasoning_parameters?: { readonly [key: string]: JSONValue };
   credential: {
     source: 'env' | 'inline' | 'none';
     env_name: string | null;

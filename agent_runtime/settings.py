@@ -154,6 +154,8 @@ class SettingsStore:
                 "model": model,
                 "url": raw.get("url"),
                 "max_context_tokens": raw.get("max_context_tokens"),
+                "reasoning_effort": raw.get("reasoning_effort"),
+                "reasoning_parameters": raw.get("reasoning_parameters", {}),
                 "credential": {
                     "source": "env" if reference else "inline" if key_value else "none",
                     "env_name": reference.group(1) if reference else None,
@@ -301,7 +303,10 @@ class SettingsStore:
             raise ValueError("provider id may contain letters, numbers, '.', '_' and '-'")
         if not isinstance(payload, dict):
             raise ValueError("provider settings must be an object")
-        allowed = {"model", "url", "max_context_tokens", "api_key", "set_default"}
+        allowed = {
+            "model", "url", "max_context_tokens", "reasoning_effort",
+            "reasoning_parameters", "api_key", "set_default",
+        }
         unknown = set(payload) - allowed
         if unknown:
             raise ValueError(f"unknown provider setting(s): {', '.join(sorted(unknown))}")
@@ -316,6 +321,14 @@ class SettingsStore:
             isinstance(context_limit, bool) or not isinstance(context_limit, int) or context_limit < 1
         ):
             raise ValueError("max_context_tokens must be a positive integer or null")
+        reasoning_effort = payload.get("reasoning_effort")
+        if reasoning_effort is not None:
+            from agent_core.providers import normalize_semantic_effort
+
+            reasoning_effort = normalize_semantic_effort(reasoning_effort)
+        reasoning_parameters = payload.get("reasoning_parameters")
+        if reasoning_parameters is not None and not isinstance(reasoning_parameters, dict):
+            raise ValueError("reasoning_parameters must be an object")
         api_key = payload.get("api_key", {"action": "keep"})
         if not isinstance(api_key, dict) or api_key.get("action") not in {"keep", "set", "clear"}:
             raise ValueError("api_key.action must be keep, set, or clear")
@@ -337,6 +350,16 @@ class SettingsStore:
             entry.pop("max_context_tokens", None)
         else:
             entry["max_context_tokens"] = context_limit
+        if "reasoning_effort" in payload:
+            if reasoning_effort is None:
+                entry.pop("reasoning_effort", None)
+            else:
+                entry["reasoning_effort"] = reasoning_effort
+        if "reasoning_parameters" in payload:
+            if reasoning_parameters is None:
+                entry.pop("reasoning_parameters", None)
+            else:
+                entry["reasoning_parameters"] = dict(reasoning_parameters)
 
         action = api_key["action"]
         old_key = entry.get("key")
@@ -470,7 +493,10 @@ class SettingsStore:
                     raise ValueError(f"invalid provider id: {provider}")
                 if not isinstance(value, dict):
                     raise ValueError(f"provider '{provider}' must be an object")
-                unknown = set(value) - {"model", "url", "key", "max_context_tokens"}
+                unknown = set(value) - {
+                    "model", "url", "key", "max_context_tokens",
+                    "reasoning_effort", "reasoning_parameters",
+                }
                 if unknown:
                     raise ValueError(f"unknown field(s) for provider '{provider}': {', '.join(sorted(unknown))}")
                 url = value.get("url")
@@ -482,6 +508,16 @@ class SettingsStore:
                     raise ValueError(f"provider '{provider}' key must be a non-empty string")
                 if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or limit < 1):
                     raise ValueError(f"provider '{provider}' max_context_tokens must be positive")
+                effort = value.get("reasoning_effort")
+                if effort is not None:
+                    from agent_core.providers import normalize_semantic_effort
+
+                    normalize_semantic_effort(effort)
+                parameters = value.get("reasoning_parameters")
+                if parameters is not None and not isinstance(parameters, dict):
+                    raise ValueError(
+                        f"provider '{provider}' reasoning_parameters must be an object"
+                    )
             for label in ("main_agent", "subagent"):
                 route = document.get(label, {})
                 if not isinstance(route, dict):

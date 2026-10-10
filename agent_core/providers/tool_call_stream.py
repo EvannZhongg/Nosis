@@ -243,7 +243,13 @@ def _decode_arguments(
 ) -> dict[str, object]:
     fragments = tuple(state.argument_fragments)
     if not fragments:
-        return {}
+        raise ProviderProtocolError(
+            f"arguments for tool '{state.name}' are missing",
+            details={
+                **_argument_error_details(state, model, fragments, ""),
+                "reason": "missing_arguments",
+            },
+        )
     joined = "".join(fragments)
     joined_value = _json_object(joined)
     if joined_value is not None:

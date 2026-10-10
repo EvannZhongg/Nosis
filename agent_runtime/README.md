@@ -87,6 +87,7 @@ Provider 路由按以下链解析：
 ```
 
 空字符串表示继续继承。图片生成使用独立 `image_generation` 配置；模型请求超时和额外重试次数来自 `agent_config.json` 的 `provider` 字段。
+每个 `provider_config.json` 的 `providers.<name>` 条目都可以单独配置可选的 `reasoning_effort`，值为 `none`、`minimal`、`low`、`medium`、`high` 或 `max`；运行时会按已知模型的原生协议转换它。省略该字段时不添加任何推理参数，使用上游默认值。自建 OpenAI-compatible 服务可在同一 provider 条目中通过可选的 `reasoning_parameters` 传递少量原始参数，例如 `{"extra_body": {"enable_thinking": true}}`。请求超时和重试次数仍来自 `agent_config.json` 的 `provider` 字段。
 
 ## 设置服务
 

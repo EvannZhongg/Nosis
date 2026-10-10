@@ -198,6 +198,8 @@ class ExecutionPlaneManager:
                     agent_config.provider.request_timeout_seconds
                 ),
                 max_retries=agent_config.provider.max_retries,
+                reasoning_effort=config.reasoning_effort,
+                reasoning_parameters=config.reasoning_parameters,
             )
             computer_tools = tuple(
                 name
@@ -429,6 +431,8 @@ class ExecutionPlaneManager:
                 agent_config.provider.request_timeout_seconds
             ),
             max_retries=agent_config.provider.max_retries,
+            reasoning_effort=config.reasoning_effort,
+            reasoning_parameters=config.reasoning_parameters,
         )
 
 

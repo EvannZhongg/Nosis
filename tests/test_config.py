@@ -518,6 +518,65 @@ class ConfigTest(unittest.TestCase):
                     ),
                 )
 
+    def test_loads_reasoning_policy_from_selected_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "main_agent": {"provider": "gateway"},
+                        "providers": {
+                            "gateway": {
+                                "model": "gpt-6-astra",
+                                "reasoning_effort": " MINIMUM ",
+                                "reasoning_parameters": {
+                                    "extra_body": {"enable_thinking": True},
+                                },
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                load_config(path),
+                ModelConfig(
+                    model="gpt-6-astra",
+                    url=None,
+                    key=None,
+                    max_context_tokens=None,
+                    reasoning_effort="minimal",
+                    reasoning_parameters={
+                        "extra_body": {"enable_thinking": True},
+                    },
+                ),
+            )
+
+    def test_rejects_invalid_provider_reasoning_policy(self) -> None:
+        for field, value in (
+            ("reasoning_effort", "balanced"),
+            ("reasoning_parameters", []),
+        ):
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "config.json"
+                path.write_text(
+                    json.dumps(
+                        {
+                            "main_agent": {"provider": "test"},
+                            "providers": {
+                                "test": {
+                                    "model": "openai/test-model",
+                                    field: value,
+                                }
+                            },
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                with self.subTest(field=field), self.assertRaises(ValueError):
+                    load_config(path)
+
     def test_strips_whitespace_from_provider_configuration(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.json"

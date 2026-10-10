@@ -1,13 +1,13 @@
 import json
 import os
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib.resources import files
 from pathlib import Path
 
 from agent_core import AgentConfig, DirectorySkillSource
 from agent_core.memory import MemoryStore
-from agent_core.providers import LiteLLMProvider
+from agent_core.providers import LiteLLMProvider, normalize_semantic_effort
 
 
 DEFAULT_CONFIG_FILENAMES = (
@@ -29,6 +29,8 @@ class ModelConfig:
     url: str | None
     key: str | None
     max_context_tokens: int | None = None
+    reasoning_effort: str | None = None
+    reasoning_parameters: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -361,6 +363,14 @@ def load_config_with_name(
         "max_context_tokens",
         provider,
     )
+    reasoning_effort = selected.get("reasoning_effort")
+    if reasoning_effort is not None:
+        reasoning_effort = normalize_semantic_effort(reasoning_effort)
+    reasoning_parameters = selected.get("reasoning_parameters", {})
+    if not isinstance(reasoning_parameters, dict):
+        raise ValueError(
+            f"provider '{provider}' field 'reasoning_parameters' must be an object"
+        )
     if key and key.startswith("${") and key.endswith("}"):
         key_env = key[2:-1]
         if not key_env:
@@ -380,6 +390,8 @@ def load_config_with_name(
         url=url,
         key=key,
         max_context_tokens=max_context_tokens,
+        reasoning_effort=reasoning_effort,
+        reasoning_parameters=dict(reasoning_parameters),
     )
 
 
