@@ -377,7 +377,7 @@ class AgentTest(unittest.TestCase):
         self.assertEqual(provider.requests[1].system_prompt, "You are helpful.")
         self.assertIn(
             "[Archived Context Summary]\n- [ephemeral] Old turn summary.",
-            provider.requests[1].messages[-1].content,
+            provider.requests[1].messages[0].content,
         )
         self.assertEqual(
             [message.role for message in session.items],
@@ -434,9 +434,9 @@ class AgentTest(unittest.TestCase):
         self.assertEqual(request.system_prompt, "You are helpful.")
         self.assertIn(
             "[Archived Context Summary]\n- [durable] Second summary.",
-            request.messages[-1].content,
+            request.messages[0].content,
         )
-        self.assertNotIn("First summary.", request.messages[-1].content)
+        self.assertNotIn("First summary.", request.messages[0].content)
         self.assertEqual(
             [message.content for message in request.messages
              if message.role == "user"],
@@ -613,18 +613,22 @@ class AgentTest(unittest.TestCase):
 
         request = context.build_request()
 
-        anchors = request.messages[0].content or ""
+        stable_context = request.messages[0].content or ""
+        self.assertIn("[Archived Context Summary]\nlossy state", stable_context)
+        anchors = request.messages[1].content or ""
         self.assertIn("[Lossless User Anchors]", anchors)
         self.assertIn("previous turn, user_input", anchors)
         self.assertIn("first command", anchors)
         self.assertIn("Which target?", anchors)
         self.assertIn("User answer: api", anchors)
-        self.assertIn("current turn, user_input", anchors)
-        self.assertIn("second command", anchors)
-        self.assertIn("keep it concise", anchors)
-        self.assertIn(
-            "[Archived Context Summary]\nlossy state",
-            request.messages[-1].content,
+        self.assertNotIn("current turn", anchors)
+        self.assertEqual(
+            [
+                message.content for message in request.messages
+                if message.role == "user"
+                and message.content in {"second command", "keep it concise"}
+            ],
+            ["second command", "keep it concise"],
         )
 
     def test_context_does_not_duplicate_user_anchor_still_in_recent_tail(self) -> None:
@@ -646,7 +650,12 @@ class AgentTest(unittest.TestCase):
 
         request = context.build_request()
 
-        anchors = request.messages[0].content or ""
+        anchors = next(
+            message.content or "" for message in request.messages
+            if message.role == "user"
+            and isinstance(message.content, str)
+            and "[Lossless User Anchors]" in message.content
+        )
         self.assertIn("first command", anchors)
         self.assertNotIn("second command", anchors)
         self.assertEqual(
@@ -678,10 +687,47 @@ class AgentTest(unittest.TestCase):
 
         request = context.build_request()
 
-        anchors = request.messages[0].content or ""
-        self.assertNotIn("old command", anchors)
+        rendered = "\n".join(
+            message.content for message in request.messages
+            if isinstance(message.content, str)
+        )
+        self.assertNotIn("old command", rendered)
+        anchors = next(
+            message.content or "" for message in request.messages
+            if message.role == "user"
+            and isinstance(message.content, str)
+            and "[Lossless User Anchors]" in message.content
+        )
         self.assertIn("previous command", anchors)
-        self.assertIn("current command", anchors)
+        self.assertNotIn("current command", anchors)
+        self.assertEqual(
+            [message.content for message in request.messages
+             if message.role == "user" and message.content == "current command"],
+            ["current command"],
+        )
+
+    def test_stable_context_and_pinned_user_remain_a_cache_prefix(self) -> None:
+        session = Session("session-1")
+        session.begin_turn("turn-1")
+        session.add_item("user", "finish the migration", REQUEST_TIME)
+        session.set_archived_summary("- [ephemeral] Migration is active.", 1)
+        context = ContextManager(
+            MockProvider([]),
+            session,
+            "You are helpful.",
+            CONSOLIDATOR_PROMPT,
+            AGENT_CONFIG,
+        )
+
+        first = context.build_request()
+        session.add_item("assistant", "working", TOOL_CALL_TIME)
+        second = context.build_request()
+
+        self.assertEqual(first.messages, second.messages[:len(first.messages)])
+        self.assertIn("[Archived Context Summary]", first.messages[0].content)
+        self.assertEqual(first.messages[-1].role, "user")
+        self.assertEqual(first.messages[-1].content, "finish the migration")
+        self.assertIs(first.messages[-1], session.items[0])
 
     def test_repeated_active_turn_archives_reinject_the_user_command(self) -> None:
         first_call = ToolCall("call-1", "echo", {"text": "first"})
@@ -1630,12 +1676,20 @@ class AgentTest(unittest.TestCase):
         self.assertEqual(resumed.system_prompt, "You are helpful.")
         self.assertIn(
             "[Archived Context Summary]\n- [ephemeral] Active turn checkpoint.",
-            resumed.messages[-1].content,
+            resumed.messages[0].content,
         )
-        anchor = resumed.messages[0]
-        self.assertEqual(anchor.role, "user")
-        self.assertIn("[Lossless User Anchors]", anchor.content or "")
-        self.assertIn("finish the task", anchor.content or "")
+        current_user = [
+            message for message in resumed.messages
+            if message.role == "user" and message.content == "finish the task"
+        ]
+        self.assertEqual(len(current_user), 1)
+        self.assertFalse(any(
+            message.role == "user"
+            and isinstance(message.content, str)
+            and "[Lossless User Anchors]" in message.content
+            and "finish the task" in message.content
+            for message in resumed.messages
+        ))
         retained = [
             message for message in resumed.messages
             if message.role not in {"system", "user"}

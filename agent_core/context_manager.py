@@ -129,13 +129,21 @@ class ContextManager:
         self,
         tools: Iterable[ToolDefinition] = (),
     ) -> LLMRequest:
-        messages = self._context_messages()
-        anchor = self._lossless_user_anchor_message()
-        if anchor is not None:
-            messages.insert(0, anchor)
-        runtime_context = self._runtime_context_message()
-        if runtime_context is not None:
-            messages.append(runtime_context)
+        messages: list[Message] = []
+        stable_context = self._stable_runtime_context_message()
+        if stable_context is not None:
+            messages.append(stable_context)
+        archived_anchors = self._archived_user_anchors()
+        historical_anchor = self._historical_user_anchor_message(
+            archived_anchors
+        )
+        if historical_anchor is not None:
+            messages.append(historical_anchor)
+        messages.extend(self._pinned_current_turn_messages(archived_anchors))
+        messages.extend(self._context_messages())
+        dynamic_context = self._dynamic_runtime_context_message()
+        if dynamic_context is not None:
+            messages.append(dynamic_context)
         return LLMRequest(
             system_prompt=self._system_prompt,
             messages=tuple(messages),
@@ -199,24 +207,30 @@ class ContextManager:
         )
         return self._session.archived_item_cursor
 
-    def _runtime_context_message(self) -> Message | None:
+    def _stable_runtime_context_message(self) -> Message | None:
         sections = ["[Runtime Context]"]
         archived_summary = self._archived_summary_text()
         if archived_summary is not None:
             sections.append(archived_summary)
-        if self._session.plan is not None and self._session.plan.is_active:
-            sections.append(
-                "[Current Plan]\n"
-                + json.dumps(
-                    plan_snapshot_to_dict(self._session.plan),
-                    ensure_ascii=False,
-                )
-            )
         if self._memory_context is not None:
             sections.append(self._memory_context.prompt_section())
         if len(sections) == 1:
             return None
         return Message(role="system", content="\n\n".join(sections))
+
+    def _dynamic_runtime_context_message(self) -> Message | None:
+        if self._session.plan is None or not self._session.plan.is_active:
+            return None
+        return Message(
+            role="system",
+            content=(
+                "[Current Plan]\n"
+                + json.dumps(
+                    plan_snapshot_to_dict(self._session.plan),
+                    ensure_ascii=False,
+                )
+            ),
+        )
 
     def _archived_summary_message(self) -> Message | None:
         content = self._archived_summary_text()
@@ -231,17 +245,54 @@ class ContextManager:
         return f"[Archived Context Summary]\n{summary}"
 
     def _lossless_user_anchor_content(self) -> str | None:
-        return _lossless_user_anchors(
-            self._session.recent_user_anchors(),
-            self._session.archived_item_cursor,
+        return _render_user_anchors(
+            self._archived_user_anchors(),
             self._session.current_turn_id,
         )
 
-    def _lossless_user_anchor_message(self) -> Message | None:
-        content = self._lossless_user_anchor_content()
+    def _archived_user_anchors(self) -> tuple[UserAnchor, ...]:
+        archive_cursor = self._session.archived_item_cursor
+        return tuple(
+            anchor for anchor in self._session.recent_user_anchors()
+            if anchor.item_index is None or anchor.item_index < archive_cursor
+        )
+
+    def _historical_user_anchor_message(
+        self,
+        anchors: Iterable[UserAnchor],
+    ) -> Message | None:
+        active_turn_id = self._session.current_turn_id
+        content = _render_user_anchors(
+            (
+                anchor for anchor in anchors
+                if anchor.turn_id != active_turn_id
+            ),
+            active_turn_id,
+        )
         if content is None:
             return None
         return Message(role="user", content=content)
+
+    def _pinned_current_turn_messages(
+        self,
+        anchors: Iterable[UserAnchor],
+    ) -> list[Message]:
+        active_turn_id = self._session.current_turn_id
+        messages: list[Message] = []
+        for anchor in anchors:
+            if anchor.turn_id != active_turn_id:
+                continue
+            if anchor.item_index is None:
+                content = _render_user_anchors((anchor,), active_turn_id)
+                if content is not None:
+                    messages.append(Message(role="user", content=content))
+                continue
+            message = self._session.items[anchor.item_index]
+            turn_context = _turn_context_message(message)
+            if turn_context is not None:
+                messages.append(turn_context)
+            messages.append(message)
+        return messages
 
     def _archivable_items(self) -> tuple[int, list[Message]]:
         """Return complete context units before the retained tail."""
@@ -295,15 +346,11 @@ def _validated_archive_summary(response: LLMResponse) -> str:
     return summary
 
 
-def _lossless_user_anchors(
+def _render_user_anchors(
     anchors: Iterable[UserAnchor],
-    archive_cursor: int,
     active_turn_id: str | None,
 ) -> str | None:
-    visible = [
-        anchor for anchor in anchors
-        if anchor.item_index is None or anchor.item_index < archive_cursor
-    ]
+    visible = list(anchors)
     if not visible:
         return None
     sections = [

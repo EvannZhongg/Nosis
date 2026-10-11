@@ -2366,7 +2366,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
 
             request = plane.agent._context.build_request()
             prompt = request.system_prompt
-            runtime_context = request.messages[-1].content
+            runtime_context = request.messages[0].content
 
         self.assertTrue(prompt.startswith(f"Custom prompt for {root.resolve()}"))
         self.assertNotIn("## Long-term Memory", prompt)
@@ -2480,7 +2480,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
             self.assertIsNot(third_plane, first_plane)
             request = third_plane.agent._context.build_request()
             self.assertNotIn("Prefer concise responses.", request.system_prompt)
-            runtime_context = request.messages[-1].content
+            runtime_context = request.messages[0].content
             self.assertIn("Prefer concise responses.", runtime_context)
             self.assertIn("current request has highest priority", runtime_context)
 

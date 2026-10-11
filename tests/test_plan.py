@@ -229,6 +229,10 @@ class PlanPersistenceTest(unittest.TestCase):
 
     def test_current_plan_is_injected_into_every_model_request(self) -> None:
         session = Session("session-1")
+        session.set_archived_summary(
+            "- [durable] Preserve the recovered workspace state.",
+            0,
+        )
         PlanManager(session).update(
             "Persistent plan",
             (PlanStep("verify", "Verify recovery", "in_progress"),),
@@ -238,8 +242,12 @@ class PlanPersistenceTest(unittest.TestCase):
         request = manager.build_request()
 
         self.assertEqual(request.system_prompt, "System")
+        stable_context = request.messages[0].content
+        self.assertIn("[Archived Context Summary]", stable_context)
+        self.assertNotIn("[Current Plan]", stable_context)
         runtime_context = request.messages[-1].content
         self.assertIn("[Current Plan]", runtime_context)
+        self.assertNotIn("[Archived Context Summary]", runtime_context)
         self.assertIn('"goal": "Persistent plan"', runtime_context)
         self.assertIn('"status": "in_progress"', runtime_context)
 
