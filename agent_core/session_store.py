@@ -76,6 +76,8 @@ class JsonlSessionStore:
         """Create a Session from the Journal before its latest user turn."""
         _validate_session_id(source_session_id)
         _validate_session_id(new_session_id)
+        if new_session_id == source_session_id:
+            raise ValueError(f"session already exists: {new_session_id!r}")
         with self._locked_session(source_session_id):
             source_directory = self._find_session_directory(source_session_id)
             source_path = self._session_path(source_session_id)

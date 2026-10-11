@@ -268,6 +268,7 @@ pre { overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-famil
 .question-free-text button { padding: 6px 10px; border: 0; border-radius: 5px; background: transparent; color: #627496; font-size: 11px; }
 .question-free-text button:hover:not(:disabled) { background: #f1f3f7; }
 .error-banner { color: #a45151; background: #fcf2f1; border-radius: 6px; padding: 10px 14px; margin: 8px 0 12px; font-size: 12px; overflow-wrap: anywhere; }
+.fork-transition { display: flex; flex: 1; align-items: center; justify-content: center; gap: 9px; color: #8d97a7; font-size: 12px; }
 .feedback-toast { color: #6f7b90; background: #f4f6fa; border-radius: 6px; padding: 8px 12px; margin: 6px 0 10px; font-size: 11px; overflow-wrap: anywhere; }
 .feedback-alerts { display: grid; gap: 6px; margin: 8px 0 12px; }
 .feedback-alert { display: flex; align-items: flex-start; gap: 8px; color: #7d6944; background: #fffaf0; border: 1px solid #eadfc8; border-radius: 7px; padding: 10px 11px; font-size: 12px; overflow-wrap: anywhere; }

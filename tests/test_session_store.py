@@ -93,6 +93,11 @@ class JsonlSessionStoreTest(unittest.TestCase):
             )
             with self.assertRaisesRegex(
                 ValueError,
+                "session already exists",
+            ):
+                store.fork_session("source", "source", first_anchor)
+            with self.assertRaisesRegex(
+                ValueError,
                 "editable user message does not exist",
             ):
                 store.fork_session("source", "old-fork", first_anchor)
