@@ -8,17 +8,19 @@ import { MessageTimestamp } from "./messagePrimitives";
 type UserMessageEditContextValue = {
   anchors: ReadonlyMap<number, string>;
   disabled: boolean;
+  previewing: boolean;
   submit: (anchorId: string, content: string) => Promise<void>;
 };
 
 export const UserMessageEditContext = createContext<UserMessageEditContextValue>({
   anchors: new Map(),
   disabled: true,
+  previewing: false,
   submit: async () => undefined,
 });
 
 export function UserMessage() {
-  const { anchors, disabled, submit } = useContext(UserMessageEditContext);
+  const { anchors, disabled, previewing, submit } = useContext(UserMessageEditContext);
   const itemIndex = Number(useAuiState((state) => state.message.id));
   const text = useAuiState((state) => state.message.parts
     .filter((part) => part.type === "text")
@@ -45,7 +47,7 @@ export function UserMessage() {
 
   return <MessagePrimitive.Root className="user-turn">
     <MessageTimestamp className="turn-timestamp" />
-    {editing
+    {editing && !previewing
       ? <div className="user-message user-message-editor">
         <textarea value={draft} autoFocus onChange={(event) => setDraft(event.target.value)} />
         <div className="user-message-editor-actions">

@@ -38,7 +38,7 @@ export function App() {
   const [sessionsCollapsed, setSessionsCollapsed] = useState(false);
   const [workspaceCollapsed, setWorkspaceCollapsed] = useState(false);
   const [initialPrompts, setInitialPrompts] = useState<Record<string, string>>({});
-  const [pendingFork, setPendingFork] = useState(false);
+  const [pendingFork, setPendingFork] = useState<{ sessionId: string; itemIndex: number; text: string } | null>(null);
   const settingsMenuRef = useRef<HTMLDivElement>(null);
 
   const refreshSessions = useCallback(async () => {
@@ -210,12 +210,10 @@ export function App() {
 
   async function forkFromMessage(source: Session, anchorId: string, content: string) {
     setError("");
-    // Hide the mounted transcripts while the fork is materialized, so the
-    // source session cannot flash behind the session transition. Every chat
-    // stays mounted: the source keeps its attachment and its open message
-    // editor, which survives a failed fork.
-    setPendingFork(true);
-    setSelectedSessionId("");
+    const target = source.editable_user_messages!.find((item) => item.anchor_id === anchorId)!;
+    // Preview the edited branch in the mounted source Chat while the server
+    // creates it. The source transcript and editor remain intact on failure.
+    setPendingFork({ sessionId: source.session_id, itemIndex: target.item_index, text: content });
     try {
       const forked = await forkSession(source.session_id, anchorId);
       setChatSessions((all) => [...all.filter((item) => item.session_id !== forked.session_id), forked]);
@@ -224,15 +222,14 @@ export function App() {
       }
       setInitialPrompts((all) => ({ ...all, [forked.session_id]: content }));
       setSelectedSessionId(forked.session_id);
-      setPendingFork(false);
+      setPendingFork(null);
       setSettingsSection(null);
       setSettingsMenuOpen(false);
       // The new chat is already available locally. Refresh the sidebar in
       // the background so it cannot delay the visible session transition.
       if (forked.items.length > 0) void refreshSessions();
     } catch (error) {
-      setPendingFork(false);
-      setSelectedSessionId(source.session_id);
+      setPendingFork(null);
       setError(String(error));
       throw error;
     }
@@ -317,10 +314,10 @@ export function App() {
       <main className="chat-panel" style={{ display: settingsSection ? "none" : undefined }}>
         <header className="chat-header"><div className="breadcrumb">Chat <ChevronRight size={14} /><span>{restoringSession ? "…" : selectedTitle}</span></div><span className="status-label"><span className={`status-dot ${busy ? "working" : ""}`} />{busy ? "Working" : "Ready"}</span></header>
         {error && <div className="error-banner" role="alert">{error}</div>}
-        {pendingFork && <div className="fork-transition" role="status" aria-live="polite"><LoaderCircle size={18} className="spin" /><span>正在创建分支会话…</span></div>}
         {!restoringSession && chatSessions.map((current) => {
           const provider = providerBySession[current.session_id] ?? defaultProvider;
-          return <div key={current.session_id} style={{ display: !pendingFork && current.session_id === selectedSessionId ? "contents" : "none" }}><Chat session={current} selected={!pendingFork && current.session_id === selectedSessionId} contextWindow={!pendingFork && current.session_id === selectedSessionId ? contextWindow : contextBySession[current.session_id] ?? current.context_window ?? null} workspaceOptions={sessionGroups.map((group) => group.workspace)} backgroundActive={Boolean(busyBySession[current.session_id])}
+          const forkPreview = pendingFork?.sessionId === current.session_id ? pendingFork : undefined;
+          return <div key={current.session_id} style={{ display: current.session_id === selectedSessionId ? "contents" : "none" }}><Chat session={current} selected={!pendingFork && current.session_id === selectedSessionId} forkPreview={forkPreview} contextWindow={current.session_id === selectedSessionId ? contextWindow : contextBySession[current.session_id] ?? current.context_window ?? null} workspaceOptions={sessionGroups.map((group) => group.workspace)} backgroundActive={Boolean(busyBySession[current.session_id])}
             providers={providers} provider={provider} onProviderChange={(value) => setProviderBySession((all) => ({ ...all, [current.session_id]: value }))} onBusyChange={(value) => {
               setBusyBySession((all) => ({ ...all, [current.session_id]: value }));
             }} onContextWindowChange={(value) => setContextBySession((all) => ({ ...all, [current.session_id]: value }))} onTurnEnd={() => {

@@ -10,6 +10,7 @@ import { jobKindLabel, shouldShowPlan, updateBackgroundJobs, userMessagePreview,
 export type SessionRuntimeOptions = {
   session: Session;
   selected: boolean;
+  forkPreview?: { itemIndex: number; text: string };
   contextWindow: ContextWindow | null;
   workspaceOptions: string[];
   backgroundActive: boolean;
@@ -28,6 +29,7 @@ export type SessionRuntimeOptions = {
 export function useSessionRuntime({
   session,
   selected,
+  forkPreview,
   contextWindow,
   workspaceOptions,
   backgroundActive,
@@ -43,6 +45,9 @@ export function useSessionRuntime({
   onInitialPromptConsumed,
 }: SessionRuntimeOptions) {
   const [items, setItems] = useState<TranscriptItem[]>(session.items);
+  // The fork's first render includes its prompt, even before socket startup.
+  const [pendingUserItem, setPendingUserItem] = useState<TranscriptItem | null>(() =>
+    initialPrompt ? { role: "user", content: initialPrompt } : null);
   const [runtimePhase, setRuntimePhase] = useState<RuntimePhase>("inactive");
   const [pendingSteers, setPendingSteers] = useState(0);
   const [jobs, setJobs] = useState<Record<string, BackgroundJob>>({});
@@ -76,6 +81,7 @@ export function useSessionRuntime({
   // Socket callbacks fire outside React's render, so the transcript and
   // turn state they fold onto are kept in refs.
   const itemsRef = useRef(items);
+  const pendingUserItemRef = useRef(pendingUserItem);
   const runtimePhaseRef = useRef<RuntimePhase>("inactive");
   const attachmentReplacedRef = useRef(false);
   const attachmentSubmitRef = useRef(false);
@@ -83,7 +89,12 @@ export function useSessionRuntime({
   const initialPromptSubmittedRef = useRef(false);
   const initialPromptFailedRef = useRef(false);
 
-  const messages = useMemo(() => toMessages(items, session.session_id), [items, session.session_id]);
+  const messages = useMemo(() => toMessages(
+    forkPreview
+      ? [...items.slice(0, forkPreview.itemIndex), { role: "user", content: forkPreview.text }]
+      : pendingUserItem ? [...items, pendingUserItem] : items,
+    session.session_id,
+  ), [forkPreview, items, pendingUserItem, session.session_id]);
   const turnPreviews = useMemo(() => messages
     .filter((message) => message.role === "user")
     .map((message) => userMessagePreview(message)), [messages]);
@@ -97,14 +108,14 @@ export function useSessionRuntime({
   const interactionActive = approval !== null || question !== null;
   const backgroundDisconnected = backgroundActive && socketRef.current === null;
   const composerGate = composerConnectionGate({
-    attaching: attaching || uploadingAttachments,
+    attaching: attaching || uploadingAttachments || pendingUserItem !== null || Boolean(forkPreview),
     configurationPending,
     attachmentReplaced,
     interactionActive,
     backgroundDisconnected,
   });
-  const controlsDisabled = attachmentReplaced || backgroundDisconnected;
-  const sessionRunning = running || backgroundActive;
+  const controlsDisabled = attachmentReplaced || backgroundDisconnected || pendingUserItem !== null || Boolean(forkPreview);
+  const sessionRunning = running || backgroundActive || pendingUserItem !== null || Boolean(forkPreview);
 
   useEffect(() => {
     if (session.workspace) setWorkspaceDraft(session.workspace);
@@ -113,6 +124,11 @@ export function useSessionRuntime({
   const showItems = useCallback((next: TranscriptItem[]) => {
     itemsRef.current = next;
     setItems(next);
+  }, []);
+
+  const showPendingUserItem = useCallback((next: TranscriptItem | null) => {
+    pendingUserItemRef.current = next;
+    setPendingUserItem(next);
   }, []);
 
   const applyRuntimePhase = useCallback((phase: RuntimePhase) => {
@@ -151,13 +167,13 @@ export function useSessionRuntime({
   }, [backgroundActive, provider, selected, session.session_id, session.workspace]);
 
   useEffect(() => {
-    if (selected || running || configurationPending || socketRef.current === null) return;
+    if (selected || running || pendingUserItem !== null || configurationPending || socketRef.current === null) return;
     const socket = socketRef.current;
     socketRef.current = null;
     socketModelRef.current = "";
     socket.close();
     void releaseActiveSession(session.session_id, provider, attachmentId).catch(() => undefined);
-  }, [attachmentId, configurationPending, provider, running, selected, session.session_id]);
+  }, [attachmentId, configurationPending, pendingUserItem, provider, running, selected, session.session_id]);
 
   const showToast = useCallback((next: Extract<Feedback, { kind: "toast" }>) => {
     if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
@@ -213,6 +229,13 @@ export function useSessionRuntime({
         // so stale transcript, feedback, usage, and turn callbacks cannot
         // mutate the active connection's state.
         if (socketRef.current !== socket) return;
+        if (message.type === "user_turn_received" && message.turn_id === activeTurnIdRef.current && pendingUserItemRef.current) {
+          // Opening checkpoints update history underneath the pending bubble.
+          // Acceptance commits it once; later checkpoints replace it normally.
+          showItems([...itemsRef.current, pendingUserItemRef.current]);
+          showPendingUserItem(null);
+          applyRuntimePhase("starting");
+        }
         if (message.type === "attachment_replaced" || message.type === "fatal") clearPendingSettings();
         if (message.type === "attachment_replaced") {
           if (toastTimeoutRef.current) {
@@ -250,7 +273,7 @@ export function useSessionRuntime({
             onProviderChange(message.provider);
           }
           applyRuntimePhase(message.phase);
-          activeTurnIdRef.current = message.turn_id;
+          if (!pendingUserItemRef.current) activeTurnIdRef.current = message.turn_id;
           setApproval(message.approval ? {
             requestId: message.approval.request_id,
             command: message.approval.command,
@@ -396,6 +419,7 @@ export function useSessionRuntime({
       role: "user",
       content: attachments.length ? [{ type: "text", text }, ...attachments] : text,
     };
+    showPendingUserItem(submittedItem);
     applyRuntimePhase("starting");
     if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
     setToast(null);
@@ -406,8 +430,17 @@ export function useSessionRuntime({
     activeTurnIdRef.current = `turn-${turnCounter.current}`;
     const socket = socketRef.current ?? connect();
     awaitingSessionActivityRef.current = startsSession;
-    await socket.sendUserTurn({ type: "user_turn", turn_id: activeTurnIdRef.current, text, ...(attachments.length ? { attachments } : {}) });
-    showItems([...itemsRef.current, submittedItem]);
+    try {
+      await socket.sendUserTurn({ type: "user_turn", turn_id: activeTurnIdRef.current, text, ...(attachments.length ? { attachments } : {}) });
+    } catch (error) {
+      showPendingUserItem(null);
+      activeTurnIdRef.current = null;
+      awaitingSessionActivityRef.current = false;
+      applyRuntimePhase("inactive");
+      if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+      setReconnecting(false);
+      throw error;
+    }
     setPendingFiles([]);
     if (initialPromptFailedRef.current) {
       initialPromptFailedRef.current = false;
