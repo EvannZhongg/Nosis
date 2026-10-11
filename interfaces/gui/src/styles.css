@@ -95,7 +95,7 @@ svg { flex-shrink: 0; }
 .user-message-editor { display: flex; flex-direction: column; width: min(100%, 760px); max-width: 100%; min-height: 160px; padding: 14px 14px 12px; border-radius: 12px; }
 .user-message-editor textarea { display: block; flex: 1; field-sizing: content; width: 100%; min-height: 105px; max-height: 360px; resize: none; overflow-y: auto; border: 0; outline: 0; padding: 0 2px 12px; background: transparent; color: inherit; line-height: 1.6; }
 .user-message-editor-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: auto; }
-.user-message-editor-actions button { min-width: 58px; height: 34px; padding: 0 14px; border-radius: 8px; font-size: 13px; }
+.user-message-editor-actions button { min-width: 54px; height: 30px; padding: 0 12px; border-radius: 8px; font-size: 13px; }
 .user-edit-cancel { border: 1px solid #d8dde6; background: transparent; color: #596273; }
 .user-edit-cancel:hover { background: #e9ecf1; }
 .user-edit-submit { border: 1px solid #445575; background: #445575; color: #fff; }
