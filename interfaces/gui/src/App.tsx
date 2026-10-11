@@ -215,6 +215,7 @@ export function App() {
     // stays mounted: the source keeps its attachment and its open message
     // editor, which survives a failed fork.
     setPendingFork(true);
+    setSelectedSessionId("");
     try {
       const forked = await forkSession(source.session_id, anchorId);
       setChatSessions((all) => [...all.filter((item) => item.session_id !== forked.session_id), forked]);
@@ -231,6 +232,7 @@ export function App() {
       if (forked.items.length > 0) void refreshSessions();
     } catch (error) {
       setPendingFork(false);
+      setSelectedSessionId(source.session_id);
       setError(String(error));
       throw error;
     }
@@ -318,7 +320,7 @@ export function App() {
         {pendingFork && <div className="fork-transition" role="status" aria-live="polite"><LoaderCircle size={18} className="spin" /><span>正在创建分支会话…</span></div>}
         {!restoringSession && chatSessions.map((current) => {
           const provider = providerBySession[current.session_id] ?? defaultProvider;
-          return <div key={current.session_id} style={{ display: !pendingFork && current.session_id === selectedSessionId ? "contents" : "none" }}><Chat session={current} selected={current.session_id === selectedSessionId} contextWindow={current.session_id === selectedSessionId ? contextWindow : contextBySession[current.session_id] ?? current.context_window ?? null} workspaceOptions={sessionGroups.map((group) => group.workspace)} backgroundActive={Boolean(busyBySession[current.session_id])}
+          return <div key={current.session_id} style={{ display: !pendingFork && current.session_id === selectedSessionId ? "contents" : "none" }}><Chat session={current} selected={!pendingFork && current.session_id === selectedSessionId} contextWindow={!pendingFork && current.session_id === selectedSessionId ? contextWindow : contextBySession[current.session_id] ?? current.context_window ?? null} workspaceOptions={sessionGroups.map((group) => group.workspace)} backgroundActive={Boolean(busyBySession[current.session_id])}
             providers={providers} provider={provider} onProviderChange={(value) => setProviderBySession((all) => ({ ...all, [current.session_id]: value }))} onBusyChange={(value) => {
               setBusyBySession((all) => ({ ...all, [current.session_id]: value }));
             }} onContextWindowChange={(value) => setContextBySession((all) => ({ ...all, [current.session_id]: value }))} onTurnEnd={() => {
