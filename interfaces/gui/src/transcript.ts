@@ -398,7 +398,10 @@ export function toMessages(items: TranscriptItem[], sessionId?: string): ThreadM
       if (open) open.content.push(...parts.filter((part) => (part as any).type === "image"));
       return;
     }
-    if (item.role === "user" && item.origin === "job_result") return;
+    if (
+      item.role === "user"
+      && (item.origin === "job_result" || item.origin === "user_interaction")
+    ) return;
 
     if (item.role === "assistant" && open) {
       open.content.push(...parts);

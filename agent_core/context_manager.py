@@ -254,7 +254,7 @@ class ContextManager:
         archive_cursor = self._session.archived_item_cursor
         return tuple(
             anchor for anchor in self._session.recent_user_anchors()
-            if anchor.item_index is None or anchor.item_index < archive_cursor
+            if anchor.item_index < archive_cursor
         )
 
     def _historical_user_anchor_message(
@@ -281,11 +281,6 @@ class ContextManager:
         messages: list[Message] = []
         for anchor in anchors:
             if anchor.turn_id != active_turn_id:
-                continue
-            if anchor.item_index is None:
-                content = _render_user_anchors((anchor,), active_turn_id)
-                if content is not None:
-                    messages.append(Message(role="user", content=content))
                 continue
             message = self._session.items[anchor.item_index]
             turn_context = _turn_context_message(message)

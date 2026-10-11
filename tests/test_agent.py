@@ -631,6 +631,37 @@ class AgentTest(unittest.TestCase):
             ["second command", "keep it concise"],
         )
 
+    def test_context_places_mid_tool_interaction_after_the_tool_result(self) -> None:
+        session = Session("session-1")
+        session.begin_turn("turn-1")
+        session.add_item("user", "deploy it")
+        call = ToolCall("call-1", "ask_user", {})
+        session.add_item("assistant", None, tool_calls=(call,))
+        session.record_user_interaction(
+            "Question: Which target?\nUser answer: api",
+            "question_response",
+        )
+        session.add_item("tool", '{"answer":"api"}', tool_call_id=call.id)
+        context = ContextManager(
+            MockProvider([]),
+            session,
+            "You are helpful.",
+            CONSOLIDATOR_PROMPT,
+            AGENT_CONFIG,
+        )
+
+        request = context.build_request()
+
+        self.assertEqual(
+            [(message.role, message.origin) for message in request.messages],
+            [
+                ("user", "conversation"),
+                ("assistant", "conversation"),
+                ("tool", "conversation"),
+                ("user", "user_interaction"),
+            ],
+        )
+
     def test_context_does_not_duplicate_user_anchor_still_in_recent_tail(self) -> None:
         session = Session("session-1")
         session.begin_turn("turn-1")

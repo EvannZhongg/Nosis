@@ -162,9 +162,9 @@ export type SessionItem = {
   tool_calls?: ToolCall[];
   tool_call_id?: string;
   reasoning?: string | null;
-  // "tool_media" marks a user-role item the runtime synthesized to carry
-  // images a Tool loaded; the person never wrote it.
-  origin?: 'conversation' | 'tool_media' | 'job_result';
+  // Non-conversation origins mark runtime-generated context that receives
+  // special transcript rendering instead of a normal user message.
+  origin?: 'conversation' | 'tool_media' | 'job_result' | 'user_interaction';
 };
 
 export type UserQuestionOption = {

@@ -275,7 +275,7 @@ function historyEntries(items: SessionItem[]): Entry[] {
       }
       continue;
     }
-    if (item.origin === 'job_result') continue;
+    if (item.origin === 'job_result' || item.origin === 'user_interaction') continue;
 
     if (item.reasoning) {
       entries.push({

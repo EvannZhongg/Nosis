@@ -22,10 +22,11 @@ def project_context_units(
     """Group raw items into units that must be retained or archived whole.
 
     A tool-calling assistant message, every result in that batch, and its
-    trailing media message form one unit, with the results ordered by the
-    model's original call order rather than completion order.  Incomplete
-    batches remain part of the raw span but expose no provider messages, and
-    are therefore absent from the next provider request.
+    trailing media or user-interaction messages form one unit. Results are
+    ordered by the model's original call order, followed by the trailing
+    messages in Journal order. Incomplete batches remain part of the raw span
+    but expose no provider messages, and are therefore absent from the next
+    provider request.
     """
     history = tuple(items)
     result: list[ContextUnit] = []
@@ -35,23 +36,28 @@ def project_context_units(
         if item.role == "assistant" and item.tool_calls:
             calls = {call.id for call in item.tool_calls}
             found: dict[str, Message] = {}
-            media: list[Message] = []
+            trailing: list[Message] = []
             end = index + 1
             while end < len(history) and (
-                history[end].role == "tool" or history[end].is_tool_media
+                history[end].role == "tool"
+                or history[end].is_tool_media
+                or history[end].origin == "user_interaction"
             ):
                 following = history[end]
                 if following.tool_call_id in calls:
                     found[following.tool_call_id] = following
-                elif following.is_tool_media:
-                    media.append(following)
+                elif (
+                    following.is_tool_media
+                    or following.origin == "user_interaction"
+                ):
+                    trailing.append(following)
                 end += 1
             messages: tuple[Message, ...] = ()
             if calls.issubset(found):
                 messages = (
                     item,
                     *(found[call.id] for call in item.tool_calls),
-                    *media,
+                    *trailing,
                 )
             result.append(
                 ContextUnit(

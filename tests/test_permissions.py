@@ -135,6 +135,8 @@ class PermissionControllerTest(unittest.TestCase):
 
         anchor = session.user_anchors[-1]
         self.assertEqual(anchor.source, "approval_response")
+        self.assertEqual(anchor.item_index, len(session.items) - 1)
+        self.assertEqual(session.items[-1].origin, "user_interaction")
         self.assertIn('"command": "pwd"', anchor.content)
         self.assertIn("approved", anchor.content)
 
@@ -153,6 +155,8 @@ class PermissionControllerTest(unittest.TestCase):
 
         anchor = session.user_anchors[-1]
         self.assertEqual(anchor.source, "approval_response")
+        self.assertEqual(anchor.item_index, len(session.items) - 1)
+        self.assertEqual(session.items[-1].origin, "user_interaction")
         self.assertIn("denied", anchor.content)
 
     def test_full_access_skips_approval(self) -> None:

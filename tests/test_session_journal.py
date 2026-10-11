@@ -157,6 +157,28 @@ class SessionJournalTest(unittest.TestCase):
         )
         self.assertTrue(units[0].messages[-1].is_tool_media)
 
+    def test_context_unit_places_interaction_after_its_tool_result(self):
+        call = ToolCall("call-1", "ask_user", {})
+        interaction = Message(
+            "user",
+            "Question: Which target?\nUser answer: api",
+            origin="user_interaction",
+        )
+        items = [
+            Message("assistant", None, tool_calls=(call,)),
+            interaction,
+            Message("tool", '{"answer":"api"}', tool_call_id="call-1"),
+        ]
+
+        units = project_context_units(items)
+
+        self.assertEqual([(unit.start, unit.end) for unit in units], [(0, 3)])
+        self.assertEqual(
+            [message.role for message in units[0].messages],
+            ["assistant", "tool", "user"],
+        )
+        self.assertIs(units[0].messages[-1], interaction)
+
     def test_reused_client_turn_id_does_not_replace_previous_turn(self):
         session = Session("s")
         first = session.begin_turn("turn-1")
@@ -293,6 +315,10 @@ class SessionJournalTest(unittest.TestCase):
                 "second command",
             ],
         )
+        interaction = replayed.items[1]
+        self.assertEqual(interaction.origin, "user_interaction")
+        self.assertEqual(replayed.user_anchors[1].item_index, 1)
+        self.assertEqual(replayed.journal[2].event_type, "message_appended")
 
     def test_steering_replays_with_its_anchor_source(self):
         session = Session("s")

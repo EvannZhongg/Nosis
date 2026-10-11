@@ -16,7 +16,12 @@ from .tools import ToolCall
 from .time_utils import format_utc as _format_utc, parse_utc as _parse_utc
 
 MessageRole = Literal["system", "user", "assistant", "tool"]
-MessageOrigin = Literal["conversation", "tool_media", "job_result"]
+MessageOrigin = Literal[
+    "conversation",
+    "tool_media",
+    "job_result",
+    "user_interaction",
+]
 UserAnchorSource = Literal[
     "user_input",
     "steering",
@@ -55,7 +60,10 @@ class Message:
 
     @property
     def is_user_authored(self) -> bool:
-        return self.role == "user" and self.origin == "conversation"
+        return self.role == "user" and self.origin in {
+            "conversation",
+            "user_interaction",
+        }
 
 
 @dataclass(frozen=True)
@@ -108,7 +116,7 @@ class UserAnchor:
     content: Content
     timestamp_utc: datetime
     source: UserAnchorSource
-    item_index: int | None = None
+    item_index: int
 
 
 JournalSink = Callable[[tuple[JournalEvent, ...]], None]
@@ -149,20 +157,21 @@ class Session:
             message = message_from_dict(payload["message"])
             item_index = len(self.items)
             self.items.append(message)
-            if (
-                event.turn_id is not None
-                and message.is_user_authored
-            ):
+            if event.turn_id is not None and message.is_user_authored:
+                source = payload.get("user_source", "user_input")
+                if source not in {
+                    "user_input",
+                    "steering",
+                    "question_response",
+                    "approval_response",
+                }:
+                    raise ValueError(f"invalid user anchor source: {source}")
                 self.user_anchors.append(
                     UserAnchor(
                         turn_id=event.turn_id,
                         content=message.content,
                         timestamp_utc=message.timestamp_utc or event.timestamp_utc,
-                        source=(
-                            payload.get("user_source")
-                            if payload.get("user_source") == "steering"
-                            else "user_input"
-                        ),
+                        source=source,
                         item_index=item_index,
                     )
                 )
@@ -283,25 +292,6 @@ class Session:
             )
             self.archived_item_cursor = int(payload["item_cursor"])
             self.compression_count += 1
-        elif event.event_type == "user_interaction_recorded" and event.turn_id:
-            content = payload.get("content")
-            source = payload.get("source")
-            anchor_source: UserAnchorSource | None
-            if isinstance(content, str) and source == "question_response":
-                anchor_source = "question_response"
-            elif isinstance(content, str) and source == "approval_response":
-                anchor_source = "approval_response"
-            else:
-                anchor_source = None
-            if anchor_source is not None:
-                self.user_anchors.append(
-                    UserAnchor(
-                        turn_id=event.turn_id,
-                        content=content,
-                        timestamp_utc=event.timestamp_utc,
-                        source=anchor_source,
-                    )
-                )
         elif event.event_type == "permission_preset_changed":
             self.permission_preset = PermissionPreset(str(payload["preset"]))
         elif event.event_type == "plan_updated" and isinstance(
@@ -399,10 +389,11 @@ class Session:
     ) -> None:
         if self._current_turn_id is None:
             return
-        self._event(
-            "user_interaction_recorded",
-            self._current_turn_id,
-            {"content": content, "source": source},
+        self.add_item(
+            "user",
+            content,
+            origin="user_interaction",
+            user_source=source,
         )
 
     def finish_turn(
@@ -695,7 +686,11 @@ def message_from_dict(data: dict[str, object]) -> Message:
         ),
         origin=(
             data["origin"]
-            if data.get("origin") in {"tool_media", "job_result"}
+            if data.get("origin") in {
+                "tool_media",
+                "job_result",
+                "user_interaction",
+            }
             else "conversation"
         ),
         provider_data=dict(data.get("provider_data", {})),

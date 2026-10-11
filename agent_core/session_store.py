@@ -448,7 +448,7 @@ def _editable_user_messages(session: Session) -> list[dict[str, object]]:
         if event.event_type == "message_appended"
     ]
     for anchor in reversed(session.user_anchors):
-        if anchor.source != "user_input" or anchor.item_index is None:
+        if anchor.source != "user_input":
             continue
         event = message_events[anchor.item_index]
         if event.turn_id != anchor.turn_id:

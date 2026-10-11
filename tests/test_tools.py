@@ -944,6 +944,8 @@ class AskUserToolTest(unittest.TestCase):
         self.assertTrue(requests[0][2])
         anchor = session.user_anchors[-1]
         self.assertEqual(anchor.source, "question_response")
+        self.assertEqual(anchor.item_index, len(session.items) - 1)
+        self.assertEqual(session.items[-1].origin, "user_interaction")
         self.assertIn("sqlite (SQLite)", anchor.content)
 
     def test_requires_unique_option_ids(self) -> None:
@@ -984,6 +986,8 @@ class AskUserToolTest(unittest.TestCase):
 
         anchor = session.user_anchors[-1]
         self.assertEqual(anchor.source, "question_response")
+        self.assertEqual(anchor.item_index, len(session.items) - 1)
+        self.assertEqual(session.items[-1].origin, "user_interaction")
         self.assertIn("User answer: Redis", anchor.content)
 
     def test_is_unavailable_without_an_interaction_callback(self) -> None:

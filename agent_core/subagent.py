@@ -242,7 +242,7 @@ def _latest_attachments(session: Session) -> tuple[AttachmentPart, ...]:
     never mentioned.
     """
     for item in reversed(session.items):
-        if item.is_user_authored:
+        if item.role == "user" and item.origin == "conversation":
             return tuple(
                 part for part in item.parts if isinstance(part, AttachmentPart)
             )

@@ -50,6 +50,27 @@ class ToolMediaInheritanceTest(unittest.TestCase):
             _latest_attachments(session), (ImagePart(path="typed.png"),)
         )
 
+    def test_an_interaction_does_not_shadow_the_user_attachment(self) -> None:
+        session = Session()
+        attachment = ImagePart(
+            path="tmp/typed.png",
+            filename="typed.png",
+            size_bytes=123,
+        )
+        session.begin_turn("turn-1")
+        session.add_item(
+            "user",
+            "inspect this",
+            attachments=(attachment,),
+        )
+        session.add_item("assistant", "Which area?")
+        session.record_user_interaction(
+            "Question: Which area?\nUser answer: header",
+            "question_response",
+        )
+
+        self.assertEqual(_latest_attachments(session), (attachment,))
+
     def test_no_attachment_when_the_user_sent_none(self) -> None:
         """A tool's image must not be mistaken for a user attachment."""
         session = self.session_with(

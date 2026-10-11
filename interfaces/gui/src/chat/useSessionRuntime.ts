@@ -400,7 +400,10 @@ export function useSessionRuntime({
       setPendingSteers((count) => count + 1);
       return;
     }
-    const startsSession = !itemsRef.current.some((item) => item.role === "user" && item.origin !== "tool_media");
+    const startsSession = !itemsRef.current.some(
+      (item) => item.role === "user"
+        && (item.origin === undefined || item.origin === "conversation"),
+    );
     let attachments: UserAttachment[] = [];
     if (pendingFiles.length) {
       attachmentSubmitRef.current = true;
