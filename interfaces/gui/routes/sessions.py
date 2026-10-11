@@ -3,6 +3,7 @@
 import asyncio
 import json
 from pathlib import Path
+from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
@@ -60,6 +61,9 @@ def create_sessions_router(
                     "session_id": runtime.session_id,
                     **runtime.state,
                     **runtime.transcript,
+                    "editable_user_messages": store.editable_user_messages(
+                        runtime.session_id
+                    ),
                 }
             )
         return result
@@ -87,6 +91,9 @@ def create_sessions_router(
                     "session_id": runtime.session_id,
                     **runtime.state,
                     **runtime.transcript,
+                    "editable_user_messages": store.editable_user_messages(
+                        runtime.session_id
+                    ),
                 }
             session = store.load(session_id, recover=True)
             return jsonable_encoder(
@@ -105,6 +112,56 @@ def create_sessions_router(
                         plan_snapshot_to_dict(session.plan)
                         if session.plan is not None
                         else None
+                    ),
+                    "editable_user_messages": store.editable_user_messages(
+                        session.session_id
+                    ),
+                }
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+
+    @router.post("/api/sessions/{session_id}/fork", status_code=201)
+    async def fork_session(
+        session_id: str,
+        payload: dict[str, object],
+    ) -> object:
+        anchor_id = payload.get("anchor_id")
+        if not isinstance(anchor_id, str) or not anchor_id:
+            raise HTTPException(status_code=400, detail="编辑锚点无效。")
+        runtime = await active_sessions.get(session_id)
+        if runtime is not None and runtime.state.get("phase") in {
+            "starting",
+            "running",
+            "waiting_approval",
+            "waiting_user",
+        }:
+            raise HTTPException(status_code=409, detail="会话正在运行。")
+        try:
+            forked = store.fork_session(
+                session_id,
+                str(uuid4()),
+                anchor_id,
+            )
+            return jsonable_encoder(
+                {
+                    "session_id": forked.session_id,
+                    "items": [
+                        message_to_dict(item, include_provider_data=False)
+                        for item in forked.items
+                    ],
+                    "workspace": forked.workspace,
+                    "provider": store.provider_for(forked.session_id),
+                    "permission_preset": forked.permission_preset.value,
+                    "context_window": None,
+                    "event_sequence": 0,
+                    "plan": (
+                        plan_snapshot_to_dict(forked.plan)
+                        if forked.plan is not None
+                        else None
+                    ),
+                    "editable_user_messages": store.editable_user_messages(
+                        forked.session_id
                     ),
                 }
             )

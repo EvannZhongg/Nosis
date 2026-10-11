@@ -141,6 +141,7 @@ export function runtimeIsActive(phase: RuntimePhase): boolean {
 export type SessionSummary = {
   session_id: string;
   title: string;
+  forked_from?: string;
 };
 
 export type SessionContentPart =

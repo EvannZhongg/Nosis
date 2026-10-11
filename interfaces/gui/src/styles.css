@@ -89,6 +89,11 @@ svg { flex-shrink: 0; }
 .user-message img { display: block; width: auto; height: auto; max-width: min(100%, 420px); max-height: 320px; border-radius: 8px; object-fit: contain; }
 .user-message:has(img) img { max-width: 100%; }
 .user-message img + p, .user-message p + img { margin-top: 8px; }
+.user-message-actions { display: flex; justify-content: flex-end; gap: 2px; min-height: 22px; margin: 3px 0 0 auto; width: fit-content; }
+.user-message-actions button { display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: #929baa; opacity: .55; }
+.user-message-actions button:hover, .user-message-actions button:focus-visible { background: #eceff4; color: #5e6f8b; opacity: 1; }
+.user-message-editor { width: min(86%, 620px); min-width: min(360px, 86%); padding: 10px 12px; }
+.user-message-editor textarea { display: block; width: 100%; min-height: 78px; max-height: 260px; resize: vertical; border: 0; outline: 0; padding: 0; background: transparent; color: inherit; line-height: 1.6; }
 .message-image { display: block; max-width: min(100%, 640px); max-height: 640px; border-radius: 8px; object-fit: contain; }
 .message-image-status { color: #8d97a7; font-size: 12px; }
 .assistant-message { margin: 0 0 30px; }

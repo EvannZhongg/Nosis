@@ -1,3 +1,3 @@
 export { AssistantMessage } from "./AssistantMessage";
-export { UserMessage } from "./UserMessage";
+export { UserMessage, UserMessageEditContext } from "./UserMessage";
 export { SessionIdContext, isRemoteMarkdownImage } from "./Attachments";

@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bot, Boxes, Brain, CalendarClock, ChevronDown, ChevronRight, KeyRound, LoaderCircle, MessageSquare, PanelLeftClose, Plug, Plus, Settings as SettingsIcon, Sparkles, Trash2 } from "lucide-react";
+import { Bot, Boxes, Brain, CalendarClock, ChevronDown, ChevronRight, GitFork, KeyRound, LoaderCircle, MessageSquare, PanelLeftClose, Plug, Plus, Settings as SettingsIcon, Sparkles, Trash2 } from "lucide-react";
 import { Chat } from "./Chat";
 import { Settings, type SettingsSection } from "./Settings";
 import { Workspace } from "./Workspace";
 import { runtimeIsActive, type ContextWindow, type RuntimePhase } from "@nosis/protocol";
-import { deleteSession, get, sessionUrl, type ModelOption, type ModelOptions, type Session, type WorkspaceSessions } from "./api";
+import { deleteSession, forkSession, get, sessionUrl, type ModelOption, type ModelOptions, type Session, type WorkspaceSessions } from "./api";
 
 type ActiveSession = Session & { provider: string | null; phase: RuntimePhase };
 const SELECTED_SESSION_KEY = "nosis.selectedSessionId";
@@ -37,6 +37,7 @@ export function App() {
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
   const [sessionsCollapsed, setSessionsCollapsed] = useState(false);
   const [workspaceCollapsed, setWorkspaceCollapsed] = useState(false);
+  const [initialPrompts, setInitialPrompts] = useState<Record<string, string>>({});
   const settingsMenuRef = useRef<HTMLDivElement>(null);
 
   const refreshSessions = useCallback(async () => {
@@ -206,6 +207,33 @@ export function App() {
     }
   }
 
+  async function forkFromMessage(source: Session, anchorId: string, content: string) {
+    setError("");
+    try {
+      const forked = await forkSession(source.session_id, anchorId);
+      setChatSessions((all) => [...all.filter((item) => item.session_id !== forked.session_id), forked]);
+      if (forked.provider) {
+        setProviderBySession((all) => ({ ...all, [forked.session_id]: forked.provider! }));
+      }
+      setInitialPrompts((all) => ({ ...all, [forked.session_id]: content }));
+      setSelectedSessionId(forked.session_id);
+      setSettingsSection(null);
+      setSettingsMenuOpen(false);
+    } catch (error) {
+      setError(String(error));
+      throw error;
+    }
+  }
+
+  async function refreshSession(sessionId: string) {
+    try {
+      const loaded = await get<Session>(sessionUrl(sessionId));
+      setChatSessions((all) => all.map((item) => item.session_id === sessionId ? loaded : item));
+    } catch (error) {
+      setError(String(error));
+    }
+  }
+
   const sessions = sessionGroups.flatMap((group) => group.sessions);
   const projectGroups = sessionGroups.filter((group) => !group.scratch);
   const scratchSessions = sessionGroups.filter((group) => group.scratch).flatMap((group) => group.sessions);
@@ -225,7 +253,7 @@ export function App() {
     <div className="settings-popover-label">Settings</div>
     {settingsItems.map((item) => { const Icon = item.icon; return <button type="button" role="menuitem" key={item.id} onClick={() => { setSettingsSection(item.id); setSettingsMenuOpen(false); }}><Icon size={15} /><span><strong>{item.label}</strong><small>{item.description}</small></span><ChevronRight size={13} /></button>; })}
   </div>;
-  const sessionRow = (item: WorkspaceSessions["sessions"][number]) => <div className={`session-row ${item.session_id === selectedSessionId ? "selected" : ""}`} key={item.session_id}><button className="session-button" title={item.title} disabled={loadingSessionId === item.session_id} onClick={() => void selectSession(item.session_id)}>{busyBySession[item.session_id] ? <LoaderCircle size={15} className="spin" role="img" aria-label="正在执行任务" /> : <MessageSquare size={15} />}<span>{item.title}</span></button><button className="delete-session" aria-label={`删除会话 ${item.title}`} title="删除会话" disabled={loadingSessionId === item.session_id || Boolean(busyBySession[item.session_id])} onClick={(event) => { event.stopPropagation(); void removeSession(item.session_id); }}><Trash2 size={14} /></button></div>;
+  const sessionRow = (item: WorkspaceSessions["sessions"][number]) => <div className={`session-row ${item.session_id === selectedSessionId ? "selected" : ""}`} key={item.session_id}><button className="session-button" title={item.title} disabled={loadingSessionId === item.session_id} onClick={() => void selectSession(item.session_id)}>{busyBySession[item.session_id] ? <LoaderCircle size={15} className="spin" role="img" aria-label="正在执行任务" /> : item.forked_from ? <GitFork size={15} aria-label="分支会话" /> : <MessageSquare size={15} />}<span>{item.title}</span></button><button className="delete-session" aria-label={`删除会话 ${item.title}`} title="删除会话" disabled={loadingSessionId === item.session_id || Boolean(busyBySession[item.session_id])} onClick={(event) => { event.stopPropagation(); void removeSession(item.session_id); }}><Trash2 size={14} /></button></div>;
 
   return (
     <div className={`app-shell ${sessionsCollapsed ? "sessions-collapsed" : ""} ${workspaceCollapsed ? "workspace-collapsed" : ""}`}>
@@ -283,11 +311,12 @@ export function App() {
               setBusyBySession((all) => ({ ...all, [current.session_id]: value }));
             }} onContextWindowChange={(value) => setContextBySession((all) => ({ ...all, [current.session_id]: value }))} onTurnEnd={() => {
             void refreshSessions();
+            void refreshSession(current.session_id);
             setWorkspaceVersion((value) => value + 1);
           }} onSessionAvailable={() => { void refreshSessions(); }} onWorkspaceChange={(workspace) => {
             setChatSessions((all) => all.map((item) => item.session_id === current.session_id ? { ...item, workspace } : item));
             setWorkspaceVersion((value) => value + 1);
-          }} /></div>;
+          }} onEditMessage={(anchorId, content) => forkFromMessage(current, anchorId, content)} initialPrompt={initialPrompts[current.session_id]} onInitialPromptConsumed={() => setInitialPrompts((all) => { const next = { ...all }; delete next[current.session_id]; return next; })} /></div>;
         })}
       </main>
       {!settingsSection && selectedSession && <Workspace version={workspaceVersion} sessionId={selectedSession.session_id} collapsed={workspaceCollapsed} onCollapsedChange={setWorkspaceCollapsed} />}

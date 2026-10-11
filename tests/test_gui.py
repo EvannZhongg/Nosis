@@ -1732,6 +1732,58 @@ class GuiTest(unittest.TestCase):
             "native-state",
         )
 
+    def test_forks_a_session_from_a_backend_projected_user_anchor(self) -> None:
+        session = Session("source")
+        session.begin_turn("turn-1")
+        session.add_item("user", "first question")
+        session.add_item("assistant", "first answer")
+        session.finish_turn("completed")
+        session.set_archived_summary("keep this summary", 2)
+        session.begin_turn("turn-2")
+        session.add_item("user", "edit this question")
+        session.add_item("assistant", "discard this answer")
+        session.finish_turn("completed")
+        self.store.bind_workspace(session.session_id, self.root)
+        self.store.append_events(
+            session.session_id,
+            session.journal,
+            workspace=self.root,
+        )
+
+        with self.client() as client:
+            source = client.get("/api/sessions/source").json()
+            self.assertEqual(
+                [target["item_index"] for target in source["editable_user_messages"]],
+                [0, 2],
+            )
+            response = client.post(
+                "/api/sessions/source/fork",
+                json={"anchor_id": source["editable_user_messages"][1]["anchor_id"]},
+            )
+            groups = client.get("/api/sessions").json()
+
+        self.assertEqual(response.status_code, 201)
+        forked = response.json()
+        self.assertNotEqual(forked["session_id"], "source")
+        self.assertEqual(
+            [item["content"] for item in forked["items"]],
+            ["first question", "first answer"],
+        )
+        self.assertEqual(len(forked["editable_user_messages"]), 1)
+        summaries = {
+            item["session_id"]: item
+            for item in groups[0]["sessions"]
+        }
+        self.assertIn("source", summaries)
+        self.assertEqual(
+            summaries[forked["session_id"]]["forked_from"],
+            "source",
+        )
+        self.assertEqual(
+            self.store.load(forked["session_id"]).archived_summary,
+            "keep this summary",
+        )
+
     def test_schedule_listing_includes_latest_run_and_session_availability(self) -> None:
         scheduler = SchedulerService(
             self.config / "schedule.jsonl",

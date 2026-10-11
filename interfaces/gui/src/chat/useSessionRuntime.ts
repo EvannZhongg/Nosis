@@ -21,6 +21,8 @@ export type SessionRuntimeOptions = {
   onSessionAvailable: () => void;
   onTurnEnd: () => void;
   onWorkspaceChange?: (workspace: string) => void;
+  initialPrompt?: string;
+  onInitialPromptConsumed: () => void;
 };
 
 export function useSessionRuntime({
@@ -37,6 +39,8 @@ export function useSessionRuntime({
   onSessionAvailable,
   onTurnEnd,
   onWorkspaceChange,
+  initialPrompt,
+  onInitialPromptConsumed,
 }: SessionRuntimeOptions) {
   const [items, setItems] = useState<TranscriptItem[]>(session.items);
   const [runtimePhase, setRuntimePhase] = useState<RuntimePhase>("inactive");
@@ -75,6 +79,7 @@ export function useSessionRuntime({
   const attachmentReplacedRef = useRef(false);
   const attachmentSubmitRef = useRef(false);
   const awaitingSessionActivityRef = useRef(false);
+  const initialPromptSubmittedRef = useRef(false);
 
   const messages = useMemo(() => toMessages(items, session.session_id), [items, session.session_id]);
   const turnPreviews = useMemo(() => messages
@@ -404,6 +409,12 @@ export function useSessionRuntime({
     const text = message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n").trim();
     await submitMessage(text);
   }
+
+  useEffect(() => {
+    if (!selected || !initialPrompt || initialPromptSubmittedRef.current) return;
+    initialPromptSubmittedRef.current = true;
+    void submitMessage(initialPrompt).then(onInitialPromptConsumed);
+  }, [initialPrompt, onInitialPromptConsumed, selected]);
 
   function respondToApproval(approved: boolean) {
     if (!approval) return;

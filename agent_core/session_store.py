@@ -57,6 +57,102 @@ class JsonlSessionStore:
         shutil.rmtree(directory)
         return True
 
+    def editable_user_messages(
+        self,
+        session_id: str,
+    ) -> list[dict[str, object]]:
+        """Project user-authored turn anchors into stable fork targets."""
+        session = self.load(session_id, recover=False)
+        message_events = [
+            event
+            for event in session.journal
+            if event.event_type == "message_appended"
+        ]
+        targets: list[dict[str, object]] = []
+        for anchor in session.user_anchors:
+            if anchor.source != "user_input" or anchor.item_index is None:
+                continue
+            event = message_events[anchor.item_index]
+            if event.turn_id != anchor.turn_id:
+                raise ValueError("user anchor does not match its Journal event")
+            targets.append(
+                {
+                    "anchor_id": event.event_id,
+                    "item_index": anchor.item_index,
+                }
+            )
+        return targets
+
+    def fork_session(
+        self,
+        source_session_id: str,
+        new_session_id: str,
+        anchor_id: str,
+    ) -> Session:
+        """Create a Session from the complete Journal turns before an anchor."""
+        _validate_session_id(source_session_id)
+        _validate_session_id(new_session_id)
+        source_directory = self._find_session_directory(source_session_id)
+        if source_directory is None or not self.has_journal(source_session_id):
+            raise ValueError(f"session does not exist: {source_session_id!r}")
+        if self._find_session_directory(new_session_id) is not None:
+            raise ValueError(f"session already exists: {new_session_id!r}")
+
+        source = self.load(source_session_id, recover=False)
+        anchor_event = next(
+            (
+                event
+                for event in source.journal
+                if event.event_id == anchor_id
+                and event.event_type == "message_appended"
+            ),
+            None,
+        )
+        editable_anchor_ids = {
+            str(target["anchor_id"])
+            for target in self.editable_user_messages(source_session_id)
+        }
+        if anchor_event is None or anchor_event.event_id not in editable_anchor_ids:
+            raise ValueError("editable user message does not exist")
+        turn_start = next(
+            (
+                index
+                for index, event in enumerate(source.journal)
+                if event.event_type == "turn_started"
+                and event.turn_id == anchor_event.turn_id
+            ),
+            None,
+        )
+        if turn_start is None:
+            raise ValueError("editable user message has no turn boundary")
+
+        workspace = self.workspace_for(source_session_id)
+        if self._group_by_workspace:
+            if workspace is None:
+                raise ValueError("source session has no workspace")
+            target_directory = session_directory(
+                self._directory,
+                workspace,
+                new_session_id,
+            )
+        else:
+            target_directory = self._directory / new_session_id
+        target_directory.mkdir(parents=True, exist_ok=False)
+        try:
+            metadata = _session_metadata(source_directory)
+            metadata["forked_from"] = source_session_id
+            metadata["fork_anchor_id"] = anchor_id
+            _write_session_metadata(target_directory, metadata)
+            self.append_events(
+                new_session_id,
+                source.journal[:turn_start],
+                workspace=workspace,
+            )
+        except BaseException:
+            shutil.rmtree(target_directory)
+            raise
+        return self.load(new_session_id, recover=False)
+
     def list_sessions(self) -> list[dict[str, object]]:
         if not self._directory.is_dir():
             return []
@@ -386,7 +482,16 @@ def _has_session_activity(path: Path) -> bool:
 
 
 def _session_summary(session_id: str, path: Path) -> dict[str, object]:
-    return {"session_id": session_id, "title": _session_title(path, session_id)}
+    metadata = _session_metadata(path.parent)
+    return {
+        "session_id": session_id,
+        "title": _session_title(path, session_id),
+        **(
+            {"forked_from": metadata["forked_from"]}
+            if isinstance(metadata.get("forked_from"), str)
+            else {}
+        ),
+    }
 
 
 def _session_title(path: Path, session_id: str) -> str:

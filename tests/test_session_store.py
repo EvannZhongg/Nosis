@@ -4,7 +4,16 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agent_core import FilePart, ImagePart, JsonlSessionStore, PermissionPreset, Session, ToolCall
+from agent_core import (
+    FilePart,
+    ImagePart,
+    JsonlSessionStore,
+    PermissionPreset,
+    PlanSnapshot,
+    PlanStep,
+    Session,
+    ToolCall,
+)
 from agent_core.session_paths import session_log_path, workspace_directory
 
 
@@ -35,6 +44,111 @@ class JsonlSessionStoreTest(unittest.TestCase):
             self.assertEqual(
                 [item.content for item in store.load("session-1").items],
                 ["你好", "你好！"],
+            )
+
+    def test_forks_the_journal_before_the_edited_turn(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            store = JsonlSessionStore(workspace / "sessions")
+            session = Session("source")
+            session.begin_turn("turn-1")
+            session.add_item("user", "first question")
+            call = ToolCall("call-1", "read", {"path": "README.md"})
+            session.add_item("assistant", None, tool_calls=(call,))
+            session.tool_started(call)
+            session.tool_finished(call, "completed")
+            session.add_item("tool", "first result", tool_call_id=call.id)
+            session.finish_turn("completed")
+            session.set_archived_summary("summary before edit", 3)
+            plan = PlanSnapshot(
+                "plan-1",
+                "finish",
+                1,
+                (PlanStep("step-1", "continue", "in_progress"),),
+            )
+            session.set_plan(plan)
+            session.begin_turn("turn-2")
+            session.add_item("user", "second question")
+            session.set_archived_summary("must not be inherited", 4)
+            session.add_item("assistant", "second answer")
+            session.finish_turn("completed")
+            persist(store, workspace, session)
+            store.set_provider("source", "provider-1", workspace)
+            store.set_permission_preset(
+                "source",
+                PermissionPreset.FULL_ACCESS,
+                workspace,
+            )
+
+            targets = store.editable_user_messages("source")
+            self.assertEqual(
+                [target["item_index"] for target in targets],
+                [0, 3],
+            )
+            forked = store.fork_session(
+                "source",
+                "forked",
+                str(targets[1]["anchor_id"]),
+            )
+
+            turn_2_start = next(
+                index
+                for index, event in enumerate(session.journal)
+                if event.event_type == "turn_started"
+                and event.turn_id == "turn-2"
+            )
+            self.assertEqual(forked.journal, session.journal[:turn_2_start])
+            self.assertEqual(
+                [item.content for item in forked.items],
+                ["first question", None, "first result"],
+            )
+            self.assertEqual(forked.archived_summary, "summary before edit")
+            self.assertEqual(forked.archived_item_cursor, 3)
+            self.assertEqual(forked.compression_count, 1)
+            self.assertEqual(forked.plan, plan)
+            self.assertEqual(forked.turns["turn-1"].status, "completed")
+            self.assertEqual(
+                forked.tool_executions["call-1"].status,
+                "completed",
+            )
+            self.assertNotIn("turn-2", forked.turns)
+            self.assertEqual(store.workspace_for("forked"), str(workspace.resolve()))
+            self.assertEqual(store.provider_for("forked"), "provider-1")
+            self.assertEqual(
+                store.permission_preset_for("forked"),
+                PermissionPreset.FULL_ACCESS,
+            )
+            summaries = {
+                item["session_id"]: item
+                for item in store.list_workspace_sessions(workspace)
+            }
+            self.assertEqual(summaries["forked"]["forked_from"], "source")
+            self.assertNotIn("forked_from", summaries["source"])
+
+    def test_forking_the_first_question_starts_with_an_empty_journal(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            store = JsonlSessionStore(workspace / "sessions")
+            session = Session("source")
+            session.begin_turn("turn-1")
+            session.add_item("user", "replace me")
+            session.add_item("assistant", "old answer")
+            session.finish_turn("completed")
+            persist(store, workspace, session)
+
+            target = store.editable_user_messages("source")[0]
+            forked = store.fork_session(
+                "source",
+                "forked",
+                str(target["anchor_id"]),
+            )
+
+            self.assertEqual(forked.items, [])
+            self.assertEqual(forked.journal, [])
+            self.assertEqual(store.workspace_for("forked"), str(workspace.resolve()))
+            self.assertEqual(
+                [item["session_id"] for item in store.list_workspace_sessions(workspace)],
+                ["source"],
             )
 
     def test_lists_sessions_by_workspace_and_first_user_message(self) -> None:

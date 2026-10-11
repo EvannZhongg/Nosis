@@ -12,7 +12,9 @@ export type Session = {
   context_window?: ContextWindow | null;
   event_sequence?: number;
   plan?: PlanSnapshot | null;
+  editable_user_messages?: EditableUserMessage[];
 };
+export type EditableUserMessage = { anchor_id: string; item_index: number };
 export type WorkspaceSessions = { workspace: string; scratch?: boolean; sessions: SessionSummary[] };
 export type ScheduleTrigger =
   | { type: "once"; at: string }
@@ -93,6 +95,19 @@ export async function deleteSession(sessionId: string): Promise<void> {
     const error = await response.json();
     throw new Error(error.detail ?? `会话删除失败 (${response.status})`);
   }
+}
+
+export async function forkSession(sessionId: string, anchorId: string): Promise<Session> {
+  const response = await fetch(`${sessionUrl(sessionId)}/fork`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ anchor_id: anchorId }),
+  });
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail ?? `会话分支创建失败 (${response.status})`);
+  }
+  return response.json();
 }
 
 export async function releaseActiveSession(
