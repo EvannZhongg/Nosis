@@ -83,12 +83,23 @@ class JsonlSessionStoreTest(unittest.TestCase):
             targets = store.editable_user_messages("source")
             self.assertEqual(
                 [target["item_index"] for target in targets],
-                [0, 3],
+                [3],
             )
+            first_anchor = next(
+                event.event_id
+                for event in session.journal
+                if event.event_type == "message_appended"
+                and event.turn_id == "turn-1"
+            )
+            with self.assertRaisesRegex(
+                ValueError,
+                "editable user message does not exist",
+            ):
+                store.fork_session("source", "old-fork", first_anchor)
             forked = store.fork_session(
                 "source",
                 "forked",
-                str(targets[1]["anchor_id"]),
+                str(targets[0]["anchor_id"]),
             )
 
             turn_2_start = next(
@@ -135,6 +146,11 @@ class JsonlSessionStoreTest(unittest.TestCase):
             session.add_item("assistant", "old answer")
             session.finish_turn("completed")
             persist(store, workspace, session)
+            store.set_permission_preset(
+                "source",
+                PermissionPreset.FULL_ACCESS,
+                workspace,
+            )
 
             target = store.editable_user_messages("source")[0]
             forked = store.fork_session(
@@ -145,6 +161,14 @@ class JsonlSessionStoreTest(unittest.TestCase):
 
             self.assertEqual(forked.items, [])
             self.assertEqual(forked.journal, [])
+            self.assertEqual(
+                forked.permission_preset,
+                PermissionPreset.FULL_ACCESS,
+            )
+            self.assertEqual(
+                store.load("forked").permission_preset,
+                PermissionPreset.FULL_ACCESS,
+            )
             self.assertEqual(store.workspace_for("forked"), str(workspace.resolve()))
             self.assertEqual(
                 [item["session_id"] for item in store.list_workspace_sessions(workspace)],

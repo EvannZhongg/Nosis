@@ -3,8 +3,9 @@
 import json
 import os
 import shutil
+from contextlib import contextmanager
 from pathlib import Path
-from typing import BinaryIO, Iterable
+from typing import BinaryIO, Iterable, Iterator
 
 from .content import FilePart, ImagePart, text_content
 from .permissions import PermissionPreset
@@ -43,45 +44,28 @@ class JsonlSessionStore:
         return self._directory
 
     def has_journal(self, session_id: str) -> bool:
-        path = self._session_path(session_id)
-        return path is not None and path.is_file()
+        with self._locked_session(session_id):
+            path = self._session_path(session_id)
+            return path is not None and path.is_file()
 
     def delete_session(self, session_id: str) -> bool:
-        _validate_session_id(session_id)
-        if self._group_by_workspace:
-            directory = self._find_session_directory(session_id)
-        else:
-            directory = self._directory / session_id
-        if directory is None:
-            return False
-        shutil.rmtree(directory)
-        return True
+        with self._locked_session(session_id):
+            if self._group_by_workspace:
+                directory = self._find_session_directory(session_id)
+            else:
+                directory = self._directory / session_id
+            if directory is None:
+                return False
+            shutil.rmtree(directory)
+            return True
 
     def editable_user_messages(
         self,
         session_id: str,
     ) -> list[dict[str, object]]:
-        """Project user-authored turn anchors into stable fork targets."""
+        """Project the latest user-authored turn into a stable fork target."""
         session = self.load(session_id, recover=False)
-        message_events = [
-            event
-            for event in session.journal
-            if event.event_type == "message_appended"
-        ]
-        targets: list[dict[str, object]] = []
-        for anchor in session.user_anchors:
-            if anchor.source != "user_input" or anchor.item_index is None:
-                continue
-            event = message_events[anchor.item_index]
-            if event.turn_id != anchor.turn_id:
-                raise ValueError("user anchor does not match its Journal event")
-            targets.append(
-                {
-                    "anchor_id": event.event_id,
-                    "item_index": anchor.item_index,
-                }
-            )
-        return targets
+        return _editable_user_messages(session)
 
     def fork_session(
         self,
@@ -89,69 +73,73 @@ class JsonlSessionStore:
         new_session_id: str,
         anchor_id: str,
     ) -> Session:
-        """Create a Session from the complete Journal turns before an anchor."""
+        """Create a Session from the Journal before its latest user turn."""
         _validate_session_id(source_session_id)
         _validate_session_id(new_session_id)
-        source_directory = self._find_session_directory(source_session_id)
-        if source_directory is None or not self.has_journal(source_session_id):
-            raise ValueError(f"session does not exist: {source_session_id!r}")
-        if self._find_session_directory(new_session_id) is not None:
-            raise ValueError(f"session already exists: {new_session_id!r}")
-
-        source = self.load(source_session_id, recover=False)
-        anchor_event = next(
-            (
-                event
-                for event in source.journal
-                if event.event_id == anchor_id
-                and event.event_type == "message_appended"
-            ),
-            None,
-        )
-        editable_anchor_ids = {
-            str(target["anchor_id"])
-            for target in self.editable_user_messages(source_session_id)
-        }
-        if anchor_event is None or anchor_event.event_id not in editable_anchor_ids:
-            raise ValueError("editable user message does not exist")
-        turn_start = next(
-            (
-                index
-                for index, event in enumerate(source.journal)
-                if event.event_type == "turn_started"
-                and event.turn_id == anchor_event.turn_id
-            ),
-            None,
-        )
-        if turn_start is None:
-            raise ValueError("editable user message has no turn boundary")
-
-        workspace = self.workspace_for(source_session_id)
-        if self._group_by_workspace:
-            if workspace is None:
-                raise ValueError("source session has no workspace")
-            target_directory = session_directory(
-                self._directory,
-                workspace,
-                new_session_id,
+        with self._locked_session(source_session_id):
+            source_directory = self._find_session_directory(source_session_id)
+            source_path = self._session_path(source_session_id)
+            if (
+                source_directory is None
+                or source_path is None
+                or not source_path.is_file()
+            ):
+                raise ValueError(f"session does not exist: {source_session_id!r}")
+            source = self._load_unlocked(source_session_id, recover=False)
+            targets = _editable_user_messages(source)
+            if not targets or targets[0]["anchor_id"] != anchor_id:
+                raise ValueError("editable user message does not exist")
+            anchor_event = next(
+                event for event in source.journal if event.event_id == anchor_id
             )
-        else:
-            target_directory = self._directory / new_session_id
-        target_directory.mkdir(parents=True, exist_ok=False)
-        try:
+            turn_start = next(
+                (
+                    index
+                    for index, event in enumerate(source.journal)
+                    if event.event_type == "turn_started"
+                    and event.turn_id == anchor_event.turn_id
+                ),
+                None,
+            )
+            if turn_start is None:
+                raise ValueError("editable user message has no turn boundary")
+
+            workspace = self._workspace_for_unlocked(source_session_id)
             metadata = _session_metadata(source_directory)
             metadata["forked_from"] = source_session_id
             metadata["fork_anchor_id"] = anchor_id
-            _write_session_metadata(target_directory, metadata)
-            self.append_events(
-                new_session_id,
-                source.journal[:turn_start],
-                workspace=workspace,
-            )
-        except BaseException:
-            shutil.rmtree(target_directory)
-            raise
-        return self.load(new_session_id, recover=False)
+            prefix = tuple(source.journal[:turn_start])
+
+            with self._locked_session(new_session_id):
+                if self._find_session_directory(new_session_id) is not None:
+                    raise ValueError(
+                        f"session already exists: {new_session_id!r}"
+                    )
+                if self._group_by_workspace:
+                    if workspace is None:
+                        raise ValueError("source session has no workspace")
+                    target_directory = session_directory(
+                        self._directory,
+                        workspace,
+                        new_session_id,
+                    )
+                else:
+                    target_directory = self._directory / new_session_id
+                target_directory.mkdir(parents=True, exist_ok=False)
+                try:
+                    _write_session_metadata(target_directory, metadata)
+                    self._append_events_unlocked(
+                        new_session_id,
+                        prefix,
+                        workspace,
+                    )
+                    return self._load_unlocked(
+                        new_session_id,
+                        recover=False,
+                    )
+                except BaseException:
+                    shutil.rmtree(target_directory)
+                    raise
 
     def list_sessions(self) -> list[dict[str, object]]:
         if not self._directory.is_dir():
@@ -198,11 +186,28 @@ class JsonlSessionStore:
         *,
         recover: bool = True,
     ) -> Session:
+        with self._locked_session(session_id):
+            return self._load_unlocked(
+                session_id,
+                workspace,
+                recover=recover,
+            )
+
+    def _load_unlocked(
+        self,
+        session_id: str,
+        workspace: Path | str | None = None,
+        *,
+        recover: bool,
+    ) -> Session:
         path = self._session_path(session_id, workspace)
+        current = self._find_session_directory(session_id)
         session = Session(
             session_id=session_id,
-            workspace=self.workspace_for(session_id),
+            workspace=self._workspace_for_unlocked(session_id),
         )
+        if current is not None:
+            session.permission_preset = _permission_preset(current)
         if path is None or not path.is_file():
             return session
         with path.open(encoding="utf-8") as file:
@@ -220,7 +225,6 @@ class JsonlSessionStore:
                 event = _event_from_dict(record)
                 session.apply_event(event)
                 session.journal.append(event)
-        session.permission_preset = self.permission_preset_for(session_id)
         if recover:
             # Read projections expose stale running work as unknown.  A
             # Runtime attaches a sink first and persists these recovery facts.
@@ -228,24 +232,29 @@ class JsonlSessionStore:
         return session
 
     def bind_workspace(self, session_id: str, workspace: Path) -> None:
-        resolved = workspace.expanduser().resolve()
-        target_group = workspace_directory(self._directory, resolved)
-        target_group.mkdir(parents=True, exist_ok=True)
-        current = self._find_session_directory(session_id)
-        target = target_group / session_id
-        if current is not None and current != target:
-            if target.exists():
-                raise ValueError(
-                    f"session already exists in workspace: {session_id!r}"
-                )
-            shutil.move(str(current), str(target))
-        target.mkdir(parents=True, exist_ok=True)
-        metadata_path = target / SESSION_METADATA_FILENAME
-        if not metadata_path.exists():
-            _write_session_metadata(target, {})
+        with self._locked_session(session_id):
+            resolved = workspace.expanduser().resolve()
+            target_group = workspace_directory(self._directory, resolved)
+            target_group.mkdir(parents=True, exist_ok=True)
+            current = self._find_session_directory(session_id)
+            target = target_group / session_id
+            if current is not None and current != target:
+                if target.exists():
+                    raise ValueError(
+                        f"session already exists in workspace: {session_id!r}"
+                    )
+                shutil.move(str(current), str(target))
+            target.mkdir(parents=True, exist_ok=True)
+            metadata_path = target / SESSION_METADATA_FILENAME
+            if not metadata_path.exists():
+                _write_session_metadata(target, {})
 
     def workspace_for(self, session_id: str) -> str | None:
         _validate_session_id(session_id)
+        with self._locked_session(session_id):
+            return self._workspace_for_unlocked(session_id)
+
+    def _workspace_for_unlocked(self, session_id: str) -> str | None:
         if not self._group_by_workspace:
             # Sessions lie directly in the root, so their parent directory
             # is that root and not an encoded Workspace path.
@@ -257,15 +266,13 @@ class JsonlSessionStore:
 
     def permission_preset_for(self, session_id: str) -> PermissionPreset:
         _validate_session_id(session_id)
-        if not self._group_by_workspace:
-            return PermissionPreset.ASK_FOR_APPROVAL
-        current = self._find_session_directory(session_id)
-        if current is None:
-            return PermissionPreset.ASK_FOR_APPROVAL
-        value = _session_metadata(current).get("permission_preset")
-        if value is None:
-            return PermissionPreset.ASK_FOR_APPROVAL
-        return PermissionPreset(str(value))
+        with self._locked_session(session_id):
+            current = self._find_session_directory(session_id)
+            return (
+                _permission_preset(current)
+                if current is not None
+                else PermissionPreset.ASK_FOR_APPROVAL
+            )
 
     def set_permission_preset(
         self,
@@ -273,21 +280,23 @@ class JsonlSessionStore:
         preset: PermissionPreset,
         workspace: Path | str,
     ) -> None:
-        directory = session_directory(self._directory, workspace, session_id)
-        directory.mkdir(parents=True, exist_ok=True)
-        metadata = _session_metadata(directory)
-        metadata["permission_preset"] = preset.value
-        _write_session_metadata(directory, metadata)
+        with self._locked_session(session_id):
+            directory = session_directory(self._directory, workspace, session_id)
+            directory.mkdir(parents=True, exist_ok=True)
+            metadata = _session_metadata(directory)
+            metadata["permission_preset"] = preset.value
+            _write_session_metadata(directory, metadata)
 
     def provider_for(self, session_id: str) -> str | None:
         _validate_session_id(session_id)
-        if not self._group_by_workspace:
-            return None
-        current = self._find_session_directory(session_id)
-        if current is None:
-            return None
-        value = _session_metadata(current).get("provider")
-        return value if isinstance(value, str) and value else None
+        with self._locked_session(session_id):
+            if not self._group_by_workspace:
+                return None
+            current = self._find_session_directory(session_id)
+            if current is None:
+                return None
+            value = _session_metadata(current).get("provider")
+            return value if isinstance(value, str) and value else None
 
     def set_provider(
         self,
@@ -295,11 +304,12 @@ class JsonlSessionStore:
         provider: str,
         workspace: Path | str,
     ) -> None:
-        directory = session_directory(self._directory, workspace, session_id)
-        directory.mkdir(parents=True, exist_ok=True)
-        metadata = _session_metadata(directory)
-        metadata["provider"] = provider
-        _write_session_metadata(directory, metadata)
+        with self._locked_session(session_id):
+            directory = session_directory(self._directory, workspace, session_id)
+            directory.mkdir(parents=True, exist_ok=True)
+            metadata = _session_metadata(directory)
+            metadata["provider"] = provider
+            _write_session_metadata(directory, metadata)
 
     def append_events(
         self,
@@ -310,8 +320,17 @@ class JsonlSessionStore:
         events = tuple(events)
         if not events:
             return
+        with self._locked_session(session_id):
+            self._append_events_unlocked(session_id, events, workspace)
+
+    def _append_events_unlocked(
+        self,
+        session_id: str,
+        events: Iterable[JournalEvent],
+        workspace: Path | str | None,
+    ) -> None:
         if workspace is None:
-            workspace = self.workspace_for(session_id)
+            workspace = self._workspace_for_unlocked(session_id)
         if workspace is None and self._group_by_workspace:
             raise ValueError(
                 f"workspace is required for a new session: {session_id!r}"
@@ -327,6 +346,18 @@ class JsonlSessionStore:
                 file.write(record.encode("utf-8") + b"\n")
             file.flush()
             os.fsync(file.fileno())
+
+    @contextmanager
+    def _locked_session(self, session_id: str) -> Iterator[None]:
+        _validate_session_id(session_id)
+        lock_path = self._directory / ".locks" / f"{session_id}.lock"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a+b") as handle:
+            _lock_file(handle)
+            try:
+                yield
+            finally:
+                _unlock_file(handle)
 
     def _find_session_directory(self, session_id: str) -> Path | None:
         if not self._group_by_workspace:
@@ -358,7 +389,7 @@ class JsonlSessionStore:
             return session_log_path(
                 self._directory, workspace, session_id
             )
-        bound = self.workspace_for(session_id)
+        bound = self._workspace_for_unlocked(session_id)
         if bound is None:
             return None
         return session_log_path(self._directory, bound, session_id)
@@ -408,6 +439,22 @@ def _prepare_journal_append(file: BinaryIO) -> None:
     file.seek(0, os.SEEK_END)
 
 
+def _editable_user_messages(session: Session) -> list[dict[str, object]]:
+    message_events = [
+        event
+        for event in session.journal
+        if event.event_type == "message_appended"
+    ]
+    for anchor in reversed(session.user_anchors):
+        if anchor.source != "user_input" or anchor.item_index is None:
+            continue
+        event = message_events[anchor.item_index]
+        if event.turn_id != anchor.turn_id:
+            raise ValueError("user anchor does not match its Journal event")
+        return [{"anchor_id": event.event_id, "item_index": anchor.item_index}]
+    return []
+
+
 def _event_from_dict(data: dict[str, object]) -> JournalEvent:
     return JournalEvent(
         seq=int(data["seq"]),
@@ -438,6 +485,44 @@ def _session_metadata(directory: Path) -> dict[str, object]:
     if not isinstance(data, dict):
         raise ValueError("session workspace metadata must be an object")
     return data
+
+
+def _permission_preset(directory: Path) -> PermissionPreset:
+    value = _session_metadata(directory).get("permission_preset")
+    return (
+        PermissionPreset(str(value))
+        if value is not None
+        else PermissionPreset.ASK_FOR_APPROVAL
+    )
+
+
+def _lock_file(handle: BinaryIO) -> None:
+    if os.name == "nt":
+        import msvcrt
+
+        # Windows byte-range locks are mandatory, so another handle cannot even
+        # read the locked byte: size the file without reading it.
+        if os.fstat(handle.fileno()).st_size == 0:
+            handle.write(b"0")
+            handle.flush()
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+        return
+    import fcntl
+
+    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+
+
+def _unlock_file(handle: BinaryIO) -> None:
+    if os.name == "nt":
+        import msvcrt
+
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+    import fcntl
+
+    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _write_session_metadata(

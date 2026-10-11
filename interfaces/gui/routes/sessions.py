@@ -130,12 +130,7 @@ def create_sessions_router(
         if not isinstance(anchor_id, str) or not anchor_id:
             raise HTTPException(status_code=400, detail="编辑锚点无效。")
         runtime = await active_sessions.get(session_id)
-        if runtime is not None and runtime.state.get("phase") in {
-            "starting",
-            "running",
-            "waiting_approval",
-            "waiting_user",
-        }:
+        if runtime is not None and runtime.running:
             raise HTTPException(status_code=409, detail="会话正在运行。")
         try:
             forked = store.fork_session(

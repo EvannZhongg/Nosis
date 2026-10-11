@@ -575,6 +575,7 @@ function applyMessage(state: State, message: Incoming): State {
     case 'plan_updated':
       return { ...state, plan: visiblePlan(message.plan) };
 
+    case 'user_turn_received':
     case 'user_steer_received':
       return state;
 

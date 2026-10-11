@@ -215,6 +215,7 @@ export function App() {
       if (forked.provider) {
         setProviderBySession((all) => ({ ...all, [forked.session_id]: forked.provider! }));
       }
+      if (forked.items.length > 0) await refreshSessions();
       setInitialPrompts((all) => ({ ...all, [forked.session_id]: content }));
       setSelectedSessionId(forked.session_id);
       setSettingsSection(null);

@@ -96,6 +96,57 @@ describe("SessionSocket synchronization", () => {
     });
   });
 
+  it("confirms a user turn only after the bridge accepts it", async () => {
+    const socket = new SessionSocket({
+      sessionId: "session-1",
+      attachmentId: "page-1",
+      onMessage: () => {},
+      onClose: () => {},
+      onError: () => {},
+    });
+    const confirmed = vi.fn();
+    const delivery = socket.sendUserTurn({
+      type: "user_turn",
+      turn_id: "turn-1",
+      text: "edited prompt",
+    }).then(confirmed);
+
+    FakeWebSocket.latest.open();
+    FakeWebSocket.latest.receive(snapshot);
+    await Promise.resolve();
+    expect(confirmed).not.toHaveBeenCalled();
+
+    FakeWebSocket.latest.receive({
+      type: "user_turn_received",
+      turn_id: "turn-1",
+    });
+    await delivery;
+    expect(confirmed).toHaveBeenCalledOnce();
+  });
+
+  it("rejects an unconfirmed turn when the connection closes", async () => {
+    const socket = new SessionSocket({
+      sessionId: "session-1",
+      attachmentId: "page-1",
+      onMessage: () => {},
+      onClose: () => {},
+      onError: () => {},
+    });
+    const consumed = vi.fn();
+    const delivery = socket.sendUserTurn({
+      type: "user_turn",
+      turn_id: "turn-1",
+      text: "keep this prompt",
+    }).then(consumed);
+
+    FakeWebSocket.latest.open();
+    FakeWebSocket.latest.receive(snapshot);
+    FakeWebSocket.latest.close();
+
+    await expect(delivery).rejects.toThrow("before confirming the turn");
+    expect(consumed).not.toHaveBeenCalled();
+  });
+
   it("queues workspace, model and permission choices during startup in order", () => {
     const socket = new SessionSocket({
       sessionId: "session-1",

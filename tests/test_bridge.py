@@ -917,7 +917,7 @@ class BridgeApprovalTest(unittest.TestCase):
             bridge.request_permission("ls")
 
     def test_routes_cancel_for_a_turn_queued_before_run_turn(self) -> None:
-        bridge, _ = make_bridge(
+        bridge, stdout = make_bridge(
             [
                 '{"type": "user_turn", "turn_id": "t1", "text": "work"}',
                 '{"type": "cancel", "turn_id": "t1"}',
@@ -929,6 +929,13 @@ class BridgeApprovalTest(unittest.TestCase):
         time.sleep(0.02)
 
         self.assertIn("t1", bridge.host.turns._pending_cancels)
+        self.assertIn(
+            ("user_turn_received", "t1"),
+            [
+                (event["type"], event.get("turn_id"))
+                for event in emitted(stdout)
+            ],
+        )
 
 
 class BridgeCancellationTest(unittest.TestCase):

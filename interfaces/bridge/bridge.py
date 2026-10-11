@@ -26,6 +26,7 @@ from .protocol import (
     settings_snapshot_message,
     settings_update_failed_message,
     usage_to_dict,
+    user_turn_received_message,
 )
 from .event_stream import EventStream
 
@@ -185,6 +186,7 @@ class Bridge:
             turn_id = message.get("turn_id")
             if isinstance(turn_id, str):
                 self.host.turns.enqueue(turn_id)
+                self.emit(**user_turn_received_message(turn_id))
         self._messages.put(message)
 
 

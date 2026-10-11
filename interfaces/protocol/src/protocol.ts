@@ -281,6 +281,7 @@ export type Incoming = (
     }
   | { type: 'user_steer_received'; turn_id: string | null; steer_id: string; text: string }
   | { type: 'user_steer_rejected'; turn_id: string | null; steer_id: string; text: string }
+  | { type: 'user_turn_received'; turn_id: string }
   | {
       type: 'user_steer_applied';
       turn_id: string;

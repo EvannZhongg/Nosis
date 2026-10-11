@@ -174,6 +174,13 @@ def attachment_replaced_message(*, phase: str) -> dict[str, object]:
     }
 
 
+def user_turn_received_message(turn_id: str) -> dict[str, object]:
+    return {
+        "type": "user_turn_received",
+        "turn_id": turn_id,
+    }
+
+
 def sessions_listed_message(
     sessions: list[dict[str, object]],
 ) -> dict[str, object]:

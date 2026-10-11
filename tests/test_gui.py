@@ -1754,11 +1754,11 @@ class GuiTest(unittest.TestCase):
             source = client.get("/api/sessions/source").json()
             self.assertEqual(
                 [target["item_index"] for target in source["editable_user_messages"]],
-                [0, 2],
+                [2],
             )
             response = client.post(
                 "/api/sessions/source/fork",
-                json={"anchor_id": source["editable_user_messages"][1]["anchor_id"]},
+                json={"anchor_id": source["editable_user_messages"][0]["anchor_id"]},
             )
             groups = client.get("/api/sessions").json()
 
@@ -1783,6 +1783,53 @@ class GuiTest(unittest.TestCase):
             self.store.load(forked["session_id"]).archived_summary,
             "keep this summary",
         )
+
+    def test_rejects_fork_while_a_user_turn_is_pending(self) -> None:
+        session = Session("source")
+        session.begin_turn("stored-turn")
+        session.add_item("user", "edit this question")
+        session.add_item("assistant", "old answer")
+        session.finish_turn("completed")
+        self.store.bind_workspace(session.session_id, self.root)
+        self.store.append_events(
+            session.session_id,
+            session.journal,
+            workspace=self.root,
+        )
+        anchor = self.store.editable_user_messages("source")[0]["anchor_id"]
+        bridge = FakeBridge(replies={
+            "open_session": [{"type": "session_ready", "session_id": "source"}],
+        })
+        original_send = bridge.send
+
+        def hold_user_turn(message: dict) -> None:
+            if message["type"] == "user_turn":
+                bridge.sent.append(message)
+                return
+            original_send(message)
+
+        bridge.send = hold_user_turn  # type: ignore[method-assign]
+        with self.client(bridge) as client:
+            with client.websocket_connect("/api/session") as socket:
+                socket.send_json({
+                    "type": "open_session",
+                    "session_id": "source",
+                    "attachment_id": "page-1",
+                })
+                self.assertEqual(socket.receive_json()["type"], "session_ready")
+                socket.send_json({
+                    "type": "user_turn",
+                    "turn_id": "pending-turn",
+                    "text": "replacement",
+                })
+                _wait_for(client, lambda: len(bridge.sent) == 2)
+
+                response = client.post(
+                    "/api/sessions/source/fork",
+                    json={"anchor_id": anchor},
+                )
+
+        self.assertEqual(response.status_code, 409)
 
     def test_schedule_listing_includes_latest_run_and_session_availability(self) -> None:
         scheduler = SchedulerService(

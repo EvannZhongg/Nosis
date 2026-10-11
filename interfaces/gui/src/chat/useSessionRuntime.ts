@@ -60,6 +60,7 @@ export function useSessionRuntime({
   const [questionDraft, setQuestionDraft] = useState("");
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [uploadingAttachments, setUploadingAttachments] = useState(false);
+  const [initialPromptDraft, setInitialPromptDraft] = useState<string | null>(null);
   const [workspaceDraft, setWorkspaceDraft] = useState(session.workspace ?? "");
   const [pendingWorkspace, setPendingWorkspace] = useState<string | null>(null);
   const socketRef = useRef<SessionSocket | null>(null);
@@ -80,6 +81,7 @@ export function useSessionRuntime({
   const attachmentSubmitRef = useRef(false);
   const awaitingSessionActivityRef = useRef(false);
   const initialPromptSubmittedRef = useRef(false);
+  const initialPromptFailedRef = useRef(false);
 
   const messages = useMemo(() => toMessages(items, session.session_id), [items, session.session_id]);
   const turnPreviews = useMemo(() => messages
@@ -389,9 +391,11 @@ export function useSessionRuntime({
         attachmentSubmitRef.current = false;
         setUploadingAttachments(false);
       }
-      setPendingFiles([]);
     }
-    showItems([...itemsRef.current, { role: "user", content: attachments.length ? [{ type: "text", text }, ...attachments] : text }]);
+    const submittedItem: TranscriptItem = {
+      role: "user",
+      content: attachments.length ? [{ type: "text", text }, ...attachments] : text,
+    };
     applyRuntimePhase("starting");
     if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
     setToast(null);
@@ -402,7 +406,14 @@ export function useSessionRuntime({
     activeTurnIdRef.current = `turn-${turnCounter.current}`;
     const socket = socketRef.current ?? connect();
     awaitingSessionActivityRef.current = startsSession;
-    socket.send({ type: "user_turn", turn_id: activeTurnIdRef.current, text, ...(attachments.length ? { attachments } : {}) });
+    await socket.sendUserTurn({ type: "user_turn", turn_id: activeTurnIdRef.current, text, ...(attachments.length ? { attachments } : {}) });
+    showItems([...itemsRef.current, submittedItem]);
+    setPendingFiles([]);
+    if (initialPromptFailedRef.current) {
+      initialPromptFailedRef.current = false;
+      setInitialPromptDraft(null);
+      onInitialPromptConsumed();
+    }
   }
 
   async function onNew(message: AppendMessage) {
@@ -413,7 +424,11 @@ export function useSessionRuntime({
   useEffect(() => {
     if (!selected || !initialPrompt || initialPromptSubmittedRef.current) return;
     initialPromptSubmittedRef.current = true;
-    void submitMessage(initialPrompt).then(onInitialPromptConsumed);
+    void submitMessage(initialPrompt).then(onInitialPromptConsumed, () => {
+      initialPromptFailedRef.current = true;
+      setInitialPromptDraft(initialPrompt);
+      showAlert({ kind: "alert", id: "initial-prompt", level: "error", text: "消息未送达，内容已保留在输入框中。" });
+    });
   }, [initialPrompt, onInitialPromptConsumed, selected]);
 
   function respondToApproval(approved: boolean) {
@@ -509,6 +524,7 @@ export function useSessionRuntime({
     workspaceSaving,
     uploadingAttachments,
     pendingFiles,
+    initialPromptDraft,
     composerGate,
     controlsDisabled,
     sessionRunning,

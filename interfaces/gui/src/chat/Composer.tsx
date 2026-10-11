@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent } from "react";
-import { ComposerPrimitive } from "@assistant-ui/react";
+import { ComposerPrimitive, unstable_useComposerInput } from "@assistant-ui/react";
 import { AlertTriangle, ArrowUp, ChevronDown, LoaderCircle, MessageCircleQuestion, Paperclip, ShieldCheck, X } from "lucide-react";
 import type { PermissionPreset } from "@nosis/protocol";
 import { shouldBlockRunningAttachmentSubmit, shouldSubmitAttachmentOnly, shouldSubmitComposerEnter } from "./composerState";
@@ -8,6 +8,7 @@ import { ContextWindowIndicator, RuntimeIndicators } from "./RuntimeIndicators";
 import type { SessionRuntime } from "./useSessionRuntime";
 
 export function Composer({ runtime }: { runtime: SessionRuntime }) {
+  const { setText: setComposerText } = unstable_useComposerInput();
   const [workspaceEditing, setWorkspaceEditing] = useState(false);
   const workspacePickerRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -24,6 +25,12 @@ export function Composer({ runtime }: { runtime: SessionRuntime }) {
     document.addEventListener("pointerdown", closeOnOutsidePointer);
     return () => document.removeEventListener("pointerdown", closeOnOutsidePointer);
   }, [workspaceEditing]);
+
+  useEffect(() => {
+    if (runtime.initialPromptDraft !== null) {
+      setComposerText(runtime.initialPromptDraft);
+    }
+  }, [runtime.initialPromptDraft, setComposerText]);
 
   useEffect(() => () => {
     if (compositionEndTimeoutRef.current) clearTimeout(compositionEndTimeoutRef.current);

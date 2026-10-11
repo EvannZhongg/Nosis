@@ -31,7 +31,7 @@ export function UserMessage() {
 
   async function save() {
     const content = draft.trim();
-    if (!anchorId || !content || saving) return;
+    if (!anchorId || !content || saving || disabled) return;
     setSaving(true);
     try {
       await submit(anchorId, content);
@@ -50,7 +50,7 @@ export function UserMessage() {
         <textarea value={draft} autoFocus onChange={(event) => setDraft(event.target.value)} />
         <div className="user-message-editor-actions">
           <button type="button" className="user-edit-cancel" disabled={saving} onClick={() => { setDraft(text); setEditing(false); }}>取消</button>
-          <button type="button" className="user-edit-submit" disabled={saving || !draft.trim()} onClick={() => void save()}>发送</button>
+          <button type="button" className="user-edit-submit" disabled={saving || disabled || !draft.trim()} onClick={() => void save()}>发送</button>
         </div>
       </div>
       : <>
