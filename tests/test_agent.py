@@ -39,6 +39,7 @@ from agent_core import (
     ToolCatalog,
     ToolExecutionContext,
 )
+from agent_core.context_manager import ARCHIVE_RETRY_COUNT
 
 REQUEST_TIME = datetime(2026, 9, 9, 8, 0, tzinfo=timezone.utc)
 TOOL_CALL_TIME = datetime(2026, 9, 9, 8, 0, 10, tzinfo=timezone.utc)
@@ -187,7 +188,7 @@ class AgentTest(unittest.TestCase):
         call = ToolCall("call", "echo", {"text": "again"})
         provider = SteeringProvider(
             [LLMResponse(content=None, tool_calls=(call,)),
-             LLMResponse(content="compressed"),
+             LLMResponse(content="- [ephemeral] Compression completed."),
              LLMResponse(content=None, tool_calls=(call,)),
              LLMResponse(content="done")],
             control, {2: "try once more"},
@@ -343,7 +344,7 @@ class AgentTest(unittest.TestCase):
         session.add_item("assistant", None, tool_calls=(call,))
         session.tool_started(call)
         provider = MockProvider(
-            ["old turn summary", "new answer"],
+            ["- [ephemeral] Old turn summary.", "new answer"],
             input_tokens=800,
         )
         agent = Agent(
@@ -375,7 +376,7 @@ class AgentTest(unittest.TestCase):
         )
         self.assertEqual(provider.requests[1].system_prompt, "You are helpful.")
         self.assertIn(
-            "[Archived Context Summary]\nold turn summary",
+            "[Archived Context Summary]\n- [ephemeral] Old turn summary.",
             provider.requests[1].messages[-1].content,
         )
         self.assertEqual(
@@ -388,7 +389,10 @@ class AgentTest(unittest.TestCase):
             "session-1",
             items=[Message("user", "first"), Message("assistant", "one")],
         )
-        provider = MockProvider(["first summary", "second summary"])
+        provider = MockProvider([
+            "- [durable] First summary.",
+            "- [durable] Second summary.",
+        ])
         context = ContextManager(
             provider,
             session,
@@ -414,11 +418,14 @@ class AgentTest(unittest.TestCase):
         context.archive()
 
         self.assertEqual(session.archived_item_cursor, 4)
-        self.assertEqual(session.archived_summary, "second summary")
+        self.assertEqual(
+            session.archived_summary,
+            "- [durable] Second summary.",
+        )
         self.assertEqual(session.compression_count, 2)
         self.assertEqual(provider.requests[1].system_prompt, CONSOLIDATOR_PROMPT)
         self.assertIn(
-            "[Archived Context Summary]\nfirst summary",
+            "[Archived Context Summary]\n- [durable] First summary.",
             provider.requests[1].messages[0].content,
         )
         compression_record = provider.requests[1].messages[-1].content or ""
@@ -426,15 +433,120 @@ class AgentTest(unittest.TestCase):
         request = context.build_request()
         self.assertEqual(request.system_prompt, "You are helpful.")
         self.assertIn(
-            "[Archived Context Summary]\nsecond summary",
+            "[Archived Context Summary]\n- [durable] Second summary.",
             request.messages[-1].content,
         )
-        self.assertNotIn("first summary", request.messages[-1].content)
+        self.assertNotIn("First summary.", request.messages[-1].content)
         self.assertEqual(
             [message.content for message in request.messages
              if message.role == "user"],
             ["third"],
         )
+
+    def test_archive_retries_invalid_shape_before_committing(self) -> None:
+        session = Session(
+            "session-1",
+            items=[Message("user", "first"), Message("assistant", "one")],
+        )
+        provider = MockProvider([
+            "I should produce a checkpoint.",
+            (
+                "- [permanent] Keep the user's stable preference.\n"
+                "- [durable] Preserve the project decision.\n"
+                "- [ephemeral] Continue the active task.\n"
+                "- [correction] Use the latest corrected value."
+            ),
+        ])
+        context = ContextManager(
+            provider,
+            session,
+            "You are helpful.",
+            CONSOLIDATOR_PROMPT,
+            AgentConfig(
+                max_same_tool_calls=5,
+                output_reserve_tokens=100,
+                tools=ToolConfig(enabled=()),
+                workspace_instruction_files=(),
+                context=ContextCompressionConfig(keep_recent_units=1),
+            ),
+        )
+        session.add_item("user", "second")
+
+        context.archive()
+
+        self.assertEqual(len(provider.requests), 2)
+        self.assertEqual(provider.requests[0], provider.requests[1])
+        self.assertEqual(
+            session.archived_summary,
+            (
+                "- [permanent] Keep the user's stable preference.\n"
+                "- [durable] Preserve the project decision.\n"
+                "- [ephemeral] Continue the active task.\n"
+                "- [correction] Use the latest corrected value."
+            ),
+        )
+        self.assertEqual(session.archived_item_cursor, 2)
+        self.assertEqual(session.compression_count, 1)
+
+    def test_archive_exhausts_shape_retries_without_committing(self) -> None:
+        session = Session(
+            "session-1",
+            items=[Message("user", "first"), Message("assistant", "one")],
+        )
+        provider = MockProvider(
+            ["- [unknown] Invalid mark."] * (ARCHIVE_RETRY_COUNT + 1)
+        )
+        context = ContextManager(
+            provider,
+            session,
+            "You are helpful.",
+            CONSOLIDATOR_PROMPT,
+            AgentConfig(
+                max_same_tool_calls=5,
+                output_reserve_tokens=100,
+                tools=ToolConfig(enabled=()),
+                workspace_instruction_files=(),
+                context=ContextCompressionConfig(keep_recent_units=1),
+            ),
+        )
+        session.add_item("user", "second")
+
+        with self.assertRaisesRegex(
+            ValueError,
+            rf"invalid checkpoint after {ARCHIVE_RETRY_COUNT + 1} attempts",
+        ):
+            context.archive()
+
+        self.assertEqual(len(provider.requests), ARCHIVE_RETRY_COUNT + 1)
+        self.assertIsNone(session.archived_summary)
+        self.assertEqual(session.archived_item_cursor, 0)
+        self.assertEqual(session.compression_count, 0)
+
+    def test_archive_accepts_nothing_checkpoint(self) -> None:
+        session = Session(
+            "session-1",
+            items=[Message("user", "first"), Message("assistant", "one")],
+        )
+        provider = MockProvider(["(nothing)"])
+        context = ContextManager(
+            provider,
+            session,
+            "You are helpful.",
+            CONSOLIDATOR_PROMPT,
+            AgentConfig(
+                max_same_tool_calls=5,
+                output_reserve_tokens=100,
+                tools=ToolConfig(enabled=()),
+                workspace_instruction_files=(),
+                context=ContextCompressionConfig(keep_recent_units=1),
+            ),
+        )
+        session.add_item("user", "second")
+
+        context.archive()
+
+        self.assertEqual(session.archived_summary, "(nothing)")
+        self.assertEqual(len(provider.requests), 1)
 
     def test_archive_excludes_reasoning_from_compression_input(self) -> None:
         session = Session(
@@ -449,7 +561,7 @@ class AgentTest(unittest.TestCase):
                 Message("user", "second"),
             ],
         )
-        provider = MockProvider(["summary"])
+        provider = MockProvider(["- [ephemeral] Summary."])
         context = ContextManager(
             provider,
             session,
@@ -580,7 +692,10 @@ class AgentTest(unittest.TestCase):
         session.add_item("assistant", None, tool_calls=(first_call,))
         session.add_item("tool", "first result", tool_call_id=first_call.id)
         session.add_item("assistant", "continuing")
-        provider = MockProvider(["first checkpoint", "second checkpoint"])
+        provider = MockProvider([
+            "- [ephemeral] First checkpoint.",
+            "- [ephemeral] Second checkpoint.",
+        ])
         context = ContextManager(
             provider,
             session,
@@ -659,7 +774,7 @@ class AgentTest(unittest.TestCase):
                 ),
             ],
         )
-        provider = MockProvider(["summary"])
+        provider = MockProvider(["- [ephemeral] Summary."])
         context = ContextManager(
             provider,
             session,
@@ -730,7 +845,7 @@ class AgentTest(unittest.TestCase):
                 Message("assistant", "next"),
             ],
         )
-        provider = MockProvider(["summary"])
+        provider = MockProvider(["- [ephemeral] Summary."])
         context = ContextManager(
             provider,
             session,
@@ -1462,7 +1577,7 @@ class AgentTest(unittest.TestCase):
                 LLMResponse(content=None, tool_calls=(calls[0],)),
                 LLMResponse(content=None, tool_calls=(calls[1],)),
                 LLMResponse(content=None, tool_calls=(calls[2],)),
-                "active turn checkpoint",
+                "- [ephemeral] Active turn checkpoint.",
                 "done",
             ],
             input_tokens=[100, 100, 100, 800, 100, 120],
@@ -1500,7 +1615,10 @@ class AgentTest(unittest.TestCase):
         agent.run("finish the task")
 
         self.assertEqual(session.archived_item_cursor, 5)
-        self.assertEqual(session.archived_summary, "active turn checkpoint")
+        self.assertEqual(
+            session.archived_summary,
+            "- [ephemeral] Active turn checkpoint.",
+        )
         consolidation = provider.requests[3]
         self.assertEqual(len(consolidation.messages), 1)
         consolidation_record = consolidation.messages[0].content or ""
@@ -1511,7 +1629,7 @@ class AgentTest(unittest.TestCase):
         resumed = provider.requests[4]
         self.assertEqual(resumed.system_prompt, "You are helpful.")
         self.assertIn(
-            "[Archived Context Summary]\nactive turn checkpoint",
+            "[Archived Context Summary]\n- [ephemeral] Active turn checkpoint.",
             resumed.messages[-1].content,
         )
         anchor = resumed.messages[0]
@@ -1906,7 +2024,7 @@ class CooperativeCancellationTest(unittest.TestCase):
         class CancellingProvider(MockProvider):
             def stream(self, *args):
                 control.cancel()
-                return LLMResponse("summary")
+                return LLMResponse("- [ephemeral] Summary.")
 
         session = Session()
         session.add_item("user", "old question")

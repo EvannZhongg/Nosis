@@ -1,16 +1,23 @@
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
 
 from .config import AgentConfig
 from .content import historical_content
-from .llm import LLMProvider, LLMRequest, with_generation_limit
+from .llm import LLMProvider, LLMRequest, LLMResponse, with_generation_limit
 from .memory import MemoryContext
 from .plan import plan_snapshot_to_dict
 from .projection import ContextUnit, project_context_units
 from .session import Message, Session, UserAnchor
 from .tools import ToolDefinition
+
+
+ARCHIVE_RETRY_COUNT = 5
+_ARCHIVE_LINE = re.compile(
+    r"^- \[(?:permanent|durable|ephemeral|correction)\] \S(?:.*\S)?$"
+)
 
 
 class ContextWindowExceededError(RuntimeError):
@@ -170,12 +177,22 @@ class ContextManager:
             self._provider,
             self._max_generation_tokens,
         )
-        response = self._provider.stream_cancellable(
-            request, lambda _text: None, None, check_cancelled,
-        )
-        summary = response.content.strip() if response.content else ""
-        if response.tool_calls or not summary:
-            raise ValueError("context consolidator must return text content")
+        summary = ""
+        validation_error: ValueError | None = None
+        for _ in range(ARCHIVE_RETRY_COUNT + 1):
+            response = self._provider.stream_cancellable(
+                request, lambda _text: None, None, check_cancelled,
+            )
+            try:
+                summary = _validated_archive_summary(response)
+                break
+            except ValueError as error:
+                validation_error = error
+        else:
+            raise ValueError(
+                "context consolidator returned an invalid checkpoint after "
+                f"{ARCHIVE_RETRY_COUNT + 1} attempts: {validation_error}"
+            ) from validation_error
         self._session.set_archived_summary(
             summary,
             archive_end,
@@ -260,6 +277,22 @@ class ContextManager:
 
 def _unit_messages(units: Iterable[ContextUnit]) -> list[Message]:
     return [message for unit in units for message in unit.messages]
+
+
+def _validated_archive_summary(response: LLMResponse) -> str:
+    if response.tool_calls:
+        raise ValueError("checkpoint must not contain tool calls")
+    summary = response.content.strip() if response.content else ""
+    if not summary:
+        raise ValueError("checkpoint must not be empty")
+    if summary == "(nothing)":
+        return summary
+    lines = summary.splitlines()
+    if any(not _ARCHIVE_LINE.fullmatch(line) for line in lines):
+        raise ValueError(
+            "checkpoint lines must use '- [mark] fact' with a supported mark"
+        )
+    return summary
 
 
 def _lossless_user_anchors(
