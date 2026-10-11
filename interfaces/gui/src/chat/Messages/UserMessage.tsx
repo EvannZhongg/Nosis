@@ -1,6 +1,7 @@
 import { createContext, useContext, useState } from "react";
-import { Check, Pencil, X } from "lucide-react";
+import { Pencil } from "lucide-react";
 import { MessagePrimitive, useAuiState } from "@assistant-ui/react";
+import { CopyTextButton } from "../../CopyTextButton";
 import { FileAttachmentPart, SignedImage } from "./Attachments";
 import { MessageTimestamp } from "./messagePrimitives";
 
@@ -35,6 +36,8 @@ export function UserMessage() {
     try {
       await submit(anchorId, content);
       setEditing(false);
+    } catch {
+      // The parent surfaces the request error; keep the editor open.
     } finally {
       setSaving(false);
     }
@@ -43,13 +46,19 @@ export function UserMessage() {
   return <MessagePrimitive.Root className="user-turn">
     <MessageTimestamp className="turn-timestamp" />
     {editing
-      ? <div className="user-message user-message-editor"><textarea value={draft} autoFocus onChange={(event) => setDraft(event.target.value)} /></div>
-      : <div className="user-message"><MessagePrimitive.Parts components={{ File: FileAttachmentPart, Image: SignedImage }} /></div>}
-    {anchorId && <div className="user-message-actions">
-      {editing ? <>
-        <button type="button" aria-label="取消编辑" title="取消编辑" disabled={saving} onClick={() => { setDraft(text); setEditing(false); }}><X size={13} /></button>
-        <button type="button" aria-label="提交编辑" title="提交并创建分支" disabled={saving || !draft.trim()} onClick={() => void save()}><Check size={13} /></button>
-      </> : <button type="button" aria-label="编辑消息" title="编辑并创建分支" disabled={disabled} onClick={() => { setDraft(text); setEditing(true); }}><Pencil size={13} /></button>}
-    </div>}
+      ? <div className="user-message user-message-editor">
+        <textarea value={draft} autoFocus onChange={(event) => setDraft(event.target.value)} />
+        <div className="user-message-editor-actions">
+          <button type="button" className="user-edit-cancel" disabled={saving} onClick={() => { setDraft(text); setEditing(false); }}>取消</button>
+          <button type="button" className="user-edit-submit" disabled={saving || !draft.trim()} onClick={() => void save()}>发送</button>
+        </div>
+      </div>
+      : <>
+        <div className="user-message"><MessagePrimitive.Parts components={{ File: FileAttachmentPart, Image: SignedImage }} /></div>
+        <div className="user-message-meta">
+          <CopyTextButton className="user-message-action" label="复制消息" getText={() => text} />
+          {anchorId && <button type="button" className="user-message-action" aria-label="编辑消息" title="编辑并创建分支" disabled={disabled} onClick={() => { setDraft(text); setEditing(true); }}><Pencil size={13} /></button>}
+        </div>
+      </>}
   </MessagePrimitive.Root>;
 }
