@@ -299,6 +299,8 @@ pre { overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-famil
 .workspace-files { flex: 1; overflow: auto; padding: 18px 13px; }
 .workspace-root { display: flex; align-items: center; gap: 8px; color: #6b7992; margin: 0 5px 14px; font-size: 11px; font-weight: 550; }
 .workspace-root span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.workspace-unselected { display: flex; min-height: 180px; flex-direction: column; align-items: center; justify-content: center; gap: 9px; color: #a0a8b5; font-size: 11px; text-align: center; }
+.workspace-unselected svg { color: #b2bac6; }
 .file-tree { list-style: none; padding: 0; margin: 0; }
 .file-tree .file-tree { padding-left: 15px; border-left: 1px solid #e7ebf1; margin-left: 12px; }
 .tree-entry-row { display: flex; align-items: center; width: 100%; border-radius: 4px; }

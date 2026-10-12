@@ -104,6 +104,7 @@ export function useSessionRuntime({
   const configurationPending = permissionSaving || providerSaving || workspaceSaving;
   const displayedProvider = pendingProvider ?? provider;
   const displayedWorkspace = pendingWorkspace ?? workspaceDraft;
+  const workspaceSelected = Boolean(displayedWorkspace.trim());
   const running = runtimeIsActive(runtimePhase);
   const interactionActive = approval !== null || question !== null;
   const backgroundDisconnected = backgroundActive && socketRef.current === null;
@@ -113,6 +114,7 @@ export function useSessionRuntime({
     attachmentReplaced,
     interactionActive,
     backgroundDisconnected,
+    workspaceSelected,
   });
   const controlsDisabled = attachmentReplaced || backgroundDisconnected || pendingUserItem !== null || Boolean(forkPreview);
   const sessionRunning = running || backgroundActive || pendingUserItem !== null || Boolean(forkPreview);
@@ -161,7 +163,7 @@ export function useSessionRuntime({
   // A selected Chat owns a lightweight Session connection. Hidden Chats keep
   // one only while their turn remains active.
   useEffect(() => {
-    if ((selected || backgroundActive) && socketRef.current === null && !attachmentReplacedRef.current) {
+    if (session.workspace && (selected || backgroundActive) && socketRef.current === null && !attachmentReplacedRef.current) {
       connect({ attachOnly: !selected });
     }
   }, [backgroundActive, provider, selected, session.session_id, session.workspace]);
@@ -387,6 +389,10 @@ export function useSessionRuntime({
 
   async function submitMessage(text: string) {
     if (!text && pendingFiles.length === 0) return;
+    if (!workspaceSelected) {
+      showToast({ kind: "toast", level: "info", text: "请先选择工作区。" });
+      return;
+    }
     if (attachmentSubmitRef.current) return;
     if (runtimeIsActive(runtimePhaseRef.current)) {
       const turnId = activeTurnIdRef.current;
@@ -474,12 +480,13 @@ export function useSessionRuntime({
   }
 
   function changePermissionPreset(preset: PermissionPreset) {
-    if (preset === permissionPreset) return;
+    if (!workspaceSelected || preset === permissionPreset) return;
     setPendingPermissionPreset(preset);
     (socketRef.current ?? connect()).send({ type: "permission_set", preset });
   }
 
   function changeProvider(nextProvider: string) {
+    if (!workspaceSelected) return;
     setPendingProvider(nextProvider);
     (socketRef.current ?? connect()).send({ type: "provider_set", provider: nextProvider });
   }
@@ -495,8 +502,14 @@ export function useSessionRuntime({
     const nextWorkspace = value.trim();
     if (!nextWorkspace || nextWorkspace === session.workspace) return;
     setPendingWorkspace(nextWorkspace);
+    if (socketRef.current === null) {
+      setWorkspaceDraft(nextWorkspace);
+      onWorkspaceChange?.(nextWorkspace);
+      setPendingWorkspace(null);
+      return;
+    }
     try {
-      (socketRef.current ?? connect()).send({ type: "workspace_set", workspace: nextWorkspace });
+      socketRef.current.send({ type: "workspace_set", workspace: nextWorkspace });
     } catch (error) {
       showAlert({ kind: "alert", id: "workspace-update", level: "error", text: String(error) });
       setPendingWorkspace(null);
@@ -564,6 +577,7 @@ export function useSessionRuntime({
     composerGate,
     controlsDisabled,
     sessionRunning,
+    workspaceSelected,
     availableWorkspaces: Array.from(new Set([...workspaceOptions, displayedWorkspace].filter(Boolean))),
     addPendingFiles: (files: File[]) => setPendingFiles((current) => [...current, ...files]),
     removePendingFile: (index: number) => setPendingFiles((current) => current.filter((_, itemIndex) => itemIndex !== index)),

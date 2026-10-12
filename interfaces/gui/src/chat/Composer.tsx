@@ -136,7 +136,7 @@ export function Composer({ runtime }: { runtime: SessionRuntime }) {
         </div>}
       </div>
       <ComposerPrimitive.Input
-        placeholder={runtime.question ? "请先回答上方问题…" : runtime.approval ? "请先处理上方确认…" : "Ask Nosis…"}
+        placeholder={!runtime.workspaceSelected ? "请先选择工作区…" : runtime.question ? "请先回答上方问题…" : runtime.approval ? "请先处理上方确认…" : "Ask Nosis…"}
         aria-label="消息"
         rows={2}
         autoFocus
@@ -148,19 +148,19 @@ export function Composer({ runtime }: { runtime: SessionRuntime }) {
         onPaste={onPaste}
       />
       <div className="composer-bottom">
-        <button type="button" className="attachment-button" aria-label="添加附件" title="添加附件" disabled={runtime.controlsDisabled || runtime.sessionRunning || runtime.uploadingAttachments} onClick={() => fileInputRef.current?.click()}><Paperclip size={15} /></button>
+        <button type="button" className="attachment-button" aria-label="添加附件" title="添加附件" disabled={!runtime.workspaceSelected || runtime.controlsDisabled || runtime.sessionRunning || runtime.uploadingAttachments} onClick={() => fileInputRef.current?.click()}><Paperclip size={15} /></button>
         <input ref={fileInputRef} className="attachment-input" type="file" multiple onChange={(event) => {
           runtime.addPendingFiles(Array.from(event.target.files ?? []));
           event.currentTarget.value = "";
         }} />
         <label className="model-selector" title={runtime.providers.find((option) => option.id === runtime.displayedProvider)?.model}>
-          <select aria-label="选择模型" value={runtime.displayedProvider} disabled={runtime.controlsDisabled || runtime.sessionRunning || runtime.providerSaving} onChange={(event) => runtime.changeProvider(event.target.value)}>
+          <select aria-label="选择模型" value={runtime.displayedProvider} disabled={!runtime.workspaceSelected || runtime.controlsDisabled || runtime.sessionRunning || runtime.providerSaving} onChange={(event) => runtime.changeProvider(event.target.value)}>
             {runtime.providers.map((option) => <option key={option.id} value={option.id}>{option.model}</option>)}
           </select>{runtime.providerSaving ? <LoaderCircle size={12} className="spin" aria-label="正在切换模型" /> : <ChevronDown size={12} />}
         </label>
         <label className="permission-selector" title="权限模式">
           <ShieldCheck size={13} />
-          <select aria-label="权限模式" value={runtime.displayedPermissionPreset} disabled={runtime.controlsDisabled || runtime.permissionSaving} onChange={(event) => runtime.changePermissionPreset(event.target.value as PermissionPreset)}>
+          <select aria-label="权限模式" value={runtime.displayedPermissionPreset} disabled={!runtime.workspaceSelected || runtime.controlsDisabled || runtime.permissionSaving} onChange={(event) => runtime.changePermissionPreset(event.target.value as PermissionPreset)}>
             <option value="ask_for_approval">请求批准</option>
             <option value="workspace_access">工作区访问</option>
             <option value="full_access">完全访问</option>

@@ -54,22 +54,20 @@ export function App() {
     let cancelled = false;
     const restoreSession = async () => {
       try {
-        const { root } = await get<{ root: string }>("/api/workspace");
         const restored = rememberedSessionId
           ? await get<Session>(sessionUrl(rememberedSessionId))
-          : newSession(root);
+          : newSession();
         if (cancelled) return;
-        const selected = restored.workspace ? restored : { ...restored, workspace: root };
         setChatSessions((all) => [
-          selected,
-          ...all.filter((item) => item.session_id !== selected.session_id),
+          restored,
+          ...all.filter((item) => item.session_id !== restored.session_id),
         ]);
-        setSelectedSessionId(selected.session_id);
-        if (selected.provider) {
-          setProviderBySession((all) => ({ ...all, [selected.session_id]: selected.provider! }));
+        setSelectedSessionId(restored.session_id);
+        if (restored.provider) {
+          setProviderBySession((all) => ({ ...all, [restored.session_id]: restored.provider! }));
         }
-        if (selected.context_window) {
-          setContextBySession((all) => ({ ...all, [selected.session_id]: selected.context_window ?? null }));
+        if (restored.context_window) {
+          setContextBySession((all) => ({ ...all, [restored.session_id]: restored.context_window ?? null }));
         }
       } catch (error) {
         if (cancelled) return;
@@ -173,7 +171,7 @@ export function App() {
     }
   }
 
-  function createNewChat(workspace = selectedSession?.workspace) {
+  function createNewChat(workspace?: string) {
     const fresh = newSession(workspace);
     // Add the new chat to the stable mounted set before making it visible.
     setChatSessions((all) => [...all, fresh]);
@@ -191,7 +189,7 @@ export function App() {
       await deleteSession(id);
       const remaining = chatSessions.filter((item) => item.session_id !== id);
       if (selectedSessionId === id) {
-        const next = remaining[0] ?? newSession(selectedSession?.workspace);
+        const next = remaining[0] ?? newSession();
         setChatSessions(remaining.length ? remaining : [next]);
         setSelectedSessionId(next.session_id);
       } else {
@@ -330,7 +328,7 @@ export function App() {
           }} onEditMessage={(anchorId, content) => forkFromMessage(current, anchorId, content)} initialPrompt={initialPrompts[current.session_id]} onInitialPromptConsumed={() => setInitialPrompts((all) => { const next = { ...all }; delete next[current.session_id]; return next; })} /></div>;
         })}
       </main>
-      {!settingsSection && selectedSession && <Workspace version={workspaceVersion} sessionId={selectedSession.session_id} collapsed={workspaceCollapsed} onCollapsedChange={setWorkspaceCollapsed} />}
+      {!settingsSection && selectedSession && <Workspace version={workspaceVersion} workspace={selectedSession.workspace} collapsed={workspaceCollapsed} onCollapsedChange={setWorkspaceCollapsed} />}
     </div>
   );
 }

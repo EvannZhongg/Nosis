@@ -2033,6 +2033,27 @@ class GuiTest(unittest.TestCase):
             {"name": "b.txt", "type": "file"}, second["entries"]
         )
 
+    def test_workspace_listing_uses_the_explicit_workspace(self) -> None:
+        other = self.root / "other-workspace"
+        other.mkdir()
+        (other / "selected.txt").write_text("selected", encoding="utf-8")
+
+        with self.client() as client:
+            listing = client.get(
+                "/api/workspace",
+                params={"path": ".", "workspace": str(other)},
+            ).json()
+
+        self.assertEqual(listing["root"], str(other.resolve()))
+        self.assertIn(
+            {"name": "selected.txt", "type": "file"},
+            listing["entries"],
+        )
+        self.assertNotIn(
+            {"name": "README.md", "type": "file"},
+            listing["entries"],
+        )
+
     @unittest.skipUnless(
         SYMLINKS_AVAILABLE,
         "creating symlinks needs Developer Mode or administrator rights "

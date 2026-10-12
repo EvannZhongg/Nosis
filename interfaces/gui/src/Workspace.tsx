@@ -3,7 +3,7 @@ import { ChevronDown, ChevronRight, File, Folder, FolderOpen, PanelRightClose, R
 import { get, type Directory } from "./api";
 import { CopyTextButton } from "./CopyTextButton";
 
-function DirectoryTree({ path, version, sessionId }: { path: string; version: number; sessionId?: string }) {
+function DirectoryTree({ path, version, workspace }: { path: string; version: number; workspace: string }) {
   const [directory, setDirectory] = useState<Directory>();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [error, setError] = useState("");
@@ -11,12 +11,12 @@ function DirectoryTree({ path, version, sessionId }: { path: string; version: nu
 
   useEffect(() => {
     let active = true;
-    const query = `path=${encodeURIComponent(path)}${sessionId ? `&session_id=${encodeURIComponent(sessionId)}` : ""}`;
+    const query = `path=${encodeURIComponent(path)}&workspace=${encodeURIComponent(workspace)}`;
     get<Directory>(`/api/workspace?${query}`).then((data) => {
       if (active) { setDirectory(data); setError(""); }
     }).catch((error) => { if (active) setError(String(error)); });
     return () => { active = false; };
-  }, [path, version, sessionId]);
+  }, [path, version, workspace]);
 
   if (error) return <p className="tree-error" role="alert">{error}</p>;
   if (!directory) return <p className="tree-loading">加载中…</p>;
@@ -28,7 +28,7 @@ function DirectoryTree({ path, version, sessionId }: { path: string; version: nu
   const loadMore = async () => {
     if (!directory.next_cursor || loadingMore) return;
     setLoadingMore(true);
-    const query = `path=${encodeURIComponent(path)}&cursor=${encodeURIComponent(directory.next_cursor)}${sessionId ? `&session_id=${encodeURIComponent(sessionId)}` : ""}`;
+    const query = `path=${encodeURIComponent(path)}&cursor=${encodeURIComponent(directory.next_cursor)}&workspace=${encodeURIComponent(workspace)}`;
     try {
       const next = await get<Directory>(`/api/workspace?${query}`);
       setDirectory({ ...next, entries: [...directory.entries, ...next.entries] });
@@ -60,7 +60,7 @@ function DirectoryTree({ path, version, sessionId }: { path: string; version: nu
                 </button>
                 <CopyTextButton className="tree-copy-button" label={`复制相对路径 ${childPath}`} getText={() => childPath} />
               </div>
-              {isOpen && <DirectoryTree path={childPath} version={version} sessionId={sessionId} />}
+              {isOpen && <DirectoryTree path={childPath} version={version} workspace={workspace} />}
             </> : <div className="tree-entry-row">
               <div className="tree-entry file-entry" title={childPath}><File size={15} /><span>{entry.name}</span>{entry.type === "symlink" && <span>↗</span>}</div>
               <CopyTextButton className="tree-copy-button" label={`复制相对路径 ${childPath}`} getText={() => childPath} />
@@ -74,14 +74,18 @@ function DirectoryTree({ path, version, sessionId }: { path: string; version: nu
   );
 }
 
-export function Workspace({ version, sessionId, collapsed, onCollapsedChange }: { version: number; sessionId?: string; collapsed: boolean; onCollapsedChange: (collapsed: boolean) => void }) {
+export function Workspace({ version, workspace, collapsed, onCollapsedChange }: { version: number; workspace?: string | null; collapsed: boolean; onCollapsedChange: (collapsed: boolean) => void }) {
   const [refresh, setRefresh] = useState(0);
+  const selectedWorkspace = workspace?.trim() ?? "";
   return <aside className={`workspace-panel ${collapsed ? "collapsed" : ""}`} aria-label="Workspace">
     <button className="workspace-rail-button" aria-label="展开工作区" title="展开工作区" onClick={() => onCollapsedChange(false)}><Folder size={19} /></button>
     <div className="workspace-content">
-      <header className="workspace-header"><span>Workspace</span><div className="workspace-header-actions"><button className="icon-button" aria-label="刷新目录" title="刷新目录" onClick={() => setRefresh((value) => value + 1)}><RefreshCw size={14} /></button><button className="icon-button" aria-label="收起工作区" title="收起工作区" onClick={() => onCollapsedChange(true)}><PanelRightClose size={15} /></button></div></header>
-      <div className="workspace-files"><DirectoryTree path="." version={version + refresh} sessionId={sessionId} /></div>
-      <div className="workspace-footer"><Folder size={13} /> 项目文件</div>
+      <header className="workspace-header"><span>Workspace</span><div className="workspace-header-actions"><button className="icon-button" aria-label="刷新目录" title="刷新目录" disabled={!selectedWorkspace} onClick={() => setRefresh((value) => value + 1)}><RefreshCw size={14} /></button><button className="icon-button" aria-label="收起工作区" title="收起工作区" onClick={() => onCollapsedChange(true)}><PanelRightClose size={15} /></button></div></header>
+      <div className="workspace-files">{selectedWorkspace
+        ? <DirectoryTree key={selectedWorkspace} path="." version={version + refresh} workspace={selectedWorkspace} />
+        : <div className="workspace-unselected"><Folder size={20} /><span>未选择工作区</span></div>}
+      </div>
+      <div className="workspace-footer"><Folder size={13} /> {selectedWorkspace ? "项目文件" : "未选择工作区"}</div>
     </div>
   </aside>;
 }

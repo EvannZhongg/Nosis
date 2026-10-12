@@ -78,6 +78,7 @@ describe("composer connection state", () => {
       attachmentReplaced: false,
       interactionActive: false,
       backgroundDisconnected: false,
+      workspaceSelected: true,
     })).toEqual({ inputDisabled: false, sendDisabled: true });
   });
 
@@ -88,6 +89,7 @@ describe("composer connection state", () => {
       attachmentReplaced: false,
       interactionActive: true,
       backgroundDisconnected: false,
+      workspaceSelected: true,
     })).toEqual({ inputDisabled: true, sendDisabled: true });
   });
 
@@ -98,6 +100,7 @@ describe("composer connection state", () => {
       attachmentReplaced: false,
       interactionActive: false,
       backgroundDisconnected: false,
+      workspaceSelected: true,
     })).toEqual({ inputDisabled: false, sendDisabled: true });
   });
 
@@ -108,7 +111,19 @@ describe("composer connection state", () => {
       attachmentReplaced: false,
       interactionActive: false,
       backgroundDisconnected: false,
+      workspaceSelected: true,
     })).toEqual({ inputDisabled: false, sendDisabled: false });
+  });
+
+  it("keeps the draft editable but blocks sending without a workspace", () => {
+    expect(composerConnectionGate({
+      attaching: false,
+      configurationPending: false,
+      attachmentReplaced: false,
+      interactionActive: false,
+      backgroundDisconnected: false,
+      workspaceSelected: false,
+    })).toEqual({ inputDisabled: false, sendDisabled: true });
   });
 });
 

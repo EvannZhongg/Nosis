@@ -85,10 +85,14 @@ def create_workspace_router(
     def get_workspace(
         path: str = ".",
         cursor: str | None = None,
-        session_id: str | None = None,
+        workspace: str | None = None,
     ) -> dict[str, object]:
-        current_workspace = resolver.for_session(session_id)
         try:
+            current_workspace = (
+                Workspace(Path(workspace))
+                if workspace is not None
+                else resolver.default_workspace
+            )
             arguments = {"path": path}
             if cursor is not None:
                 arguments["cursor"] = cursor

@@ -29,15 +29,17 @@ export function composerConnectionGate({
   attachmentReplaced,
   interactionActive,
   backgroundDisconnected,
+  workspaceSelected,
 }: {
   attaching: boolean;
   configurationPending: boolean;
   attachmentReplaced: boolean;
   interactionActive: boolean;
   backgroundDisconnected: boolean;
+  workspaceSelected: boolean;
 }): { inputDisabled: boolean; sendDisabled: boolean } {
   return {
     inputDisabled: attachmentReplaced || interactionActive,
-    sendDisabled: attaching || configurationPending || attachmentReplaced || interactionActive || backgroundDisconnected,
+    sendDisabled: !workspaceSelected || attaching || configurationPending || attachmentReplaced || interactionActive || backgroundDisconnected,
   };
 }
