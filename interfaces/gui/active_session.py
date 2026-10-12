@@ -43,7 +43,7 @@ class ActiveSession:
         self._resume_after = 0
         self.done = False
         self._closed = False
-        self._fatal_pending = False
+        self._failure_pending = False
         self._attachment_id: str | None = None
         self._subscriber: asyncio.Queue[dict[str, object] | None] | None = None
         self._subscriber_detached: asyncio.Event | None = None
@@ -125,7 +125,7 @@ class ActiveSession:
 
     @property
     def attachable(self) -> bool:
-        return not self.done or self._fatal_pending
+        return not self.done or self._failure_pending
 
     @property
     def running(self) -> bool:
@@ -134,15 +134,15 @@ class ActiveSession:
         )
 
     @property
-    def fatal_pending(self) -> bool:
-        return self._fatal_pending
+    def failure_pending(self) -> bool:
+        return self._failure_pending
 
     @property
     def event_sequence(self) -> int:
         return self._event_sequence
 
-    def mark_fatal_delivered(self) -> None:
-        self._fatal_pending = False
+    def mark_failure_delivered(self) -> None:
+        self._failure_pending = False
 
     async def close(self) -> None:
         if not self._closed:
@@ -179,15 +179,15 @@ class ActiveSession:
                             self._snapshot_ready.set()
                     if "transcript" in message:
                         self.transcript = message["transcript"]
-                    if message["type"] in {"turn_completed", "turn_cancelled", "turn_failed", "fatal"}:
+                    if message["type"] in {"turn_completed", "turn_cancelled", "turn_failed", "fatal", "session_open_failed"}:
                         self._pending_turn = None
                         self._snapshot_ready.set()
-                    if message["type"] == "fatal":
-                        self._fatal_pending = True
+                    if message["type"] in {"fatal", "session_open_failed"}:
+                        self._failure_pending = True
                     self._events.append(message)
                     if self._subscriber is not None:
                         self._subscriber.put_nowait(message)
-                if message.get("type") == "fatal":
+                if message.get("type") in {"fatal", "session_open_failed"}:
                     break
         finally:
             unexpected_exit = not self._closed
@@ -218,30 +218,19 @@ class ActiveSessionRegistry:
         workspace: Workspace,
         *,
         attach_only: bool,
-        attachment_id: str,
     ) -> tuple[ActiveSession | None, bool]:
         session_id = str(opening_message["session_id"])
         async with self._lock:
             current = self._sessions.get(session_id)
-            if current is not None and current.done and current.fatal_pending:
+            if current is not None and current.done and current.failure_pending:
                 return current, False
             provider = opening_message.get("provider")
             selected_provider = provider if isinstance(provider, str) else None
             selected_workspace = str(workspace.path)
             if current is not None and not current.done:
-                same_configuration = (
-                    current.state["provider"] == selected_provider
-                    and current.state["workspace"] == selected_workspace
-                )
-                if (
-                    attach_only
-                    or current.running
-                    or same_configuration
-                    or not current.owns_attachment(attachment_id)
-                ):
-                    return current, False
-                self._sessions.pop(session_id, None)
-                await current.close()
+                # Opening a view attaches to its existing Runtime. Explicit
+                # provider/workspace messages change that Runtime's settings.
+                return current, False
             if current is not None:
                 self._sessions.pop(session_id, None)
             if attach_only:

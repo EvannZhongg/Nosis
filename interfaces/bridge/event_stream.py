@@ -8,8 +8,8 @@ class EventStream:
     """Assign cursors and bind transcript checkpoints to emitted events.
 
     A checkpoint replaces the transcript through its cursor. Later events
-    must be replayed, regardless of the execution phase. Fatal errors never
-    advance that checkpoint because they are not conversation items.
+    must be replayed, regardless of the execution phase. Opening failures and
+    fatal errors do not advance the resume cursor before they are delivered.
     """
 
     def __init__(self) -> None:
@@ -26,7 +26,7 @@ class EventStream:
         result = {
             **message,
             "event_sequence": self.sequence,
-            "resume_after": self.sequence - 1 if message["type"] == "fatal" else self.sequence,
+            "resume_after": self.sequence - 1 if message["type"] in {"fatal", "session_open_failed"} else self.sequence,
         }
         if state is not None and message["type"] != "runtime_state":
             result["runtime"] = state

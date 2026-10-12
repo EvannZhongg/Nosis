@@ -23,6 +23,14 @@ from .time_utils import format_utc as _format_utc, parse_utc as _parse_utc
 SESSION_METADATA_FILENAME = "session.json"
 
 
+class SessionInUseError(RuntimeError):
+    """Another writer owns the Session journal."""
+
+    def __init__(self, session_id: str) -> None:
+        self.session_id = session_id
+        super().__init__(f"Session '{session_id}' is already in use by another runtime.")
+
+
 class JsonlSessionStore:
     """Persist one durable JSON record for every runtime journal event."""
 
@@ -440,7 +448,10 @@ def _open_journal_file(path: Path) -> BinaryIO:
     # Do not share writes/deletes or allow the handle to be inherited.
     handle = create_file(str(path), 0xC0000000, 0x1, None, 4, 0x80, None)
     if handle == wintypes.HANDLE(-1).value:
-        raise ctypes.WinError(ctypes.get_last_error())
+        error = ctypes.WinError(ctypes.get_last_error())
+        if error.winerror == 32:  # ERROR_SHARING_VIOLATION
+            raise SessionInUseError(path.stem) from error
+        raise error
     try:
         descriptor = msvcrt.open_osfhandle(
             handle, os.O_RDWR | os.O_BINARY | os.O_APPEND | os.O_NOINHERIT,

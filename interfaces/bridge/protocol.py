@@ -119,6 +119,14 @@ def session_ready_message(
     }
 
 
+def session_open_failed_message(session_id: str, message: str) -> dict[str, object]:
+    return {
+        "type": "session_open_failed",
+        "session_id": session_id,
+        "error": {"type": "SessionInUseError", "message": message},
+    }
+
+
 def runtime_state_message(
     *,
     phase: str,

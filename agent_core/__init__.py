@@ -102,7 +102,7 @@ from .plan import (
     PlanStepStatus,
     plan_snapshot_to_dict,
 )
-from .session_store import JsonlSessionStore
+from .session_store import JsonlSessionStore, SessionInUseError
 from .scheduler import (
     AgentTurnAction,
     CronTrigger,
@@ -256,6 +256,7 @@ __all__ = [
     "CancellationToken",
     "JSONValue",
     "JsonlSessionStore",
+    "SessionInUseError",
     "LLMProvider",
     "LLMRequest",
     "LLMResponse",

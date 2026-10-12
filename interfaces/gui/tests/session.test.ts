@@ -57,6 +57,35 @@ describe("SessionSocket synchronization", () => {
     vi.stubGlobal("WebSocket", FakeWebSocket);
   });
 
+  it("reports an occupied session without sending queued commands and allows another selection", async () => {
+    const onMessage = vi.fn();
+    const onClose = vi.fn();
+    const socket = new SessionSocket({
+      sessionId: "occupied", attachmentId: "page", onMessage, onClose, onError: vi.fn(),
+    });
+    socket.send({ type: "permission_set", preset: "full_access" });
+    const pending = socket.sendUserTurn({ type: "user_turn", turn_id: "t1", text: "keep draft" });
+    const rejected = expect(pending).rejects.toThrow("already in use");
+    const failed = FakeWebSocket.latest;
+    failed.open();
+    failed.receive({
+      type: "session_open_failed", session_id: "occupied",
+      error: { type: "SessionInUseError", message: "Session is already in use" },
+    });
+    await rejected;
+    expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "session_open_failed" }));
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(failed.sent.map((message) => JSON.parse(message).type)).toEqual(["open_session"]);
+
+    const next = new SessionSocket({
+      sessionId: "available", attachmentId: "page", onMessage, onClose, onError: vi.fn(),
+    });
+    next.send({ type: "user_turn", turn_id: "t2", text: "next" });
+    FakeWebSocket.latest.open();
+    FakeWebSocket.latest.receive(snapshot);
+    expect(FakeWebSocket.latest.sent.map((message) => JSON.parse(message).type)).toEqual(["open_session", "user_turn"]);
+  });
+
   it("sends open_session first and holds commands until runtime_state", () => {
     const received: string[] = [];
     const socket = new SessionSocket({

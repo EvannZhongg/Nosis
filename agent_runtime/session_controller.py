@@ -35,6 +35,10 @@ class SessionRuntimeController:
         config_path = self._config_path
         self._environment.reload()
         self.close()
+        self.session = None
+        self.plan = None
+        self.permissions = None
+        self.provider_name = None
 
         workspace = Workspace(workspace)
         default_provider, models = load_model_options(config_path)
@@ -59,21 +63,23 @@ class SessionRuntimeController:
             bound_workspace = self.store.workspace_for(str(session_id))
             if bound_workspace:
                 workspace = Workspace(Path(bound_workspace))
-        self.session = (
-            self.store.load(str(session_id), recover=False)
-            if resumed
-            else Session()
-        )
         self.workspace = workspace
-        # Runtime events are persisted as soon as they happen.
-        self.store.bind_workspace(self.session.session_id, workspace.path)
-        self.session.workspace = str(workspace.path)
-        self.session.attach_journal_sink(
-            self._journal.enter_context(
-                self.store.open_journal(self.session.session_id, workspace.path)
+        session = Session(str(session_id)) if resumed else Session()
+        opening_id = session.session_id
+        # Own the writer before loading state so recovery cannot race another
+        # Runtime. A failed open leaves only the read-only browsing context.
+        with ExitStack() as journal:
+            sink = journal.enter_context(
+                self.store.open_journal(opening_id, workspace.path)
             )
-        )
-        self.session.recover()
+            if resumed:
+                session = self.store.load(opening_id, recover=False)
+            self.store.bind_workspace(opening_id, workspace.path)
+            session.workspace = str(workspace.path)
+            session.attach_journal_sink(sink)
+            session.recover()
+            self._journal = journal.pop_all()
+            self.session = session
         self.plan = PlanManager(
             self.session,
             self.callbacks.on_plan,

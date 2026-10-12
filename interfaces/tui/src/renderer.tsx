@@ -273,6 +273,13 @@ export function PlanView({ plan }: { plan: PlanSnapshot }): React.ReactElement {
 }
 
 export function StatusBar({ state, elapsed }: { state: State; elapsed: number }) {
+  if (state.status === 'session_unavailable') {
+    return (
+      <Box flexShrink={0} paddingX={1}>
+        <Text color="yellow"> session in use · /sessions to choose another conversation</Text>
+      </Box>
+    );
+  }
   if (state.status === 'opening') {
     return (
       <Box flexShrink={0} paddingX={1}>

@@ -23,6 +23,8 @@ TUI 和 GUI 各自负责启动与附着 Bridge 子进程。`process.py` 提供�
 1. `session_ready`：Session、Workspace、Provider 和权限已恢复。
 2. `runtime_state`：当前执行面的权威快照，也是前端发送后续命令前的同步屏障。
 
+Windows Journal 写入权已被其他 Runtime 占用时，Bridge 返回 `session_open_failed`（`SessionInUseError`），保持协议连接并允许 `list_sessions` 或重新发送 `open_session`。前端在收到 `session_ready` 前不得请求历史记录；在初始 `runtime_state` 前不得提交执行命令。同一 GUI 宿主内打开已有会话会附着原 Bridge，模型或工作区变更通过显式协议消息执行，不另建 Session 写者。
+
 Provider、MCP、Tool 和 Agent 仍由 Runtime 在首个 `user_turn` 到来时延迟初始化。
 
 Bridge 路由的输入包括：

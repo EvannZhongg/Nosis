@@ -6,7 +6,7 @@ from queue import Queue
 from threading import Lock, RLock, Thread
 from typing import TextIO
 
-from agent_core import AgentCancelled as Cancelled, AgentEvent, PermissionPreset, SchedulerService, message_to_dict, runtime_error_info
+from agent_core import AgentCancelled as Cancelled, AgentEvent, PermissionPreset, SchedulerService, SessionInUseError, message_to_dict, runtime_error_info
 from agent_core.mcp.manager import McpServerStatus
 from agent_runtime.host import RuntimeHost
 from agent_runtime.callbacks import RuntimeCallbacks
@@ -21,6 +21,7 @@ from .protocol import (
     runtime_failure_to_dict,
     plan_updated_message,
     session_ready_message,
+    session_open_failed_message,
     session_items_message,
     sessions_listed_message,
     settings_snapshot_message,
@@ -505,6 +506,9 @@ class Bridge:
             if message is None or message["type"] == "shutdown":
                 return
             if not opened:
+                if message["type"] == "list_sessions" and self.host.sessions.workspace is not None:
+                    self._emit_sessions()
+                    continue
                 if message["type"] != "open_session":
                     self.emit(
                         "fatal",
@@ -515,7 +519,11 @@ class Bridge:
                         },
                     )
                     raise SystemExit(1)
-                self.open_session(message)
+                try:
+                    self.open_session(message)
+                except SessionInUseError as error:
+                    self.emit(**session_open_failed_message(error.session_id, str(error)))
+                    continue
                 opened = True
             elif message["type"] == "user_turn":
                 self.run_turn(message)

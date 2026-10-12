@@ -231,6 +231,16 @@ export function useSessionRuntime({
         // so stale transcript, feedback, usage, and turn callbacks cannot
         // mutate the active connection's state.
         if (socketRef.current !== socket) return;
+        if (message.type === "session_open_failed") {
+          clearPendingSettings();
+          setAttaching(false);
+          setReconnecting(false);
+          setJobs({});
+          setApproval(null);
+          setQuestion(null);
+          applyRuntimePhase("inactive");
+          eventCounterRef.current = 0;
+        }
         if (message.type === "user_turn_received" && message.turn_id === activeTurnIdRef.current && pendingUserItemRef.current) {
           // Opening checkpoints update history underneath the pending bubble.
           // Acceptance commits it once; later checkpoints replace it normally.
@@ -274,6 +284,10 @@ export function useSessionRuntime({
             socketModelRef.current = message.provider;
             onProviderChange(message.provider);
           }
+          if (message.workspace) {
+            setWorkspaceDraft(message.workspace);
+            onWorkspaceChange?.(message.workspace);
+          }
           applyRuntimePhase(message.phase);
           if (!pendingUserItemRef.current) activeTurnIdRef.current = message.turn_id;
           setApproval(message.approval ? {
@@ -293,7 +307,7 @@ export function useSessionRuntime({
           }
           return;
         }
-        if (typeof message.event_sequence === "number") eventCounterRef.current = message.event_sequence;
+        if (message.type !== "session_open_failed" && typeof message.event_sequence === "number") eventCounterRef.current = message.event_sequence;
         if (message.type === "user_steer_applied" || message.type === "user_steer_rejected") {
           setPendingSteers((count) => Math.max(0, count - 1));
         }
@@ -313,9 +327,9 @@ export function useSessionRuntime({
           }
           setToast(null);
           setAlerts((current) => {
-            if (!("connection" in current)) return current;
             const next = { ...current };
             delete next.connection;
+            delete next["session-open"];
             return next;
           });
         }

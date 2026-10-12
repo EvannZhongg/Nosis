@@ -15,6 +15,7 @@ from agent_core import (
     PlanSnapshot,
     PlanStep,
     Session,
+    SessionInUseError,
     ToolCall,
 )
 from agent_core.session_paths import session_log_path, workspace_directory
@@ -26,6 +27,44 @@ def persist(store: JsonlSessionStore, workspace: Path, session: Session) -> None
 
 
 class JsonlSessionStoreTest(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "Windows journal ownership")
+    def test_second_writer_reports_session_in_use_without_changing_journal(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = JsonlSessionStore(root / "sessions")
+            session = Session("owned")
+            with store.open_journal("owned", root) as sink:
+                session.attach_journal_sink(sink)
+                session.add_item("user", "original")
+                with self.assertRaises(SessionInUseError) as caught:
+                    with JsonlSessionStore(store.directory).open_journal("owned", root):
+                        self.fail("a second writer acquired the journal")
+                self.assertEqual(caught.exception.session_id, "owned")
+                self.assertEqual(caught.exception.__cause__.winerror, 32)
+                session.add_item("assistant", "owner continues")
+            session.attach_journal_sink(None)
+            self.assertEqual([event.seq for event in store.load("owned").journal], [1, 2])
+            with store.open_journal("owned", root):
+                pass
+
+    @unittest.skipUnless(os.name == "nt", "Windows file permissions")
+    def test_read_only_journal_is_not_reported_as_session_in_use(self) -> None:
+        import stat
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = JsonlSessionStore(root / "sessions")
+            with store.open_journal("readonly", root):
+                pass
+            path = session_log_path(store.directory, root, "readonly")
+            path.chmod(stat.S_IREAD)
+            try:
+                with self.assertRaises(PermissionError):
+                    with store.open_journal("readonly", root):
+                        self.fail("read-only journal opened for writing")
+            finally:
+                path.chmod(stat.S_IREAD | stat.S_IWRITE)
+
     @unittest.skipUnless(os.name == "nt", "Windows PowerShell journal protection")
     def test_recursive_powershell_cleanup_cannot_erase_audit_chain(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

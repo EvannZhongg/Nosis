@@ -129,7 +129,7 @@ class FakeBridge:
             elif kind in {"turn_completed", "turn_failed", "turn_cancelled", "fatal"}:
                 self.state.update(phase="failed" if kind == "fatal" else "idle", turn_id=None)
             self._messages.put_nowait(self._stream.publish(
-                message, state=dict(self.state),
+                message, state=None if kind == "session_open_failed" else dict(self.state),
                 items=list(self.items) if kind in {"session_ready", "turn_completed", "turn_failed", "turn_cancelled"} else None,
             ))
 
@@ -404,6 +404,66 @@ class RuntimeSnapshotTest(unittest.IsolatedAsyncioTestCase):
 
 @unittest.skipIf(TestClient is None, "Install the gui extra to test the GUI")
 class GuiTest(unittest.TestCase):
+    def test_occupied_session_reports_failure_then_allows_selection_or_retry(self) -> None:
+        for selected in ("occupied", "another"):
+            with self.subTest(selected=selected):
+                failed = FakeBridge(replies={"open_session": [
+                    bridge_protocol.session_open_failed_message("occupied", "Session is already in use"),
+                ]})
+                ready = FakeBridge(replies={"open_session": [
+                    {"type": "session_ready", "session_id": selected},
+                ]})
+                pending = [failed, ready]
+
+                async def spawn(cls: object, workspace: Workspace) -> FakeBridge:
+                    return pending.pop(0)
+
+                with patch.object(bridge_process.BridgeProcess, "spawn", classmethod(spawn)), self.client() as client:
+                    with client.websocket_connect("/api/session") as socket:
+                        socket.send_json({"type": "open_session", "session_id": "occupied", "attachment_id": "page"})
+                        message = socket.receive_json()
+                        self.assertEqual(message["type"], "session_open_failed")
+                        self.assertEqual(message["error"]["type"], "SessionInUseError")
+                        self.assertNotIn("runtime", message)
+                        self.assertEqual(message["resume_after"], 0)
+                        with self.assertRaises(WebSocketDisconnect):
+                            socket.receive_json()
+                    _wait_for(client, lambda: client.get("/api/active-sessions").json() == [])
+                    with client.websocket_connect("/api/session") as socket:
+                        socket.send_json({"type": "open_session", "session_id": selected, "attachment_id": "page"})
+                        message = socket.receive_json()
+                        self.assertEqual(message["type"], "session_ready")
+                        self.assertEqual(message["session_id"], selected)
+                self.assertTrue(failed.closed)
+                self.assertEqual([message["type"] for message in failed.sent], ["open_session"])
+                self.assertEqual(pending, [])
+
+    def test_reopening_with_different_preferences_attaches_to_existing_bridge(self) -> None:
+        bridge = FakeBridge(replies={
+            "open_session": [{"type": "session_ready", "session_id": "shared"}],
+            "provider_set": [{"type": "provider_changed", "provider": "second", "model": "openai/second"}],
+        })
+        with self.client(bridge) as client:
+            with client.websocket_connect("/api/session") as first:
+                first.send_json({
+                    "type": "open_session", "session_id": "shared",
+                    "attachment_id": "page", "provider": "first",
+                })
+                self.assertEqual(first.receive_json()["type"], "session_ready")
+            with client.websocket_connect("/api/session") as second:
+                second.send_json({
+                    "type": "open_session", "session_id": "shared",
+                    "attachment_id": "page", "provider": "second",
+                })
+                self.assertTrue(second.receive_json()["replayed"])
+                snapshot = second.receive_json()
+                self.assertEqual(snapshot["type"], "runtime_state")
+                self.assertEqual(snapshot["provider"], "first")
+                self.assertFalse(bridge.closed)
+                self.assertEqual([message["type"] for message in bridge.sent], ["open_session"])
+                second.send_json({"type": "provider_set", "provider": "second"})
+                self.assertEqual(second.receive_json()["type"], "provider_changed")
+
     def test_new_bridge_ignores_the_previous_process_cursor(self) -> None:
         bridge = FakeBridge(replies={"open_session": [{"type": "session_ready", "session_id": "s1"}]})
         with self.client(bridge) as client:

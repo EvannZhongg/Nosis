@@ -283,7 +283,6 @@ def create_sessions_router(
             opening_message,
             current_workspace,
             attach_only=attach_only,
-            attachment_id=attachment_id,
         )
         if runtime is None:
             await websocket.send_json(
@@ -315,6 +314,17 @@ def create_sessions_router(
         queue, events, state = attachment
         fatal_delivered = False
         try:
+            opening_failure = next(
+                (message for message in events if message["type"] == "session_open_failed"),
+                None,
+            )
+            if opening_failure is not None:
+                # No execution snapshot exists. Sending the placeholder state
+                # would incorrectly release the browser's queued commands.
+                await websocket.send_json(opening_failure)
+                runtime.mark_failure_delivered()
+                await websocket.close()
+                return
             replays_fatal = any(
                 message.get("type") == "fatal" for message in events
             )
@@ -341,7 +351,7 @@ def create_sessions_router(
             pass
         finally:
             if fatal_delivered:
-                runtime.mark_fatal_delivered()
+                runtime.mark_failure_delivered()
             await asyncio.shield(runtime.detach(queue, attachment_id))
             await active_sessions.remove_if_finished(runtime)
 

@@ -57,6 +57,13 @@ export class SessionSocket {
     };
     this.socket.onmessage = ({ data }) => {
       const message = JSON.parse(data as string) as Incoming;
+      if (message.type === "session_open_failed") {
+        this.synchronized = false;
+        this.rejectUnconfirmedTurns(new Error(message.error.message));
+        options.onMessage(message);
+        this.socket.close();
+        return;
+      }
       const state = message.type === "runtime_state" ? message : message.runtime;
       if (state && !message.replayed) {
         this.phase = state.phase;
@@ -148,8 +155,7 @@ export class SessionSocket {
     }
   }
 
-  private rejectUnconfirmedTurns(): void {
-    const error = new Error("session connection closed before confirming the turn");
+  private rejectUnconfirmedTurns(error = new Error("session connection closed before confirming the turn")): void {
     for (const command of this.queued) command.acknowledgment?.reject(error);
     this.queued = [];
     for (const acknowledgment of this.pendingUserTurns.values()) {

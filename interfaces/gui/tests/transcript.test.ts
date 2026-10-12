@@ -4,6 +4,18 @@ import { applyMessage, isTurnActivity, toMessages, type TranscriptItem } from ".
 
 const TOOL_CALL = { id: "call-1", name: "shell", arguments: { command: "ls" } };
 
+it("shows session occupancy as actionable feedback without changing the transcript", () => {
+  const items: TranscriptItem[] = [{ role: "user", content: "stored history" }];
+  const applied = applyMessage(items, {
+    type: "session_open_failed", session_id: "occupied",
+    error: { type: "SessionInUseError", message: "occupied" },
+  });
+  expect(applied.items).toBe(items);
+  expect(applied.feedback).toMatchObject({ kind: "alert", level: "warning", id: "session-open" });
+  expect(applied.feedback?.text).toContain("选择其他会话");
+  expect(applied.finished).toBeUndefined();
+});
+
 describe("isTurnActivity", () => {
   it.each([
     { type: "assistant_delta", turn_id: "t1", text: "hi", model_call_index: 1 },

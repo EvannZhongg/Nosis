@@ -22,6 +22,7 @@ export type Status =
   | 'awaiting_user'
   | 'cancelling'
   | 'runtime_failed'
+  | 'session_unavailable'
   | 'fatal';
 
 export type Entry =
@@ -467,6 +468,18 @@ function applyMessage(state: State, message: Incoming): State {
       return {
         ...state,
         mcpStatus: `MCP ${message.server}: ${message.status}${message.tool_count === undefined ? '' : ` (${message.tool_count} tools)`}${message.error === undefined ? '' : ` — ${message.error}`}`,
+      };
+
+    case 'session_open_failed':
+      return {
+        ...initialState,
+        status: 'session_unavailable',
+        workspace: state.workspace,
+        sessions: { list: [], selectedIndex: 0 },
+        entries: [{
+          kind: 'notice', id: nextId('notice'), level: 'warning',
+          text: 'This session is in use in another window. Select another session, or return to its current window.',
+        }],
       };
 
     case 'session_ready':

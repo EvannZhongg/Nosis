@@ -312,9 +312,10 @@ export type Incoming = (
   | { type: 'turn_cancelled'; turn_id: string }
   | { type: 'turn_failed'; turn_id: string; error: RuntimeFailure }
   | { type: 'fatal'; error: RuntimeFailure }
+  | { type: 'session_open_failed'; session_id: string; error: { type: 'SessionInUseError'; message: string } }
 ) & {
   event_sequence?: number;
-  /** Cursor used by the current snapshot before replaying a pending fatal. */
+  /** Cursor used before replaying an undelivered opening or fatal error. */
   resume_after?: number;
   runtime?: RuntimeState;
   /** Replaces the transcript through event_sequence, independent of phase. */

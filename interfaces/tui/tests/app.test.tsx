@@ -131,6 +131,34 @@ function lineContaining(frame: string | undefined, text: string): number {
 }
 
 describe('App', () => {
+  it('opens the session picker on occupancy and can retry the same selection', async () => {
+    autoReady = false;
+    const { stdin, lastFrame, unmount } = renderApp();
+    await waitFor(() => expect(sent.filter((m) => m.type === 'open_session')).toHaveLength(1));
+    expect(sent.some((m) => m.type === 'load_session')).toBe(false);
+    const fail = () => emit({
+      type: 'session_open_failed', session_id: 'occupied',
+      error: { type: 'SessionInUseError', message: 'occupied' },
+    });
+    fail();
+    await waitFor(() => expect(lastFrame()).toContain('in use in another window'));
+    expect(sent.some((m) => m.type === 'list_sessions')).toBe(true);
+    emit({ type: 'sessions_listed', sessions: [{ session_id: 'occupied', title: 'Retry session' }] });
+    await waitFor(() => expect(lastFrame()).toContain('Retry session'));
+    stdin.write('\r');
+    await waitFor(() => expect(sent.filter((m) => m.type === 'open_session')).toHaveLength(2));
+    fail();
+    emit({ type: 'sessions_listed', sessions: [{ session_id: 'occupied', title: 'Retry session' }] });
+    await waitFor(() => expect(lastFrame()).toContain('Retry session'));
+    autoReady = true;
+    stdin.write('\r');
+    await waitForReady(lastFrame);
+    expect(sent.filter((m) => m.type === 'open_session')).toHaveLength(3);
+    expect(sent.filter((m) => m.type === 'load_session')).toHaveLength(1);
+    expect(turns()).toHaveLength(0);
+    unmount();
+  });
+
   beforeEach(() => {
     sent.length = 0;
     autoReady = true;

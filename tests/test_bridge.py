@@ -8,7 +8,6 @@ import threading
 import time
 import unittest
 import weakref
-from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -33,6 +32,7 @@ from agent_core import (
     PlanStep,
     ReasoningDeltaEvent,
     Session,
+    SessionInUseError,
     ToolBatchStartedEvent,
     ToolCall,
     ToolCallEvent,
@@ -429,19 +429,24 @@ class ProtocolTest(unittest.TestCase):
             decode('{"text": "hello"}')
 
 
-def make_bridge(
-    lines: list[str],
-    config_directory: Path | None = None,
-) -> tuple[Bridge, io.StringIO]:
-    stdin = io.StringIO("".join(f"{line}\n" for line in lines))
-    stdout = io.StringIO()
-    if config_directory is None:
-        return isolated_bridge(stdin, stdout), stdout
-    with patch(
-        "interfaces.bridge.bridge.default_config_directory",
-        return_value=config_directory,
-    ):
-        return Bridge(stdin, stdout, start_scheduler=False), stdout
+class BridgeTestCase(unittest.TestCase):
+    def make_bridge(
+        self,
+        lines: list[str],
+        config_directory: Path | None = None,
+    ) -> tuple[Bridge, io.StringIO]:
+        stdin = io.StringIO("".join(f"{line}\n" for line in lines))
+        stdout = io.StringIO()
+        if config_directory is None:
+            bridge = isolated_bridge(stdin, stdout)
+        else:
+            with patch(
+                "interfaces.bridge.bridge.default_config_directory",
+                return_value=config_directory,
+            ):
+                bridge = Bridge(stdin, stdout, start_scheduler=False)
+        self.addCleanup(bridge.close)
+        return bridge, stdout
 
 
 def isolated_bridge(stdin, stdout: io.StringIO) -> Bridge:
@@ -474,247 +479,241 @@ class IsolatedBridgeTest(unittest.TestCase):
             bridge.close()
 
 
-class PermissionProtocolTest(unittest.TestCase):
+class PermissionProtocolTest(BridgeTestCase):
     def test_bridge_accepts_workspace_access_before_runtime_start(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            root = Path(directory)
-            bridge, stdout = make_bridge([], root)
-            resources.callback(bridge.close)
-            bridge.open_session(open_session_message(root, session_id="s"))
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        bridge, stdout = self.make_bridge([], root)
+        bridge.open_session(open_session_message(root, session_id="s"))
 
-            bridge._set_permission_preset(
-                {"type": "permission_set", "preset": "workspace_access"}
-            )
+        bridge._set_permission_preset(
+            {"type": "permission_set", "preset": "workspace_access"}
+        )
 
-            self.assertIsNone(bridge.host.planes.current)
-            assert bridge.host.sessions.session is not None
-            self.assertEqual(
-                bridge.host.sessions.session.permission_preset,
-                PermissionPreset.WORKSPACE_ACCESS,
-            )
-            self.assertEqual(
-                {key: emitted(stdout)[-1][key] for key in ("type", "preset")},
-                {"type": "permission_changed", "preset": "workspace_access"},
-            )
+        self.assertIsNone(bridge.host.planes.current)
+        assert bridge.host.sessions.session is not None
+        self.assertEqual(
+            bridge.host.sessions.session.permission_preset,
+            PermissionPreset.WORKSPACE_ACCESS,
+        )
+        self.assertEqual(
+            {key: emitted(stdout)[-1][key] for key in ("type", "preset")},
+            {"type": "permission_changed", "preset": "workspace_access"},
+        )
 
     def test_bridge_updates_permission_before_runtime_initialization(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            root = Path(directory)
-            bridge, stdout = make_bridge([], root)
-            resources.callback(bridge.close)
-            bridge.open_session(open_session_message(root, session_id="s"))
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        bridge, stdout = self.make_bridge([], root)
+        bridge.open_session(open_session_message(root, session_id="s"))
 
-            bridge._set_permission_preset(
-                {"type": "permission_set", "preset": "full_access"}
-            )
+        bridge._set_permission_preset(
+            {"type": "permission_set", "preset": "full_access"}
+        )
 
-            self.assertIsNone(bridge.host.planes.current)
-            assert bridge.host.sessions.session is not None
-            self.assertEqual(
-                bridge.host.sessions.session.permission_preset,
-                PermissionPreset.FULL_ACCESS,
-            )
-            self.assertEqual(
-                JsonlSessionStore(root / "sessions").permission_preset_for("s"),
-                PermissionPreset.FULL_ACCESS,
-            )
-            self.assertEqual(
-                bridge.host.sessions.session.journal[-1].event_type,
-                "permission_preset_changed",
-            )
-            self.assertEqual(
-                JsonlSessionStore(root / "sessions").list_sessions(), []
-            )
-            self.assertEqual(
-                {key: emitted(stdout)[-1][key] for key in ("type", "preset")},
-                {"type": "permission_changed", "preset": "full_access"},
-            )
+        self.assertIsNone(bridge.host.planes.current)
+        assert bridge.host.sessions.session is not None
+        self.assertEqual(
+            bridge.host.sessions.session.permission_preset,
+            PermissionPreset.FULL_ACCESS,
+        )
+        self.assertEqual(
+            JsonlSessionStore(root / "sessions").permission_preset_for("s"),
+            PermissionPreset.FULL_ACCESS,
+        )
+        self.assertEqual(
+            bridge.host.sessions.session.journal[-1].event_type,
+            "permission_preset_changed",
+        )
+        self.assertEqual(
+            JsonlSessionStore(root / "sessions").list_sessions(), []
+        )
+        self.assertEqual(
+            {key: emitted(stdout)[-1][key] for key in ("type", "preset")},
+            {"type": "permission_changed", "preset": "full_access"},
+        )
 
     def test_workspace_access_routes_shell_without_host_approval(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            root = Path(directory)
-            if sys.platform == "win32":
-                user = "*" + subprocess.run(
-                    ["whoami", "/user", "/fo", "csv", "/nh"],
-                    capture_output=True, check=True,
-                ).stdout.split(b",")[-1].strip(b'"\r\n ').decode("ascii")
-                subprocess.run(
-                    ["icacls", str(root), "/grant", f"{user}:(OI)(CI)F"],
-                    capture_output=True, check=True,
-                )
-            bridge, stdout = make_bridge([], root)
-            resources.callback(bridge.close)
-            bridge.open_session(
-                open_session_message(
-                    root,
-                    session_id="s",
-                    agent_config={
-                        "max_same_tool_calls": 5,
-                        "output_reserve_tokens": 100,
-                        "workspace_instruction_files": [
-                            "CLAUDE.md",
-                            "AGENTS.md",
-                        ],
-                        "main_agent": {
-                            "tools": {
-                                name: name == "shell" for name in TOOL_NAMES
-                            }
-                        },
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        if sys.platform == "win32":
+            user = "*" + subprocess.run(
+                ["whoami", "/user", "/fo", "csv", "/nh"],
+                capture_output=True, check=True,
+            ).stdout.split(b",")[-1].strip(b'"\r\n ').decode("ascii")
+            subprocess.run(
+                ["icacls", str(root), "/grant", f"{user}:(OI)(CI)F"],
+                capture_output=True, check=True,
+            )
+        bridge, stdout = self.make_bridge([], root)
+        bridge.open_session(
+            open_session_message(
+                root,
+                session_id="s",
+                agent_config={
+                    "max_same_tool_calls": 5,
+                    "output_reserve_tokens": 100,
+                    "workspace_instruction_files": [
+                        "CLAUDE.md",
+                        "AGENTS.md",
+                    ],
+                    "main_agent": {
+                        "tools": {
+                            name: name == "shell" for name in TOOL_NAMES
+                        }
                     },
+                },
+            )
+        )
+        bridge._set_permission_preset(
+            {"type": "permission_set", "preset": "workspace_access"}
+        )
+        plane = bridge.host.planes.ensure(bridge.host.sessions)
+        try:
+            command = (
+                "Set-Content -NoNewline -LiteralPath routed.txt "
+                "-Value workspace"
+                if sys.platform == "win32"
+                else "printf workspace > routed.txt"
+            )
+            result = plane.agent._tools.execute(
+                ToolCall(
+                    "call-workspace",
+                    "shell",
+                    {"command": command},
                 )
             )
-            bridge._set_permission_preset(
-                {"type": "permission_set", "preset": "workspace_access"}
-            )
-            plane = bridge.host.planes.ensure(bridge.host.sessions)
-            try:
-                command = (
-                    "Set-Content -NoNewline -LiteralPath routed.txt "
-                    "-Value workspace"
-                    if sys.platform == "win32"
-                    else "printf workspace > routed.txt"
-                )
-                result = plane.agent._tools.execute(
-                    ToolCall(
-                        "call-workspace",
-                        "shell",
-                        {"command": command},
-                    )
-                )
-            finally:
-                bridge.host.planes.close()
+        finally:
+            bridge.host.planes.close()
 
-            if (
-                result.error is not None
-                and result.error.type == "RuntimeError"
-                and "Operation not permitted" in result.error.message
-            ):
-                self.skipTest("the test runner already forbids nested Seatbelt")
-            self.assertIsNone(result.error)
-            self.assertEqual(
-                (root / "routed.txt").read_text(encoding="utf-8"),
-                "workspace",
+        if (
+            result.error is not None
+            and result.error.type == "RuntimeError"
+            and "Operation not permitted" in result.error.message
+        ):
+            self.skipTest("the test runner already forbids nested Seatbelt")
+        self.assertIsNone(result.error)
+        self.assertEqual(
+            (root / "routed.txt").read_text(encoding="utf-8"),
+            "workspace",
+        )
+        self.assertFalse(
+            any(
+                message["type"] == "approval_request"
+                for message in emitted(stdout)
             )
-            self.assertFalse(
-                any(
-                    message["type"] == "approval_request"
-                    for message in emitted(stdout)
-                )
-            )
+        )
 
     def test_bridge_changes_session_configuration_without_initializing_runtime(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            root = Path(directory)
-            next_workspace = root / "next"
-            next_workspace.mkdir()
-            bridge, stdout = make_bridge([], root)
-            resources.callback(bridge.close)
-            bridge.open_session(open_session_message(root, session_id="s"))
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        next_workspace = root / "next"
+        next_workspace.mkdir()
+        bridge, stdout = self.make_bridge([], root)
+        bridge.open_session(open_session_message(root, session_id="s"))
 
-            bridge._set_provider({"type": "provider_set", "provider": "second"})
-            bridge._set_workspace(
-                {"type": "workspace_set", "workspace": str(next_workspace)}
-            )
-            bridge._set_permission_preset(
-                {"type": "permission_set", "preset": "full_access"}
-            )
+        bridge._set_provider({"type": "provider_set", "provider": "second"})
+        bridge._set_workspace(
+            {"type": "workspace_set", "workspace": str(next_workspace)}
+        )
+        bridge._set_permission_preset(
+            {"type": "permission_set", "preset": "full_access"}
+        )
 
-            self.assertIsNone(bridge.host.planes.current)
-            self.assertEqual(
-                JsonlSessionStore(root / "sessions").provider_for("s"),
-                "second",
-            )
-            self.assertEqual(
-                bridge.host.sessions.workspace.path,
-                next_workspace.resolve(),
-            )
-            self.assertEqual(
-                JsonlSessionStore(root / "sessions").permission_preset_for("s"),
-                PermissionPreset.FULL_ACCESS,
-            )
-            self.assertEqual(
-                [message["type"] for message in emitted(stdout)[-5:]],
-                [
-                    "provider_changed",
-                    "runtime_state",
-                    "workspace_changed",
-                    "runtime_state",
-                    "permission_changed",
-                ],
-            )
+        self.assertIsNone(bridge.host.planes.current)
+        self.assertEqual(
+            JsonlSessionStore(root / "sessions").provider_for("s"),
+            "second",
+        )
+        self.assertEqual(
+            bridge.host.sessions.workspace.path,
+            next_workspace.resolve(),
+        )
+        self.assertEqual(
+            JsonlSessionStore(root / "sessions").permission_preset_for("s"),
+            PermissionPreset.FULL_ACCESS,
+        )
+        self.assertEqual(
+            [message["type"] for message in emitted(stdout)[-5:]],
+            [
+                "provider_changed",
+                "runtime_state",
+                "workspace_changed",
+                "runtime_state",
+                "permission_changed",
+            ],
+        )
 
     def test_provider_change_closes_the_execution_plane_once(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            root = Path(directory)
-            bridge, _ = make_bridge([], root)
-            resources.callback(bridge.close)
-            bridge.open_session(open_session_message(root, session_id="s"))
-            plane = bridge.host.planes.ensure(bridge.host.sessions)
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        bridge, _ = self.make_bridge([], root)
+        bridge.open_session(open_session_message(root, session_id="s"))
+        plane = bridge.host.planes.ensure(bridge.host.sessions)
 
-            with (
-                patch.object(
-                    plane.jobs,
-                    "close",
-                    wraps=plane.jobs.close,
-                ) as close_jobs,
-                patch.object(
-                    plane.mcp,
-                    "close",
-                    wraps=plane.mcp.close,
-                ) as close_mcp,
-                patch.object(
-                    plane.execution_router,
-                    "close",
-                    wraps=plane.execution_router.close,
-                ) as close_execution_router,
-            ):
-                bridge._set_provider(
-                    {"type": "provider_set", "provider": "second"}
-                )
+        with (
+            patch.object(
+                plane.jobs,
+                "close",
+                wraps=plane.jobs.close,
+            ) as close_jobs,
+            patch.object(
+                plane.mcp,
+                "close",
+                wraps=plane.mcp.close,
+            ) as close_mcp,
+            patch.object(
+                plane.execution_router,
+                "close",
+                wraps=plane.execution_router.close,
+            ) as close_execution_router,
+        ):
+            bridge._set_provider(
+                {"type": "provider_set", "provider": "second"}
+            )
 
-            self.assertIsNone(bridge.host.planes.current)
-            close_jobs.assert_called_once_with()
-            close_mcp.assert_called_once_with()
-            close_execution_router.assert_called_once_with()
+        self.assertIsNone(bridge.host.planes.current)
+        close_jobs.assert_called_once_with()
+        close_mcp.assert_called_once_with()
+        close_execution_router.assert_called_once_with()
 
     def test_workspace_change_closes_the_execution_plane_once(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            root = Path(directory)
-            next_workspace = root / "next"
-            next_workspace.mkdir()
-            bridge, _ = make_bridge([], root)
-            resources.callback(bridge.close)
-            bridge.open_session(open_session_message(root, session_id="s"))
-            plane = bridge.host.planes.ensure(bridge.host.sessions)
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        next_workspace = root / "next"
+        next_workspace.mkdir()
+        bridge, _ = self.make_bridge([], root)
+        bridge.open_session(open_session_message(root, session_id="s"))
+        plane = bridge.host.planes.ensure(bridge.host.sessions)
 
-            with (
-                patch.object(
-                    plane.jobs,
-                    "close",
-                    wraps=plane.jobs.close,
-                ) as close_jobs,
-                patch.object(
-                    plane.mcp,
-                    "close",
-                    wraps=plane.mcp.close,
-                ) as close_mcp,
-                patch.object(
-                    plane.execution_router,
-                    "close",
-                    wraps=plane.execution_router.close,
-                ) as close_execution_router,
-            ):
-                bridge._set_workspace(
-                    {
-                        "type": "workspace_set",
-                        "workspace": str(next_workspace),
-                    }
-                )
+        with (
+            patch.object(
+                plane.jobs,
+                "close",
+                wraps=plane.jobs.close,
+            ) as close_jobs,
+            patch.object(
+                plane.mcp,
+                "close",
+                wraps=plane.mcp.close,
+            ) as close_mcp,
+            patch.object(
+                plane.execution_router,
+                "close",
+                wraps=plane.execution_router.close,
+            ) as close_execution_router,
+        ):
+            bridge._set_workspace(
+                {
+                    "type": "workspace_set",
+                    "workspace": str(next_workspace),
+                }
+            )
 
-            self.assertIsNone(bridge.host.planes.current)
-            close_jobs.assert_called_once_with()
-            close_mcp.assert_called_once_with()
-            close_execution_router.assert_called_once_with()
+        self.assertIsNone(bridge.host.planes.current)
+        close_jobs.assert_called_once_with()
+        close_mcp.assert_called_once_with()
+        close_execution_router.assert_called_once_with()
 
 
 class _SlowStdin:
@@ -746,51 +745,49 @@ class _BlockingAfterLines:
             return ""
 
 
-class BridgeApprovalTest(unittest.TestCase):
+class BridgeApprovalTest(BridgeTestCase):
     def test_runtime_state_contains_only_the_jobs_that_are_running(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            bridge, stdout = make_bridge([], Path(directory))
-            resources.callback(bridge.close)
-            bridge.open_session(
-                open_session_message(Path(directory), session_id="s")
-            )
-            bridge._emit_agent_event(JobStatusEvent("j1", "shell", "running"), "t1")
-            bridge._emit_agent_event(JobStatusEvent("j2", "shell", "running"), "t1")
-            bridge._emit_agent_event(JobStatusEvent("j2", "shell", "completed"), "t1")
-            bridge._emit_runtime_state("running")
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        bridge, stdout = self.make_bridge([], Path(directory))
+        bridge.open_session(
+            open_session_message(Path(directory), session_id="s")
+        )
+        bridge._emit_agent_event(JobStatusEvent("j1", "shell", "running"), "t1")
+        bridge._emit_agent_event(JobStatusEvent("j2", "shell", "running"), "t1")
+        bridge._emit_agent_event(JobStatusEvent("j2", "shell", "completed"), "t1")
+        bridge._emit_runtime_state("running")
 
-            self.assertEqual(
-                emitted(stdout)[-1]["jobs"],
-                [{"job_id": "j1", "kind": "shell", "status": "running"}],
-            )
+        self.assertEqual(
+            emitted(stdout)[-1]["jobs"],
+            [{"job_id": "j1", "kind": "shell", "status": "running"}],
+        )
 
     def test_runtime_state_contains_the_pending_approval(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            bridge, stdout = make_bridge(
-                ['{"type": "approval_response", "request_id": "t1:1",'
-                 ' "approved": true}'],
-                Path(directory),
-            )
-            resources.callback(bridge.close)
-            bridge.open_session(
-                open_session_message(Path(directory), session_id="s")
-            )
-            bridge.host.turns.turn_id = "t1"
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        bridge, stdout = self.make_bridge(
+            ['{"type": "approval_response", "request_id": "t1:1",'
+             ' "approved": true}'],
+            Path(directory),
+        )
+        bridge.open_session(
+            open_session_message(Path(directory), session_id="s")
+        )
+        bridge.host.turns.turn_id = "t1"
 
-            self.assertTrue(bridge.request_permission("ls"))
+        self.assertTrue(bridge.request_permission("ls"))
 
-            states = [
-                message for message in emitted(stdout)
-                if message["type"] == "runtime_state"
-            ]
-            self.assertEqual(states[-2]["phase"], "waiting_approval")
-            self.assertEqual(states[-2]["approval"]["command"], "ls")
-            self.assertIsNone(states[-2]["question"])
-            self.assertIsNone(states[-1]["approval"])
-            self.assertEqual(states[-1]["phase"], "running")
+        states = [
+            message for message in emitted(stdout)
+            if message["type"] == "runtime_state"
+        ]
+        self.assertEqual(states[-2]["phase"], "waiting_approval")
+        self.assertEqual(states[-2]["approval"]["command"], "ls")
+        self.assertIsNone(states[-2]["question"])
+        self.assertIsNone(states[-1]["approval"])
+        self.assertEqual(states[-1]["phase"], "running")
 
     def test_approves_matching_request(self) -> None:
-        bridge, stdout = make_bridge(
+        bridge, stdout = self.make_bridge(
             ['{"type": "approval_response", "request_id": "None:1",'
              ' "approved": true}']
         )
@@ -801,7 +798,7 @@ class BridgeApprovalTest(unittest.TestCase):
         )
 
     def test_denies_when_response_is_false(self) -> None:
-        bridge, _ = make_bridge(
+        bridge, _ = self.make_bridge(
             ['{"type": "approval_response", "request_id": "None:1",'
              ' "approved": false}']
         )
@@ -809,7 +806,7 @@ class BridgeApprovalTest(unittest.TestCase):
 
     def test_buffers_interleaved_messages_and_replays_them(self) -> None:
         """A typed-ahead turn must not be consumed as the answer."""
-        bridge, _ = make_bridge(
+        bridge, _ = self.make_bridge(
             [
                 '{"type": "user_turn", "turn_id": "t2", "text": "later"}',
                 '{"type": "approval_response", "request_id": "None:1",'
@@ -825,7 +822,7 @@ class BridgeApprovalTest(unittest.TestCase):
         self.assertIsNone(bridge.read_message())
 
     def test_ignores_stale_request_id(self) -> None:
-        bridge, _ = make_bridge(
+        bridge, _ = self.make_bridge(
             [
                 '{"type": "approval_response", "request_id": "stale",'
                 ' "approved": true}',
@@ -836,12 +833,12 @@ class BridgeApprovalTest(unittest.TestCase):
         self.assertFalse(bridge.request_permission("ls"))
 
     def test_cancels_when_input_ends(self) -> None:
-        bridge, _ = make_bridge([])
+        bridge, _ = self.make_bridge([])
         with self.assertRaises(Cancelled):
             bridge.request_permission("ls")
 
     def test_cancels_on_shutdown(self) -> None:
-        bridge, _ = make_bridge(['{"type": "shutdown"}'])
+        bridge, _ = self.make_bridge(['{"type": "shutdown"}'])
         with self.assertRaises(Cancelled):
             bridge.request_permission("ls")
 
@@ -914,7 +911,7 @@ class BridgeApprovalTest(unittest.TestCase):
         stdin.release.set()
 
     def test_ignores_a_stale_response_that_arrived_before_its_waiter(self) -> None:
-        bridge, _ = make_bridge(
+        bridge, _ = self.make_bridge(
             [
                 '{"type": "approval_response", "request_id": "None:1", "approved": true}',
             ]
@@ -926,7 +923,7 @@ class BridgeApprovalTest(unittest.TestCase):
             bridge.request_permission("ls")
 
     def test_routes_cancel_for_a_turn_queued_before_run_turn(self) -> None:
-        bridge, stdout = make_bridge(
+        bridge, stdout = self.make_bridge(
             [
                 '{"type": "user_turn", "turn_id": "t1", "text": "work"}',
                 '{"type": "cancel", "turn_id": "t1"}',
@@ -947,13 +944,13 @@ class BridgeApprovalTest(unittest.TestCase):
         )
 
 
-class BridgeCancellationTest(unittest.TestCase):
+class BridgeCancellationTest(BridgeTestCase):
     def test_input_cancels_interactions_in_a_worker_turn(self) -> None:
         for interaction in ("approval", "question"):
             for command in ('{"type":"cancel","turn_id":"t1"}',
                             '{"type":"shutdown"}', None):
                 with self.subTest(interaction=interaction, command=command):
-                    bridge, _ = make_bridge([command] if command is not None else [])
+                    bridge, _ = self.make_bridge([command] if command is not None else [])
                     results = []
                     errors = []
 
@@ -990,8 +987,8 @@ class BridgeCancellationTest(unittest.TestCase):
                         thread.join(3)
 
     def test_cancel_is_scoped_to_its_turn_and_bridge(self) -> None:
-        first, _ = make_bridge([])
-        second, _ = make_bridge([])
+        first, _ = self.make_bridge([])
+        second, _ = self.make_bridge([])
         try:
             for bridge in (first, second):
                 bridge.host.turns.turn_id = "t1"
@@ -1020,39 +1017,38 @@ class BridgeCancellationTest(unittest.TestCase):
             second.close()
 
 
-class BridgeUserQuestionTest(unittest.TestCase):
+class BridgeUserQuestionTest(BridgeTestCase):
     OPTIONS = [
         {"id": "memory", "label": "Memory"},
         {"id": "sqlite", "label": "SQLite"},
     ]
 
     def test_runtime_state_contains_the_pending_question(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            bridge, stdout = make_bridge(
-                ['{"type": "user_question_response", "request_id": "t1:1",'
-                 ' "option_id": "sqlite"}'],
-                Path(directory),
-            )
-            resources.callback(bridge.close)
-            bridge.open_session(
-                open_session_message(Path(directory), session_id="s")
-            )
-            bridge.host.turns.turn_id = "t1"
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        bridge, stdout = self.make_bridge(
+            ['{"type": "user_question_response", "request_id": "t1:1",'
+             ' "option_id": "sqlite"}'],
+            Path(directory),
+        )
+        bridge.open_session(
+            open_session_message(Path(directory), session_id="s")
+        )
+        bridge.host.turns.turn_id = "t1"
 
-            bridge.request_user_choice("Cache?", self.OPTIONS, False)
+        bridge.request_user_choice("Cache?", self.OPTIONS, False)
 
-            states = [
-                message for message in emitted(stdout)
-                if message["type"] == "runtime_state"
-            ]
-            self.assertEqual(states[-2]["phase"], "waiting_user")
-            self.assertEqual(states[-2]["question"]["question"], "Cache?")
-            self.assertIsNone(states[-2]["approval"])
-            self.assertIsNone(states[-1]["question"])
-            self.assertEqual(states[-1]["phase"], "running")
+        states = [
+            message for message in emitted(stdout)
+            if message["type"] == "runtime_state"
+        ]
+        self.assertEqual(states[-2]["phase"], "waiting_user")
+        self.assertEqual(states[-2]["question"]["question"], "Cache?")
+        self.assertIsNone(states[-2]["approval"])
+        self.assertIsNone(states[-1]["question"])
+        self.assertEqual(states[-1]["phase"], "running")
 
     def test_returns_the_selected_option(self) -> None:
-        bridge, stdout = make_bridge(
+        bridge, stdout = self.make_bridge(
             ['{"type": "user_question_response", "request_id": "None:1",'
              ' "option_id": "sqlite"}']
         )
@@ -1067,7 +1063,7 @@ class BridgeUserQuestionTest(unittest.TestCase):
         )
 
     def test_returns_trimmed_free_text(self) -> None:
-        bridge, _ = make_bridge(
+        bridge, _ = self.make_bridge(
             ['{"type": "user_question_response", "request_id": "None:1",'
              ' "text": "  Redis  "}']
         )
@@ -1078,7 +1074,7 @@ class BridgeUserQuestionTest(unittest.TestCase):
         )
 
     def test_ignores_invalid_answers(self) -> None:
-        bridge, _ = make_bridge(
+        bridge, _ = self.make_bridge(
             [
                 '{"type": "user_question_response", "request_id": "None:1",'
                 ' "option_id": "unknown"}',
@@ -1093,30 +1089,30 @@ class BridgeUserQuestionTest(unittest.TestCase):
         )
 
 
-class BridgeServeTest(unittest.TestCase):
+class BridgeServeTest(BridgeTestCase):
     def test_stops_on_shutdown(self) -> None:
-        bridge, _ = make_bridge(['{"type": "shutdown"}'])
+        bridge, _ = self.make_bridge(['{"type": "shutdown"}'])
         bridge.serve()
 
     def test_stops_at_end_of_input(self) -> None:
-        bridge, _ = make_bridge([])
+        bridge, _ = self.make_bridge([])
         bridge.serve()
 
     def test_does_not_swallow_an_external_keyboard_interrupt(self) -> None:
-        bridge, _ = make_bridge([])
+        bridge, _ = self.make_bridge([])
         with patch.object(bridge, "read_message", side_effect=KeyboardInterrupt):
             with self.assertRaises(KeyboardInterrupt):
                 bridge.serve()
 
     def test_rejects_turn_before_open_session(self) -> None:
-        bridge, _ = make_bridge(
+        bridge, _ = self.make_bridge(
             ['{"type": "user_turn", "turn_id": "t1", "text": "hi"}']
         )
         with self.assertRaises(SystemExit):
             bridge.serve()
 
     def test_reports_malformed_input_as_fatal(self) -> None:
-        bridge, stdout = make_bridge(["not json"])
+        bridge, stdout = self.make_bridge(["not json"])
         with self.assertRaises(SystemExit):
             bridge.serve()
         self.assertEqual(emitted(stdout)[0]["type"], "fatal")
@@ -1124,97 +1120,94 @@ class BridgeServeTest(unittest.TestCase):
     def test_answers_the_workspace_sessions_and_the_stored_conversation(
         self,
     ) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            root = Path(directory)
-            store = JsonlSessionStore(root / "sessions")
-            session = Session("saved")
-            session.begin_turn("t")
-            session.add_item("user", "hello there")
-            session.add_item("assistant", "hi")
-            session.finish_turn("completed")
-            store.bind_workspace(session.session_id, root)
-            store.append_events(
-                session.session_id, session.journal, workspace=root
-            )
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        store = JsonlSessionStore(root / "sessions")
+        session = Session("saved")
+        session.begin_turn("t")
+        session.add_item("user", "hello there")
+        session.add_item("assistant", "hi")
+        session.finish_turn("completed")
+        store.bind_workspace(session.session_id, root)
+        store.append_events(
+            session.session_id, session.journal, workspace=root
+        )
 
-            bridge, stdout = make_bridge(
-                [
-                    json.dumps(open_session_message(root, session_id="saved")),
-                    '{"type": "load_session"}',
-                    '{"type": "list_sessions"}',
-                    '{"type": "shutdown"}',
-                ],
-                root,
-            )
-            resources.callback(bridge.close)
-            bridge.serve()
+        bridge, stdout = self.make_bridge(
+            [
+                json.dumps(open_session_message(root, session_id="saved")),
+                '{"type": "load_session"}',
+                '{"type": "list_sessions"}',
+                '{"type": "shutdown"}',
+            ],
+            root,
+        )
+        bridge.serve()
 
-            messages = emitted(stdout)
-            loaded = next(
-                message
-                for message in messages
-                if message["type"] == "session_items"
-            )
-            self.assertEqual(
-                [item["content"] for item in loaded["items"]],
-                ["hello there", "hi"],
-            )
-            listed = next(
-                message
-                for message in messages
-                if message["type"] == "sessions_listed"
-            )
-            self.assertEqual(
-                listed["sessions"],
-                [{"session_id": "saved", "title": "hello there"}],
-            )
+        messages = emitted(stdout)
+        loaded = next(
+            message
+            for message in messages
+            if message["type"] == "session_items"
+        )
+        self.assertEqual(
+            [item["content"] for item in loaded["items"]],
+            ["hello there", "hi"],
+        )
+        listed = next(
+            message
+            for message in messages
+            if message["type"] == "sessions_listed"
+        )
+        self.assertEqual(
+            listed["sessions"],
+            [{"session_id": "saved", "title": "hello there"}],
+        )
 
     def test_applies_a_permission_queued_immediately_after_open_session(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            root = Path(directory)
-            bridge, stdout = make_bridge(
-                [
-                    json.dumps(open_session_message(root, session_id="empty")),
-                    '{"type": "permission_set", "preset": "full_access"}',
-                    '{"type": "shutdown"}',
-                ],
-                root,
-            )
-            resources.callback(bridge.close)
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        bridge, stdout = self.make_bridge(
+            [
+                json.dumps(open_session_message(root, session_id="empty")),
+                '{"type": "permission_set", "preset": "full_access"}',
+                '{"type": "shutdown"}',
+            ],
+            root,
+        )
 
-            bridge.serve()
+        bridge.serve()
 
-            self.assertEqual(
-                [message["type"] for message in emitted(stdout)],
-                ["session_ready", "runtime_state", "permission_changed"],
-            )
-            self.assertEqual(
-                JsonlSessionStore(root / "sessions").permission_preset_for(
-                    "empty"
-                ),
-                PermissionPreset.FULL_ACCESS,
-            )
-            self.assertIsNone(bridge.host.planes.current)
+        self.assertEqual(
+            [message["type"] for message in emitted(stdout)],
+            ["session_ready", "runtime_state", "permission_changed"],
+        )
+        self.assertEqual(
+            JsonlSessionStore(root / "sessions").permission_preset_for(
+                "empty"
+            ),
+            PermissionPreset.FULL_ACCESS,
+        )
+        self.assertIsNone(bridge.host.planes.current)
 
     def test_answers_settings_requests_without_starting_runtime(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            root = Path(directory)
-            bridge, stdout = make_bridge(
-                [
-                    json.dumps(open_session_message(root, session_id="empty")),
-                    '{"type": "settings_get", "request_id": "settings-1"}',
-                    '{"type": "shutdown"}',
-                ],
-                root,
-            )
-            resources.callback(bridge.close)
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        bridge, stdout = self.make_bridge(
+            [
+                json.dumps(open_session_message(root, session_id="empty")),
+                '{"type": "settings_get", "request_id": "settings-1"}',
+                '{"type": "shutdown"}',
+            ],
+            root,
+        )
 
-            bridge.serve()
+        bridge.serve()
 
-            snapshot = next(message for message in emitted(stdout) if message["type"] == "settings_snapshot")
-            self.assertEqual(snapshot["request_id"], "settings-1")
-            self.assertEqual(snapshot["settings"]["default_provider"], "first")
-            self.assertIsNone(bridge.host.planes.current)
+        snapshot = next(message for message in emitted(stdout) if message["type"] == "settings_snapshot")
+        self.assertEqual(snapshot["request_id"], "settings-1")
+        self.assertEqual(snapshot["settings"]["default_provider"], "first")
+        self.assertIsNone(bridge.host.planes.current)
 
 
 def open_session_message(
@@ -1377,15 +1370,14 @@ class MemorySpy:
         return True
 
 
-class InterruptedTurnTest(unittest.TestCase):
+class InterruptedTurnTest(BridgeTestCase):
     """A turn keeps the transcript it produced before it ended early."""
 
     def setUp(self) -> None:
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         self.root = Path(directory.name)
-        self.bridge, self.stdout = make_bridge([], self.root)
-        self.addCleanup(self.bridge.close)
+        self.bridge, self.stdout = self.make_bridge([], self.root)
         self.bridge.open_session(open_session_message(self.root))
         self.session_id = next(
             message["session_id"]
@@ -1817,71 +1809,117 @@ class ScheduledTurnTest(unittest.TestCase):
                 self.assertEqual(stored.permission_preset, preset)
 
 
-class BridgeSessionOpenTest(unittest.TestCase):
+class BridgeSessionOpenTest(BridgeTestCase):
     """The bridge selects the provider the interface asked for."""
 
     @unittest.skipUnless(sys.platform == "win32", "Windows journal ownership")
+    def test_occupied_session_can_be_reselected_without_exiting_bridge(self) -> None:
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        owner, _ = self.make_bridge([], root)
+        opening = open_session_message(root, session_id="occupied")
+        owner.open_session(opening)
+        owner.host.sessions.session.add_item("user", "owner history")
+
+        # Requests after the failure stay on the same stdio connection.
+        contender, output = self.make_bridge([
+            json.dumps(opening),
+            json.dumps({"type": "list_sessions"}),
+            json.dumps({**opening, "session_id": "available"}),
+            json.dumps({"type": "load_session"}),
+            json.dumps({"type": "shutdown"}),
+        ], root)
+        contender.serve()
+        messages = emitted(output)
+        self.assertEqual([item["type"] for item in messages], [
+            "session_open_failed", "sessions_listed", "session_ready",
+            "runtime_state", "session_items",
+        ])
+        self.assertEqual(messages[0]["session_id"], "occupied")
+        self.assertEqual(messages[0]["error"]["type"], "SessionInUseError")
+        self.assertNotIn("runtime", messages[0])
+        self.assertEqual(messages[1]["sessions"][0]["session_id"], "occupied")
+        self.assertEqual(messages[2]["session_id"], "available")
+        owner.host.sessions.session.add_item("assistant", "owner continues")
+        self.assertEqual(len(owner.host.sessions.store.load("occupied").items), 2)
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows journal ownership")
+    def test_failed_open_leaves_no_session_and_can_retry_after_owner_closes(self) -> None:
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        owner, _ = self.make_bridge([], root)
+        opening = open_session_message(root, session_id="occupied")
+        owner.open_session(opening)
+        owner.host.sessions.session.add_item("user", "preserved")
+        contender, _ = self.make_bridge([], root)
+        with self.assertRaises(SessionInUseError):
+            contender.open_session(opening)
+        self.assertIsNone(contender.host.sessions.session)
+        self.assertIsNone(contender.host.sessions.permissions)
+        self.assertIsNone(contender.host.sessions.plan)
+        owner.close()
+        contender.open_session(opening)
+        self.assertEqual(contender.host.sessions.session.items[0].content, "preserved")
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows journal ownership")
     def test_journal_protection_follows_workspace_and_session_lifecycle(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            root = Path(directory)
-            bridge, _ = make_bridge([], root)
-            resources.callback(bridge.close)
-            bridge.open_session(open_session_message(root))
-            controller = bridge.host.sessions
-            first = controller.session
-            first.add_item("user", "keep this audit record")
-            original = next((root / "sessions").rglob(f"{first.session_id}.jsonl"))
-            with self.assertRaises(PermissionError):
-                original.unlink()
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        bridge, _ = self.make_bridge([], root)
+        bridge.open_session(open_session_message(root))
+        controller = bridge.host.sessions
+        first = controller.session
+        first.add_item("user", "keep this audit record")
+        original = next((root / "sessions").rglob(f"{first.session_id}.jsonl"))
+        with self.assertRaises(PermissionError):
+            original.unlink()
 
-            moved_workspace = root / "moved"
-            moved_workspace.mkdir()
-            bridge.host.change_workspace(moved_workspace)
-            moved = next((root / "sessions").rglob(f"{first.session_id}.jsonl"))
-            self.assertFalse(original.exists())
-            with self.assertRaises(PermissionError):
-                moved.unlink()
-            first.add_item("assistant", "still persisted after move")
+        moved_workspace = root / "moved"
+        moved_workspace.mkdir()
+        bridge.host.change_workspace(moved_workspace)
+        moved = next((root / "sessions").rglob(f"{first.session_id}.jsonl"))
+        self.assertFalse(original.exists())
+        with self.assertRaises(PermissionError):
+            moved.unlink()
+        first.add_item("assistant", "still persisted after move")
 
-            bridge.host.open_session(root)
-            with moved.open("a+b"):
-                pass  # Switching sessions releases the former writer.
-            second = controller.session
-            current = next((root / "sessions").rglob(f"{second.session_id}.jsonl"))
-            with self.assertRaises(PermissionError):
-                current.unlink()
-            bridge.close()
+        bridge.host.open_session(root)
+        with moved.open("a+b"):
+            pass  # Switching sessions releases the former writer.
+        second = controller.session
+        current = next((root / "sessions").rglob(f"{second.session_id}.jsonl"))
+        with self.assertRaises(PermissionError):
             current.unlink()
-            self.assertEqual(len(controller.store.load(first.session_id).items), 2)
+        bridge.close()
+        current.unlink()
+        self.assertEqual(len(controller.store.load(first.session_id).items), 2)
 
     @unittest.skipUnless(sys.platform == "win32", "Windows journal ownership")
     def test_failed_workspace_move_keeps_original_journal_protected(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            root = Path(directory)
-            bridge, _ = make_bridge([], root)
-            resources.callback(bridge.close)
-            bridge.open_session(open_session_message(root))
-            controller = bridge.host.sessions
-            session = controller.session
-            path = next((root / "sessions").rglob(f"{session.session_id}.jsonl"))
-            destination = root / "destination"
-            destination.mkdir()
-            with patch.object(controller.store, "bind_workspace", side_effect=OSError("move failed")):
-                with self.assertRaisesRegex(OSError, "move failed"):
-                    bridge.host.change_workspace(destination)
-            with self.assertRaises(PermissionError):
-                path.unlink()
-            session.add_item("user", "persisted after failed move")
-            self.assertEqual(controller.store.load(session.session_id).items[0].content,
-                             "persisted after failed move")
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        bridge, _ = self.make_bridge([], root)
+        bridge.open_session(open_session_message(root))
+        controller = bridge.host.sessions
+        session = controller.session
+        path = next((root / "sessions").rglob(f"{session.session_id}.jsonl"))
+        destination = root / "destination"
+        destination.mkdir()
+        with patch.object(controller.store, "bind_workspace", side_effect=OSError("move failed")):
+            with self.assertRaisesRegex(OSError, "move failed"):
+                bridge.host.change_workspace(destination)
+        with self.assertRaises(PermissionError):
+            path.unlink()
+        session.add_item("user", "persisted after failed move")
+        self.assertEqual(controller.store.load(session.session_id).items[0].content,
+                         "persisted after failed move")
 
     def started_model(self, **extra: object) -> str:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            root = Path(directory)
-            bridge, stdout = make_bridge([], root)
-            resources.callback(bridge.close)
-            bridge.open_session(open_session_message(root, **extra))
-            return str(emitted(stdout)[0]["model"])
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        bridge, stdout = self.make_bridge([], root)
+        bridge.open_session(open_session_message(root, **extra))
+        return str(emitted(stdout)[0]["model"])
 
     def test_selects_the_configured_or_requested_provider(self) -> None:
         for label, extra, expected in (
@@ -1893,94 +1931,91 @@ class BridgeSessionOpenTest(unittest.TestCase):
                 self.assertEqual(self.started_model(**extra), expected)
 
     def test_restores_the_session_provider_selection(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            root = Path(directory)
-            store = JsonlSessionStore(root / "sessions")
-            store.set_provider("saved", "second", root)
-            bridge, stdout = make_bridge([], root)
-            resources.callback(bridge.close)
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        store = JsonlSessionStore(root / "sessions")
+        store.set_provider("saved", "second", root)
+        bridge, stdout = self.make_bridge([], root)
 
-            bridge.open_session(open_session_message(root, session_id="saved"))
+        bridge.open_session(open_session_message(root, session_id="saved"))
 
-            self.assertEqual(emitted(stdout)[0]["provider"], "second")
-            self.assertEqual(emitted(stdout)[0]["model"], "openai/second")
+        self.assertEqual(emitted(stdout)[0]["provider"], "second")
+        self.assertEqual(emitted(stdout)[0]["model"], "openai/second")
 
     def test_opening_a_session_does_not_initialize_the_agent_runtime(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            root = Path(directory)
-            bridge, stdout = make_bridge([], root)
-            resources.callback(bridge.close)
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        bridge, stdout = self.make_bridge([], root)
 
-            bridge.open_session(open_session_message(root))
+        bridge.open_session(open_session_message(root))
 
-            self.assertIsNone(bridge.host.planes.current)
-            self.assertEqual(
-                [message["type"] for message in emitted(stdout)],
-                ["session_ready", "runtime_state"],
-            )
-            self.assertEqual(emitted(stdout)[-1]["phase"], "inactive")
+        self.assertIsNone(bridge.host.planes.current)
+        self.assertEqual(
+            [message["type"] for message in emitted(stdout)],
+            ["session_ready", "runtime_state"],
+        )
+        self.assertEqual(emitted(stdout)[-1]["phase"], "inactive")
 
     def test_applies_provider_request_policy_to_all_chat_providers(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            root = Path(directory)
-            bridge, _ = make_bridge([], root)
-            resources.callback(bridge.close)
-            bridge.open_session(
-                open_session_message(
-                    root,
-                    agent_config={
-                        "max_same_tool_calls": 5,
-                        "output_reserve_tokens": 100,
-                        "provider": {
-                            "request_timeout_seconds": 45,
-                            "max_retries": 4,
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        bridge, _ = self.make_bridge([], root)
+        bridge.open_session(
+            open_session_message(
+                root,
+                agent_config={
+                    "max_same_tool_calls": 5,
+                    "output_reserve_tokens": 100,
+                    "provider": {
+                        "request_timeout_seconds": 45,
+                        "max_retries": 4,
+                    },
+                    "scratch_workspace_root": str(root / "scratch"),
+                    "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
+                    "main_agent": {"tools": {"subagent": True}},
+                    "subagent_roles": {
+                        "researcher": {
+                            "description": "Reads.",
+                            "tools": {},
+                        }
+                    },
+                },
+                provider_config={
+                    "main_agent": {
+                        "provider": "first",
+                        "vision_provider": "second",
+                    },
+                    "subagent": {"provider": ""},
+                    "providers": {
+                        "first": {
+                            "model": "openai/first",
+                            "max_context_tokens": 1000,
                         },
-                        "scratch_workspace_root": str(root / "scratch"),
-                        "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
-                        "main_agent": {"tools": {"subagent": True}},
-                        "subagent_roles": {
-                            "researcher": {
-                                "description": "Reads.",
-                                "tools": {},
-                            }
+                        "second": {
+                            "model": "openai/second",
+                            "max_context_tokens": 1000,
                         },
                     },
-                    provider_config={
-                        "main_agent": {
-                            "provider": "first",
-                            "vision_provider": "second",
-                        },
-                        "subagent": {"provider": ""},
-                        "providers": {
-                            "first": {
-                                "model": "openai/first",
-                                "max_context_tokens": 1000,
-                            },
-                            "second": {
-                                "model": "openai/second",
-                                "max_context_tokens": 1000,
-                            },
-                        },
-                    },
-                )
+                },
             )
+        )
 
-            with patch.object(
-                ModelProvider,
-                "capabilities_for_model",
-                classmethod(
-                    lambda cls, model, base_url=None: ProviderCapabilities(
-                        frozenset({"text", "image"})
-                    )
-                ),
-            ):
-                plane = bridge.host.planes.ensure(bridge.host.sessions)
-            main_provider = plane.agent._provider
-            vision_provider = plane.agent._tools._context.vision_provider
-            subagents = plane.agent._tools._context.subagents
-            assert vision_provider is not None
-            assert subagents is not None
-            role_provider = subagents.roles.get("researcher").provider
+        with patch.object(
+            ModelProvider,
+            "capabilities_for_model",
+            classmethod(
+                lambda cls, model, base_url=None: ProviderCapabilities(
+                    frozenset({"text", "image"})
+                )
+            ),
+        ):
+            plane = bridge.host.planes.ensure(bridge.host.sessions)
+        main_provider = plane.agent._provider
+        vision_provider = plane.agent._tools._context.vision_provider
+        subagents = plane.agent._tools._context.subagents
+        assert vision_provider is not None
+        assert subagents is not None
+        role_provider = subagents.roles.get("researcher").provider
 
         self.assertEqual(main_provider._request_timeout_seconds, 45)
         self.assertEqual(main_provider._max_retries, 4)
@@ -1990,72 +2025,70 @@ class BridgeSessionOpenTest(unittest.TestCase):
         self.assertEqual(role_provider._max_retries, 4)
 
     def test_opening_a_session_does_not_require_the_provider_key(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            root = Path(directory)
-            message = open_session_message(
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        message = open_session_message(
+            root,
+            provider_config={
+                "main_agent": {"provider": "first"},
+                "providers": {
+                    "first": {
+                        "model": "openai/first",
+                        "key": "${MISSING_NOSIS_TEST_KEY}",
+                    }
+                },
+            },
+        )
+        bridge, stdout = self.make_bridge([], root)
+
+        bridge.open_session(message)
+
+        self.assertEqual(emitted(stdout)[0]["type"], "session_ready")
+        with self.assertRaisesRegex(
+            ValueError,
+            "MISSING_NOSIS_TEST_KEY",
+        ):
+            bridge.host.planes.ensure(bridge.host.sessions)
+
+    def test_injects_the_configured_image_generator(self) -> None:
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        bridge, _ = self.make_bridge([], root)
+        bridge.open_session(
+            open_session_message(
                 root,
+                agent_config={
+                    "max_same_tool_calls": 5,
+                    "output_reserve_tokens": 100,
+                    "scratch_workspace_root": str(root / "scratch"),
+                    "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
+                    "main_agent": {"tools": {"generate_image": True}},
+                },
                 provider_config={
                     "main_agent": {"provider": "first"},
+                    "image_generation": {
+                        "provider": "images",
+                        "model": "openrouter/example/image",
+                        "default_aspect_ratio": "16:9",
+                        "default_image_size": "2K",
+                    },
                     "providers": {
                         "first": {
                             "model": "openai/first",
-                            "key": "${MISSING_NOSIS_TEST_KEY}",
-                        }
+                            "max_context_tokens": 1000,
+                        },
+                        "images": {
+                            "model": "openrouter/unused",
+                            "url": "https://example.test/v1",
+                            "key": "secret",
+                        },
                     },
                 },
             )
-            bridge, stdout = make_bridge([], root)
-            resources.callback(bridge.close)
+        )
 
-            bridge.open_session(message)
-
-            self.assertEqual(emitted(stdout)[0]["type"], "session_ready")
-            with self.assertRaisesRegex(
-                ValueError,
-                "MISSING_NOSIS_TEST_KEY",
-            ):
-                bridge.host.planes.ensure(bridge.host.sessions)
-
-    def test_injects_the_configured_image_generator(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            root = Path(directory)
-            bridge, _ = make_bridge([], root)
-            resources.callback(bridge.close)
-            bridge.open_session(
-                open_session_message(
-                    root,
-                    agent_config={
-                        "max_same_tool_calls": 5,
-                        "output_reserve_tokens": 100,
-                        "scratch_workspace_root": str(root / "scratch"),
-                        "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
-                        "main_agent": {"tools": {"generate_image": True}},
-                    },
-                    provider_config={
-                        "main_agent": {"provider": "first"},
-                        "image_generation": {
-                            "provider": "images",
-                            "model": "openrouter/example/image",
-                            "default_aspect_ratio": "16:9",
-                            "default_image_size": "2K",
-                        },
-                        "providers": {
-                            "first": {
-                                "model": "openai/first",
-                                "max_context_tokens": 1000,
-                            },
-                            "images": {
-                                "model": "openrouter/unused",
-                                "url": "https://example.test/v1",
-                                "key": "secret",
-                            },
-                        },
-                    },
-                )
-            )
-
-            plane = bridge.host.planes.ensure(bridge.host.sessions)
-            generator = plane.agent._tools._context.image_generator
+        plane = bridge.host.planes.ensure(bridge.host.sessions)
+        generator = plane.agent._tools._context.image_generator
 
         self.assertIsNotNone(generator)
         self.assertEqual(generator.model, "openrouter/example/image")
@@ -2065,197 +2098,191 @@ class BridgeSessionOpenTest(unittest.TestCase):
         )
 
     def test_enabled_image_tool_requires_image_generation_config(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            root = Path(directory)
-            bridge, _ = make_bridge([], root)
-            resources.callback(bridge.close)
-            bridge.open_session(
-                open_session_message(
-                    root,
-                    agent_config={
-                        "max_same_tool_calls": 5,
-                        "output_reserve_tokens": 100,
-                        "scratch_workspace_root": str(root / "scratch"),
-                        "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
-                        "main_agent": {"tools": {"generate_image": True}},
-                    },
-                )
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        bridge, _ = self.make_bridge([], root)
+        bridge.open_session(
+            open_session_message(
+                root,
+                agent_config={
+                    "max_same_tool_calls": 5,
+                    "output_reserve_tokens": 100,
+                    "scratch_workspace_root": str(root / "scratch"),
+                    "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
+                    "main_agent": {"tools": {"generate_image": True}},
+                },
             )
+        )
 
-            with self.assertRaisesRegex(ValueError, "no image_generation"):
-                bridge.host.planes.ensure(bridge.host.sessions)
+        with self.assertRaisesRegex(ValueError, "no image_generation"):
+            bridge.host.planes.ensure(bridge.host.sessions)
 
     def test_restores_the_session_permission_preset(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            root = Path(directory)
-            store = JsonlSessionStore(root / "sessions")
-            session = Session("saved")
-            session.set_permission_preset(PermissionPreset.FULL_ACCESS)
-            store.bind_workspace(session.session_id, root)
-            store.set_permission_preset(
-                session.session_id,
-                PermissionPreset.FULL_ACCESS,
-                root,
-            )
-            store.append_events(session.session_id, session.journal, workspace=root)
-            bridge, stdout = make_bridge([], root)
-            resources.callback(bridge.close)
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        store = JsonlSessionStore(root / "sessions")
+        session = Session("saved")
+        session.set_permission_preset(PermissionPreset.FULL_ACCESS)
+        store.bind_workspace(session.session_id, root)
+        store.set_permission_preset(
+            session.session_id,
+            PermissionPreset.FULL_ACCESS,
+            root,
+        )
+        store.append_events(session.session_id, session.journal, workspace=root)
+        bridge, stdout = self.make_bridge([], root)
 
-            bridge.open_session(open_session_message(root, session_id=session.session_id))
+        bridge.open_session(open_session_message(root, session_id=session.session_id))
 
-            ready = emitted(stdout)[0]
-            self.assertEqual(ready["permission_preset"], "full_access")
-            assert bridge.host.sessions.permissions is not None
-            bridge.host.sessions.permissions.authorize(
-                TOOL_CALL,
-                ToolExecutionContext(
-                    workspace=Workspace(Path(__file__).parent),
-                    session=bridge.host.sessions.permissions._session,
-                ),
-            )
-            self.assertFalse(
-                any(message["type"] == "approval_request" for message in emitted(stdout))
-            )
+        ready = emitted(stdout)[0]
+        self.assertEqual(ready["permission_preset"], "full_access")
+        assert bridge.host.sessions.permissions is not None
+        bridge.host.sessions.permissions.authorize(
+            TOOL_CALL,
+            ToolExecutionContext(
+                workspace=Workspace(Path(__file__).parent),
+                session=bridge.host.sessions.permissions._session,
+            ),
+        )
+        self.assertFalse(
+            any(message["type"] == "approval_request" for message in emitted(stdout))
+        )
 
     def test_restores_the_session_plan_in_runtime_state(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            root = Path(directory)
-            store = JsonlSessionStore(root / "sessions")
-            session = Session("saved")
-            store.bind_workspace(session.session_id, root)
-            session.attach_journal_sink(
-                lambda events: store.append_events(
-                    session.session_id, events, workspace=root
-                )
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        store = JsonlSessionStore(root / "sessions")
+        session = Session("saved")
+        store.bind_workspace(session.session_id, root)
+        session.attach_journal_sink(
+            lambda events: store.append_events(
+                session.session_id, events, workspace=root
             )
-            PlanManager(session).update(
-                "Ship plans",
-                (PlanStep("verify", "Verify recovery", "in_progress"),),
-            )
-            bridge, stdout = make_bridge([], root)
-            resources.callback(bridge.close)
+        )
+        PlanManager(session).update(
+            "Ship plans",
+            (PlanStep("verify", "Verify recovery", "in_progress"),),
+        )
+        bridge, stdout = self.make_bridge([], root)
 
-            bridge.open_session(open_session_message(root, session_id="saved"))
+        bridge.open_session(open_session_message(root, session_id="saved"))
 
-            state = emitted(stdout)[-1]
-            self.assertEqual(state["type"], "runtime_state")
-            self.assertEqual(state["plan"]["goal"], "Ship plans")
-            self.assertEqual(state["plan"]["revision"], 1)
+        state = emitted(stdout)[-1]
+        self.assertEqual(state["type"], "runtime_state")
+        self.assertEqual(state["plan"]["goal"], "Ship plans")
+        self.assertEqual(state["plan"]["revision"], 1)
 
     def test_rejects_an_unconfigured_provider(self) -> None:
         with self.assertRaisesRegex(ValueError, "not configured"):
             self.started_model(provider="unknown")
 
     def test_registers_discovered_skills_and_their_read_tool(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            root = Path(directory)
-            skill_directory = root / "skills" / "demo"
-            skill_directory.mkdir(parents=True)
-            (skill_directory / "SKILL.md").write_text(
-                "---\n"
-                "name: demo-skill\n"
-                "description: Does demo work.\n"
-                "---\n\n"
-                "# Detailed instructions\n",
-                encoding="utf-8",
-            )
-            bridge, _ = make_bridge([], root)
-            resources.callback(bridge.close)
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        skill_directory = root / "skills" / "demo"
+        skill_directory.mkdir(parents=True)
+        (skill_directory / "SKILL.md").write_text(
+            "---\n"
+            "name: demo-skill\n"
+            "description: Does demo work.\n"
+            "---\n\n"
+            "# Detailed instructions\n",
+            encoding="utf-8",
+        )
+        bridge, _ = self.make_bridge([], root)
 
-            bridge.open_session(open_session_message(root))
-            plane = bridge.host.planes.ensure(bridge.host.sessions)
+        bridge.open_session(open_session_message(root))
+        plane = bridge.host.planes.ensure(bridge.host.sessions)
 
-            names = [item.name for item in plane.agent._tools.definitions]
-            prompt = plane.agent._context._system_prompt
+        names = [item.name for item in plane.agent._tools.definitions]
+        prompt = plane.agent._context._system_prompt
 
         self.assertIn("read_skill", names)
         self.assertIn("demo-skill: Does demo work.", prompt)
         self.assertNotIn("# Detailed instructions", prompt)
 
     def test_registers_configured_global_and_workspace_skill_paths(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            root = Path(directory)
-            config = root / "config"
-            workspace = root / "workspace"
-            config.mkdir()
-            workspace.mkdir()
-            for skill_root, name in (
-                (config / "shared-skills", "global-skill"),
-                (workspace / ".project-skills", "workspace-skill"),
-            ):
-                skill = skill_root / name
-                skill.mkdir(parents=True)
-                (skill / "SKILL.md").write_text(
-                    "---\n"
-                    f"name: {name}\n"
-                    f"description: {name} description.\n"
-                    "---\n",
-                    encoding="utf-8",
-                )
-            message = open_session_message(
-                config,
-                agent_config={
-                    "max_same_tool_calls": 5,
-                    "output_reserve_tokens": 100,
-                    "scratch_workspace_root": str(config / "scratch"),
-                    "workspace_instruction_files": ["AGENTS.md"],
-                    "skills": {
-                        "global_paths": ["shared-skills"],
-                        "workspace_paths": [
-                            ".project-skills",
-                            str(workspace / ".project-skills"),
-                        ],
-                    },
-                    "main_agent": {"tools": {}},
-                },
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        config = root / "config"
+        workspace = root / "workspace"
+        config.mkdir()
+        workspace.mkdir()
+        for skill_root, name in (
+            (config / "shared-skills", "global-skill"),
+            (workspace / ".project-skills", "workspace-skill"),
+        ):
+            skill = skill_root / name
+            skill.mkdir(parents=True)
+            (skill / "SKILL.md").write_text(
+                "---\n"
+                f"name: {name}\n"
+                f"description: {name} description.\n"
+                "---\n",
+                encoding="utf-8",
             )
-            message["workspace"] = str(workspace)
-            bridge, _ = make_bridge([], config)
-            resources.callback(bridge.close)
+        message = open_session_message(
+            config,
+            agent_config={
+                "max_same_tool_calls": 5,
+                "output_reserve_tokens": 100,
+                "scratch_workspace_root": str(config / "scratch"),
+                "workspace_instruction_files": ["AGENTS.md"],
+                "skills": {
+                    "global_paths": ["shared-skills"],
+                    "workspace_paths": [
+                        ".project-skills",
+                        str(workspace / ".project-skills"),
+                    ],
+                },
+                "main_agent": {"tools": {}},
+            },
+        )
+        message["workspace"] = str(workspace)
+        bridge, _ = self.make_bridge([], config)
 
-            bridge.open_session(message)
-            plane = bridge.host.planes.ensure(bridge.host.sessions)
-            skills = plane.agent._execution_context.skills
+        bridge.open_session(message)
+        plane = bridge.host.planes.ensure(bridge.host.sessions)
+        skills = plane.agent._execution_context.skills
 
         assert skills is not None
         self.assertEqual(skills.names, ("global-skill", "workspace-skill"))
         self.assertEqual(plane.runtime_warnings, ())
 
     def test_registers_plugin_skills_with_the_plugin_namespace(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            root = Path(directory)
-            plugin = root / "plugins" / "example"
-            skill = plugin / "skills" / "demo"
-            skill.mkdir(parents=True)
-            (plugin / "plugin.json").write_text(
-                json.dumps(
-                    {
-                        "name": "example",
-                        "components": {"skills": ["skills"]},
-                    }
-                ),
-                encoding="utf-8",
-            )
-            (skill / "SKILL.md").write_text(
-                "---\n"
-                "name: demo-skill\n"
-                "description: Plugin demo work.\n"
-                "---\n",
-                encoding="utf-8",
-            )
-            bridge, _ = make_bridge([], root)
-            resources.callback(bridge.close)
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        plugin = root / "plugins" / "example"
+        skill = plugin / "skills" / "demo"
+        skill.mkdir(parents=True)
+        (plugin / "plugin.json").write_text(
+            json.dumps(
+                {
+                    "name": "example",
+                    "components": {"skills": ["skills"]},
+                }
+            ),
+            encoding="utf-8",
+        )
+        (skill / "SKILL.md").write_text(
+            "---\n"
+            "name: demo-skill\n"
+            "description: Plugin demo work.\n"
+            "---\n",
+            encoding="utf-8",
+        )
+        bridge, _ = self.make_bridge([], root)
 
-            bridge.open_session(open_session_message(root))
-            plane = bridge.host.planes.ensure(bridge.host.sessions)
+        bridge.open_session(open_session_message(root))
+        plane = bridge.host.planes.ensure(bridge.host.sessions)
 
-            skills = plane.agent._execution_context.skills
-            assert skills is not None
-            definition = next(
-                item
-                for item in plane.agent._tools.definitions
-                if item.name == "read_skill"
-            )
+        skills = plane.agent._execution_context.skills
+        assert skills is not None
+        definition = next(
+            item
+            for item in plane.agent._tools.definitions
+            if item.name == "read_skill"
+        )
 
         self.assertEqual(skills.names, ("example:demo-skill",))
         self.assertEqual(
@@ -2266,82 +2293,81 @@ class BridgeSessionOpenTest(unittest.TestCase):
     def test_registers_and_calls_plugin_mcp_tools_in_the_execution_plane(
         self,
     ) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            root = Path(directory)
-            plugin = root / "plugins" / "example"
-            plugin.mkdir(parents=True)
-            (plugin / "plugin.json").write_text(
-                json.dumps(
-                    {
-                        "name": "example",
-                        "components": {"mcp": [".mcp.json"]},
-                    }
-                ),
-                encoding="utf-8",
-            )
-            (plugin / ".mcp.json").write_text(
-                json.dumps(
-                    {
-                        "fake": {
-                            "type": "stdio",
-                            "command": sys.executable,
-                            "args": [
-                                str(
-                                    Path(__file__).with_name(
-                                        "fake_mcp_server.py"
-                                    )
-                                )
-                            ],
-                            "tools": {
-                                "enabled": ["echo"],
-                                "approval": "never",
-                            },
-                        }
-                    }
-                ),
-                encoding="utf-8",
-            )
-            bridge, stdout = make_bridge([], root)
-            resources.callback(bridge.close)
-            bridge.open_session(
-                open_session_message(
-                    root,
-                    agent_config={
-                        "max_same_tool_calls": 5,
-                        "output_reserve_tokens": 100,
-                        "workspace_instruction_files": [
-                            "CLAUDE.md",
-                            "AGENTS.md",
-                        ],
-                        "main_agent": {
-                            "tools": {
-                                name: False for name in TOOL_NAMES
-                            }
-                        },
-                        "mcp": {"enabled": True, "servers": {}},
-                    },
-                )
-            )
-
-            try:
-                plane = bridge.host.planes.ensure(bridge.host.sessions)
-                names = {
-                    item.name for item in plane.agent._tools.definitions
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        plugin = root / "plugins" / "example"
+        plugin.mkdir(parents=True)
+        (plugin / "plugin.json").write_text(
+            json.dumps(
+                {
+                    "name": "example",
+                    "components": {"mcp": [".mcp.json"]},
                 }
-                result = plane.agent._tools.execute(
-                    ToolCall(
-                        "plugin-mcp",
-                        "mcp__example_fake__echo",
-                        {"text": "hello"},
-                    )
+            ),
+            encoding="utf-8",
+        )
+        (plugin / ".mcp.json").write_text(
+            json.dumps(
+                {
+                    "fake": {
+                        "type": "stdio",
+                        "command": sys.executable,
+                        "args": [
+                            str(
+                                Path(__file__).with_name(
+                                    "fake_mcp_server.py"
+                                )
+                            )
+                        ],
+                        "tools": {
+                            "enabled": ["echo"],
+                            "approval": "never",
+                        },
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        bridge, stdout = self.make_bridge([], root)
+        bridge.open_session(
+            open_session_message(
+                root,
+                agent_config={
+                    "max_same_tool_calls": 5,
+                    "output_reserve_tokens": 100,
+                    "workspace_instruction_files": [
+                        "CLAUDE.md",
+                        "AGENTS.md",
+                    ],
+                    "main_agent": {
+                        "tools": {
+                            name: False for name in TOOL_NAMES
+                        }
+                    },
+                    "mcp": {"enabled": True, "servers": {}},
+                },
+            )
+        )
+
+        try:
+            plane = bridge.host.planes.ensure(bridge.host.sessions)
+            names = {
+                item.name for item in plane.agent._tools.definitions
+            }
+            result = plane.agent._tools.execute(
+                ToolCall(
+                    "plugin-mcp",
+                    "mcp__example_fake__echo",
+                    {"text": "hello"},
                 )
-                statuses = [
-                    message
-                    for message in emitted(stdout)
-                    if message["type"] == "mcp_server_status"
-                ]
-            finally:
-                bridge.host.planes.close()
+            )
+            statuses = [
+                message
+                for message in emitted(stdout)
+                if message["type"] == "mcp_server_status"
+            ]
+        finally:
+            bridge.host.planes.close()
 
         self.assertIn("mcp__example_fake__echo", names)
         self.assertIsNone(result.error)
@@ -2358,27 +2384,26 @@ class BridgeSessionOpenTest(unittest.TestCase):
         )
 
     def test_global_mcp_switch_prevents_loading_plugin_mcp(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            root = Path(directory)
-            plugin = root / "plugins" / "example"
-            plugin.mkdir(parents=True)
-            (plugin / "plugin.json").write_text(
-                json.dumps(
-                    {
-                        "name": "example",
-                        "components": {"mcp": ["missing.json"]},
-                    }
-                ),
-                encoding="utf-8",
-            )
-            bridge, stdout = make_bridge([], root)
-            resources.callback(bridge.close)
-            bridge.open_session(open_session_message(root))
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        plugin = root / "plugins" / "example"
+        plugin.mkdir(parents=True)
+        (plugin / "plugin.json").write_text(
+            json.dumps(
+                {
+                    "name": "example",
+                    "components": {"mcp": ["missing.json"]},
+                }
+            ),
+            encoding="utf-8",
+        )
+        bridge, stdout = self.make_bridge([], root)
+        bridge.open_session(open_session_message(root))
 
-            try:
-                plane = bridge.host.planes.ensure(bridge.host.sessions)
-            finally:
-                bridge.host.planes.close()
+        try:
+            plane = bridge.host.planes.ensure(bridge.host.sessions)
+        finally:
+            bridge.host.planes.close()
 
         self.assertEqual(plane.mcp.tool_names, ())
         self.assertEqual(plane.runtime_warnings, ())
@@ -2390,89 +2415,86 @@ class BridgeSessionOpenTest(unittest.TestCase):
         )
 
     def test_missing_plugin_mcp_warns_without_failing_runtime(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            root = Path(directory)
-            plugin = root / "plugins" / "example"
-            plugin.mkdir(parents=True)
-            (plugin / "plugin.json").write_text(
-                json.dumps(
-                    {
-                        "name": "example",
-                        "components": {"mcp": ["missing.json"]},
-                    }
-                ),
-                encoding="utf-8",
-            )
-            bridge, _ = make_bridge([], root)
-            resources.callback(bridge.close)
-            bridge.open_session(
-                open_session_message(
-                    root,
-                    agent_config={
-                        "max_same_tool_calls": 5,
-                        "output_reserve_tokens": 100,
-                        "workspace_instruction_files": [
-                            "CLAUDE.md",
-                            "AGENTS.md",
-                        ],
-                        "main_agent": {
-                            "tools": {
-                                name: False for name in TOOL_NAMES
-                            }
-                        },
-                        "mcp": {"enabled": True, "servers": {}},
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        plugin = root / "plugins" / "example"
+        plugin.mkdir(parents=True)
+        (plugin / "plugin.json").write_text(
+            json.dumps(
+                {
+                    "name": "example",
+                    "components": {"mcp": ["missing.json"]},
+                }
+            ),
+            encoding="utf-8",
+        )
+        bridge, _ = self.make_bridge([], root)
+        bridge.open_session(
+            open_session_message(
+                root,
+                agent_config={
+                    "max_same_tool_calls": 5,
+                    "output_reserve_tokens": 100,
+                    "workspace_instruction_files": [
+                        "CLAUDE.md",
+                        "AGENTS.md",
+                    ],
+                    "main_agent": {
+                        "tools": {
+                            name: False for name in TOOL_NAMES
+                        }
                     },
-                )
+                    "mcp": {"enabled": True, "servers": {}},
+                },
             )
+        )
 
-            try:
-                plane = bridge.host.planes.ensure(bridge.host.sessions)
-            finally:
-                bridge.host.planes.close()
+        try:
+            plane = bridge.host.planes.ensure(bridge.host.sessions)
+        finally:
+            bridge.host.planes.close()
 
         self.assertEqual(plane.mcp.tool_names, ())
         self.assertEqual(len(plane.runtime_warnings), 1)
         self.assertIn("Skipping MCP component", plane.runtime_warnings[0])
 
     def test_uses_prompt_templates_from_the_config_directory(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            root = Path(directory)
-            message = open_session_message(root)
-            (root / "prompts" / "Soul.md").write_text(
-                "Custom prompt for {{workspace}}",
-                encoding="utf-8",
-            )
-            bridge, _ = make_bridge([], root)
-            resources.callback(bridge.close)
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        message = open_session_message(root)
+        (root / "prompts" / "Soul.md").write_text(
+            "Custom prompt for {{workspace}}",
+            encoding="utf-8",
+        )
+        bridge, _ = self.make_bridge([], root)
 
-            bridge.open_session(message)
-            plane = bridge.host.planes.ensure(bridge.host.sessions)
+        bridge.open_session(message)
+        plane = bridge.host.planes.ensure(bridge.host.sessions)
 
-            request = plane.agent._context.build_request()
-            prompt = request.system_prompt
-            runtime_context = request.messages[0].content
+        request = plane.agent._context.build_request()
+        prompt = request.system_prompt
+        runtime_context = request.messages[0].content
 
         self.assertTrue(prompt.startswith(f"Custom prompt for {root.resolve()}"))
         self.assertNotIn("## Long-term Memory", prompt)
         self.assertIn("## Long-term Memory", runtime_context)
 
     def test_injects_global_and_workspace_instructions_without_persisting_them(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            root = Path(directory)
-            workspace = root / "workspace"
-            workspace.mkdir()
-            (root / "AGENTS.md").write_text("global rule", encoding="utf-8")
-            (workspace / "CLAUDE.md").write_text("claude rule", encoding="utf-8")
-            (workspace / "AGENTS.md").write_text("workspace rule", encoding="utf-8")
-            bridge, _ = make_bridge([], root)
-            resources.callback(bridge.close)
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        workspace = root / "workspace"
+        workspace.mkdir()
+        (root / "AGENTS.md").write_text("global rule", encoding="utf-8")
+        (workspace / "CLAUDE.md").write_text("claude rule", encoding="utf-8")
+        (workspace / "AGENTS.md").write_text("workspace rule", encoding="utf-8")
+        bridge, _ = self.make_bridge([], root)
 
-            bridge.open_session(open_session_message(root, workspace=str(workspace)))
-            plane = bridge.host.planes.ensure(bridge.host.sessions)
+        bridge.open_session(open_session_message(root, workspace=str(workspace)))
+        plane = bridge.host.planes.ensure(bridge.host.sessions)
 
-            prompt = plane.agent._context._system_prompt
-            session = bridge.host.sessions.session
-            assert session is not None
+        prompt = plane.agent._context._system_prompt
+        session = bridge.host.sessions.session
+        assert session is not None
 
         self.assertLess(prompt.index("global rule"), prompt.index("claude rule"))
         self.assertLess(prompt.index("claude rule"), prompt.index("workspace rule"))
@@ -2485,28 +2507,27 @@ class BridgeSessionOpenTest(unittest.TestCase):
         )
 
     def test_uses_configured_workspace_instruction_files(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            root = Path(directory)
-            workspace = root / "workspace"
-            workspace.mkdir()
-            (workspace / "PROJECT.md").write_text("project rule", encoding="utf-8")
-            (workspace / "AGENTS.md").write_text("not configured", encoding="utf-8")
-            bridge, _ = make_bridge([], root)
-            resources.callback(bridge.close)
-            message = open_session_message(
-                root,
-                workspace=str(workspace),
-                agent_config={
-                    "max_same_tool_calls": 5,
-                    "output_reserve_tokens": 100,
-                    "workspace_instruction_files": ["PROJECT.md"],
-                    "main_agent": {"tools": {name: False for name in TOOL_NAMES}},
-                },
-            )
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        workspace = root / "workspace"
+        workspace.mkdir()
+        (workspace / "PROJECT.md").write_text("project rule", encoding="utf-8")
+        (workspace / "AGENTS.md").write_text("not configured", encoding="utf-8")
+        bridge, _ = self.make_bridge([], root)
+        message = open_session_message(
+            root,
+            workspace=str(workspace),
+            agent_config={
+                "max_same_tool_calls": 5,
+                "output_reserve_tokens": 100,
+                "workspace_instruction_files": ["PROJECT.md"],
+                "main_agent": {"tools": {name: False for name in TOOL_NAMES}},
+            },
+        )
 
-            bridge.open_session(message)
-            plane = bridge.host.planes.ensure(bridge.host.sessions)
-            prompt = plane.agent._context._system_prompt
+        bridge.open_session(message)
+        plane = bridge.host.planes.ensure(bridge.host.sessions)
+        prompt = plane.agent._context._system_prompt
 
         self.assertIn("project rule", prompt)
         self.assertIn("<workspace>/PROJECT.md", prompt)
@@ -2514,273 +2535,264 @@ class BridgeSessionOpenTest(unittest.TestCase):
         self.assertNotIn("<workspace>/AGENTS.md", prompt)
 
     def test_reuses_runtime_until_instructions_change_between_turns(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            root = Path(directory)
-            instructions_path = root / "AGENTS.md"
-            instructions_path.write_text("first rule", encoding="utf-8")
-            bridge, _ = make_bridge([], root)
-            resources.callback(bridge.close)
-            bridge.open_session(open_session_message(root))
-            first_plane = bridge.host.planes.ensure(bridge.host.sessions)
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        instructions_path = root / "AGENTS.md"
+        instructions_path.write_text("first rule", encoding="utf-8")
+        bridge, _ = self.make_bridge([], root)
+        bridge.open_session(open_session_message(root))
+        first_plane = bridge.host.planes.ensure(bridge.host.sessions)
 
-            self.assertIs(bridge.host.planes.ensure(bridge.host.sessions), first_plane)
+        self.assertIs(bridge.host.planes.ensure(bridge.host.sessions), first_plane)
 
-            instructions_path.write_text("second rule", encoding="utf-8")
-            second_plane = bridge.host.planes.ensure(bridge.host.sessions)
+        instructions_path.write_text("second rule", encoding="utf-8")
+        second_plane = bridge.host.planes.ensure(bridge.host.sessions)
 
-            self.assertIsNot(second_plane, first_plane)
-            self.assertIn(
-                "second rule", second_plane.agent._context._system_prompt
-            )
-            self.assertNotIn(
-                "first rule", second_plane.agent._context._system_prompt
-            )
+        self.assertIsNot(second_plane, first_plane)
+        self.assertIn(
+            "second rule", second_plane.agent._context._system_prompt
+        )
+        self.assertNotIn(
+            "first rule", second_plane.agent._context._system_prompt
+        )
 
     def test_memory_changes_are_loaded_by_the_next_runtime(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            root = Path(directory)
-            bridge, _ = make_bridge([], root)
-            resources.callback(bridge.close)
-            bridge.open_session(open_session_message(root))
-            first_plane = bridge.host.planes.ensure(bridge.host.sessions)
-            store = MemoryStore(
-                root / "MEMORY.md",
-                root / "sessions",
-            )
-            store.write_updates(
-                root,
-                global_memory=MemoryDocument(
-                    preferences=("Prefer concise responses.",)
-                ),
-            )
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        bridge, _ = self.make_bridge([], root)
+        bridge.open_session(open_session_message(root))
+        first_plane = bridge.host.planes.ensure(bridge.host.sessions)
+        store = MemoryStore(
+            root / "MEMORY.md",
+            root / "sessions",
+        )
+        store.write_updates(
+            root,
+            global_memory=MemoryDocument(
+                preferences=("Prefer concise responses.",)
+            ),
+        )
 
-            second_plane = bridge.host.planes.ensure(bridge.host.sessions)
+        second_plane = bridge.host.planes.ensure(bridge.host.sessions)
 
-            self.assertIs(second_plane, first_plane)
-            self.assertNotIn(
-                "Prefer concise responses.",
-                second_plane.agent._context._system_prompt,
-            )
+        self.assertIs(second_plane, first_plane)
+        self.assertNotIn(
+            "Prefer concise responses.",
+            second_plane.agent._context._system_prompt,
+        )
 
-            bridge.host.planes.close()
-            third_plane = bridge.host.planes.ensure(bridge.host.sessions)
+        bridge.host.planes.close()
+        third_plane = bridge.host.planes.ensure(bridge.host.sessions)
 
-            self.assertIsNot(third_plane, first_plane)
-            request = third_plane.agent._context.build_request()
-            self.assertNotIn("Prefer concise responses.", request.system_prompt)
-            runtime_context = request.messages[0].content
-            self.assertIn("Prefer concise responses.", runtime_context)
-            self.assertIn("current request has highest priority", runtime_context)
+        self.assertIsNot(third_plane, first_plane)
+        request = third_plane.agent._context.build_request()
+        self.assertNotIn("Prefer concise responses.", request.system_prompt)
+        runtime_context = request.messages[0].content
+        self.assertIn("Prefer concise responses.", runtime_context)
+        self.assertIn("current request has highest priority", runtime_context)
 
     def test_rebuilds_runtime_when_the_configured_instruction_list_changes(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            root = Path(directory)
-            (root / "PROJECT.md").write_text("project rule", encoding="utf-8")
-            bridge, _ = make_bridge([], root)
-            resources.callback(bridge.close)
-            bridge.open_session(open_session_message(root))
-            first_plane = bridge.host.planes.ensure(bridge.host.sessions)
-            config = json.loads(
-                (root / "agent_config.json").read_text(encoding="utf-8")
-            )
-            config["workspace_instruction_files"] = ["PROJECT.md"]
-            (root / "agent_config.json").write_text(
-                json.dumps(config),
-                encoding="utf-8",
-            )
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        (root / "PROJECT.md").write_text("project rule", encoding="utf-8")
+        bridge, _ = self.make_bridge([], root)
+        bridge.open_session(open_session_message(root))
+        first_plane = bridge.host.planes.ensure(bridge.host.sessions)
+        config = json.loads(
+            (root / "agent_config.json").read_text(encoding="utf-8")
+        )
+        config["workspace_instruction_files"] = ["PROJECT.md"]
+        (root / "agent_config.json").write_text(
+            json.dumps(config),
+            encoding="utf-8",
+        )
 
-            second_plane = bridge.host.planes.ensure(bridge.host.sessions)
+        second_plane = bridge.host.planes.ensure(bridge.host.sessions)
 
-            self.assertIsNot(second_plane, first_plane)
-            self.assertIn(
-                "project rule", second_plane.agent._context._system_prompt
-            )
-            self.assertIn(
-                "<workspace>/PROJECT.md",
-                second_plane.agent._context._system_prompt,
-            )
+        self.assertIsNot(second_plane, first_plane)
+        self.assertIn(
+            "project rule", second_plane.agent._context._system_prompt
+        )
+        self.assertIn(
+            "<workspace>/PROJECT.md",
+            second_plane.agent._context._system_prompt,
+        )
 
     def test_rebuilds_the_execution_plane_when_agent_config_changes(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            root = Path(directory)
-            bridge, _ = make_bridge([], root)
-            resources.callback(bridge.close)
-            bridge.open_session(open_session_message(root))
-            first_plane = bridge.host.planes.ensure(bridge.host.sessions)
-            config = json.loads(
-                (root / "agent_config.json").read_text(encoding="utf-8")
-            )
-            config["max_same_tool_calls"] = 6
-            (root / "agent_config.json").write_text(
-                json.dumps(config),
-                encoding="utf-8",
-            )
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        bridge, _ = self.make_bridge([], root)
+        bridge.open_session(open_session_message(root))
+        first_plane = bridge.host.planes.ensure(bridge.host.sessions)
+        config = json.loads(
+            (root / "agent_config.json").read_text(encoding="utf-8")
+        )
+        config["max_same_tool_calls"] = 6
+        (root / "agent_config.json").write_text(
+            json.dumps(config),
+            encoding="utf-8",
+        )
 
-            with (
-                patch.object(
-                    first_plane.jobs,
-                    "close",
-                    wraps=first_plane.jobs.close,
-                ) as close_jobs,
-                patch.object(
-                    first_plane.mcp,
-                    "close",
-                    wraps=first_plane.mcp.close,
-                ) as close_mcp,
-            ):
-                second_plane = bridge.host.planes.ensure(bridge.host.sessions)
+        with (
+            patch.object(
+                first_plane.jobs,
+                "close",
+                wraps=first_plane.jobs.close,
+            ) as close_jobs,
+            patch.object(
+                first_plane.mcp,
+                "close",
+                wraps=first_plane.mcp.close,
+            ) as close_mcp,
+        ):
+            second_plane = bridge.host.planes.ensure(bridge.host.sessions)
 
-            self.assertIsNot(second_plane, first_plane)
-            self.assertEqual(second_plane.agent_config.max_same_tool_calls, 6)
-            close_jobs.assert_called_once_with()
-            close_mcp.assert_called_once_with()
+        self.assertIsNot(second_plane, first_plane)
+        self.assertEqual(second_plane.agent_config.max_same_tool_calls, 6)
+        close_jobs.assert_called_once_with()
+        close_mcp.assert_called_once_with()
 
     def test_rebuilds_the_execution_plane_when_provider_config_changes(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            root = Path(directory)
-            bridge, _ = make_bridge([], root)
-            resources.callback(bridge.close)
-            bridge.open_session(open_session_message(root))
-            first_plane = bridge.host.planes.ensure(bridge.host.sessions)
-            config = json.loads(
-                (root / "provider_config.json").read_text(encoding="utf-8")
-            )
-            config["providers"]["first"]["model"] = "openai/updated"
-            (root / "provider_config.json").write_text(
-                json.dumps(config),
-                encoding="utf-8",
-            )
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        bridge, _ = self.make_bridge([], root)
+        bridge.open_session(open_session_message(root))
+        first_plane = bridge.host.planes.ensure(bridge.host.sessions)
+        config = json.loads(
+            (root / "provider_config.json").read_text(encoding="utf-8")
+        )
+        config["providers"]["first"]["model"] = "openai/updated"
+        (root / "provider_config.json").write_text(
+            json.dumps(config),
+            encoding="utf-8",
+        )
 
-            second_plane = bridge.host.planes.ensure(bridge.host.sessions)
+        second_plane = bridge.host.planes.ensure(bridge.host.sessions)
 
-            self.assertIsNot(second_plane, first_plane)
-            self.assertNotEqual(
-                second_plane.configuration_fingerprint,
-                first_plane.configuration_fingerprint,
-            )
-            self.assertEqual(
-                second_plane.agent._provider._model,
-                "openai/updated",
-            )
+        self.assertIsNot(second_plane, first_plane)
+        self.assertNotEqual(
+            second_plane.configuration_fingerprint,
+            first_plane.configuration_fingerprint,
+        )
+        self.assertEqual(
+            second_plane.agent._provider._model,
+            "openai/updated",
+        )
 
     def test_rebuilds_the_execution_plane_when_dotenv_changes(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            root = Path(directory)
-            config = {
-                "main_agent": {"provider": "first"},
-                "subagent": {"provider": ""},
-                "providers": {
-                    "first": {
-                        "model": "openai/first",
-                        "key": "${FIRST_KEY}",
-                        "max_context_tokens": 1000,
-                    }
-                },
-            }
-            bridge, _ = make_bridge([], root)
-            resources.callback(bridge.close)
-            open_session_message(root, provider_config=config)
-            (root / ".env").write_text("FIRST_KEY=first\n", encoding="utf-8")
-            bridge.open_session({"type": "open_session", "workspace": str(root), "session_id": None})
-            first_plane = bridge.host.planes.ensure(bridge.host.sessions)
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        config = {
+            "main_agent": {"provider": "first"},
+            "subagent": {"provider": ""},
+            "providers": {
+                "first": {
+                    "model": "openai/first",
+                    "key": "${FIRST_KEY}",
+                    "max_context_tokens": 1000,
+                }
+            },
+        }
+        bridge, _ = self.make_bridge([], root)
+        open_session_message(root, provider_config=config)
+        (root / ".env").write_text("FIRST_KEY=first\n", encoding="utf-8")
+        bridge.open_session({"type": "open_session", "workspace": str(root), "session_id": None})
+        first_plane = bridge.host.planes.ensure(bridge.host.sessions)
 
-            (root / ".env").write_text("FIRST_KEY=second\n", encoding="utf-8")
-            second_plane = bridge.host.planes.ensure(bridge.host.sessions)
+        (root / ".env").write_text("FIRST_KEY=second\n", encoding="utf-8")
+        second_plane = bridge.host.planes.ensure(bridge.host.sessions)
 
-            self.assertIsNot(second_plane, first_plane)
-            self.assertEqual(second_plane.agent._provider._api_key, "second")
+        self.assertIsNot(second_plane, first_plane)
+        self.assertEqual(second_plane.agent._provider._api_key, "second")
 
     def test_failed_assembly_does_not_publish_a_partial_execution_plane(
         self,
     ) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            root = Path(directory)
-            bridge, _ = make_bridge([], root)
-            resources.callback(bridge.close)
-            bridge.open_session(open_session_message(root))
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        bridge, _ = self.make_bridge([], root)
+        bridge.open_session(open_session_message(root))
 
-            with (
-                patch(
-                    "agent_runtime.plane_manager.Agent",
-                    side_effect=RuntimeError("assembly failed"),
-                ),
-                patch(
-                    "agent_runtime.plane_manager.JobManager.close",
-                    autospec=True,
-                ) as close_jobs,
-                patch(
-                    "agent_runtime.plane_manager.McpClientManager.close",
-                    autospec=True,
-                ) as close_mcp,
-            ):
-                with self.assertRaisesRegex(RuntimeError, "assembly failed"):
-                    bridge.host.planes.ensure(bridge.host.sessions)
+        with (
+            patch(
+                "agent_runtime.plane_manager.Agent",
+                side_effect=RuntimeError("assembly failed"),
+            ),
+            patch(
+                "agent_runtime.plane_manager.JobManager.close",
+                autospec=True,
+            ) as close_jobs,
+            patch(
+                "agent_runtime.plane_manager.McpClientManager.close",
+                autospec=True,
+            ) as close_mcp,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "assembly failed"):
+                bridge.host.planes.ensure(bridge.host.sessions)
 
-            self.assertIsNone(bridge.host.planes.current)
-            close_jobs.assert_called_once()
-            close_mcp.assert_called_once()
+        self.assertIsNone(bridge.host.planes.current)
+        close_jobs.assert_called_once()
+        close_mcp.assert_called_once()
 
     def test_context_window_event_updates_the_execution_plane_snapshot(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            root = Path(directory)
-            bridge, stdout = make_bridge([], root)
-            resources.callback(bridge.close)
-            bridge.open_session(open_session_message(root))
-            plane = bridge.host.planes.ensure(bridge.host.sessions)
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        bridge, stdout = self.make_bridge([], root)
+        bridge.open_session(open_session_message(root))
+        plane = bridge.host.planes.ensure(bridge.host.sessions)
 
-            bridge.host.publish_event(
-                ContextWindowEvent(
-                    ContextWindow(
-                        input_tokens=240,
-                        max_input_tokens=900,
-                        max_context_tokens=1000,
-                        output_reserve_tokens=100,
-                        compression_threshold=720,
-                        compression_count=3,
-                        compression_summary="Archived context",
-                    )
-                ),
-                "t1",
-            )
-            bridge._emit_runtime_state("running")
+        bridge.host.publish_event(
+            ContextWindowEvent(
+                ContextWindow(
+                    input_tokens=240,
+                    max_input_tokens=900,
+                    max_context_tokens=1000,
+                    output_reserve_tokens=100,
+                    compression_threshold=720,
+                    compression_count=3,
+                    compression_summary="Archived context",
+                )
+            ),
+            "t1",
+        )
+        bridge._emit_runtime_state("running")
 
-            self.assertEqual(plane.context_window.input_tokens, 240)
-            self.assertEqual(
-                emitted(stdout)[-1]["context_window"],
-                {
-                    "input_tokens": 240,
-                    "max_input_tokens": 900,
-                    "max_context_tokens": 1000,
-                    "output_reserve_tokens": 100,
-                    "compression_threshold": 720,
-                    "compression_count": 3,
-                    "compression_summary": "Archived context",
-                },
-            )
+        self.assertEqual(plane.context_window.input_tokens, 240)
+        self.assertEqual(
+            emitted(stdout)[-1]["context_window"],
+            {
+                "input_tokens": 240,
+                "max_input_tokens": 900,
+                "max_context_tokens": 1000,
+                "output_reserve_tokens": 100,
+                "compression_threshold": 720,
+                "compression_count": 3,
+                "compression_summary": "Archived context",
+            },
+        )
 
     def test_invalid_skill_does_not_prevent_bridge_startup(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            root = Path(directory)
-            invalid = root / "skills" / "invalid"
-            invalid.mkdir(parents=True)
-            (invalid / "SKILL.md").write_text(
-                "# Missing front matter\n", encoding="utf-8"
-            )
-            valid = root / "skills" / "valid"
-            valid.mkdir()
-            (valid / "SKILL.md").write_text(
-                "---\nname: valid-skill\n"
-                "description: Still available.\n---\n",
-                encoding="utf-8",
-            )
-            bridge, stdout = make_bridge([], root)
-            resources.callback(bridge.close)
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        invalid = root / "skills" / "invalid"
+        invalid.mkdir(parents=True)
+        (invalid / "SKILL.md").write_text(
+            "# Missing front matter\n", encoding="utf-8"
+        )
+        valid = root / "skills" / "valid"
+        valid.mkdir()
+        (valid / "SKILL.md").write_text(
+            "---\nname: valid-skill\n"
+            "description: Still available.\n---\n",
+            encoding="utf-8",
+        )
+        bridge, stdout = self.make_bridge([], root)
 
-            bridge.open_session(open_session_message(root))
-            plane = bridge.host.planes.ensure(bridge.host.sessions)
+        bridge.open_session(open_session_message(root))
+        plane = bridge.host.planes.ensure(bridge.host.sessions)
 
-            runtime_state = emitted(stdout)[-1]
-            names = [item.name for item in plane.agent._tools.definitions]
+        runtime_state = emitted(stdout)[-1]
+        names = [item.name for item in plane.agent._tools.definitions]
 
         self.assertEqual(runtime_state["type"], "runtime_state")
         self.assertEqual(runtime_state["phase"], "starting")
@@ -2789,30 +2801,29 @@ class BridgeSessionOpenTest(unittest.TestCase):
         self.assertIn("read_skill", names)
 
 
-class SubagentRoleStartTest(unittest.TestCase):
+class SubagentRoleStartTest(BridgeTestCase):
     """Only enabled roles reach the model's subagent schema."""
 
     def offered_roles(self, roles: dict) -> list[str]:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            bridge, _ = make_bridge([], Path(directory))
-            resources.callback(bridge.close)
-            bridge.open_session(
-                open_session_message(
-                    Path(directory),
-                    agent_config={
-                        "max_same_tool_calls": 5,
-                        "output_reserve_tokens": 100,
-                        "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
-                        "main_agent": {"tools": {"subagent": True}},
-                        "subagent_roles": roles,
-                    },
-                )
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        bridge, _ = self.make_bridge([], Path(directory))
+        bridge.open_session(
+            open_session_message(
+                Path(directory),
+                agent_config={
+                    "max_same_tool_calls": 5,
+                    "output_reserve_tokens": 100,
+                    "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
+                    "main_agent": {"tools": {"subagent": True}},
+                    "subagent_roles": roles,
+                },
             )
-            plane = bridge.host.planes.ensure(bridge.host.sessions)
-            subagents = plane.agent._tools._context.subagents
-            if subagents is None:
-                return []
-            return [role.name for role in subagents.roles]
+        )
+        plane = bridge.host.planes.ensure(bridge.host.sessions)
+        subagents = plane.agent._tools._context.subagents
+        if subagents is None:
+            return []
+        return [role.name for role in subagents.roles]
 
     def test_offers_every_enabled_role(self) -> None:
         self.assertEqual(
@@ -2846,154 +2857,151 @@ class SubagentRoleStartTest(unittest.TestCase):
 
     def test_disabling_every_role_removes_the_subagent_tool(self) -> None:
         """With no role left there is nothing to delegate to."""
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            bridge, _ = make_bridge([], Path(directory))
-            resources.callback(bridge.close)
-            bridge.open_session(
-                open_session_message(
-                    Path(directory),
-                    agent_config={
-                        "max_same_tool_calls": 5,
-                        "output_reserve_tokens": 100,
-                        "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
-                        "main_agent": {"tools": {"subagent": True}},
-                        "subagent_roles": {
-                            "researcher": {
-                                "enabled": False,
-                                "description": "Reads.",
-                                "tools": {},
-                            }
-                        },
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        bridge, _ = self.make_bridge([], Path(directory))
+        bridge.open_session(
+            open_session_message(
+                Path(directory),
+                agent_config={
+                    "max_same_tool_calls": 5,
+                    "output_reserve_tokens": 100,
+                    "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
+                    "main_agent": {"tools": {"subagent": True}},
+                    "subagent_roles": {
+                        "researcher": {
+                            "enabled": False,
+                            "description": "Reads.",
+                            "tools": {},
+                        }
                     },
-                )
+                },
             )
-            plane = bridge.host.planes.ensure(bridge.host.sessions)
+        )
+        plane = bridge.host.planes.ensure(bridge.host.sessions)
 
-            self.assertEqual(
-                [definition.name for definition in plane.agent._tools.definitions],
-                ["ask_user", "update_plan", "remember"],
-            )
+        self.assertEqual(
+            [definition.name for definition in plane.agent._tools.definitions],
+            ["ask_user", "update_plan", "remember"],
+        )
 
     def test_runtime_tools_are_registered_only_for_the_main_agent(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            bridge, _ = make_bridge([], Path(directory))
-            resources.callback(bridge.close)
-            bridge.open_session(
-                open_session_message(
-                    Path(directory),
-                    agent_config={
-                        "max_same_tool_calls": 5,
-                        "output_reserve_tokens": 100,
-                        "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
-                        "main_agent": {"tools": {"subagent": True}},
-                        "subagent_roles": {
-                            "researcher": {
-                                "description": "Reads.",
-                                "tools": {"read_file": True},
-                            }
-                        },
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        bridge, _ = self.make_bridge([], Path(directory))
+        bridge.open_session(
+            open_session_message(
+                Path(directory),
+                agent_config={
+                    "max_same_tool_calls": 5,
+                    "output_reserve_tokens": 100,
+                    "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
+                    "main_agent": {"tools": {"subagent": True}},
+                    "subagent_roles": {
+                        "researcher": {
+                            "description": "Reads.",
+                            "tools": {"read_file": True},
+                        }
                     },
-                )
+                },
             )
-            plane = bridge.host.planes.ensure(bridge.host.sessions)
+        )
+        plane = bridge.host.planes.ensure(bridge.host.sessions)
 
-            main_names = {
-                definition.name for definition in plane.agent._tools.definitions
-            }
-            subagent = plane.agent._tools._context.subagents
-            assert subagent is not None
-            role = subagent.roles.get("researcher")
-            role_context = plane.agent._tools._context
-            role_names = {
-                definition.name
-                for definition in subagent._catalog.select(
-                    role.tools, role_context
-                ).definitions
-            }
+        main_names = {
+            definition.name for definition in plane.agent._tools.definitions
+        }
+        subagent = plane.agent._tools._context.subagents
+        assert subagent is not None
+        role = subagent.roles.get("researcher")
+        role_context = plane.agent._tools._context
+        role_names = {
+            definition.name
+            for definition in subagent._catalog.select(
+                role.tools, role_context
+            ).definitions
+        }
 
-            self.assertIn("ask_user", main_names)
-            self.assertIn("update_plan", main_names)
-            self.assertNotIn("ask_user", role_names)
-            self.assertNotIn("update_plan", role_names)
-            self.assertNotIn("remember", role_names)
+        self.assertIn("ask_user", main_names)
+        self.assertIn("update_plan", main_names)
+        self.assertNotIn("ask_user", role_names)
+        self.assertNotIn("update_plan", role_names)
+        self.assertNotIn("remember", role_names)
 
 
-class PluginAgentStartTest(unittest.TestCase):
+class PluginAgentStartTest(BridgeTestCase):
     def test_assembles_plugin_agents_with_prompts_tools_and_providers(self) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            root = Path(directory)
-            plugin = root / "plugins" / "review-kit"
-            agents = plugin / "agents"
-            agents.mkdir(parents=True)
-            (plugin / "plugin.json").write_text(
-                json.dumps(
-                    {
-                        "name": "review-kit",
-                        "components": {
-                            "agents": [
-                                "agents/matched.md",
-                                "agents/fallback.md",
-                                "agents/overridden.md",
-                            ]
-                        },
-                    }
-                ),
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        plugin = root / "plugins" / "review-kit"
+        agents = plugin / "agents"
+        agents.mkdir(parents=True)
+        (plugin / "plugin.json").write_text(
+            json.dumps(
+                {
+                    "name": "review-kit",
+                    "components": {
+                        "agents": [
+                            "agents/matched.md",
+                            "agents/fallback.md",
+                            "agents/overridden.md",
+                        ]
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        for name, model in (
+            ("matched", "second"),
+            ("fallback", "opus"),
+            ("overridden", "inherit"),
+        ):
+            (agents / f"{name}.md").write_text(
+                "---\n"
+                f"name: {name}\n"
+                f"description: Review as {name}.\n"
+                f"model: {model}\n"
+                "---\n\n"
+                f"System instructions for {name}.\n",
                 encoding="utf-8",
             )
-            for name, model in (
-                ("matched", "second"),
-                ("fallback", "opus"),
-                ("overridden", "inherit"),
-            ):
-                (agents / f"{name}.md").write_text(
-                    "---\n"
-                    f"name: {name}\n"
-                    f"description: Review as {name}.\n"
-                    f"model: {model}\n"
-                    "---\n\n"
-                    f"System instructions for {name}.\n",
-                    encoding="utf-8",
-                )
-            bridge, _ = make_bridge([], root)
-            resources.callback(bridge.close)
-            bridge.open_session(
-                open_session_message(
-                    root,
-                    agent_config={
-                        "max_same_tool_calls": 5,
-                        "output_reserve_tokens": 100,
-                        "workspace_instruction_files": [
-                            "CLAUDE.md",
-                            "AGENTS.md",
-                        ],
-                        "main_agent": {"tools": {"subagent": True}},
+        bridge, _ = self.make_bridge([], root)
+        bridge.open_session(
+            open_session_message(
+                root,
+                agent_config={
+                    "max_same_tool_calls": 5,
+                    "output_reserve_tokens": 100,
+                    "workspace_instruction_files": [
+                        "CLAUDE.md",
+                        "AGENTS.md",
+                    ],
+                    "main_agent": {"tools": {"subagent": True}},
+                },
+                provider_config={
+                    "main_agent": {"provider": "first"},
+                    "subagent": {"provider": "first"},
+                    "subagent_roles": {
+                        "review-kit:overridden": {"provider": "second"}
                     },
-                    provider_config={
-                        "main_agent": {"provider": "first"},
-                        "subagent": {"provider": "first"},
-                        "subagent_roles": {
-                            "review-kit:overridden": {"provider": "second"}
+                    "providers": {
+                        "first": {
+                            "model": "openai/first",
+                            "max_context_tokens": 1000,
                         },
-                        "providers": {
-                            "first": {
-                                "model": "openai/first",
-                                "max_context_tokens": 1000,
-                            },
-                            "second": {
-                                "model": "openai/second",
-                                "max_context_tokens": 1000,
-                            },
+                        "second": {
+                            "model": "openai/second",
+                            "max_context_tokens": 1000,
                         },
                     },
-                )
+                },
             )
+        )
 
-            plane = bridge.host.planes.ensure(bridge.host.sessions)
-            runtime = plane.agent._tools._context.subagents
-            assert runtime is not None
-            matched = runtime.roles.get("review-kit:matched")
-            fallback = runtime.roles.get("review-kit:fallback")
-            overridden = runtime.roles.get("review-kit:overridden")
+        plane = bridge.host.planes.ensure(bridge.host.sessions)
+        runtime = plane.agent._tools._context.subagents
+        assert runtime is not None
+        matched = runtime.roles.get("review-kit:matched")
+        fallback = runtime.roles.get("review-kit:fallback")
+        overridden = runtime.roles.get("review-kit:overridden")
 
         self.assertEqual(matched.description, "Review as matched.")
         self.assertEqual(
@@ -3024,7 +3032,7 @@ _CAPABILITIES_PATCH = classmethod(
 )
 
 
-class AnalyzeImageDerivationTest(unittest.TestCase):
+class AnalyzeImageDerivationTest(BridgeTestCase):
     """The image tools are derived from capability, never configured.
 
     Exactly one of them is registered: a model that reads images gets
@@ -3043,63 +3051,62 @@ class AnalyzeImageDerivationTest(unittest.TestCase):
         main_agent: dict[str, object] = {"provider": "main"}
         if vision_provider is not None:
             main_agent["vision_provider"] = vision_provider
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            bridge, _ = make_bridge([], Path(directory))
-            resources.callback(bridge.close)
-            with patch.object(
-                ModelProvider, "capabilities_for_model", _CAPABILITIES_PATCH
-            ):
-                bridge.open_session(
-                    open_session_message(
-                        Path(directory),
-                        provider_config={
-                            "main_agent": main_agent,
-                            "subagent": {"provider": ""},
-                            "subagent_roles": role_blocks or {},
-                            "providers": {
-                                "main": {
-                                    "model": main_model,
-                                    "api": "chat_completions",
-                                    "max_context_tokens": 1000,
-                                },
-                                "seeing": {
-                                    "model": VISION_MODEL,
-                                    "api": "chat_completions",
-                                    "max_context_tokens": 1000,
-                                },
-                                "blind": {
-                                    "model": TEXT_MODEL,
-                                    "api": "chat_completions",
-                                    "max_context_tokens": 1000,
-                                },
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        bridge, _ = self.make_bridge([], Path(directory))
+        with patch.object(
+            ModelProvider, "capabilities_for_model", _CAPABILITIES_PATCH
+        ):
+            bridge.open_session(
+                open_session_message(
+                    Path(directory),
+                    provider_config={
+                        "main_agent": main_agent,
+                        "subagent": {"provider": ""},
+                        "subagent_roles": role_blocks or {},
+                        "providers": {
+                            "main": {
+                                "model": main_model,
+                                "api": "chat_completions",
+                                "max_context_tokens": 1000,
+                            },
+                            "seeing": {
+                                "model": VISION_MODEL,
+                                "api": "chat_completions",
+                                "max_context_tokens": 1000,
+                            },
+                            "blind": {
+                                "model": TEXT_MODEL,
+                                "api": "chat_completions",
+                                "max_context_tokens": 1000,
                             },
                         },
-                        agent_config={
-                            "max_same_tool_calls": 5,
-                            "output_reserve_tokens": 100,
-                            "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
-                            "main_agent": {"tools": {"subagent": True}},
-                            "subagent_roles": {
-                                "researcher": {
-                                    "description": "Reads.",
-                                    "tools": role_tools or {},
-                                }
-                            },
+                    },
+                    agent_config={
+                        "max_same_tool_calls": 5,
+                        "output_reserve_tokens": 100,
+                        "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
+                        "main_agent": {"tools": {"subagent": True}},
+                        "subagent_roles": {
+                            "researcher": {
+                                "description": "Reads.",
+                                "tools": role_tools or {},
+                            }
                         },
-                    )
+                    },
                 )
-                plane = bridge.host.planes.ensure(bridge.host.sessions)
-                main_names = sorted(
-                    d.name for d in plane.agent._tools.definitions
+            )
+            plane = bridge.host.planes.ensure(bridge.host.sessions)
+            main_names = sorted(
+                d.name for d in plane.agent._tools.definitions
+            )
+            role = plane.agent._tools._context.subagents.roles.get(
+                "researcher"
+            )
+            role_names = sorted(
+                vision_aware_tool_names(
+                    role.tools, role.provider, role.vision_provider
                 )
-                role = plane.agent._tools._context.subagents.roles.get(
-                    "researcher"
-                )
-                role_names = sorted(
-                    vision_aware_tool_names(
-                        role.tools, role.provider, role.vision_provider
-                    )
-                )
+            )
         return main_names, role_names
 
     def test_derives_the_single_image_tool_from_capabilities(self) -> None:
@@ -3159,37 +3166,36 @@ class AnalyzeImageDerivationTest(unittest.TestCase):
             )
 
 
-class CrossFileRoleValidationTest(unittest.TestCase):
+class CrossFileRoleValidationTest(BridgeTestCase):
     """The two config files must agree on which roles exist."""
 
     def start(self, provider_roles: dict, agent_roles: dict) -> None:
-        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
-            bridge, _ = make_bridge([], Path(directory))
-            resources.callback(bridge.close)
-            bridge.open_session(
-                open_session_message(
-                    Path(directory),
-                    provider_config={
-                        "main_agent": {"provider": "first"},
-                        "subagent": {"provider": ""},
-                        "subagent_roles": provider_roles,
-                        "providers": {
-                            "first": {
-                                "model": "openai/first",
-                                "max_context_tokens": 1000,
-                            }
-                        },
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        bridge, _ = self.make_bridge([], Path(directory))
+        bridge.open_session(
+            open_session_message(
+                Path(directory),
+                provider_config={
+                    "main_agent": {"provider": "first"},
+                    "subagent": {"provider": ""},
+                    "subagent_roles": provider_roles,
+                    "providers": {
+                        "first": {
+                            "model": "openai/first",
+                            "max_context_tokens": 1000,
+                        }
                     },
-                    agent_config={
-                        "max_same_tool_calls": 5,
-                        "output_reserve_tokens": 100,
-                        "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
-                        "main_agent": {"tools": {"subagent": True}},
-                        "subagent_roles": agent_roles,
-                    },
-                )
+                },
+                agent_config={
+                    "max_same_tool_calls": 5,
+                    "output_reserve_tokens": 100,
+                    "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
+                    "main_agent": {"tools": {"subagent": True}},
+                    "subagent_roles": agent_roles,
+                },
             )
-            bridge.host.planes.ensure(bridge.host.sessions)
+        )
+        bridge.host.planes.ensure(bridge.host.sessions)
 
     def test_rejects_a_provider_override_for_an_unknown_role(self) -> None:
         """A typo must fail loudly instead of silently doing nothing."""

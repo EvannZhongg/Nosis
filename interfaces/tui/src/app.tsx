@@ -50,7 +50,7 @@ export function App(props: AppProps): React.ReactElement {
   const [draft, setDraft] = useState('');
   const [questionDraft, setQuestionDraft] = useState('');
   const [permissionChoice, setPermissionChoice] = useState<PermissionPreset | null>(null);
-  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [selection, setSelection] = useState<{ sessionId: string | null }>({ sessionId: null });
   const [settingsMode, setSettingsMode] = useState<'model' | 'provider' | null>(null);
   const [modelChoice, setModelChoice] = useState(0);
   const [elapsed, setElapsed] = useState(0);
@@ -71,7 +71,10 @@ export function App(props: AppProps): React.ReactElement {
       python: props.python,
       cwd: props.workspace,
       onMessage: (message) => {
-        if (bridgeRef.current === client) dispatch({ type: 'message', message });
+        if (bridgeRef.current !== client) return;
+        dispatch({ type: 'message', message });
+        if (message.type === 'session_ready') client.send({ type: 'load_session' });
+        if (message.type === 'session_open_failed') client.send({ type: 'list_sessions' });
       },
       onExit: (code) => {
         if (bridgeRef.current !== client) return;
@@ -93,23 +96,20 @@ export function App(props: AppProps): React.ReactElement {
     client.send({
       type: 'open_session',
       workspace: protocolPath(props.workspace),
-      session_id: sessionId,
+      session_id: selection.sessionId,
     });
-    // The stored conversation is not part of `session_ready`: it is sent only when
-    // asked, so a frontend that reads it elsewhere never pays for it.
-    client.send({ type: 'load_session' });
     return () => {
       bridgeRef.current = null;
       client.shutdown();
     };
-  }, [sessionId]);
+  }, [selection]);
 
   const busy =
     state.status === 'starting' ||
     state.status === 'streaming' ||
     state.status === 'running' ||
     state.status === 'cancelling';
-  const inputBusy = state.status !== 'idle' && state.status !== 'runtime_failed';
+  const inputBusy = state.status !== 'idle' && state.status !== 'runtime_failed' && state.status !== 'session_unavailable';
 
   useEffect(() => {
     if (!busy) {
@@ -237,7 +237,7 @@ export function App(props: AppProps): React.ReactElement {
   const switchSession = (choice: SessionSummary): void => {
     // `restart` also closes the picker and empties the transcript.
     dispatch({ type: 'restart' });
-    setSessionId(choice.session_id);
+    setSelection({ sessionId: choice.session_id });
   };
 
   useInput(
@@ -337,6 +337,7 @@ export function App(props: AppProps): React.ReactElement {
     // while the Session opens, but do not let a command overtake its initial
     // execution snapshot and then get reset back to idle by that snapshot.
     if (state.status === 'opening') return;
+    if (state.status === 'session_unavailable' && text !== '/sessions') return;
     setDraft('');
     // Commands are answered by the TUI, so the agent never sees them.
     const parsed = parseCommand(text);
@@ -443,7 +444,7 @@ export function App(props: AppProps): React.ReactElement {
           focus={state.approval === null && permissionChoice === null && state.sessions === null && settingsMode === null}
           busy={inputBusy}
           docked
-          commands={COMMANDS}
+          commands={state.status === 'session_unavailable' ? COMMANDS.filter((command) => command.name === '/sessions') : COMMANDS}
           placeholder={inputBusy ? 'steer the current turn…' : undefined}
         />
       )}
