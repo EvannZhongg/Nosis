@@ -36,7 +36,7 @@ class JsonlSessionStoreTest(unittest.TestCase):
                 session.attach_journal_sink(sink)
                 session.add_item("user", "before cleanup")
                 result = HostCommandExecutor(workspace).execute(
-                    "Remove-Item -LiteralPath './sessions' -Recurse -Force -ErrorAction Stop",
+                    "Remove-Item -Path './sessions' -Recurse -Force -ErrorAction Stop",
                     timeout_seconds=10,
                 )
                 self.assertNotEqual(result.exit_code, 0)

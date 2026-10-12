@@ -119,7 +119,7 @@ Shell 通过 `ExecutionRouter` 根据 `ExecutionScope` 和当前 `ExecutionAutho
 - macOS 使用 Seatbelt。
 - Linux 使用 bubblewrap；缺失时报错，namespace 初始化失败时保留原始诊断，两者都不回退宿主执行。
 - Windows 使用 Restricted Token（`windows_sandbox.py`），Shell 方言为 PowerShell 7。
-- Windows 的 host/workspace Shell 统一启用 `ErrorActionPreference=Stop`、严格模式与原生命令错误处理；清理脚本须使用任务专用变量、`-LiteralPath` 并先验证目标路径边界，不得吞掉初始化或删除错误。
+- Windows 的 host/workspace Shell 统一启用 `ErrorActionPreference=Stop`、严格模式与原生命令错误处理；清理脚本须使用任务专用变量并先验证目标路径边界，不得吞掉初始化或删除错误。
 
 沙箱策略使用结构化的文件系统、网络、临时目录和进程隔离能力描述；平台 backend 负责把策略翻译成具体 OS 约束。
 
