@@ -432,6 +432,9 @@ def _compression_threshold(
         return max(1, int(hard_limit * trigger_ratio))
     if max_context_tokens <= 32 * 1024:
         return max(1, int(hard_limit * 0.75))
-    if max_context_tokens <= 256 * 1024:
-        return max(1, int(hard_limit * 0.80))
-    return min(hard_limit, 200_000)
+    # Compression stays proportional to the window while it fits inside the
+    # budget, so a model that can hold 1M tokens does not compress when it is
+    # still a fifth full. Above the budget the working set stops growing: past
+    # this point the reason to compress is the cost and quality of a very long
+    # prompt, not the size of the window.
+    return max(1, min(int(hard_limit * 0.80), 256 * 1024))

@@ -210,7 +210,7 @@ class AgentTest(unittest.TestCase):
         self.assertEqual(len([item for item in session.items if item.role == "tool"]), 2)
         self.assertTrue(any(item.content == "try once more" for item in session.items))
 
-    def test_large_context_default_compression_threshold_is_fixed(self) -> None:
+    def test_large_context_default_compression_threshold_is_capped(self) -> None:
         provider = MockProvider([], max_context_tokens=1_048_576)
         context = ContextManager(
             provider,
@@ -228,7 +228,7 @@ class AgentTest(unittest.TestCase):
         window = context.window(0)
 
         self.assertEqual(window.max_input_tokens, 1_040_384)
-        self.assertEqual(window.compression_threshold, 200_000)
+        self.assertEqual(window.compression_threshold, 262_144)
         self.assertIsNone(window.compression_summary)
 
     def test_context_window_includes_current_compression_summary(self) -> None:
