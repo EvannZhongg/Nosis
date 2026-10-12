@@ -1,5 +1,6 @@
 """Session binding, provider selection and persisted permission state."""
 
+from contextlib import ExitStack
 from pathlib import Path
 from agent_core import JsonlSessionStore, Session, Workspace, PlanManager, PermissionController, PermissionPreset, CompositeToolPolicy
 from .config import load_model_options
@@ -22,11 +23,18 @@ class SessionRuntimeController:
         self.permissions: PermissionController | None = None
         self.plan: PlanManager | None = None
         self.sessions_directory = config_directory / "sessions"
+        self._journal = ExitStack()
+
+    def close(self) -> None:
+        if self.session is not None:
+            self.session.attach_journal_sink(None)
+        self._journal.close()
 
     def open_session(self, workspace: Path, session_id: str | None = None,
                      provider: str | None = None) -> bool:
         config_path = self._config_path
         self._environment.reload()
+        self.close()
 
         workspace = Workspace(workspace)
         default_provider, models = load_model_options(config_path)
@@ -61,8 +69,8 @@ class SessionRuntimeController:
         self.store.bind_workspace(self.session.session_id, workspace.path)
         self.session.workspace = str(workspace.path)
         self.session.attach_journal_sink(
-            lambda events: self.store.append_events(
-                self.session.session_id, events, workspace=workspace.path
+            self._journal.enter_context(
+                self.store.open_journal(self.session.session_id, workspace.path)
             )
         )
         self.session.recover()
@@ -96,11 +104,14 @@ class SessionRuntimeController:
 
     def change_workspace(self, workspace: Workspace) -> None:
         assert self.session is not None and self.store is not None
-        self.store.bind_workspace(self.session.session_id, workspace.path)
-        self.workspace = workspace
-        self.session.workspace = str(workspace.path)
-        self.session.attach_journal_sink(
-            lambda events: self.store.append_events(
-                self.session.session_id, events, workspace=workspace.path,
+        self.close()
+        try:
+            self.store.bind_workspace(self.session.session_id, workspace.path)
+            self.workspace = workspace
+            self.session.workspace = str(workspace.path)
+        finally:
+            self.session.attach_journal_sink(
+                self._journal.enter_context(
+                    self.store.open_journal(self.session.session_id)
+                )
             )
-        )

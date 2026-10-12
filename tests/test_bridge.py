@@ -8,6 +8,7 @@ import threading
 import time
 import unittest
 import weakref
+from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -475,9 +476,10 @@ class IsolatedBridgeTest(unittest.TestCase):
 
 class PermissionProtocolTest(unittest.TestCase):
     def test_bridge_accepts_workspace_access_before_runtime_start(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             root = Path(directory)
             bridge, stdout = make_bridge([], root)
+            resources.callback(bridge.close)
             bridge.open_session(open_session_message(root, session_id="s"))
 
             bridge._set_permission_preset(
@@ -496,9 +498,10 @@ class PermissionProtocolTest(unittest.TestCase):
             )
 
     def test_bridge_updates_permission_before_runtime_initialization(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             root = Path(directory)
             bridge, stdout = make_bridge([], root)
+            resources.callback(bridge.close)
             bridge.open_session(open_session_message(root, session_id="s"))
 
             bridge._set_permission_preset(
@@ -528,7 +531,7 @@ class PermissionProtocolTest(unittest.TestCase):
             )
 
     def test_workspace_access_routes_shell_without_host_approval(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             root = Path(directory)
             if sys.platform == "win32":
                 user = "*" + subprocess.run(
@@ -540,6 +543,7 @@ class PermissionProtocolTest(unittest.TestCase):
                     capture_output=True, check=True,
                 )
             bridge, stdout = make_bridge([], root)
+            resources.callback(bridge.close)
             bridge.open_session(
                 open_session_message(
                     root,
@@ -599,11 +603,12 @@ class PermissionProtocolTest(unittest.TestCase):
             )
 
     def test_bridge_changes_session_configuration_without_initializing_runtime(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             root = Path(directory)
             next_workspace = root / "next"
             next_workspace.mkdir()
             bridge, stdout = make_bridge([], root)
+            resources.callback(bridge.close)
             bridge.open_session(open_session_message(root, session_id="s"))
 
             bridge._set_provider({"type": "provider_set", "provider": "second"})
@@ -639,9 +644,10 @@ class PermissionProtocolTest(unittest.TestCase):
             )
 
     def test_provider_change_closes_the_execution_plane_once(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             root = Path(directory)
             bridge, _ = make_bridge([], root)
+            resources.callback(bridge.close)
             bridge.open_session(open_session_message(root, session_id="s"))
             plane = bridge.host.planes.ensure(bridge.host.sessions)
 
@@ -672,11 +678,12 @@ class PermissionProtocolTest(unittest.TestCase):
             close_execution_router.assert_called_once_with()
 
     def test_workspace_change_closes_the_execution_plane_once(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             root = Path(directory)
             next_workspace = root / "next"
             next_workspace.mkdir()
             bridge, _ = make_bridge([], root)
+            resources.callback(bridge.close)
             bridge.open_session(open_session_message(root, session_id="s"))
             plane = bridge.host.planes.ensure(bridge.host.sessions)
 
@@ -741,8 +748,9 @@ class _BlockingAfterLines:
 
 class BridgeApprovalTest(unittest.TestCase):
     def test_runtime_state_contains_only_the_jobs_that_are_running(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             bridge, stdout = make_bridge([], Path(directory))
+            resources.callback(bridge.close)
             bridge.open_session(
                 open_session_message(Path(directory), session_id="s")
             )
@@ -757,12 +765,13 @@ class BridgeApprovalTest(unittest.TestCase):
             )
 
     def test_runtime_state_contains_the_pending_approval(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             bridge, stdout = make_bridge(
                 ['{"type": "approval_response", "request_id": "t1:1",'
                  ' "approved": true}'],
                 Path(directory),
             )
+            resources.callback(bridge.close)
             bridge.open_session(
                 open_session_message(Path(directory), session_id="s")
             )
@@ -1018,12 +1027,13 @@ class BridgeUserQuestionTest(unittest.TestCase):
     ]
 
     def test_runtime_state_contains_the_pending_question(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             bridge, stdout = make_bridge(
                 ['{"type": "user_question_response", "request_id": "t1:1",'
                  ' "option_id": "sqlite"}'],
                 Path(directory),
             )
+            resources.callback(bridge.close)
             bridge.open_session(
                 open_session_message(Path(directory), session_id="s")
             )
@@ -1114,7 +1124,7 @@ class BridgeServeTest(unittest.TestCase):
     def test_answers_the_workspace_sessions_and_the_stored_conversation(
         self,
     ) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             root = Path(directory)
             store = JsonlSessionStore(root / "sessions")
             session = Session("saved")
@@ -1136,6 +1146,7 @@ class BridgeServeTest(unittest.TestCase):
                 ],
                 root,
             )
+            resources.callback(bridge.close)
             bridge.serve()
 
             messages = emitted(stdout)
@@ -1159,7 +1170,7 @@ class BridgeServeTest(unittest.TestCase):
             )
 
     def test_applies_a_permission_queued_immediately_after_open_session(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             root = Path(directory)
             bridge, stdout = make_bridge(
                 [
@@ -1169,6 +1180,7 @@ class BridgeServeTest(unittest.TestCase):
                 ],
                 root,
             )
+            resources.callback(bridge.close)
 
             bridge.serve()
 
@@ -1185,7 +1197,7 @@ class BridgeServeTest(unittest.TestCase):
             self.assertIsNone(bridge.host.planes.current)
 
     def test_answers_settings_requests_without_starting_runtime(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             root = Path(directory)
             bridge, stdout = make_bridge(
                 [
@@ -1195,6 +1207,7 @@ class BridgeServeTest(unittest.TestCase):
                 ],
                 root,
             )
+            resources.callback(bridge.close)
 
             bridge.serve()
 
@@ -1633,12 +1646,12 @@ class InterruptedTurnTest(unittest.TestCase):
         )
 
     def test_reports_a_storage_failure_without_ending_the_bridge(self) -> None:
-        storage = patch.object(
-            self.bridge.host.sessions.store,
-            "append_events",
+        storage = patch(
+            "agent_core.session_store._write_journal_events",
             side_effect=ValueError("session already exists in workspace: 'x'"),
         )
         storage.start()
+        self.addCleanup(storage.stop)
 
         self.start_turn(ScriptedAgent(self.session, error=KeyboardInterrupt()))
 
@@ -1807,10 +1820,66 @@ class ScheduledTurnTest(unittest.TestCase):
 class BridgeSessionOpenTest(unittest.TestCase):
     """The bridge selects the provider the interface asked for."""
 
+    @unittest.skipUnless(sys.platform == "win32", "Windows journal ownership")
+    def test_journal_protection_follows_workspace_and_session_lifecycle(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
+            root = Path(directory)
+            bridge, _ = make_bridge([], root)
+            resources.callback(bridge.close)
+            bridge.open_session(open_session_message(root))
+            controller = bridge.host.sessions
+            first = controller.session
+            first.add_item("user", "keep this audit record")
+            original = next((root / "sessions").rglob(f"{first.session_id}.jsonl"))
+            with self.assertRaises(PermissionError):
+                original.unlink()
+
+            moved_workspace = root / "moved"
+            moved_workspace.mkdir()
+            bridge.host.change_workspace(moved_workspace)
+            moved = next((root / "sessions").rglob(f"{first.session_id}.jsonl"))
+            self.assertFalse(original.exists())
+            with self.assertRaises(PermissionError):
+                moved.unlink()
+            first.add_item("assistant", "still persisted after move")
+
+            bridge.host.open_session(root)
+            with moved.open("a+b"):
+                pass  # Switching sessions releases the former writer.
+            second = controller.session
+            current = next((root / "sessions").rglob(f"{second.session_id}.jsonl"))
+            with self.assertRaises(PermissionError):
+                current.unlink()
+            bridge.close()
+            current.unlink()
+            self.assertEqual(len(controller.store.load(first.session_id).items), 2)
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows journal ownership")
+    def test_failed_workspace_move_keeps_original_journal_protected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
+            root = Path(directory)
+            bridge, _ = make_bridge([], root)
+            resources.callback(bridge.close)
+            bridge.open_session(open_session_message(root))
+            controller = bridge.host.sessions
+            session = controller.session
+            path = next((root / "sessions").rglob(f"{session.session_id}.jsonl"))
+            destination = root / "destination"
+            destination.mkdir()
+            with patch.object(controller.store, "bind_workspace", side_effect=OSError("move failed")):
+                with self.assertRaisesRegex(OSError, "move failed"):
+                    bridge.host.change_workspace(destination)
+            with self.assertRaises(PermissionError):
+                path.unlink()
+            session.add_item("user", "persisted after failed move")
+            self.assertEqual(controller.store.load(session.session_id).items[0].content,
+                             "persisted after failed move")
+
     def started_model(self, **extra: object) -> str:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             root = Path(directory)
             bridge, stdout = make_bridge([], root)
+            resources.callback(bridge.close)
             bridge.open_session(open_session_message(root, **extra))
             return str(emitted(stdout)[0]["model"])
 
@@ -1824,11 +1893,12 @@ class BridgeSessionOpenTest(unittest.TestCase):
                 self.assertEqual(self.started_model(**extra), expected)
 
     def test_restores_the_session_provider_selection(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             root = Path(directory)
             store = JsonlSessionStore(root / "sessions")
             store.set_provider("saved", "second", root)
             bridge, stdout = make_bridge([], root)
+            resources.callback(bridge.close)
 
             bridge.open_session(open_session_message(root, session_id="saved"))
 
@@ -1836,9 +1906,10 @@ class BridgeSessionOpenTest(unittest.TestCase):
             self.assertEqual(emitted(stdout)[0]["model"], "openai/second")
 
     def test_opening_a_session_does_not_initialize_the_agent_runtime(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             root = Path(directory)
             bridge, stdout = make_bridge([], root)
+            resources.callback(bridge.close)
 
             bridge.open_session(open_session_message(root))
 
@@ -1850,9 +1921,10 @@ class BridgeSessionOpenTest(unittest.TestCase):
             self.assertEqual(emitted(stdout)[-1]["phase"], "inactive")
 
     def test_applies_provider_request_policy_to_all_chat_providers(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             root = Path(directory)
             bridge, _ = make_bridge([], root)
+            resources.callback(bridge.close)
             bridge.open_session(
                 open_session_message(
                     root,
@@ -1918,7 +1990,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
         self.assertEqual(role_provider._max_retries, 4)
 
     def test_opening_a_session_does_not_require_the_provider_key(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             root = Path(directory)
             message = open_session_message(
                 root,
@@ -1933,6 +2005,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
                 },
             )
             bridge, stdout = make_bridge([], root)
+            resources.callback(bridge.close)
 
             bridge.open_session(message)
 
@@ -1944,9 +2017,10 @@ class BridgeSessionOpenTest(unittest.TestCase):
                 bridge.host.planes.ensure(bridge.host.sessions)
 
     def test_injects_the_configured_image_generator(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             root = Path(directory)
             bridge, _ = make_bridge([], root)
+            resources.callback(bridge.close)
             bridge.open_session(
                 open_session_message(
                     root,
@@ -1991,9 +2065,10 @@ class BridgeSessionOpenTest(unittest.TestCase):
         )
 
     def test_enabled_image_tool_requires_image_generation_config(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             root = Path(directory)
             bridge, _ = make_bridge([], root)
+            resources.callback(bridge.close)
             bridge.open_session(
                 open_session_message(
                     root,
@@ -2011,7 +2086,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
                 bridge.host.planes.ensure(bridge.host.sessions)
 
     def test_restores_the_session_permission_preset(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             root = Path(directory)
             store = JsonlSessionStore(root / "sessions")
             session = Session("saved")
@@ -2024,6 +2099,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
             )
             store.append_events(session.session_id, session.journal, workspace=root)
             bridge, stdout = make_bridge([], root)
+            resources.callback(bridge.close)
 
             bridge.open_session(open_session_message(root, session_id=session.session_id))
 
@@ -2042,7 +2118,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
             )
 
     def test_restores_the_session_plan_in_runtime_state(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             root = Path(directory)
             store = JsonlSessionStore(root / "sessions")
             session = Session("saved")
@@ -2057,6 +2133,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
                 (PlanStep("verify", "Verify recovery", "in_progress"),),
             )
             bridge, stdout = make_bridge([], root)
+            resources.callback(bridge.close)
 
             bridge.open_session(open_session_message(root, session_id="saved"))
 
@@ -2070,7 +2147,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
             self.started_model(provider="unknown")
 
     def test_registers_discovered_skills_and_their_read_tool(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             root = Path(directory)
             skill_directory = root / "skills" / "demo"
             skill_directory.mkdir(parents=True)
@@ -2083,6 +2160,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
                 encoding="utf-8",
             )
             bridge, _ = make_bridge([], root)
+            resources.callback(bridge.close)
 
             bridge.open_session(open_session_message(root))
             plane = bridge.host.planes.ensure(bridge.host.sessions)
@@ -2095,7 +2173,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
         self.assertNotIn("# Detailed instructions", prompt)
 
     def test_registers_configured_global_and_workspace_skill_paths(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             root = Path(directory)
             config = root / "config"
             workspace = root / "workspace"
@@ -2133,6 +2211,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
             )
             message["workspace"] = str(workspace)
             bridge, _ = make_bridge([], config)
+            resources.callback(bridge.close)
 
             bridge.open_session(message)
             plane = bridge.host.planes.ensure(bridge.host.sessions)
@@ -2143,7 +2222,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
         self.assertEqual(plane.runtime_warnings, ())
 
     def test_registers_plugin_skills_with_the_plugin_namespace(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             root = Path(directory)
             plugin = root / "plugins" / "example"
             skill = plugin / "skills" / "demo"
@@ -2165,6 +2244,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
                 encoding="utf-8",
             )
             bridge, _ = make_bridge([], root)
+            resources.callback(bridge.close)
 
             bridge.open_session(open_session_message(root))
             plane = bridge.host.planes.ensure(bridge.host.sessions)
@@ -2186,7 +2266,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
     def test_registers_and_calls_plugin_mcp_tools_in_the_execution_plane(
         self,
     ) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             root = Path(directory)
             plugin = root / "plugins" / "example"
             plugin.mkdir(parents=True)
@@ -2222,6 +2302,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
                 encoding="utf-8",
             )
             bridge, stdout = make_bridge([], root)
+            resources.callback(bridge.close)
             bridge.open_session(
                 open_session_message(
                     root,
@@ -2277,7 +2358,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
         )
 
     def test_global_mcp_switch_prevents_loading_plugin_mcp(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             root = Path(directory)
             plugin = root / "plugins" / "example"
             plugin.mkdir(parents=True)
@@ -2291,6 +2372,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
                 encoding="utf-8",
             )
             bridge, stdout = make_bridge([], root)
+            resources.callback(bridge.close)
             bridge.open_session(open_session_message(root))
 
             try:
@@ -2308,7 +2390,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
         )
 
     def test_missing_plugin_mcp_warns_without_failing_runtime(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             root = Path(directory)
             plugin = root / "plugins" / "example"
             plugin.mkdir(parents=True)
@@ -2322,6 +2404,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
                 encoding="utf-8",
             )
             bridge, _ = make_bridge([], root)
+            resources.callback(bridge.close)
             bridge.open_session(
                 open_session_message(
                     root,
@@ -2352,7 +2435,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
         self.assertIn("Skipping MCP component", plane.runtime_warnings[0])
 
     def test_uses_prompt_templates_from_the_config_directory(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             root = Path(directory)
             message = open_session_message(root)
             (root / "prompts" / "Soul.md").write_text(
@@ -2360,6 +2443,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
                 encoding="utf-8",
             )
             bridge, _ = make_bridge([], root)
+            resources.callback(bridge.close)
 
             bridge.open_session(message)
             plane = bridge.host.planes.ensure(bridge.host.sessions)
@@ -2373,7 +2457,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
         self.assertIn("## Long-term Memory", runtime_context)
 
     def test_injects_global_and_workspace_instructions_without_persisting_them(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             root = Path(directory)
             workspace = root / "workspace"
             workspace.mkdir()
@@ -2381,6 +2465,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
             (workspace / "CLAUDE.md").write_text("claude rule", encoding="utf-8")
             (workspace / "AGENTS.md").write_text("workspace rule", encoding="utf-8")
             bridge, _ = make_bridge([], root)
+            resources.callback(bridge.close)
 
             bridge.open_session(open_session_message(root, workspace=str(workspace)))
             plane = bridge.host.planes.ensure(bridge.host.sessions)
@@ -2400,13 +2485,14 @@ class BridgeSessionOpenTest(unittest.TestCase):
         )
 
     def test_uses_configured_workspace_instruction_files(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             root = Path(directory)
             workspace = root / "workspace"
             workspace.mkdir()
             (workspace / "PROJECT.md").write_text("project rule", encoding="utf-8")
             (workspace / "AGENTS.md").write_text("not configured", encoding="utf-8")
             bridge, _ = make_bridge([], root)
+            resources.callback(bridge.close)
             message = open_session_message(
                 root,
                 workspace=str(workspace),
@@ -2428,11 +2514,12 @@ class BridgeSessionOpenTest(unittest.TestCase):
         self.assertNotIn("<workspace>/AGENTS.md", prompt)
 
     def test_reuses_runtime_until_instructions_change_between_turns(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             root = Path(directory)
             instructions_path = root / "AGENTS.md"
             instructions_path.write_text("first rule", encoding="utf-8")
             bridge, _ = make_bridge([], root)
+            resources.callback(bridge.close)
             bridge.open_session(open_session_message(root))
             first_plane = bridge.host.planes.ensure(bridge.host.sessions)
 
@@ -2450,9 +2537,10 @@ class BridgeSessionOpenTest(unittest.TestCase):
             )
 
     def test_memory_changes_are_loaded_by_the_next_runtime(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             root = Path(directory)
             bridge, _ = make_bridge([], root)
+            resources.callback(bridge.close)
             bridge.open_session(open_session_message(root))
             first_plane = bridge.host.planes.ensure(bridge.host.sessions)
             store = MemoryStore(
@@ -2485,10 +2573,11 @@ class BridgeSessionOpenTest(unittest.TestCase):
             self.assertIn("current request has highest priority", runtime_context)
 
     def test_rebuilds_runtime_when_the_configured_instruction_list_changes(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             root = Path(directory)
             (root / "PROJECT.md").write_text("project rule", encoding="utf-8")
             bridge, _ = make_bridge([], root)
+            resources.callback(bridge.close)
             bridge.open_session(open_session_message(root))
             first_plane = bridge.host.planes.ensure(bridge.host.sessions)
             config = json.loads(
@@ -2512,9 +2601,10 @@ class BridgeSessionOpenTest(unittest.TestCase):
             )
 
     def test_rebuilds_the_execution_plane_when_agent_config_changes(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             root = Path(directory)
             bridge, _ = make_bridge([], root)
+            resources.callback(bridge.close)
             bridge.open_session(open_session_message(root))
             first_plane = bridge.host.planes.ensure(bridge.host.sessions)
             config = json.loads(
@@ -2546,9 +2636,10 @@ class BridgeSessionOpenTest(unittest.TestCase):
             close_mcp.assert_called_once_with()
 
     def test_rebuilds_the_execution_plane_when_provider_config_changes(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             root = Path(directory)
             bridge, _ = make_bridge([], root)
+            resources.callback(bridge.close)
             bridge.open_session(open_session_message(root))
             first_plane = bridge.host.planes.ensure(bridge.host.sessions)
             config = json.loads(
@@ -2573,7 +2664,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
             )
 
     def test_rebuilds_the_execution_plane_when_dotenv_changes(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             root = Path(directory)
             config = {
                 "main_agent": {"provider": "first"},
@@ -2587,6 +2678,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
                 },
             }
             bridge, _ = make_bridge([], root)
+            resources.callback(bridge.close)
             open_session_message(root, provider_config=config)
             (root / ".env").write_text("FIRST_KEY=first\n", encoding="utf-8")
             bridge.open_session({"type": "open_session", "workspace": str(root), "session_id": None})
@@ -2601,9 +2693,10 @@ class BridgeSessionOpenTest(unittest.TestCase):
     def test_failed_assembly_does_not_publish_a_partial_execution_plane(
         self,
     ) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             root = Path(directory)
             bridge, _ = make_bridge([], root)
+            resources.callback(bridge.close)
             bridge.open_session(open_session_message(root))
 
             with (
@@ -2628,9 +2721,10 @@ class BridgeSessionOpenTest(unittest.TestCase):
             close_mcp.assert_called_once()
 
     def test_context_window_event_updates_the_execution_plane_snapshot(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             root = Path(directory)
             bridge, stdout = make_bridge([], root)
+            resources.callback(bridge.close)
             bridge.open_session(open_session_message(root))
             plane = bridge.host.planes.ensure(bridge.host.sessions)
 
@@ -2665,7 +2759,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
             )
 
     def test_invalid_skill_does_not_prevent_bridge_startup(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             root = Path(directory)
             invalid = root / "skills" / "invalid"
             invalid.mkdir(parents=True)
@@ -2680,6 +2774,7 @@ class BridgeSessionOpenTest(unittest.TestCase):
                 encoding="utf-8",
             )
             bridge, stdout = make_bridge([], root)
+            resources.callback(bridge.close)
 
             bridge.open_session(open_session_message(root))
             plane = bridge.host.planes.ensure(bridge.host.sessions)
@@ -2698,8 +2793,9 @@ class SubagentRoleStartTest(unittest.TestCase):
     """Only enabled roles reach the model's subagent schema."""
 
     def offered_roles(self, roles: dict) -> list[str]:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             bridge, _ = make_bridge([], Path(directory))
+            resources.callback(bridge.close)
             bridge.open_session(
                 open_session_message(
                     Path(directory),
@@ -2750,8 +2846,9 @@ class SubagentRoleStartTest(unittest.TestCase):
 
     def test_disabling_every_role_removes_the_subagent_tool(self) -> None:
         """With no role left there is nothing to delegate to."""
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             bridge, _ = make_bridge([], Path(directory))
+            resources.callback(bridge.close)
             bridge.open_session(
                 open_session_message(
                     Path(directory),
@@ -2778,8 +2875,9 @@ class SubagentRoleStartTest(unittest.TestCase):
             )
 
     def test_runtime_tools_are_registered_only_for_the_main_agent(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             bridge, _ = make_bridge([], Path(directory))
+            resources.callback(bridge.close)
             bridge.open_session(
                 open_session_message(
                     Path(directory),
@@ -2822,7 +2920,7 @@ class SubagentRoleStartTest(unittest.TestCase):
 
 class PluginAgentStartTest(unittest.TestCase):
     def test_assembles_plugin_agents_with_prompts_tools_and_providers(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             root = Path(directory)
             plugin = root / "plugins" / "review-kit"
             agents = plugin / "agents"
@@ -2857,6 +2955,7 @@ class PluginAgentStartTest(unittest.TestCase):
                     encoding="utf-8",
                 )
             bridge, _ = make_bridge([], root)
+            resources.callback(bridge.close)
             bridge.open_session(
                 open_session_message(
                     root,
@@ -2944,8 +3043,9 @@ class AnalyzeImageDerivationTest(unittest.TestCase):
         main_agent: dict[str, object] = {"provider": "main"}
         if vision_provider is not None:
             main_agent["vision_provider"] = vision_provider
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             bridge, _ = make_bridge([], Path(directory))
+            resources.callback(bridge.close)
             with patch.object(
                 ModelProvider, "capabilities_for_model", _CAPABILITIES_PATCH
             ):
@@ -3063,8 +3163,9 @@ class CrossFileRoleValidationTest(unittest.TestCase):
     """The two config files must agree on which roles exist."""
 
     def start(self, provider_roles: dict, agent_roles: dict) -> None:
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             bridge, _ = make_bridge([], Path(directory))
+            resources.callback(bridge.close)
             bridge.open_session(
                 open_session_message(
                     Path(directory),

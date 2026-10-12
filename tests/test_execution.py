@@ -107,6 +107,46 @@ class HostCommandExecutorTest(unittest.TestCase):
         self.assertNotIn("\x1b[", result.stdout)
         self.assertNotIn("\x1b[", result.stderr)
 
+    @unittest.skipUnless(os.name == "nt", "Windows shell test")
+    def test_powershell_stops_before_cleanup_after_setup_errors(self) -> None:
+        # Only a marker follows the failing setup; never replay the incident's
+        # destructive command against the actual PowerShell HOME variable.
+        commands = (
+            "$home = Join-Path $PWD 'task-temp'",
+            "Get-Item -LiteralPath './missing-setup-file'",
+            "$cleanupTarget = $undefinedCleanupTarget.FullName",
+            f'& "{sys.executable}" -c "import sys; sys.exit(9)"',
+        )
+        for setup in commands:
+            with self.subTest(setup=setup), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                result = HostCommandExecutor(root).execute(
+                    setup + "\nSet-Content -LiteralPath 'cleanup-reached' -Value yes"
+                )
+                self.assertNotEqual(result.exit_code, 0)
+                self.assertFalse(result.timed_out)
+                self.assertFalse((root / "cleanup-reached").exists())
+                self.assertTrue(result.stderr)
+
+    @unittest.skipUnless(os.name == "nt", "Windows shell test")
+    def test_powershell_cleanup_uses_literal_task_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "cleanup[1]"
+            target.mkdir()
+            (target / "marker").write_text("temporary")
+            sibling = root / "cleanup1"
+            sibling.mkdir()
+            result = HostCommandExecutor(root).execute(
+                "$uiVerifyCleanupTarget = (Get-Item -LiteralPath './cleanup[1]').FullName\n"
+                "if ([IO.Path]::GetDirectoryName($uiVerifyCleanupTarget) -ne $PWD.Path) "
+                "{ throw 'Cleanup target is outside the task directory' }\n"
+                "Remove-Item -LiteralPath $uiVerifyCleanupTarget -Recurse -Force -ErrorAction Stop"
+            )
+            self.assertEqual(result.exit_code, 0, result.stderr)
+            self.assertFalse(target.exists())
+            self.assertTrue(sibling.is_dir())
+
     def test_returns_nonzero_exit_code(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             executor = HostCommandExecutor(Path(directory))

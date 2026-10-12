@@ -131,5 +131,8 @@ class RuntimeHost:
         try:
             self.planes.close()
         finally:
-            if self._owns_scheduler:
-                self.scheduler.close()
+            try:
+                self.sessions.close()
+            finally:
+                if self._owns_scheduler:
+                    self.scheduler.close()

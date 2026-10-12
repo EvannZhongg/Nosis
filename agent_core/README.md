@@ -57,6 +57,8 @@ interfaces → agent_runtime → agent_core
 
 `Session` 是执行状态的事实来源。对话、Tool 执行、Job、计划和恢复所需状态以 append-only Journal Event 表示；`JsonlSessionStore` 负责 JSONL 持久化、元数据、Session 列表与恢复。
 
+Runtime 通过 `JsonlSessionStore.open_journal()` 持有当前 Session 的写入句柄，Session 关闭或切换时释放；子 Agent 在执行期间持有自己的句柄。Windows 句柄仅共享读取，阻止同用户子进程删除、重命名或覆盖打开的 Journal，Runtime 继续通过原句柄追加并 fsync。保护不覆盖已关闭的 Session、其他 Session 文件、POSIX 删除语义或能够终止 Runtime 的进程，不等同于独立权限的审计存储。
+
 `PlanManager` 从最新 `plan_updated` 事件恢复当前计划。计划可跨 Turn 延续，每个步骤记录状态以及不超过 500 字符的结果或阻塞原因。
 
 较大的 Tool 输出由 `ToolResultNormalizer` 保存为 Session Artifact，只把可控大小的预览和 Artifact 引用送回模型。
@@ -117,6 +119,7 @@ Shell 通过 `ExecutionRouter` 根据 `ExecutionScope` 和当前 `ExecutionAutho
 - macOS 使用 Seatbelt。
 - Linux 使用 bubblewrap；缺失时报错，namespace 初始化失败时保留原始诊断，两者都不回退宿主执行。
 - Windows 使用 Restricted Token（`windows_sandbox.py`），Shell 方言为 PowerShell 7。
+- Windows 的 host/workspace Shell 统一启用 `ErrorActionPreference=Stop`、严格模式与原生命令错误处理；清理脚本须使用任务专用变量、`-LiteralPath` 并先验证目标路径边界，不得吞掉初始化或删除错误。
 
 沙箱策略使用结构化的文件系统、网络、临时目录和进程隔离能力描述；平台 backend 负责把策略翻译成具体 OS 约束。
 

@@ -9,7 +9,7 @@ from typing import BinaryIO, Iterable, Iterator
 
 from .content import FilePart, ImagePart, text_content
 from .permissions import PermissionPreset
-from .session import JournalEvent, Session, message_from_dict
+from .session import JournalEvent, JournalSink, Session, message_from_dict
 from .session_paths import (
     _validate_session_id,
     default_sessions_directory,
@@ -325,6 +325,34 @@ class JsonlSessionStore:
         with self._locked_session(session_id):
             self._append_events_unlocked(session_id, events, workspace)
 
+    @contextmanager
+    def open_journal(
+        self, session_id: str, workspace: Path | str | None = None,
+    ) -> Iterator[JournalSink]:
+        """Own the active journal until its Runtime releases the writer.
+
+        Windows sharing rules prevent even same-user child processes from
+        deleting or overwriting this file while the writer is open. This is
+        not a security boundary against a process that can kill the Runtime.
+        """
+        with self._locked_session(session_id):
+            path = self._session_path(session_id, workspace)
+            if path is None:
+                raise ValueError(f"session has no journal path: {session_id!r}")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            file = _open_journal_file(path)
+        try:
+            with self._locked_session(session_id):
+                _prepare_journal_append(file)
+
+            def append(events: tuple[JournalEvent, ...]) -> None:
+                with self._locked_session(session_id):
+                    _write_journal_events(file, events)
+
+            yield append
+        finally:
+            file.close()
+
     def _append_events_unlocked(
         self,
         session_id: str,
@@ -341,13 +369,9 @@ class JsonlSessionStore:
         if path is None:
             raise ValueError(f"session has no journal path: {session_id!r}")
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a+b") as file:
+        with _open_journal_file(path) as file:
             _prepare_journal_append(file)
-            for event in events:
-                record = json.dumps(_event_to_dict(event), ensure_ascii=False)
-                file.write(record.encode("utf-8") + b"\n")
-            file.flush()
-            os.fsync(file.fileno())
+            _write_journal_events(file, events)
 
     @contextmanager
     def _locked_session(self, session_id: str) -> Iterator[None]:
@@ -395,6 +419,51 @@ class JsonlSessionStore:
         if bound is None:
             return None
         return session_log_path(self._directory, bound, session_id)
+
+
+def _open_journal_file(path: Path) -> BinaryIO:
+    if os.name != "nt":
+        return path.open("a+b")
+
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    create_file = kernel32.CreateFileW
+    create_file.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD,
+        wintypes.LPVOID, wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+    ]
+    create_file.restype = wintypes.HANDLE
+    # GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, OPEN_ALWAYS.
+    # Do not share writes/deletes or allow the handle to be inherited.
+    handle = create_file(str(path), 0xC0000000, 0x1, None, 4, 0x80, None)
+    if handle == wintypes.HANDLE(-1).value:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        descriptor = msvcrt.open_osfhandle(
+            handle, os.O_RDWR | os.O_BINARY | os.O_APPEND | os.O_NOINHERIT,
+        )
+    except BaseException:
+        close_handle = kernel32.CloseHandle
+        close_handle.argtypes = [wintypes.HANDLE]
+        close_handle.restype = wintypes.BOOL
+        close_handle(handle)
+        raise
+    try:
+        return os.fdopen(descriptor, "a+b")
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _write_journal_events(file: BinaryIO, events: Iterable[JournalEvent]) -> None:
+    for event in events:
+        record = json.dumps(_event_to_dict(event), ensure_ascii=False)
+        file.write(record.encode("utf-8") + b"\n")
+    file.flush()
+    os.fsync(file.fileno())
 
 
 def _event_to_dict(event: JournalEvent) -> dict[str, object]:

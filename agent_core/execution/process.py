@@ -240,7 +240,10 @@ def _windows_powershell_argv(
         "-WorkingDirectory",
         str(working_directory),
         "-Command",
-        command,
+        "$ErrorActionPreference = 'Stop'\n"
+        "Set-StrictMode -Version Latest\n"
+        "$PSNativeCommandUseErrorActionPreference = $true\n"
+        + command,
     ]
 
 

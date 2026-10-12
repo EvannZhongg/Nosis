@@ -26,7 +26,20 @@ MAX_BACKGROUND_SHELL_TIMEOUT_SECONDS = MAX_COMMAND_TIMEOUT_SECONDS
 WINDOWS_SHELL_NOTE = (
     "On Windows, every scope runs through PowerShell 7. Shell dialect is "
     "independent of execution scope. Use PowerShell syntax for commands; "
-    "running POSIX .sh scripts is outside the Windows shell contract."
+    "running POSIX .sh scripts is outside the Windows shell contract. "
+    "The shell starts with ErrorActionPreference=Stop, strict mode, and "
+    "PSNativeCommandUseErrorActionPreference=true. Preserve fail-fast behavior "
+    "in cleanup scripts: never suppress setup, path validation, or deletion "
+    "errors. Use unique task-specific variable names, never automatic or "
+    "environment variable names such as $home, $HOME, $PID, or $PWD. "
+    "Use -LiteralPath for cleanup path operations, including Remove-Item "
+    "and Move-Item. Before recursive deletion or moving, resolve and verify "
+    "the exact absolute target is inside the intended task directory, is "
+    "not that directory's parent, a drive root, or the user profile, and "
+    "does not traverse a junction or symbolic link outside that boundary. "
+    "Keep validation and cleanup in PowerShell; do not pass computed paths "
+    "to cmd.exe or another shell. If a native program's nonzero exit code "
+    "is expected, handle it explicitly before proceeding."
 )
 POSIX_SHELL_NOTE = (
     "Commands run through /bin/sh, so use POSIX shell syntax: chain "

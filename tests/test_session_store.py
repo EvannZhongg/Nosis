@@ -1,5 +1,7 @@
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,6 +10,7 @@ from agent_core import (
     FilePart,
     ImagePart,
     JsonlSessionStore,
+    HostCommandExecutor,
     PermissionPreset,
     PlanSnapshot,
     PlanStep,
@@ -23,6 +26,81 @@ def persist(store: JsonlSessionStore, workspace: Path, session: Session) -> None
 
 
 class JsonlSessionStoreTest(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "Windows PowerShell journal protection")
+    def test_recursive_powershell_cleanup_cannot_erase_audit_chain(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            store = JsonlSessionStore(workspace / "sessions")
+            session = Session("active")
+            with store.open_journal(session.session_id, workspace) as sink:
+                session.attach_journal_sink(sink)
+                session.add_item("user", "before cleanup")
+                result = HostCommandExecutor(workspace).execute(
+                    "Remove-Item -LiteralPath './sessions' -Recurse -Force -ErrorAction Stop",
+                    timeout_seconds=10,
+                )
+                self.assertNotEqual(result.exit_code, 0)
+                self.assertFalse(result.timed_out)
+                session.add_item("assistant", "cleanup failed")
+                self.assertEqual(
+                    [item.content for item in store.load("active").items],
+                    ["before cleanup", "cleanup failed"],
+                )
+            session.attach_journal_sink(None)
+
+    def test_open_journal_persists_and_releases_writer_on_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            store = JsonlSessionStore(workspace / "sessions")
+            session = Session("active")
+            with self.assertRaisesRegex(RuntimeError, "turn failed"):
+                with store.open_journal(session.session_id, workspace) as sink:
+                    session.attach_journal_sink(sink)
+                    session.add_item("user", "before failure")
+                    self.assertEqual(store.load("active").items[0].content, "before failure")
+                    raise RuntimeError("turn failed")
+            session.attach_journal_sink(None)
+            with store.open_journal(session.session_id, workspace) as sink:
+                session.attach_journal_sink(sink)
+                session.add_item("assistant", "after failure")
+            session.attach_journal_sink(None)
+            self.assertEqual(len(store.load("active").items), 2)
+            self.assertTrue(store.delete_session("active"))
+
+    @unittest.skipUnless(os.name == "nt", "Windows file sharing test")
+    def test_active_journal_survives_same_user_child_mutations(self) -> None:
+        mutations = (
+            "target.unlink()",
+            "target.rename(target.with_suffix('.moved'))",
+            "target.write_text('overwritten')",
+            "replacement = target.with_suffix('.replacement'); "
+            "replacement.write_text('replacement'); replacement.replace(target)",
+            "shutil.rmtree(target.parent)",
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
+                workspace = Path(directory)
+                store = JsonlSessionStore(workspace / "sessions")
+                session = Session("active")
+                path = session_log_path(store.directory, workspace, session.session_id)
+                with store.open_journal(session.session_id, workspace) as sink:
+                    session.attach_journal_sink(sink)
+                    session.add_item("user", "audit before command")
+                    before = path.read_bytes()
+                    result = subprocess.run(
+                        [sys.executable, "-c",
+                         "import shutil, sys; from pathlib import Path; "
+                         "target = Path(sys.argv[1]); " + mutation, str(path)],
+                        capture_output=True, text=True, timeout=15,
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("PermissionError", result.stderr)
+                    self.assertEqual(path.read_bytes(), before)
+                    session.add_item("assistant", "audit after command")
+                    self.assertEqual(len(store.load("active").items), 2)
+                session.attach_journal_sink(None)
+                self.assertTrue(store.delete_session("active"))
+
     def test_appends_and_replays_journal_events(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
