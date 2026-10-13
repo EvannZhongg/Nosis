@@ -27,6 +27,8 @@ Windows Journal 写入权已被其他 Runtime 占用时，Bridge 返回 `session
 
 Provider、MCP、Tool 和 Agent 仍由 Runtime 在首个 `user_turn` 到来时延迟初始化。
 
+空闲时可以再次发送 `open_session`，在同一个 Bridge 进程内切换会话。Runtime 释放旧会话的任务和 Journal，按装配输入决定是否复用重型资源；Bridge 重新发送 `session_ready` 和 `runtime_state` 同步新会话。
+
 Bridge 路由的输入包括：
 
 - `user_turn`、`user_steer` 和 `cancel`

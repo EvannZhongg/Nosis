@@ -1309,6 +1309,28 @@ class GuiTest(unittest.TestCase):
         )
         self.assertTrue(bridge.sent[-1]["approved"])
 
+    def test_idle_view_detach_reuses_bridge_for_the_next_turn(self) -> None:
+        bridge = FakeBridge(replies={
+            "open_session": [{"type": "session_ready", "session_id": "shared"}],
+            "user_turn": [{"type": "turn_completed", "turn_id": "t1", "usage": None}],
+        })
+        with self.client(bridge) as client:
+            with client.websocket_connect("/api/session") as first:
+                first.send_json({"type": "open_session", "session_id": "shared", "attachment_id": "page-1"})
+                self.assertEqual(first.receive_json()["type"], "session_ready")
+            self.assertFalse(bridge.closed)
+            with client.websocket_connect("/api/session") as second:
+                second.send_json({
+                    "type": "open_session", "session_id": "shared", "attachment_id": "page-1",
+                    "after_event": 1,
+                })
+                self.assertEqual(second.receive_json()["type"], "runtime_state")
+                second.send_json({"type": "user_turn", "turn_id": "t1", "text": "continue"})
+                self.assertEqual(second.receive_json()["type"], "turn_completed")
+            self.assertEqual([m["type"] for m in bridge.sent], ["open_session", "user_turn"])
+            self.assertFalse(bridge.closed)
+        self.assertTrue(bridge.closed)
+
     def test_opening_a_page_with_another_provider_preserves_the_idle_owner(self) -> None:
         bridge = FakeBridge(replies={
             "open_session": [{"type": "session_ready", "session_id": "shared"}],

@@ -6,14 +6,20 @@ import type { Incoming } from '@nosis/protocol';
 const sent: any[] = [];
 let emit: (message: Incoming) => void = () => {};
 let autoReady = true;
+let bridgeCount = 0;
+let shutdownCount = 0;
 
 vi.mock('../src/bridge.js', () => ({
   BridgeClient: class {
     constructor(options: any) {
       emit = options.onMessage;
-      if (autoReady) {
+      bridgeCount += 1;
+    }
+    send(message: any) {
+      sent.push(message);
+      if (autoReady && message.type === 'open_session') {
         setTimeout(() => {
-            options.onMessage({
+            emit({
               type: 'session_ready',
               session_id: 'sess-1234',
               workspace: '/w',
@@ -23,7 +29,7 @@ vi.mock('../src/bridge.js', () => ({
               message_count: 0,
               permission_preset: 'ask_for_approval',
             });
-            options.onMessage({
+            emit({
               type: 'runtime_state',
               phase: 'inactive',
               turn_id: null,
@@ -38,13 +44,10 @@ vi.mock('../src/bridge.js', () => ({
           }, 10);
       }
     }
-    send(message: any) {
-      sent.push(message);
-    }
     cancel(turnId: string) {
       sent.push({ type: '__cancel', turn_id: turnId });
     }
-    shutdown() {}
+    shutdown() { shutdownCount += 1; }
     diagnostics() {
       return '';
     }
@@ -161,6 +164,8 @@ describe('App', () => {
 
   beforeEach(() => {
     sent.length = 0;
+    bridgeCount = 0;
+    shutdownCount = 0;
     autoReady = true;
   });
 
@@ -356,13 +361,14 @@ describe('App', () => {
     await waitFor(() => expect(lastFrame()).toContain('❯ about the tests'));
     stdin.write('\r');
 
-    // The runtime is replaced rather than re-pointed, so a second bridge
-    // starts on the chosen session and the picker closes.
+    // Session switching stays on the existing process.
     await waitFor(() => expect(sent.filter((m) => m.type === 'open_session')).toHaveLength(2));
     expect(sent.filter((m) => m.type === 'open_session')[1]).toMatchObject({
       session_id: 'older',
     });
     expect(lastFrame()).not.toContain('❯ about the tests');
+    expect(bridgeCount).toBe(1);
+    expect(shutdownCount).toBe(0);
 
     emit({
       type: 'session_items',

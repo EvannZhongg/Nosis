@@ -60,11 +60,7 @@ export function App(props: AppProps): React.ReactElement {
   const startedAt = useRef<number | null>(null);
 
   /**
-   * One bridge per Session: opening binds lightweight Session state, while
-   * Provider, MCP, Tools and Agent initialize on the first ordinary turn.
-   *
-   * Messages from a replaced process are dropped, so a turn it is still
-   * unwinding cannot leak into the new transcript.
+   * The TUI owns one Bridge process; open_session changes its Session binding.
    */
   useEffect(() => {
     const client = new BridgeClient({
@@ -93,16 +89,19 @@ export function App(props: AppProps): React.ReactElement {
       },
     });
     bridgeRef.current = client;
-    client.send({
-      type: 'open_session',
-      workspace: protocolPath(props.workspace),
-      session_id: selection.sessionId,
-    });
     return () => {
       bridgeRef.current = null;
       client.shutdown();
     };
-  }, [selection]);
+  }, [props.python, props.workspace]);
+
+  useEffect(() => {
+    bridgeRef.current?.send({
+      type: 'open_session',
+      workspace: protocolPath(props.workspace),
+      session_id: selection.sessionId,
+    });
+  }, [selection, props.python, props.workspace]);
 
   const busy =
     state.status === 'starting' ||

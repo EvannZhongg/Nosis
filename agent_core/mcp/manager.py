@@ -90,9 +90,10 @@ class McpClientManager:
     ) -> tuple[str, str] | None:
         return self._tool_origins.get(qualified_name)
 
-    def start(self) -> tuple[Tool, ...]:
+    def start(self) -> None:
+        """Connect while the caller prepares other independent dependencies."""
         if not self._servers:
-            return ()
+            return
         if self._thread is not None:
             raise RuntimeError("MCP client manager has already started")
         self._thread = threading.Thread(
@@ -101,6 +102,12 @@ class McpClientManager:
             daemon=True,
         )
         self._thread.start()
+
+    def wait_ready(self) -> tuple[Tool, ...]:
+        if not self._servers:
+            return ()
+        if self._thread is None:
+            raise RuntimeError("MCP client manager has not started")
         # Servers start concurrently, so the slowest budget is the whole
         # startup window: waiting for the sum would raise here while a
         # server was about to be reported unavailable, turning a slow
@@ -170,7 +177,10 @@ class McpClientManager:
         self._loop = asyncio.get_running_loop()
         self._task = asyncio.current_task()
         try:
-            await self._serve()
+            if not self._closing.is_set():
+                await self._serve()
+            else:
+                self._ready.set()
         finally:
             self._task = None
             self._loop = None

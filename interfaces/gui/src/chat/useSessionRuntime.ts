@@ -160,8 +160,7 @@ export function useSessionRuntime({
     return () => window.removeEventListener("pagehide", releaseOnPageLeave);
   }, [attachmentId, provider, session.session_id]);
 
-  // A selected Chat owns a lightweight Session connection. Hidden Chats keep
-  // one only while their turn remains active.
+  // A view can detach without destroying its Session's Bridge and MCP clients.
   useEffect(() => {
     if (session.workspace && (selected || backgroundActive) && socketRef.current === null && !attachmentReplacedRef.current) {
       connect({ attachOnly: !selected });
@@ -174,7 +173,6 @@ export function useSessionRuntime({
     socketRef.current = null;
     socketModelRef.current = "";
     socket.close();
-    void releaseActiveSession(session.session_id, provider, attachmentId).catch(() => undefined);
   }, [attachmentId, configurationPending, pendingUserItem, provider, running, selected, session.session_id]);
 
   const showToast = useCallback((next: Extract<Feedback, { kind: "toast" }>) => {

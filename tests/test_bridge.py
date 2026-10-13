@@ -1812,6 +1812,95 @@ class ScheduledTurnTest(unittest.TestCase):
 class BridgeSessionOpenTest(BridgeTestCase):
     """The bridge selects the provider the interface asked for."""
 
+    def test_switching_sessions_reuses_resources_and_rebinds_all_session_state(self) -> None:
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        bridge, output = self.make_bridge([], root)
+        opening = open_session_message(root)
+        bridge.open_session(opening)
+        first_session = bridge.host.sessions.session
+        first_session.add_item("user", "first conversation")
+        bridge.host.set_permission_preset(PermissionPreset.FULL_ACCESS)
+        bridge.host.sessions.plan.update("first plan", (PlanStep("1", "first step", "pending"),))
+        plane = bridge.host.planes.ensure(bridge.host.sessions)
+        first_agent, first_jobs = plane.agent, plane.jobs
+        with (
+            patch.object(plane.mcp, "start") as start_mcp,
+            patch.object(plane.mcp, "close") as close_mcp,
+            patch.object(first_jobs, "close", wraps=first_jobs.close) as close_jobs,
+        ):
+            bridge.open_session(opening)
+            self.assertIsNone(plane.agent)
+            self.assertIsNone(emitted(output)[-1]["context_window"])
+            rebound = bridge.host.planes.ensure(bridge.host.sessions)
+            self.assertIs(rebound, plane)
+            self.assertIsNot(rebound.agent, first_agent)
+            self.assertIsNot(rebound.jobs, first_jobs)
+            context = rebound.agent._execution_context
+            self.assertIs(context.session, bridge.host.sessions.session)
+            self.assertEqual(context.session.items, [])
+            self.assertIsNone(context.plan.snapshot)
+            self.assertIs(rebound.agent._tools._policy, bridge.host.sessions.permissions)
+            self.assertEqual(context.execution_router.authority, bridge.host.sessions.permissions.authority)
+            self.assertNotEqual(context.execution_router.authority, FULL_ACCESS_AUTHORITY)
+            close_jobs.assert_called_once()
+            start_mcp.assert_not_called()
+            close_mcp.assert_not_called()
+
+        bridge.open_session({**opening, "session_id": first_session.session_id})
+        restored = bridge.host.planes.ensure(bridge.host.sessions)
+        self.assertIs(restored, plane)
+        self.assertEqual(restored.agent._execution_context.session.items[0].content, "first conversation")
+        self.assertEqual(restored.agent._execution_context.plan.snapshot.goal, "first plan")
+        self.assertEqual(restored.execution_router.authority, FULL_ACCESS_AUTHORITY)
+
+    def test_switching_sessions_rebuilds_resources_for_a_different_workspace_or_provider(self) -> None:
+        for change in ("workspace", "provider"):
+            with self.subTest(change=change):
+                root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+                bridge, _ = self.make_bridge([], root)
+                opening = open_session_message(root)
+                bridge.open_session(opening)
+                first = bridge.host.planes.ensure(bridge.host.sessions)
+                other = root / "other"
+                other.mkdir()
+                opening[change] = str(other) if change == "workspace" else "second"
+                bridge.open_session(opening)
+                with patch.object(first.mcp, "close", wraps=first.mcp.close) as close:
+                    second = bridge.host.planes.ensure(bridge.host.sessions)
+                self.assertIsNot(first, second)
+                close.assert_called_once()
+
+    def test_repeated_open_session_commands_use_the_same_bridge(self) -> None:
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        opening = open_session_message(root, session_id="first")
+        bridge, output = self.make_bridge([
+            json.dumps(opening),
+            json.dumps({**opening, "session_id": "second"}),
+            json.dumps({"type": "load_session"}),
+            json.dumps({"type": "shutdown"}),
+        ], root)
+        bridge.serve()
+        ready = [m for m in emitted(output) if m["type"] == "session_ready"]
+        self.assertEqual([m["session_id"] for m in ready], ["first", "second"])
+        self.assertEqual(bridge.host.sessions.session.session_id, "second")
+
+    def test_binding_failure_closes_retained_resources(self) -> None:
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        bridge, _ = self.make_bridge([], root)
+        opening = open_session_message(root)
+        bridge.open_session(opening)
+        plane = bridge.host.planes.ensure(bridge.host.sessions)
+        bridge.open_session(opening)
+        with (
+            patch("agent_runtime.plane_manager.Agent", side_effect=ValueError("binding failed")),
+            patch.object(plane.mcp, "close", wraps=plane.mcp.close) as close,
+        ):
+            with self.assertRaisesRegex(ValueError, "binding failed"):
+                bridge.host.planes.ensure(bridge.host.sessions)
+        self.assertIsNone(bridge.host.planes.current)
+        self.assertIsNone(plane.jobs)
+        close.assert_called_once()
+
     @unittest.skipUnless(sys.platform == "win32", "Windows journal ownership")
     def test_occupied_session_can_be_reselected_without_exiting_bridge(self) -> None:
         directory = self.enterContext(tempfile.TemporaryDirectory())
@@ -2723,7 +2812,7 @@ class BridgeSessionOpenTest(BridgeTestCase):
                 autospec=True,
             ) as close_jobs,
             patch(
-                "agent_runtime.plane_manager.McpClientManager.close",
+                "agent_core.mcp.manager.McpClientManager.close",
                 autospec=True,
             ) as close_mcp,
         ):

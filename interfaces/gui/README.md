@@ -52,6 +52,8 @@ HTTP / WebSocket 路由按模块拆分：
 
 React 应用提供可折叠的 Session 列表、对话区和 Workspace 文件树。多个 Session 会稳定挂载，因此可以并行执行并在页面内切换。
 
+切换到其他会话时，只断开空闲会话的 WebSocket，保留其 Bridge、Provider 和 MCP；返回后附着已有 Runtime。离开浏览器页面时释放该页面持有的空闲会话，删除会话和关闭 GUI 宿主也会释放资源。因此浏览过的会话会在页面存续期间占用进程与内存，新建会话仍有独立执行面。
+
 对话层由 `useSessionRuntime` 统一管理：
 
 - 建立和恢复 Session WebSocket

@@ -361,6 +361,31 @@ class McpToolTest(unittest.TestCase):
 
 
 class McpClientManagerTest(unittest.TestCase):
+    def test_background_start_allows_independent_work_before_discovery_finishes(self) -> None:
+        config = load_mcp_config({"enabled": True, "servers": {
+            "fake": {"transport": "stdio", "command": sys.executable},
+        }})
+        manager = McpClientManager(config, Path.cwd())
+        entered = threading.Event()
+        release = threading.Event()
+
+        async def start_server(stack, server):
+            entered.set()
+            await asyncio.to_thread(release.wait)
+            return object(), ()
+
+        with patch.object(manager, "_start_server", start_server):
+            try:
+                manager.start()
+                self.assertTrue(entered.wait(2))
+                self.assertFalse(manager._ready.is_set())
+                release.set()
+                self.assertEqual(manager.wait_ready(), ())
+                self.assertTrue(manager._ready.is_set())
+            finally:
+                release.set()
+                manager.close()
+
     def test_cancel_stops_only_the_active_request_and_keeps_the_manager_usable(self) -> None:
         entered = threading.Event()
         stopped = threading.Event()
@@ -395,6 +420,7 @@ class McpClientManagerTest(unittest.TestCase):
 
         with patch.object(manager, "_start_server", start_server):
             manager.start()
+            manager.wait_ready()
         thread = threading.Thread(target=call, daemon=True)
         thread.start()
         try:
@@ -434,7 +460,8 @@ class McpClientManagerTest(unittest.TestCase):
         statuses = []
         manager = McpClientManager(config, Path.cwd(), statuses.append)
         try:
-            tools = manager.start()
+            manager.start()
+            tools = manager.wait_ready()
             self.assertEqual(
                 [tool.name for tool in tools],
                 ["mcp__fake__echo"],
@@ -494,6 +521,7 @@ class McpClientManagerTest(unittest.TestCase):
         with patch.object(manager._ready, "wait", record_wait):
             try:
                 manager.start()
+                manager.wait_ready()
             finally:
                 manager.close()
 
@@ -541,7 +569,8 @@ class McpClientManagerTest(unittest.TestCase):
         manager = McpClientManager(config, Path.cwd())
         started = time.monotonic()
         try:
-            tools = manager.start()
+            manager.start()
+            tools = manager.wait_ready()
         finally:
             manager.close()
 

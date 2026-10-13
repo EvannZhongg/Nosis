@@ -72,7 +72,7 @@ class RuntimeHost:
     def open_session(self, workspace: Path, session_id: str | None = None,
                      provider: str | None = None) -> bool:
         self._require_idle()
-        self.planes.close()
+        self.planes.unbind_session()
         return self.sessions.open_session(workspace, session_id, provider)
 
     def change_provider(self, provider: str) -> tuple[bool, str]:

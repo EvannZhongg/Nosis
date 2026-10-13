@@ -3,26 +3,14 @@
 from pathlib import Path
 from agent_core import (
     Agent,
-    AgentEvent,
-    AgentCancelled as Cancelled,
-    ContextWindowEvent,
-    JsonlSessionStore,
     JobManager,
     JobStatusEvent,
     MemoryManager,
     MemoryReconciler,
-    Session,
-    CompositeToolPolicy,
     ExecutionAuthority,
     ExecutionRouter,
-    ExecutionScope,
-    FULL_ACCESS_AUTHORITY,
     McpConfig,
-    McpApprovalPolicy,
     PermissionController,
-    PermissionPreset,
-    PlanManager,
-    ShellApprovalPolicy,
     SkillLoader,
     SubagentRole,
     SubagentRoleRegistry,
@@ -30,38 +18,23 @@ from agent_core import (
     HostCommandExecutor,
     SandboxedCommandExecutor,
     ToolExecutionContext,
-    TurnControl,
     Workspace,
     WorkspaceInstructions,
-    AttachmentPart,
-    FilePart,
-    ImagePart,
-    UnsupportedImageError,
-    Schedule,
-    ScheduledRun,
     builtin_catalog,
     load_agent_config,
     merge_mcp_servers,
-    message_to_dict,
-    probe_image,
-    runtime_error_info,
     vision_aware_tool_names,
     skill_aware_tool_names,
     platform_workspace_sandbox_backend,
     SchedulerService,
-    WORKSPACE_ONLY_AUTHORITY,
 )
 from agent_core.prompting import render_system_prompt
-from agent_core.path_utils import path_for_comparison
 from agent_core.llm import LLMProvider
-from agent_core.providers import LiteLLMImageGenerator, LiteLLMProvider, OpenAIProvider
-from agent_core.mcp.manager import McpClientManager, McpServerStatus
 from agent_core.tools import ROLE_TOOL_NAMES
 
 from .config import (
     configured_skill_sources,
     configured_role_names,
-    default_config_directory,
     load_config_with_name,
     load_image_generation_config,
     load_model_options,
@@ -72,7 +45,7 @@ from .config import (
 from .execution_plane import ExecutionPlane
 from .instructions import load_workspace_instructions
 from .plugins import PluginAgent, PluginManager
-from .settings import EnvironmentReloader, SettingsStore, configuration_fingerprint
+from .settings import EnvironmentReloader, configuration_fingerprint
 from .callbacks import RuntimeCallbacks
 from .computer import DesktopComputer
 from .session_controller import SessionRuntimeController
@@ -137,6 +110,8 @@ class ExecutionPlaneManager:
             instructions=instructions,
         ):
             assert plane is not None
+            if plane.agent is None:
+                self._bind_session(plane, session)
             return plane
         if plane is not None:
             self.close()
@@ -144,12 +119,6 @@ class ExecutionPlaneManager:
         self.callbacks.on_phase("starting", ())
         config_path = self._config_path
         workspace = session.workspace
-        store = None
-        memory_context = None
-        if agent_config.memory.enabled:
-            store = memory_store(self._config_directory)
-            store.initialize(workspace.path)
-            memory_context = store.load(workspace.path)
         _, config = load_config_with_name(config_path, session.provider_name)
         plugins = PluginManager.discover(
             self._config_directory / "plugins"
@@ -166,17 +135,19 @@ class ExecutionPlaneManager:
                 (agent_config.mcp.servers, plugin_mcp_servers)
             ),
         )
+        from agent_core.mcp.manager import McpClientManager
+
         mcp = McpClientManager(
             mcp_config,
             workspace.path,
             on_status=self.callbacks.on_mcp_status,
         )
-        jobs: JobManager | None = None
         workspace_executor: SandboxedCommandExecutor | None = None
         host_executor: HostCommandExecutor | None = None
         execution_router: ExecutionRouter | None = None
         desktop: DesktopComputer | None = None
         try:
+            mcp.start()
             skills = SkillLoader().load(
                 (
                     *configured_skill_sources(
@@ -215,6 +186,8 @@ class ExecutionPlaneManager:
                 )
             image_generator = None
             if agent_config.tools.is_enabled("generate_image"):
+                from agent_core.providers import LiteLLMImageGenerator
+
                 image_config = load_image_generation_config(config_path)
                 if image_config is None:
                     raise ValueError(
@@ -231,6 +204,95 @@ class ExecutionPlaneManager:
             vision_provider = self._provider_for(
                 load_vision_config(config_path), workspace, agent_config
             )
+            # One catalog of stateless Tool instances is shared by the main
+            # Agent and by every sub-agent role.
+            catalog = builtin_catalog()
+            catalog = catalog.extend(mcp.wait_ready())
+
+            workspace_executor = SandboxedCommandExecutor(
+                workspace.path,
+                platform_workspace_sandbox_backend(),
+                excluded_environment_names=self._environment.loaded_names,
+            )
+            host_executor = HostCommandExecutor(workspace.path)
+            execution_router = ExecutionRouter(
+                workspace_executor,
+                host_executor,
+                authority=lambda: session.permissions.authority.intersect(
+                    self._execution_authority_limit
+                ),
+                host_tool=mcp.requires_approval,
+            )
+            plane = ExecutionPlane(
+                workspace=workspace,
+                provider_name=session.provider_name,
+                agent_config=agent_config,
+                configuration_fingerprint=config_fingerprint,
+                instructions=instructions,
+                provider=main_provider,
+                vision_provider=vision_provider,
+                image_generator=image_generator,
+                catalog=catalog,
+                skills=skills,
+                prompts=prompts,
+                plugin_agents=plugin_agents,
+                computer_tools=computer_tools,
+                execution_router=execution_router,
+                mcp=mcp,
+                computer=desktop,
+                runtime_warnings=(
+                    *plugins.warnings,
+                    *mcp_warnings,
+                    *agent_warnings,
+                    *skills.warnings,
+                    *computer_tool_warnings,
+                ),
+            )
+        except BaseException:
+            try:
+                if desktop is not None:
+                    desktop.close()
+            finally:
+                try:
+                    mcp.close()
+                finally:
+                    if execution_router is not None:
+                        execution_router.close()
+                    else:
+                        try:
+                            if workspace_executor is not None:
+                                workspace_executor.close()
+                        finally:
+                            if host_executor is not None:
+                                host_executor.close()
+            raise
+        self._bind_session(plane, session)
+        self.current = plane
+        return plane
+
+    def _bind_session(self, plane: ExecutionPlane, session: SessionRuntimeController) -> None:
+        try:
+            agent_config = plane.agent_config
+            workspace = plane.workspace
+            main_provider = plane.provider
+            vision_provider = plane.vision_provider
+            image_generator = plane.image_generator
+            catalog = plane.catalog
+            skills = plane.skills
+            prompts = plane.prompts
+            instructions = plane.instructions
+            plugin_agents = plane.plugin_agents
+            desktop = plane.computer
+            computer_tools = plane.computer_tools
+            mcp = plane.mcp
+            execution_router = plane.execution_router
+            config_path = self._config_path
+            store = None
+            memory_context = None
+            if agent_config.memory.enabled:
+                store = memory_store(self._config_directory)
+                store.initialize(workspace.path)
+                memory_context = store.load(workspace.path)
             memory = None
             if memory_context is not None:
                 assert store is not None
@@ -248,28 +310,10 @@ class ExecutionPlaneManager:
                     ),
                 )
 
-            # One catalog of stateless Tool instances is shared by the main
-            # Agent and by every sub-agent role.
-            catalog = builtin_catalog()
-            catalog = catalog.extend(mcp.start())
-
-            if session.permissions is None:
+            if session.permissions is None or session.session is None:
                 raise RuntimeError("session permissions are not initialized")
             jobs = JobManager(session.session)
-            workspace_executor = SandboxedCommandExecutor(
-                workspace.path,
-                platform_workspace_sandbox_backend(),
-                excluded_environment_names=self._environment.loaded_names,
-            )
-            host_executor = HostCommandExecutor(workspace.path)
-            execution_router = ExecutionRouter(
-                workspace_executor,
-                host_executor,
-                authority=lambda: session.permissions.authority.intersect(
-                    self._execution_authority_limit
-                ),
-                host_tool=mcp.requires_approval,
-            )
+            plane.jobs = jobs
             jobs.set_update_callback(
                 lambda update: self.callbacks.on_event(
                     JobStatusEvent(
@@ -356,51 +400,18 @@ class ExecutionPlaneManager:
                 ),
                 context=context,
             )
-            plane = ExecutionPlane(
-                workspace=workspace,
-                provider_name=session.provider_name,
-                agent_config=agent_config,
-                configuration_fingerprint=config_fingerprint,
-                instructions=instructions,
-                memory=memory,
-                agent=agent,
-                execution_router=execution_router,
-                jobs=jobs,
-                mcp=mcp,
-                context_window=agent.context_window(),
-                computer=desktop,
-                runtime_warnings=(
-                    *plugins.warnings,
-                    *mcp_warnings,
-                    *agent_warnings,
-                    *skills.warnings,
-                    *computer_tool_warnings,
-                ),
-            )
+            plane.memory = memory
+            plane.agent = agent
+            plane.context_window = agent.context_window()
         except BaseException:
-            try:
-                try:
-                    if desktop is not None:
-                        desktop.close()
-                finally:
-                    if jobs is not None:
-                        jobs.close()
-            finally:
-                try:
-                    mcp.close()
-                finally:
-                    if execution_router is not None:
-                        execution_router.close()
-                    else:
-                        try:
-                            if workspace_executor is not None:
-                                workspace_executor.close()
-                        finally:
-                            if host_executor is not None:
-                                host_executor.close()
+            if self.current is plane:
+                self.current = None
+            plane.close()
             raise
-        self.current = plane
-        return plane
+
+    def unbind_session(self) -> None:
+        if self.current is not None:
+            self.current.unbind_session()
 
     def _provider_for(
         self,
@@ -410,6 +421,8 @@ class ExecutionPlaneManager:
     ) -> LLMProvider | None:
         if config is None:
             return None
+        from agent_core.providers import LiteLLMProvider, OpenAIProvider
+
         arguments = dict(
             model=config.model,
             base_url=config.url,

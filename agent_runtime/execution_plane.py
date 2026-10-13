@@ -1,6 +1,7 @@
-"""One fully assembled Agent execution lifecycle."""
+"""Workspace resources and their replaceable Session binding."""
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from agent_core import (
     Agent,
@@ -11,27 +12,43 @@ from agent_core import (
     MemoryManager,
     Workspace,
     WorkspaceInstructions,
+    SkillRegistry,
+    ToolCatalog,
 )
-from agent_core.mcp.manager import McpClientManager
+from agent_core.llm import LLMProvider
+from agent_core.image_generation import ImageGenerator
 
 from .computer import DesktopComputer
+
+if TYPE_CHECKING:
+    from agent_core.mcp.manager import McpClientManager
+    from .config import PromptTemplates
+    from .plugins import PluginAgent
 
 
 @dataclass(eq=False)
 class ExecutionPlane:
-    """Resources and inputs that make one concrete Agent runtime."""
+    """One resource assembly, with fresh Agent state for each Session binding."""
 
     workspace: Workspace
     provider_name: str
     agent_config: AgentConfig
     configuration_fingerprint: str
     instructions: WorkspaceInstructions
-    memory: MemoryManager | None
-    agent: Agent
+    provider: LLMProvider
+    vision_provider: LLMProvider | None
+    image_generator: ImageGenerator | None
+    catalog: ToolCatalog
+    skills: SkillRegistry
+    prompts: "PromptTemplates"
+    plugin_agents: tuple["PluginAgent", ...]
+    computer_tools: tuple[str, ...]
     execution_router: ExecutionRouter
-    jobs: JobManager
-    mcp: McpClientManager
-    context_window: ContextWindow
+    mcp: "McpClientManager"
+    memory: MemoryManager | None = None
+    agent: Agent | None = None
+    jobs: JobManager | None = None
+    context_window: ContextWindow | None = None
     computer: DesktopComputer | None = None
     runtime_warnings: tuple[str, ...] = ()
 
@@ -53,13 +70,22 @@ class ExecutionPlane:
             and self.instructions.fingerprint == instructions.fingerprint
         )
 
+    def unbind_session(self) -> None:
+        jobs = self.jobs
+        self.jobs = None
+        self.agent = None
+        self.memory = None
+        self.context_window = None
+        if jobs is not None:
+            jobs.close()
+
     def close(self) -> None:
         try:
             if self.computer is not None:
                 self.computer.close()
         finally:
             try:
-                self.jobs.close()
+                self.unbind_session()
             finally:
                 try:
                     self.mcp.close()

@@ -314,6 +314,9 @@ os._exit(0)
             workspace=Workspace(self.workspace), provider_name="test",
             agent_config=Mock(), configuration_fingerprint="test",
             instructions=Mock(), memory=None, agent=Mock(),
+            provider=Mock(), vision_provider=None, image_generator=None,
+            catalog=ToolCatalog(), skills=Mock(), prompts=Mock(),
+            plugin_agents=(), computer_tools=(),
             execution_router=ExecutionRouter(executor, Mock()),
             jobs=Mock(), mcp=Mock(), context_window=Mock(),
         )

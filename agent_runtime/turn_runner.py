@@ -80,6 +80,7 @@ class TurnRunner:
         started = False
         try:
             plane = ensure_plane()
+            assert plane.agent is not None
             started = True
             self.callbacks.on_phase("running", plane.runtime_warnings)
             plane.runtime_warnings = ()

@@ -325,6 +325,7 @@ export type Incoming = (
 
 export type Outgoing =
   | {
+      // May also rebind an idle Bridge to another Session without restarting it.
       type: 'open_session';
       workspace: string;
       session_id: string | null;

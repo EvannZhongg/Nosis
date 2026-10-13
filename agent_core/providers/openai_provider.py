@@ -13,9 +13,7 @@ from agent_core.tools import ToolCall
 from .base import ModelProvider, _cancellable_chunks, _request_messages, _request_tools
 from .reasoning import reasoning_arguments
 from .tool_call_stream import ToolCallStreamAssembler
-
-
-OPENAI_APIS = frozenset({"responses", "chat_completions"})
+from . import OPENAI_APIS
 
 
 class OpenAIProvider(ModelProvider):

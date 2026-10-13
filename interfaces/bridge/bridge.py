@@ -4,10 +4,11 @@ from itertools import count
 from pathlib import Path
 from queue import Queue
 from threading import Lock, RLock, Thread
-from typing import TextIO
+from typing import TextIO, TYPE_CHECKING
 
 from agent_core import AgentCancelled as Cancelled, AgentEvent, PermissionPreset, SchedulerService, SessionInUseError, message_to_dict, runtime_error_info
-from agent_core.mcp.manager import McpServerStatus
+if TYPE_CHECKING:
+    from agent_core.mcp.manager import McpServerStatus
 from agent_runtime.host import RuntimeHost
 from agent_runtime.callbacks import RuntimeCallbacks
 from agent_runtime.attachments import parse_attachments
@@ -377,7 +378,7 @@ class Bridge:
             ),
             context_window=(
                 context_window_to_dict(plane.context_window)
-                if plane is not None
+                if plane is not None and plane.context_window is not None
                 else None
             ),
             jobs=list(self._jobs.values()),
@@ -475,7 +476,7 @@ class Bridge:
             self.emit(**settings_update_failed_message(error, request_id))
 
 
-    def _emit_mcp_status(self, status: McpServerStatus) -> None:
+    def _emit_mcp_status(self, status: "McpServerStatus") -> None:
         fields: dict[str, object] = {
             "server": status.server,
             "status": status.status,
@@ -505,7 +506,7 @@ class Bridge:
 
             if message is None or message["type"] == "shutdown":
                 return
-            if not opened:
+            if not opened or message["type"] == "open_session":
                 if message["type"] == "list_sessions" and self.host.sessions.workspace is not None:
                     self._emit_sessions()
                     continue
@@ -522,6 +523,8 @@ class Bridge:
                 try:
                     self.open_session(message)
                 except SessionInUseError as error:
+                    opened = False
+                    self._session_opened = False
                     self.emit(**session_open_failed_message(error.session_id, str(error)))
                     continue
                 opened = True
@@ -554,6 +557,11 @@ class Bridge:
             provider=message.get("provider"),
         )
         state = self.host.sessions
+        self._phase = "inactive"
+        self._approval = self._question = None
+        self._runtime_warnings = ()
+        self._jobs.clear()
+        self._checkpoint_turn = None
         self._session_opened = True
         self.emit(**session_ready_message(
             session_id=state.session.session_id,

@@ -8,7 +8,6 @@ from pathlib import Path
 from agent_core import AgentConfig, DirectorySkillSource
 from agent_core.memory import MemoryStore
 from agent_core.providers import (
-    ModelProvider,
     OPENAI_APIS,
     normalize_semantic_effort,
     validate_reasoning_parameters,
@@ -490,6 +489,8 @@ def load_image_generation_config(
 
 
 def _is_vision_capable(config: ModelConfig) -> bool:
+    from agent_core.providers import ModelProvider
+
     return "image" in ModelProvider.capabilities_for_model(
         config.model,
         config.url,
