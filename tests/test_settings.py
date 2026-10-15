@@ -23,7 +23,7 @@ AGENT = {
     "scratch_workspace_root": "~/.nosis/workspaces/scratch",
     "workspace_instruction_files": ["AGENTS.md"],
     "skills": {"global_paths": ["skills"], "workspace_paths": []},
-    "context": {"compression": {"enabled": True, "trigger_ratio": None, "keep_recent_units": 4}},
+    "context": {"compression": {"enabled": True, "trigger_ratio": None, "keep_recent_units": 4, "user_anchor_token_budget": 2000}},
     "main_agent": {"tools": {"read_file": True}},
     "subagent_roles": {},
     "mcp": {"enabled": False, "servers": {}},
@@ -101,6 +101,20 @@ class SettingsStoreTest(unittest.TestCase):
             document["provider"],
             {"request_timeout_seconds": 300, "max_retries": 2},
         )
+
+    def test_user_anchor_budget_survives_settings_round_trip(self) -> None:
+        agent = self.store.snapshot()["agent"]
+        self.assertEqual(agent["context"]["compression"]["user_anchor_token_budget"], 2000)
+        agent["context"]["compression"]["user_anchor_token_budget"] = 3500
+
+        snapshot = self.store.save_agent(agent)
+
+        self.assertEqual(
+            snapshot["agent"]["context"]["compression"]["user_anchor_token_budget"],
+            3500,
+        )
+        document = json.loads(self.store.agent_path.read_text(encoding="utf-8"))
+        self.assertEqual(document["context"]["compression"]["user_anchor_token_budget"], 3500)
 
     def test_mcp_toggle_preserves_server_configuration(self) -> None:
         document = json.loads(

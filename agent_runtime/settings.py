@@ -248,6 +248,7 @@ class SettingsStore:
                         "enabled": agent_config.context.enabled,
                         "trigger_ratio": agent_config.context.trigger_ratio,
                         "keep_recent_units": agent_config.context.keep_recent_units,
+                        "user_anchor_token_budget": agent_config.context.user_anchor_token_budget,
                     }
                 },
                 "memory": {

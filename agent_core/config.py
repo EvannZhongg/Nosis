@@ -10,6 +10,7 @@ class ContextCompressionConfig:
     enabled: bool = True
     trigger_ratio: float | None = None
     keep_recent_units: int = 6
+    user_anchor_token_budget: int = 2000
 
 
 @dataclass(frozen=True)
@@ -264,6 +265,7 @@ def _context_config(value: object) -> ContextCompressionConfig:
         "enabled",
         "trigger_ratio",
         "keep_recent_units",
+        "user_anchor_token_budget",
     }
     if unknown:
         fields = ", ".join(sorted(unknown))
@@ -278,7 +280,12 @@ def _context_config(value: object) -> ContextCompressionConfig:
     keep_recent_units = _positive_integer_with_default(
         compression, "keep_recent_units", 6, prefix="context.compression"
     )
-    return ContextCompressionConfig(enabled, trigger, keep_recent_units)
+    user_anchor_token_budget = _positive_integer_with_default(
+        compression, "user_anchor_token_budget", 2000, prefix="context.compression"
+    )
+    return ContextCompressionConfig(
+        enabled, trigger, keep_recent_units, user_anchor_token_budget
+    )
 
 
 def _memory_config(value: object) -> MemoryConfig:

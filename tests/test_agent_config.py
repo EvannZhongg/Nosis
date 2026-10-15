@@ -367,6 +367,27 @@ class AgentConfigTest(unittest.TestCase):
                         }
                     )
 
+    def test_loads_user_anchor_token_budget(self) -> None:
+        config = self.load({
+            "context": {"compression": {"user_anchor_token_budget": 3500}},
+            "main_agent": {"tools": ENABLED_TOOLS},
+        })
+
+        self.assertEqual(config.context.user_anchor_token_budget, 3500)
+        default = self.load({"main_agent": {"tools": ENABLED_TOOLS}})
+        self.assertEqual(default.context.user_anchor_token_budget, 2000)
+
+    def test_rejects_invalid_user_anchor_token_budget(self) -> None:
+        for value in (0, -1, True, "2000", 2.5, None):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(
+                    ValueError, "user_anchor_token_budget.*positive integer"
+                ):
+                    self.load({
+                        "context": {"compression": {"user_anchor_token_budget": value}},
+                        "main_agent": {"tools": ENABLED_TOOLS},
+                    })
+
     def test_rejects_missing_tool_config(self) -> None:
         with self.assertRaisesRegex(ValueError, "'main_agent'.*object"):
             self.load_json(

@@ -239,6 +239,10 @@ class ConfigTest(unittest.TestCase):
                 agent_config["context"]["compression"]["keep_recent_units"],
                 8,
             )
+            self.assertEqual(
+                agent_config["context"]["compression"]["user_anchor_token_budget"],
+                2000,
+            )
             self.assertTrue((config_directory / "skills").is_dir())
             self.assertTrue((config_directory / "plugins").is_dir())
             prompts = load_prompt_templates(config_directory / "prompts")

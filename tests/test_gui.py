@@ -502,7 +502,7 @@ class GuiTest(unittest.TestCase):
             "scratch_workspace_root": str(self.root / "scratch"),
             "workspace_instruction_files": ["AGENTS.md"],
             "skills": {"global_paths": ["skills"], "workspace_paths": []},
-            "context": {"compression": {"enabled": True, "trigger_ratio": None, "keep_recent_units": 4}},
+            "context": {"compression": {"enabled": True, "trigger_ratio": None, "keep_recent_units": 4, "user_anchor_token_budget": 2000}},
             "main_agent": {"tools": {"read_file": True}},
             "subagent_roles": {},
             "mcp": {"enabled": False, "servers": {}},

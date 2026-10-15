@@ -617,7 +617,7 @@ class AgentTest(unittest.TestCase):
         self.assertIn("[Archived Context Summary]\nlossy state", stable_context)
         anchors = request.messages[1].content or ""
         self.assertIn("[Lossless User Anchors]", anchors)
-        self.assertIn("previous turn, user_input", anchors)
+        self.assertIn("historical turn, user_input, turn_id=turn-1", anchors)
         self.assertIn("first command", anchors)
         self.assertIn("Which target?", anchors)
         self.assertIn("User answer: api", anchors)
@@ -695,7 +695,7 @@ class AgentTest(unittest.TestCase):
             ["second command"],
         )
 
-    def test_context_excludes_user_anchors_older_than_previous_turn(self) -> None:
+    def test_context_stops_extending_user_anchors_at_the_token_budget(self) -> None:
         session = Session("session-1")
         for turn_id, command in (
             ("turn-1", "old command"),
@@ -709,7 +709,7 @@ class AgentTest(unittest.TestCase):
         session.add_item("user", "current command")
         session.set_archived_summary("lossy state", len(session.items))
         context = ContextManager(
-            MockProvider([]),
+            MockProvider([], input_tokens=2001),
             session,
             "You are helpful.",
             CONSOLIDATOR_PROMPT,

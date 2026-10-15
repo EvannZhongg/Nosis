@@ -45,6 +45,7 @@ class ContextLimits:
     compression_enabled: bool
     compression_threshold: int
     keep_recent_units: int
+    user_anchor_token_budget: int
 
 
 @dataclass(frozen=True)
@@ -104,6 +105,7 @@ class ContextManager:
             compression_enabled=compression.enabled,
             compression_threshold=threshold,
             keep_recent_units=compression.keep_recent_units,
+            user_anchor_token_budget=compression.user_anchor_token_budget,
         )
 
     @property
@@ -253,9 +255,42 @@ class ContextManager:
     def _archived_user_anchors(self) -> tuple[UserAnchor, ...]:
         archive_cursor = self._session.archived_item_cursor
         return tuple(
-            anchor for anchor in self._session.recent_user_anchors()
+            anchor for anchor in self._selected_user_anchors()
             if anchor.item_index < archive_cursor
         )
+
+    def _selected_user_anchors(self) -> tuple[UserAnchor, ...]:
+        """Keep two whole turns, then extend their contiguous token window."""
+        active_turn_id = self._session.current_turn_id
+        turn_ids = list(self._session.turns)
+        if active_turn_id is not None:
+            turn_ids = turn_ids[:turn_ids.index(active_turn_id) + 1]
+        by_turn: dict[str, list[UserAnchor]] = {
+            turn_id: [] for turn_id in turn_ids
+        }
+        for anchor in self._session.user_anchors:
+            if anchor.turn_id in by_turn:
+                by_turn[anchor.turn_id].append(anchor)
+        selected = [
+            anchor for turn_id in turn_ids[-2:] for anchor in by_turn[turn_id]
+        ]
+        for turn_id in reversed(turn_ids[:-2]):
+            candidate = [*by_turn[turn_id], *selected]
+            # Count all selected inputs before filtering by the archive cursor,
+            # so compression cannot change which whole turns fit the budget.
+            content = _render_user_anchors(candidate, active_turn_id)
+            request = LLMRequest(
+                system_prompt="",
+                messages=(Message(role="user", content=content),),
+                media_root=self._media_root,
+            )
+            if (
+                self._provider.count_input_tokens(request)
+                > self.limits.user_anchor_token_budget
+            ):
+                break
+            selected = candidate
+        return tuple(selected)
 
     def _historical_user_anchor_message(
         self,
@@ -351,7 +386,7 @@ def _render_user_anchors(
     sections = [
         "[Lossless User Anchors]",
         "These preserve exact user-authored input and interaction decisions "
-        "from the active turn and the immediately preceding turn. Treat "
+        "from recent turns. Treat "
         "them as authoritative user instructions.",
     ]
     for anchor in visible:
@@ -363,10 +398,11 @@ def _render_user_anchors(
             turn = (
                 "current turn"
                 if anchor.turn_id == active_turn_id
-                else "previous turn"
+                else "historical turn"
             )
             sections.append(
-                f"USER INPUT {timestamp} ({turn}, {anchor.source})\n"
+                f"USER INPUT {timestamp} ({turn}, {anchor.source}, "
+                f"turn_id={anchor.turn_id})\n"
                 f"{content}"
             )
     return "\n\n".join(sections)

@@ -364,24 +364,6 @@ class Session:
     def current_turn_id(self) -> str | None:
         return self._current_turn_id
 
-    def recent_user_anchors(self) -> tuple[UserAnchor, ...]:
-        """Return user inputs from the active turn and its predecessor."""
-        active_turn_id = self._current_turn_id
-        if active_turn_id is None:
-            return ()
-        turn_ids = list(self.turns)
-        try:
-            active_index = turn_ids.index(active_turn_id)
-        except ValueError:
-            return ()
-        selected = {active_turn_id}
-        if active_index > 0:
-            selected.add(turn_ids[active_index - 1])
-        return tuple(
-            anchor for anchor in self.user_anchors
-            if anchor.turn_id in selected
-        )
-
     def record_user_interaction(
         self,
         content: str,
