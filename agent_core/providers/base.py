@@ -391,10 +391,7 @@ def _message_to_dict(
                 "type": "function",
                 "function": {
                     "name": tool_call.name,
-                    "arguments": json.dumps(
-                        tool_call.arguments,
-                        ensure_ascii=False,
-                    ),
+                    "arguments": tool_call.arguments_json,
                 },
             }
             for tool_call in message.tool_calls

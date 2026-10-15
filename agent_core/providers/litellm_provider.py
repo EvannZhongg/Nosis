@@ -53,6 +53,7 @@ class LiteLLMProvider(ModelProvider):
         reasoning_text = ""
         tool_calls = ToolCallStreamAssembler(self._model)
         usage = None
+        finish_reason = None
         chunks = _cancellable_chunks(
             lambda: completion(**base_arguments),
             check_cancelled,
@@ -66,7 +67,10 @@ class LiteLLMProvider(ModelProvider):
                 choices = getattr(chunk, "choices", None) or []
                 if not choices:
                     continue
-                delta = get_field(choices[0], "delta")
+                choice = choices[0]
+                if get_field(choice, "finish_reason") is not None:
+                    finish_reason = get_field(choice, "finish_reason")
+                delta = get_field(choice, "delta")
                 if delta is None:
                     continue
                 text = _text_from_content(get_field(delta, "content"))
@@ -94,6 +98,15 @@ class LiteLLMProvider(ModelProvider):
             ) from error
         finally:
             chunks.close()
+        if finish_reason not in {"stop", "tool_calls"}:
+            reason = "missing_finish_reason" if finish_reason is None else "incomplete_response"
+            raise ProviderStreamError(
+                f"provider stream did not complete: {reason}",
+                details={
+                    "phase": "response_stream", "model": self._model,
+                    "reason": reason, "finish_reason": finish_reason,
+                },
+            )
         return LLMResponse(
             content=content or None,
             reasoning=reasoning_text or None,

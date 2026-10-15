@@ -351,8 +351,8 @@ function itemParts(
       type: "tool-call",
       toolCallId: call.id,
       toolName: call.name,
-      args: call.arguments,
-      argsText: JSON.stringify(call.arguments),
+      args: typeof call.arguments === "string" ? undefined : call.arguments,
+      argsText: typeof call.arguments === "string" ? call.arguments : JSON.stringify(call.arguments),
       result: results.get(call.id),
       isError: results.get(call.id)?.ok === false,
     });

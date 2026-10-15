@@ -95,6 +95,12 @@ class ToolSet:
     ) -> ToolResult:
         if turn_control is not None:
             turn_control.raise_if_cancelled()
+        if call.argument_error is not None:
+            return ToolResult(
+                tool_call_id=call.id,
+                name=call.name,
+                error=call.argument_error,
+            )
         tool = self._tools.get(call.name)
         if tool is None:
             return ToolResult(

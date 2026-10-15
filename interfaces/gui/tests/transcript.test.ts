@@ -4,6 +4,26 @@ import { applyMessage, isTurnActivity, toMessages, type TranscriptItem } from ".
 
 const TOOL_CALL = { id: "call-1", name: "shell", arguments: { command: "ls" } };
 
+it("keeps invalid arguments as raw text with the matching tool failure", () => {
+  const raw = '{"goal" "fix this"}';
+  const error = { type: "invalid_tool_arguments", message: "Expected ':' delimiter" };
+  const call = { id: "invalid", name: "update_plan", arguments: raw, argument_error: error };
+  const started = applyMessage([], {
+    type: "tool_batch_started", turn_id: "t", model_call_index: 1, tool_calls: [call],
+  });
+  const failed = applyMessage(started.items, {
+    type: "tool_result", turn_id: "t", tool_call_id: call.id, name: call.name,
+    ok: false, error, tool_index: 1, tool_count: 1,
+  });
+  const parts = toMessages(failed.items)[0].content as any[];
+  expect(parts[0]).toMatchObject({
+    type: "tool-call", toolCallId: call.id, argsText: raw,
+    result: { ok: false, error }, isError: true,
+  });
+  expect(parts[0].args).toBeUndefined();
+  expect(failed.finished).toBeUndefined();
+});
+
 it("shows session occupancy as actionable feedback without changing the transcript", () => {
   const items: TranscriptItem[] = [{ role: "user", content: "stored history" }];
   const applied = applyMessage(items, {

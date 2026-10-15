@@ -12,7 +12,8 @@ export type JSONValue =
 export type ToolCall = {
   id: string;
   name: string;
-  arguments: { readonly [key: string]: JSONValue };
+  arguments: { readonly [key: string]: JSONValue } | string;
+  argument_error?: { type: string; message: string };
 };
 
 export type ImageAttachment = {

@@ -21,6 +21,7 @@ from agent_core import (
     Message,
     ProviderProtocolError,
     ProviderStreamError,
+    PlanManager,
     ReasoningDeltaEvent,
     Session,
     Tool,
@@ -38,6 +39,7 @@ from agent_core import (
     TextPart,
     ToolCatalog,
     ToolExecutionContext,
+    UpdatePlanTool,
 )
 from agent_core.context_manager import ARCHIVE_RETRY_COUNT
 
@@ -133,12 +135,12 @@ class ProtocolFailingProvider(MockProvider):
     def stream(self, request, on_text_delta, on_reasoning_delta=None):
         self.requests.append(request)
         raise ProviderProtocolError(
-            "invalid streamed arguments for tool 'shell'",
+            "tool call index and id refer to different calls",
             details={
                 "phase": "tool_call_assembly",
                 "provider": "deepseek",
                 "model": "deepseek/deepseek-flash",
-                "reason": "ambiguous_arguments",
+                "reason": "conflicting_identity",
             },
         )
 
@@ -183,6 +185,69 @@ def clock(*values: datetime):
 
 
 class AgentTest(unittest.TestCase):
+    def test_invalid_plan_arguments_are_returned_and_corrected_in_the_same_turn(self):
+        raw = '{"goal":"finish","steps":[{"id":"1","title":"work","status" "completed"}]}'
+        invalid = ToolCall.from_raw_arguments("bad-plan", "update_plan", raw)
+        valid = ToolCall("good-plan", "update_plan", {
+            "goal": "finish",
+            "steps": [{"id": "1", "title": "work", "status": "completed"}],
+        })
+        sibling = ToolCall("echo", "echo", {"text": "still runs"})
+        provider = MockProvider([
+            LLMResponse(None, tool_calls=(invalid, sibling)),
+            LLMResponse(None, tool_calls=(valid,)),
+            "done",
+        ])
+        session = Session("invalid-plan")
+        context = ToolExecutionContext(
+            workspace=TEST_WORKSPACE, session=session, plan=PlanManager(session),
+        )
+        tools = ToolCatalog((UpdatePlanTool(), EchoTool())).select(
+            ("update_plan", "echo"), context,
+        )
+        agent = Agent(provider, session, "system", CONSOLIDATOR_PROMPT,
+                      AGENT_CONFIG, tools, context)
+        events = []
+
+        result = agent.run("finish", on_event=events.append, turn_id="turn-1")
+
+        self.assertEqual(result.response.content, "done")
+        self.assertEqual(session.turns["turn-1"].status, "completed")
+        self.assertEqual(session.plan.revision, 1)
+        self.assertEqual(session.plan.steps[0].status, "completed")
+        repair_request = provider.requests[1]
+        failed_call = next(item for item in repair_request.messages if item.tool_calls)
+        self.assertEqual(failed_call.tool_calls[0], invalid)
+        failure = next(item for item in repair_request.messages if item.tool_call_id == invalid.id)
+        self.assertEqual(json.loads(failure.content), {
+            "ok": False,
+            "error": {"type": "invalid_tool_arguments", "message": invalid.argument_error.message},
+        })
+        sibling_result = next(item for item in repair_request.messages if item.tool_call_id == sibling.id)
+        self.assertEqual(json.loads(sibling_result.content)["output"], {"text": "still runs"})
+        self.assertEqual(session.tool_executions[invalid.id].arguments, raw)
+        self.assertEqual(session.tool_executions[invalid.id].status, "failed")
+        self.assertEqual(session.tool_executions[valid.id].status, "completed")
+        self.assertEqual([event.tool_result.error is not None for event in events
+                          if isinstance(event, ToolResultEvent)], [True, False, False])
+
+    def test_repeated_invalid_arguments_still_obey_the_tool_call_limit(self):
+        provider = MockProvider([
+            LLMResponse(None, tool_calls=(ToolCall.from_raw_arguments(str(i), "echo", '{"text"'),))
+            for i in range(3)
+        ])
+        session = Session("invalid-repeat")
+        agent = Agent(provider, session, "system", CONSOLIDATOR_PROMPT,
+                      replace(AGENT_CONFIG, max_same_tool_calls=2),
+                      tool_set(EchoTool(), session=session),
+                      ToolExecutionContext(workspace=TEST_WORKSPACE, session=session))
+
+        with self.assertRaises(ToolCallLimitExceededError):
+            agent.run("work", turn_id="turn-1")
+
+        self.assertEqual(len([item for item in session.items if item.role == "tool"]), 2)
+        self.assertEqual(session.turns["turn-1"].status, "failed")
+
     def test_steering_during_compression_resets_tool_repetition(self) -> None:
         control = TurnControl()
         call = ToolCall("call", "echo", {"text": "again"})

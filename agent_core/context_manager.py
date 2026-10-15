@@ -437,7 +437,7 @@ def _compression_record(items: list[Message]) -> str:
                     f"id: {call.id}",
                     f"name: {call.name}",
                     "arguments: "
-                    + json.dumps(call.arguments, ensure_ascii=False),
+                    + call.arguments_json,
                 )
             )
         sections.append("\n".join(lines))

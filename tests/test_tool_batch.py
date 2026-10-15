@@ -58,6 +58,31 @@ class FailingNormalizer:
 
 
 class ToolBatchExecutorTest(unittest.TestCase):
+    def test_invalid_arguments_do_not_block_valid_siblings_in_either_execution_mode(self):
+        for concurrent in (False, True):
+            with self.subTest(concurrent=concurrent):
+                session = Session("mixed-batch")
+                turn_id = session.begin_turn("turn")
+                context = ToolExecutionContext(workspace=Workspace(Path(__file__).parent), session=session)
+                tool = CleanupTool()
+                tool.concurrent = concurrent
+                tools = ToolCatalog((tool,)).select((tool.name,), context)
+                invalid = ToolCall.from_raw_arguments("bad", "cleanup", '{"label" "bad"}')
+                valid = ToolCall("good", "cleanup", {"label": "good"})
+                normalizer = RecordingNormalizer()
+                executor = ToolBatchExecutor(tools, session, normalizer, now=lambda: NOW)
+                results = []
+
+                executor.execute((invalid, valid), turn_id=turn_id,
+                                 on_result=lambda result, _index, _count: results.append(result))
+
+                self.assertEqual(tool.cleaned, {"good"})
+                by_id = {result.tool_call_id: result for result in results}
+                self.assertEqual(by_id["bad"].error.type, "invalid_tool_arguments")
+                self.assertIsNone(by_id["good"].error)
+                self.assertEqual(session.tool_executions["bad"].status, "failed")
+                self.assertEqual(session.tool_executions["good"].status, "completed")
+
     def setUp(self) -> None:
         self.session = Session("session-1")
         self.turn_id = self.session.begin_turn("turn-1")

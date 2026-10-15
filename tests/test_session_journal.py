@@ -18,6 +18,32 @@ from agent_core.session import message_from_dict
 
 
 class SessionJournalTest(unittest.TestCase):
+    def test_invalid_tool_call_and_matching_error_survive_journal_reload(self):
+        raw = ' {"goal":"修正计划","steps" [ } '
+        call = ToolCall.from_raw_arguments("invalid", "update_plan", raw)
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = JsonlSessionStore(root / "sessions")
+            store.bind_workspace("s", root)
+            session = Session("s")
+            session.begin_turn("t")
+            session.add_item("user", "work")
+            session.add_item("assistant", None, tool_calls=(call,))
+            session.tool_started(call)
+            session.tool_finished(call, "failed", error=call.argument_error.message)
+            session.add_item("tool", '{"ok":false}', tool_call_id=call.id)
+            session.finish_turn("completed")
+            store.append_events("s", session.journal, workspace=root)
+
+            restored = store.load("s")
+
+        self.assertEqual(restored.items[1].tool_calls, (call,))
+        self.assertEqual(restored.tool_executions[call.id].arguments, raw)
+        self.assertEqual(restored.tool_executions[call.id].status, "failed")
+        projected = [item for unit in project_context_units(restored.items) for item in unit.messages]
+        self.assertEqual(projected[1].tool_calls[0].arguments_json, raw)
+        self.assertEqual(projected[2].tool_call_id, call.id)
+
     def test_attachment_replay_requires_current_metadata(self):
         for missing in ("filename", "size_bytes"):
             part = {

@@ -22,10 +22,61 @@ JSONValue: TypeAlias = (
 
 
 @dataclass(frozen=True)
+class ToolError:
+    type: str
+    message: str
+
+
+@dataclass(frozen=True)
 class ToolCall:
     id: str
     name: str
-    arguments: dict[str, JSONValue]
+    # Invalid arguments retain the provider's exact text for history and repair.
+    arguments: dict[str, JSONValue] | str
+    argument_error: ToolError | None = None
+
+    @classmethod
+    def from_raw_arguments(cls, id: str, name: str, raw: str) -> "ToolCall":
+        try:
+            arguments = json.loads(raw)
+        except json.JSONDecodeError as error:
+            message = str(error)
+        else:
+            if isinstance(arguments, dict):
+                return cls(id, name, arguments)
+            message = "arguments must be a JSON object"
+        return cls(
+            id, name, raw,
+            ToolError(
+                type="invalid_tool_arguments",
+                message=(
+                    f"Invalid arguments for tool '{name}': {message}. "
+                    "Send a valid JSON object and call the tool again."
+                ),
+            ),
+        )
+
+    @property
+    def arguments_json(self) -> str:
+        if isinstance(self.arguments, str):
+            return self.arguments
+        return json.dumps(self.arguments, ensure_ascii=False)
+
+    def to_dict(self) -> dict[str, object]:
+        data: dict[str, object] = {
+            "id": self.id, "name": self.name, "arguments": self.arguments,
+        }
+        if self.argument_error is not None:
+            data["argument_error"] = asdict(self.argument_error)
+        return data
+
+    @classmethod
+    def from_dict(cls, data: dict[str, object]) -> "ToolCall":
+        error = data.get("argument_error")
+        return cls(
+            data["id"], data["name"], data["arguments"],
+            ToolError(**error) if error is not None else None,
+        )
 
 
 @dataclass(frozen=True)
@@ -33,12 +84,6 @@ class ToolDefinition:
     name: str
     description: str
     parameters: dict[str, JSONValue]
-
-
-@dataclass(frozen=True)
-class ToolError:
-    type: str
-    message: str
 
 
 @dataclass(frozen=True)

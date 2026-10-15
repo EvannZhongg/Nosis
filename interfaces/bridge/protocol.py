@@ -15,7 +15,6 @@ from agent_core import (
     ContextWindow,
     ContextWindowEvent,
     ToolBatchStartedEvent,
-    ToolCall,
     ToolCallEvent,
     ToolMediaEvent,
     ToolResultEvent,
@@ -47,14 +46,6 @@ def format_timestamp(value: datetime) -> str:
         .isoformat(timespec="microseconds")
         .replace("+00:00", "Z")
     )
-
-
-def tool_call_to_dict(tool_call: ToolCall) -> dict[str, object]:
-    return {
-        "id": tool_call.id,
-        "name": tool_call.name,
-        "arguments": tool_call.arguments,
-    }
 
 
 def usage_to_dict(usage: TokenUsage | None) -> dict[str, object] | None:
@@ -274,7 +265,7 @@ def event_to_message(
             "turn_id": turn_id,
             "model_call_index": event.model_call_index,
             "tool_calls": [
-                tool_call_to_dict(tool_call)
+                tool_call.to_dict()
                 for tool_call in event.tool_calls
             ],
         }
@@ -283,7 +274,7 @@ def event_to_message(
         return {
             "type": "tool_call",
             "turn_id": turn_id,
-            "tool_call": tool_call_to_dict(event.tool_call),
+            "tool_call": event.tool_call.to_dict(),
             "tool_index": event.tool_index,
             "tool_count": event.tool_count,
         }

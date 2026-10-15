@@ -194,11 +194,13 @@ class OpenAIProviderTest(unittest.TestCase):
                 self.assertEqual(raised.exception.details["reason"], reason)
                 self.assertEqual(len(requests), 1)
 
-    def test_rejects_invalid_tool_arguments_without_repeating_request(self):
+    def test_preserves_invalid_tool_arguments_without_repeating_request(self):
         for arguments in ("", "{", "[]", "null"):
             with self.subTest(arguments=arguments), self.transport([response_event([function_call(arguments)])]) as requests:
-                with self.assertRaises(ProviderProtocolError):
-                    self.provider().stream(self.request(), lambda _: None)
+                response = self.provider().stream(self.request(), lambda _: None)
+                call = response.tool_calls[0]
+                self.assertEqual(call.arguments, arguments)
+                self.assertEqual(call.argument_error.type, "invalid_tool_arguments")
                 self.assertEqual(len(requests), 1)
 
     def test_rejects_tool_without_identity(self):
@@ -207,6 +209,42 @@ class OpenAIProviderTest(unittest.TestCase):
         with self.transport([response_event([call])]):
             with self.assertRaises(ProviderProtocolError):
                 self.provider().stream(self.request(), lambda _: None)
+
+    def test_rejects_duplicate_call_identity_even_when_arguments_are_invalid(self):
+        with self.transport([response_event([function_call("{"), function_call()])]):
+            with self.assertRaises(ProviderProtocolError) as raised:
+                self.provider().stream(self.request(), lambda _: None)
+        self.assertEqual(raised.exception.details["reason"], "conflicting_identity")
+
+    def test_invalid_arguments_and_error_round_trip_in_both_protocols(self):
+        raw = ' {"value" "错误的参数"} '
+        error_content = '{"ok":false,"error":{"type":"invalid_tool_arguments","message":"Fix the JSON"}}'
+        for api in ("responses", "chat_completions"):
+            if api == "responses":
+                first, second = [response_event([function_call(raw)])], [response_event()]
+            else:
+                first = [chat_chunk({"tool_calls": [{"index": 0, "id": "call_1", "type": "function",
+                          "function": {"name": "probe", "arguments": raw}}]}, "tool_calls")]
+                second = [chat_chunk({"content": "OK"}, "stop")]
+            with self.subTest(api=api), self.transport(first, second) as requests:
+                provider = self.provider(api=api)
+                result = provider.stream(self.request(), lambda _: None)
+                self.assertEqual(result.tool_calls[0].arguments, raw)
+                self.assertEqual(result.tool_calls[0].argument_error.type, "invalid_tool_arguments")
+                messages = (
+                    Message("assistant", None, tool_calls=result.tool_calls),
+                    Message("tool", error_content, tool_call_id="call_1"),
+                )
+                provider.stream(LLMRequest("Test", messages, (TOOL,)), lambda _: None)
+
+            body = json.loads(requests[1].content)
+            if api == "responses":
+                self.assertEqual(body["input"][0]["arguments"], raw)
+                self.assertEqual(body["input"][1]["output"], error_content)
+            else:
+                self.assertEqual(body["messages"][1]["tool_calls"][0]["function"]["arguments"], raw)
+                self.assertEqual(body["messages"][2]["content"], error_content)
+            self.assertEqual(len(requests), 2)
 
     def test_streams_refusal(self):
         output = output_message()

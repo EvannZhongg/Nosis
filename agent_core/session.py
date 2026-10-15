@@ -91,7 +91,7 @@ class ToolExecution:
     tool_call_id: str
     turn_id: str | None
     name: str
-    arguments: dict[str, object]
+    arguments: dict[str, object] | str
     status: ToolExecutionStatus
     started_at: datetime | None = None
     completed_at: datetime | None = None
@@ -194,11 +194,12 @@ class Session:
                 else None
             )
         elif event.event_type == "tool_started" and event.tool_call_id:
+            arguments = payload["arguments"]
             self.tool_executions[event.tool_call_id] = ToolExecution(
                 tool_call_id=event.tool_call_id,
                 turn_id=event.turn_id,
                 name=str(payload.get("name", "")),
-                arguments=dict(payload.get("arguments") or {}),
+                arguments=dict(arguments) if isinstance(arguments, dict) else arguments,
                 status="started",
                 started_at=event.timestamp_utc,
             )
@@ -401,10 +402,12 @@ class Session:
 
     def tool_started(self, call: ToolCall, turn_id: str | None = None) -> None:
         turn_id = turn_id or self._current_turn_id
+        arguments = call.arguments
         self._event(
             "tool_started",
             turn_id,
-            {"name": call.name, "arguments": dict(call.arguments)},
+            {"name": call.name,
+             "arguments": dict(arguments) if isinstance(arguments, dict) else arguments},
             call.id,
         )
 
@@ -579,7 +582,7 @@ def message_to_dict(
         data["timestamp_utc"] = _format_utc(message.timestamp_utc)
     if message.tool_calls:
         data["tool_calls"] = [
-            {"id": call.id, "name": call.name, "arguments": call.arguments}
+            call.to_dict()
             for call in message.tool_calls
         ]
     if message.tool_call_id is not None:
@@ -649,7 +652,7 @@ def message_from_dict(data: dict[str, object]) -> Message:
                 raise ValueError("unknown message content part type")
         content = tuple(parts)
     calls = tuple(
-        ToolCall(call["id"], call["name"], call["arguments"])
+        ToolCall.from_dict(call)
         for call in data.get("tool_calls", [])
     )
     timestamp = data.get("timestamp_utc")

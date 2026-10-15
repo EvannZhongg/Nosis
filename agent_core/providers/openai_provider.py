@@ -1,6 +1,5 @@
 """Native OpenAI wire protocols, shared by official and relay endpoints."""
 
-import json
 from typing import Callable
 
 import httpx
@@ -118,6 +117,7 @@ class OpenAIProvider(ModelProvider):
             raise self._stream_error("incomplete_response", status=completed.status)
 
         calls = []
+        call_ids = set()
         output = []
         content = []
         for item in completed.output:
@@ -129,22 +129,20 @@ class OpenAIProvider(ModelProvider):
                         details={"phase": "tool_call_assembly", "model": self._model,
                                  "reason": "missing_identity"},
                     )
-                try:
-                    parameters = json.loads(item.arguments)
-                except (TypeError, json.JSONDecodeError) as error:
+                if item.call_id in call_ids:
                     raise ProviderProtocolError(
-                        f"invalid arguments for tool '{item.name}'",
+                        "tool call id was used by multiple calls",
                         details={"phase": "tool_call_assembly", "model": self._model,
-                                 "reason": "invalid_json", "tool_name": item.name,
-                                 "tool_call_id": item.call_id},
-                    ) from error
-                if not isinstance(parameters, dict):
-                    raise ProviderProtocolError(
-                        f"arguments for tool '{item.name}' must be a JSON object",
-                        details={"phase": "tool_call_assembly", "model": self._model,
-                                 "reason": "arguments_not_object", "tool_name": item.name},
+                                 "reason": "conflicting_identity", "tool_call_id": item.call_id},
                     )
-                calls.append(ToolCall(item.call_id, item.name, parameters))
+                call_ids.add(item.call_id)
+                if not isinstance(item.arguments, str):
+                    raise ProviderProtocolError(
+                        "tool call arguments must be text",
+                        details={"phase": "tool_call_assembly", "model": self._model,
+                                 "reason": "invalid_arguments_fragment", "tool_name": item.name},
+                    )
+                calls.append(ToolCall.from_raw_arguments(item.call_id, item.name, item.arguments))
             elif item.type == "message":
                 for part in item.content:
                     if part.type == "output_text":
@@ -270,5 +268,5 @@ def _responses_input(request: LLMRequest, provider: OpenAIProvider) -> list[dict
             inputs.append({"role": message.role, "content": content})
         for call in message.tool_calls:
             inputs.append({"type": "function_call", "call_id": call.id, "name": call.name,
-                           "arguments": json.dumps(call.arguments, ensure_ascii=False)})
+                           "arguments": call.arguments_json})
     return inputs

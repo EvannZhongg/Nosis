@@ -7,7 +7,7 @@ import tempfile
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from agent_core import (
     ApplyPatchTool,
@@ -813,6 +813,26 @@ class ScheduledTaskToolTest(unittest.TestCase):
 
 
 class ToolSetTest(unittest.TestCase):
+    def test_invalid_arguments_skip_routing_approval_and_execution(self):
+        router, policy = Mock(), Mock()
+        tool = FailingTool()
+        tool.execute = Mock()
+        tools = ToolCatalog((tool,)).select(
+            (tool.name,), context_for(_TMP_WORKSPACE, execution_router=router), policy=policy,
+        )
+
+        for raw in ('{"value" "broken"}', '[]', 'null', '"text"'):
+            with self.subTest(raw=raw):
+                call = ToolCall.from_raw_arguments("bad-call", tool.name, raw)
+                result = tools.execute(call)
+                self.assertEqual(result.tool_call_id, call.id)
+                self.assertEqual(result.name, call.name)
+                self.assertEqual(result.error, call.argument_error)
+                self.assertEqual(json.loads(result.to_content())["error"]["type"], "invalid_tool_arguments")
+        router.resolve.assert_not_called()
+        policy.authorize.assert_not_called()
+        tool.execute.assert_not_called()
+
     def test_returns_structured_execution_error(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             tools = ToolCatalog((FailingTool(),)).select(

@@ -151,6 +151,20 @@ class AttachmentParsingTest(unittest.TestCase):
 
 
 class ProtocolTest(unittest.TestCase):
+    def test_invalid_tool_arguments_and_error_are_transmitted_with_the_call(self):
+        raw = '{"command" "bad"}'
+        call = ToolCall.from_raw_arguments("bad-call", "shell", raw)
+        for event, key in (
+            (ToolBatchStartedEvent(1, (call,)), "tool_calls"),
+            (ToolCallEvent(call, 1, 1), "tool_call"),
+        ):
+            with self.subTest(key=key):
+                message = event_to_message(event, "t")
+                payload = message[key][0] if key == "tool_calls" else message[key]
+                self.assertEqual(payload["arguments"], raw)
+                self.assertEqual(payload["argument_error"]["type"], "invalid_tool_arguments")
+                self.assertEqual(payload["id"], call.id)
+
     def test_runtime_failure_to_dict_includes_details(self) -> None:
         from agent_core import RuntimeErrorInfo
 

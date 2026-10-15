@@ -31,6 +31,7 @@ def chunk(
     tool_calls: list[dict] | None = None,
     usage: object | None = None,
     reasoning: str | None = None,
+    finish_reason: str | None = None,
 ) -> object:
     """Build a streamed chunk shaped like a LiteLLM delta."""
     delta = {
@@ -38,12 +39,17 @@ def chunk(
         "tool_calls": tool_calls,
         "reasoning_content": reasoning,
     }
-    choice = {"delta": delta, "finish_reason": None}
+    choice = {"delta": delta, "finish_reason": finish_reason}
     return type(
         "Chunk",
         (),
         {"choices": [choice], "usage": usage},
     )()
+
+
+def completed_stream(chunks):
+    yield from chunks
+    yield chunk(finish_reason="stop")
 
 
 USAGE = type(
@@ -58,6 +64,78 @@ USAGE = type(
 
 
 class LiteLLMProviderTest(unittest.TestCase):
+    @patch("agent_core.providers.litellm_provider.completion")
+    def test_invalid_fragments_are_preserved_without_guessing_or_repair(self, completion_mock):
+        cases = (
+            ('{"value":1}}',),
+            ('{"value"', '{"value":1}', '{"value":1}'),
+            ('{"value":1}', '{"value"'),
+            ('{"value":1}', '{ "value": 1 }'),
+            ('{"value":"ping"', '"ping"}'),
+            ('{"value":[1]}', ']}'),
+            ('{"value":1}', '{"value":2}'),
+            ('{"value":1}', 'unexpected'),
+            ('[]',),
+            ('null',),
+            ('"text"',),
+            ('',),
+        )
+        for fragments in cases:
+            with self.subTest(fragments=fragments):
+                completion_mock.reset_mock()
+                completion_mock.return_value = completed_stream([
+                    chunk(tool_calls=[{
+                        "index": 0, "id": "call", "function": {"name": "probe", "arguments": fragment},
+                    }]) for fragment in fragments
+                ])
+                provider = LiteLLMProvider(model="deepseek/deepseek-flash", max_context_tokens=1000)
+                response = provider.stream(LLMRequest("system", (Message("user", "work"),)), lambda _: None)
+
+                call = response.tool_calls[0]
+                self.assertEqual(call.arguments, "".join(fragments))
+                self.assertEqual(call.argument_error.type, "invalid_tool_arguments")
+                self.assertEqual(completion_mock.call_count, 1)
+
+    @patch("agent_core.providers.litellm_provider.completion")
+    def test_preserves_invalid_arguments_in_an_interleaved_tool_batch(self, completion_mock):
+        raw = '{"goal":"修正计划","steps" [}'
+        completion_mock.return_value = iter([
+            chunk(tool_calls=[
+                {"index": 0, "id": "good", "function": {"name": "read_file", "arguments": '{"path":'}},
+                {"index": 1, "id": "bad", "function": {"name": "update_plan", "arguments": raw[:12]}},
+            ]),
+            chunk(tool_calls=[
+                {"index": 1, "function": {"arguments": raw[12:]}},
+                {"index": 0, "function": {"arguments": '"file.txt"}'}},
+            ]),
+            chunk(finish_reason="tool_calls"),
+        ])
+        provider = LiteLLMProvider(model="deepseek/deepseek-flash", max_context_tokens=1000)
+
+        response = provider.stream(LLMRequest("system", (Message("user", "work"),)), lambda _: None)
+
+        self.assertEqual(response.tool_calls[0], ToolCall("good", "read_file", {"path": "file.txt"}))
+        failed = response.tool_calls[1]
+        self.assertEqual((failed.id, failed.name, failed.arguments), ("bad", "update_plan", raw))
+        self.assertEqual(failed.argument_error.type, "invalid_tool_arguments")
+        self.assertIn("Expecting ':' delimiter", failed.argument_error.message)
+        self.assertEqual(completion_mock.call_count, 1)
+
+    @patch("agent_core.providers.litellm_provider.completion")
+    def test_incomplete_stream_is_not_returned_as_a_tool_argument_error(self, completion_mock):
+        for finish in (None, "length", "content_filter"):
+            with self.subTest(finish=finish):
+                completion_mock.return_value = iter([
+                    chunk(tool_calls=[{"index": 0, "id": "bad", "function": {
+                        "name": "update_plan", "arguments": '{"goal"',
+                    }}], finish_reason=finish),
+                ])
+                provider = LiteLLMProvider(model="deepseek/deepseek-flash", max_context_tokens=1000)
+                with self.assertRaises(ProviderStreamError) as raised:
+                    provider.stream(LLMRequest("system", (Message("user", "work"),)), lambda _: None)
+                self.assertEqual(raised.exception.details["reason"],
+                                 "missing_finish_reason" if finish is None else "incomplete_response")
+
     @staticmethod
     def _interrupted_stream(*chunks):
         yield from chunks
@@ -190,7 +268,7 @@ class LiteLLMProviderTest(unittest.TestCase):
         completion_mock,
         _model_info_mock,
     ) -> None:
-        completion_mock.return_value = iter([chunk(content="ok")])
+        completion_mock.return_value = completed_stream([chunk(content="ok")])
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             image = root / ".nosis" / "attachments" / "a1.png"
@@ -331,7 +409,7 @@ class LiteLLMProviderTest(unittest.TestCase):
         completion_mock,
         _model_info_mock,
     ) -> None:
-        completion_mock.return_value = iter([chunk(content="ok")])
+        completion_mock.return_value = completed_stream([chunk(content="ok")])
         with tempfile.TemporaryDirectory() as directory:
             provider = LiteLLMProvider(
                 model="vision/test",
@@ -362,7 +440,7 @@ class LiteLLMProviderTest(unittest.TestCase):
         completion_mock,
         token_counter_mock,
     ) -> None:
-        completion_mock.return_value = iter(
+        completion_mock.return_value = completed_stream(
             [
                 chunk(content="resp"),
                 chunk(content="onse"),
@@ -435,7 +513,7 @@ class LiteLLMProviderTest(unittest.TestCase):
         }])
         completion_mock.side_effect = [
             self._interrupted_stream(partial_tool),
-            iter([chunk(content="recovered")]),
+            completed_stream([chunk(content="recovered")]),
         ]
         provider = LiteLLMProvider(
             model="openai/test-model",
@@ -546,7 +624,7 @@ class LiteLLMProviderTest(unittest.TestCase):
 
     @patch("agent_core.providers.litellm_provider.completion")
     def test_adds_model_specific_reasoning_parameters(self, completion_mock) -> None:
-        completion_mock.return_value = iter([chunk(content="ok")])
+        completion_mock.return_value = completed_stream([chunk(content="ok")])
         provider = LiteLLMProvider(
             model="openrouter/openai/gpt-5",
             max_context_tokens=1000,
@@ -571,7 +649,7 @@ class LiteLLMProviderTest(unittest.TestCase):
         self,
         completion_mock,
     ) -> None:
-        completion_mock.return_value = iter([chunk(content="ok")])
+        completion_mock.return_value = completed_stream([chunk(content="ok")])
         provider = LiteLLMProvider(
             model="gpt-6-astra",
             base_url="https://gateway.example/v1",
@@ -597,7 +675,7 @@ class LiteLLMProviderTest(unittest.TestCase):
     @patch("agent_core.providers.litellm_provider.completion")
     def test_parses_structured_text_content_blocks(self, completion_mock) -> None:
         """Adapters may expose streamed text as OpenAI-style blocks."""
-        completion_mock.return_value = iter(
+        completion_mock.return_value = completed_stream(
             [
                 chunk(content=[{"type": "text", "text": "first "}]),
                 chunk(content=[{"type": "text", "text": "second"}]),
@@ -629,7 +707,7 @@ class LiteLLMProviderTest(unittest.TestCase):
         self,
         completion_mock,
     ) -> None:
-        completion_mock.return_value = iter(
+        completion_mock.return_value = completed_stream(
             [
                 chunk(
                     tool_calls=[
@@ -783,7 +861,7 @@ class LiteLLMProviderTest(unittest.TestCase):
             ],
             usage=USAGE,
         )
-        completion_mock.side_effect = [iter([missing]), iter([complete])]
+        completion_mock.side_effect = [completed_stream([missing]), completed_stream([complete])]
         provider = LiteLLMProvider(
             model="openai/test-model",
             max_context_tokens=1000,
@@ -799,22 +877,22 @@ class LiteLLMProviderTest(unittest.TestCase):
             },
         )
 
-        with self.assertRaises(ProviderProtocolError) as raised:
-            provider.stream(
-                LLMRequest(
-                    system_prompt="You are helpful.",
-                    messages=(Message(role="user", content="read it"),),
-                    tools=(tool,),
-                ),
-                lambda _text: None,
-            )
+        response = provider.stream(
+            LLMRequest(
+                system_prompt="You are helpful.",
+                messages=(Message(role="user", content="read it"),),
+                tools=(tool,),
+            ),
+            lambda _text: None,
+        )
 
-        self.assertEqual(raised.exception.details["reason"], "missing_arguments")
+        self.assertEqual(response.tool_calls[0].arguments, "")
+        self.assertEqual(response.tool_calls[0].argument_error.type, "invalid_tool_arguments")
         self.assertEqual(completion_mock.call_count, 1)
         self.assertNotIn("tool_choice", completion_mock.call_args.kwargs)
 
     @patch("agent_core.providers.litellm_provider.completion")
-    def test_missing_arguments_reports_fragment_count(
+    def test_missing_arguments_remain_empty_for_core_feedback(
         self,
         completion_mock,
     ) -> None:
@@ -827,7 +905,7 @@ class LiteLLMProviderTest(unittest.TestCase):
                 }
             ]
         )
-        completion_mock.side_effect = [iter([missing]), iter([missing])]
+        completion_mock.side_effect = [completed_stream([missing]), completed_stream([missing])]
         provider = LiteLLMProvider(
             model="openai/test-model",
             max_context_tokens=1000,
@@ -838,26 +916,25 @@ class LiteLLMProviderTest(unittest.TestCase):
             parameters={"type": "object", "properties": {}},
         )
 
-        with self.assertRaises(ProviderProtocolError) as raised:
-            provider.stream(
-                LLMRequest(
-                    system_prompt="You are helpful.",
-                    messages=(Message(role="user", content="read it"),),
-                    tools=(tool,),
-                ),
-                lambda _text: None,
-            )
+        response = provider.stream(
+            LLMRequest(
+                system_prompt="You are helpful.",
+                messages=(Message(role="user", content="read it"),),
+                tools=(tool,),
+            ),
+            lambda _text: None,
+        )
 
-        self.assertEqual(raised.exception.details["reason"], "missing_arguments")
-        self.assertEqual(raised.exception.details["argument_chunk_count"], 0)
+        self.assertEqual(response.tool_calls[0].arguments, "")
+        self.assertEqual(response.tool_calls[0].argument_error.type, "invalid_tool_arguments")
         self.assertEqual(completion_mock.call_count, 1)
 
     @patch("agent_core.providers.litellm_provider.completion")
-    def test_missing_arguments_with_text_reports_no_recovery(
+    def test_missing_arguments_preserve_assistant_text_without_retry(
         self,
         completion_mock,
     ) -> None:
-        completion_mock.return_value = iter([
+        completion_mock.return_value = completed_stream([
             chunk(
                 content="I will read it.",
                 tool_calls=[{
@@ -877,92 +954,26 @@ class LiteLLMProviderTest(unittest.TestCase):
             parameters={"type": "object", "properties": {}},
         )
 
-        with self.assertRaises(ProviderProtocolError) as raised:
-            provider.stream(
-                LLMRequest(
-                    system_prompt="You are helpful.",
-                    messages=(Message(role="user", content="read it"),),
-                    tools=(tool,),
-                ),
-                lambda _text: None,
-            )
-
-        self.assertEqual(raised.exception.details["reason"], "missing_arguments")
-        self.assertEqual(raised.exception.details["argument_chunk_count"], 0)
-        self.assertEqual(completion_mock.call_count, 1)
-
-    @patch("agent_core.providers.litellm_provider.completion")
-    def test_parses_cumulative_and_repeated_streamed_tool_arguments(
-        self,
-        completion_mock,
-    ) -> None:
-        complete_arguments = '{"path": "README.md"}'
-        completion_mock.return_value = iter(
-            [
-                chunk(
-                    tool_calls=[
-                        {
-                            "index": 0,
-                            "id": "call-1",
-                            "function": {
-                                "name": "read_file",
-                                "arguments": '{"path"',
-                            },
-                        }
-                    ]
-                ),
-                chunk(
-                    tool_calls=[
-                        {
-                            "index": 0,
-                            "function": {
-                                "arguments": complete_arguments
-                            },
-                        }
-                    ]
-                ),
-                chunk(
-                    tool_calls=[
-                        {
-                            "index": 0,
-                            "function": {
-                                "arguments": complete_arguments
-                            },
-                        }
-                    ]
-                ),
-            ]
-        )
-        provider = LiteLLMProvider(
-            model="openai/test-model",
-            max_context_tokens=1000,
-        )
-
         response = provider.stream(
             LLMRequest(
                 system_prompt="You are helpful.",
-                messages=(Message(role="user", content="read README.md"),),
+                messages=(Message(role="user", content="read it"),),
+                tools=(tool,),
             ),
             lambda _text: None,
         )
 
-        self.assertEqual(
-            response.tool_calls,
-            (
-                ToolCall(
-                    id="call-1",
-                    name="read_file",
-                    arguments={"path": "README.md"},
-                ),
-            ),
-        )
+        self.assertEqual(response.tool_calls[0].arguments, "")
+        self.assertEqual(response.tool_calls[0].argument_error.type, "invalid_tool_arguments")
+        self.assertEqual(response.content, "I will read it.")
+        self.assertEqual(completion_mock.call_count, 1)
 
     @patch("agent_core.providers.litellm_provider.completion")
     def test_assembles_multiple_tool_calls_by_id_without_indexes(
         self,
         completion_mock,
     ) -> None:
-        completion_mock.return_value = iter(
+        completion_mock.return_value = completed_stream(
             [
                 chunk(
                     tool_calls=[
@@ -1026,7 +1037,7 @@ class LiteLLMProviderTest(unittest.TestCase):
         self,
         completion_mock,
     ) -> None:
-        completion_mock.return_value = iter(
+        completion_mock.return_value = completed_stream(
             [
                 chunk(
                     tool_calls=[
@@ -1073,7 +1084,7 @@ class LiteLLMProviderTest(unittest.TestCase):
         self,
         completion_mock,
     ) -> None:
-        completion_mock.return_value = iter(
+        completion_mock.return_value = completed_stream(
             [
                 chunk(
                     tool_calls=[
@@ -1118,7 +1129,7 @@ class LiteLLMProviderTest(unittest.TestCase):
         self,
         completion_mock,
     ) -> None:
-        completion_mock.return_value = iter(
+        completion_mock.return_value = completed_stream(
             [
                 chunk(
                     tool_calls=[
@@ -1145,7 +1156,7 @@ class LiteLLMProviderTest(unittest.TestCase):
 
     @patch("agent_core.providers.litellm_provider.completion")
     def test_rejects_anonymous_parallel_tool_calls(self, completion_mock) -> None:
-        completion_mock.return_value = iter(
+        completion_mock.return_value = completed_stream(
             [
                 chunk(
                     tool_calls=[
@@ -1182,435 +1193,11 @@ class LiteLLMProviderTest(unittest.TestCase):
         self.assertEqual(raised.exception.details["reason"], "ambiguous_identity")
 
     @patch("agent_core.providers.litellm_provider.completion")
-    def test_recovers_a_stale_shorter_argument_snapshot(
-        self,
-        completion_mock,
-    ) -> None:
-        complete = '{"path": "README.md"}'
-        completion_mock.return_value = iter(
-            [
-                chunk(
-                    tool_calls=[
-                        {
-                            "index": 0,
-                            "id": "call-1",
-                            "function": {
-                                "name": "read_file",
-                                "arguments": complete,
-                            },
-                        }
-                    ]
-                ),
-                chunk(
-                    tool_calls=[
-                        {
-                            "index": 0,
-                            "function": {"arguments": '{"path"'},
-                        }
-                    ]
-                ),
-            ]
-        )
-        provider = LiteLLMProvider(
-            model="openai/test-model",
-            max_context_tokens=1000,
-        )
-
-        response = provider.stream(
-            LLMRequest(
-                system_prompt="You are helpful.",
-                messages=(Message(role="user", content="read it"),),
-            ),
-            lambda _text: None,
-        )
-
-        self.assertEqual(response.tool_calls[0].arguments, {"path": "README.md"})
-
-    @patch("agent_core.providers.litellm_provider.completion")
-    def test_recovers_equivalent_complete_argument_snapshots(
-        self,
-        completion_mock,
-    ) -> None:
-        completion_mock.return_value = iter(
-            [
-                chunk(
-                    tool_calls=[
-                        {
-                            "index": 0,
-                            "id": "call-1",
-                            "function": {
-                                "name": "read_file",
-                                "arguments": '{"path":"README.md"}',
-                            },
-                        }
-                    ]
-                ),
-                chunk(
-                    tool_calls=[
-                        {
-                            "index": 0,
-                            "function": {
-                                "arguments": '{"path": "README.md"}',
-                            },
-                        }
-                    ]
-                ),
-            ]
-        )
-        provider = LiteLLMProvider(
-            model="openai/test-model",
-            max_context_tokens=1000,
-        )
-
-        response = provider.stream(
-            LLMRequest(
-                system_prompt="You are helpful.",
-                messages=(Message(role="user", content="read it"),),
-            ),
-            lambda _text: None,
-        )
-
-        self.assertEqual(response.tool_calls[0].arguments, {"path": "README.md"})
-
-    @patch("agent_core.providers.litellm_provider.completion")
-    def test_recovers_partially_overlapping_argument_fragments(
-        self,
-        completion_mock,
-    ) -> None:
-        completion_mock.return_value = iter(
-            [
-                chunk(
-                    tool_calls=[
-                        {
-                            "index": 0,
-                            "id": "call-1",
-                            "function": {
-                                "name": "read_file",
-                                "arguments": '{"path": "README.md"',
-                            },
-                        }
-                    ]
-                ),
-                chunk(
-                    tool_calls=[
-                        {
-                            "index": 0,
-                            "function": {
-                                "arguments": '"}',
-                            },
-                        }
-                    ]
-                ),
-            ]
-        )
-        provider = LiteLLMProvider(
-            model="openai/test-model",
-            max_context_tokens=1000,
-        )
-
-        response = provider.stream(
-            LLMRequest(
-                system_prompt="You are helpful.",
-                messages=(Message(role="user", content="read it"),),
-            ),
-            lambda _text: None,
-        )
-
-        self.assertEqual(response.tool_calls[0].arguments, {"path": "README.md"})
-
-    @patch("agent_core.providers.litellm_provider.completion")
-    def test_recovers_repeated_argument_closing_suffix(
-        self,
-        completion_mock,
-    ) -> None:
-        completion_mock.return_value = iter(
-            [
-                chunk(
-                    tool_calls=[
-                        {
-                            "index": 0,
-                            "id": "call-1",
-                            "function": {
-                                "name": "ask_user",
-                                "arguments": (
-                                    '{"question":"Continue?","options":['
-                                    '{"id":"yes","label":"Yes"}]'
-                                ),
-                            },
-                        }
-                    ]
-                ),
-                chunk(
-                    tool_calls=[
-                        {
-                            "index": 0,
-                            "function": {"arguments": "}}"},
-                        }
-                    ]
-                ),
-                chunk(
-                    tool_calls=[
-                        {
-                            "index": 0,
-                            "function": {"arguments": "}"},
-                        }
-                    ]
-                ),
-            ]
-        )
-        provider = LiteLLMProvider(
-            model="deepseek/deepseek-flash",
-            max_context_tokens=1000,
-        )
-
-        response = provider.stream(
-            LLMRequest(
-                system_prompt="You are helpful.",
-                messages=(Message(role="user", content="review it"),),
-            ),
-            lambda _text: None,
-        )
-
-        self.assertEqual(
-            response.tool_calls[0].arguments,
-            {
-                "question": "Continue?",
-                "options": [{"id": "yes", "label": "Yes"}],
-            },
-        )
-
-    @patch("agent_core.providers.litellm_provider.completion")
-    def test_recovers_repeated_argument_closing_sequence(
-        self,
-        completion_mock,
-    ) -> None:
-        completion_mock.return_value = iter(
-            [
-                chunk(
-                    tool_calls=[
-                        {
-                            "index": 0,
-                            "id": "call-1",
-                            "function": {
-                                "name": "ask_user",
-                                "arguments": (
-                                    '{"question":"How should I proceed?",'
-                                    '"options":[{"id":"amend",'
-                                    '"label":"Amend"}]}'
-                                ),
-                            },
-                        }
-                    ]
-                ),
-                chunk(
-                    tool_calls=[
-                        {
-                            "index": 0,
-                            "function": {"arguments": "]}"},
-                        }
-                    ]
-                ),
-            ]
-        )
-        provider = LiteLLMProvider(
-            model="deepseek/deepseek-flash",
-            max_context_tokens=1000,
-        )
-
-        response = provider.stream(
-            LLMRequest(
-                system_prompt="You are helpful.",
-                messages=(Message(role="user", content="review it"),),
-            ),
-            lambda _text: None,
-        )
-
-        self.assertEqual(
-            response.tool_calls[0].arguments,
-            {
-                "question": "How should I proceed?",
-                "options": [{"id": "amend", "label": "Amend"}],
-            },
-        )
-
-    @patch("agent_core.providers.litellm_provider.completion")
-    def test_rejects_a_repeated_closing_brace_in_one_fragment(
-        self,
-        completion_mock,
-    ) -> None:
-        completion_mock.return_value = iter(
-            [
-                chunk(
-                    tool_calls=[
-                        {
-                            "index": 0,
-                            "id": "call-1",
-                            "function": {
-                                "name": "ask_user",
-                                "arguments": '{"question":"Continue?"}}',
-                            },
-                        }
-                    ]
-                ),
-            ]
-        )
-        provider = LiteLLMProvider(
-            model="deepseek/deepseek-flash",
-            max_context_tokens=1000,
-        )
-
-        with self.assertRaises(ProviderProtocolError) as raised:
-            provider.stream(
-                LLMRequest(
-                    system_prompt="You are helpful.",
-                    messages=(Message(role="user", content="review it"),),
-                ),
-                lambda _text: None,
-            )
-
-        self.assertEqual(raised.exception.details["reason"], "invalid_json")
-
-    @patch("agent_core.providers.litellm_provider.completion")
-    def test_rejects_non_closing_argument_suffix(
-        self,
-        completion_mock,
-    ) -> None:
-        completion_mock.return_value = iter(
-            [
-                chunk(
-                    tool_calls=[
-                        {
-                            "index": 0,
-                            "id": "call-1",
-                            "function": {
-                                "name": "ask_user",
-                                "arguments": '{"question":"Continue?"}',
-                            },
-                        }
-                    ]
-                ),
-                chunk(
-                    tool_calls=[
-                        {
-                            "index": 0,
-                            "function": {"arguments": "unexpected"},
-                        }
-                    ]
-                ),
-            ]
-        )
-        provider = LiteLLMProvider(
-            model="deepseek/deepseek-flash",
-            max_context_tokens=1000,
-        )
-
-        with self.assertRaises(ProviderProtocolError) as raised:
-            provider.stream(
-                LLMRequest(
-                    system_prompt="You are helpful.",
-                    messages=(Message(role="user", content="review it"),),
-                ),
-                lambda _text: None,
-            )
-
-        self.assertEqual(raised.exception.details["reason"], "invalid_json")
-
-    @patch("agent_core.providers.litellm_provider.completion")
-    def test_rejects_a_different_argument_closing_suffix(
-        self,
-        completion_mock,
-    ) -> None:
-        completion_mock.return_value = iter(
-            [
-                chunk(
-                    tool_calls=[
-                        {
-                            "index": 0,
-                            "id": "call-1",
-                            "function": {
-                                "name": "ask_user",
-                                "arguments": '{"question":"Continue?"}',
-                            },
-                        }
-                    ]
-                ),
-                chunk(
-                    tool_calls=[
-                        {
-                            "index": 0,
-                            "function": {"arguments": "]"},
-                        }
-                    ]
-                ),
-            ]
-        )
-        provider = LiteLLMProvider(
-            model="deepseek/deepseek-flash",
-            max_context_tokens=1000,
-        )
-
-        with self.assertRaises(ProviderProtocolError) as raised:
-            provider.stream(
-                LLMRequest(
-                    system_prompt="You are helpful.",
-                    messages=(Message(role="user", content="review it"),),
-                ),
-                lambda _text: None,
-            )
-
-        self.assertEqual(raised.exception.details["reason"], "invalid_json")
-
-    @patch("agent_core.providers.litellm_provider.completion")
-    def test_rejects_closing_delimiters_not_repeated_from_the_object(
-        self,
-        completion_mock,
-    ) -> None:
-        completion_mock.return_value = iter(
-            [
-                chunk(
-                    tool_calls=[
-                        {
-                            "index": 0,
-                            "id": "call-1",
-                            "function": {
-                                "name": "ask_user",
-                                "arguments": '{"question":"Continue?"}',
-                            },
-                        }
-                    ]
-                ),
-                chunk(
-                    tool_calls=[
-                        {
-                            "index": 0,
-                            "function": {"arguments": "]}"},
-                        }
-                    ]
-                ),
-            ]
-        )
-        provider = LiteLLMProvider(
-            model="deepseek/deepseek-flash",
-            max_context_tokens=1000,
-        )
-
-        with self.assertRaises(ProviderProtocolError) as raised:
-            provider.stream(
-                LLMRequest(
-                    system_prompt="You are helpful.",
-                    messages=(Message(role="user", content="review it"),),
-                ),
-                lambda _text: None,
-            )
-
-        self.assertEqual(raised.exception.details["reason"], "invalid_json")
-
-    @patch("agent_core.providers.litellm_provider.completion")
     def test_rejects_an_index_reused_for_a_different_id(
         self,
         completion_mock,
     ) -> None:
-        completion_mock.return_value = iter(
+        completion_mock.return_value = completed_stream(
             [
                 chunk(
                     tool_calls=[
@@ -1653,59 +1240,6 @@ class LiteLLMProviderTest(unittest.TestCase):
             )
 
         self.assertEqual(raised.exception.details["reason"], "conflicting_id")
-
-    @patch("agent_core.providers.litellm_provider.completion")
-    def test_rejects_two_distinct_complete_argument_objects(
-        self,
-        completion_mock,
-    ) -> None:
-        first = json.dumps({"command": "x" * 710}, separators=(",", ":"))
-        self.assertEqual(len(first), 724)
-        completion_mock.return_value = iter(
-            [
-                chunk(
-                    tool_calls=[
-                        {
-                            "index": 0,
-                            "id": "call-1",
-                            "function": {
-                                "name": "shell",
-                                "arguments": first,
-                            },
-                        }
-                    ]
-                ),
-                chunk(
-                    tool_calls=[
-                        {
-                            "index": 0,
-                            "function": {
-                                "arguments": '{"command":"next"}',
-                            },
-                        }
-                    ]
-                ),
-            ]
-        )
-        provider = LiteLLMProvider(
-            model="deepseek/deepseek-flash",
-            max_context_tokens=1000,
-        )
-
-        with self.assertRaises(ProviderProtocolError) as raised:
-            provider.stream(
-                LLMRequest(
-                    system_prompt="You are helpful.",
-                    messages=(Message(role="user", content="run it"),),
-                ),
-                lambda _text: None,
-            )
-
-        self.assertEqual(raised.exception.details["reason"], "ambiguous_arguments")
-        self.assertEqual(raised.exception.details["json_error_position"], 724)
-        self.assertEqual(raised.exception.details["candidate_count"], 2)
-        self.assertEqual(raised.exception.details["provider"], "deepseek")
-        self.assertNotIn("x" * 20, str(raised.exception.details))
 
     @patch(
         "agent_core.providers.base.token_counter",
