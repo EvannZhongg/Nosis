@@ -15,7 +15,7 @@ export type SessionRuntimeOptions = {
   workspaceOptions: string[];
   backgroundActive: boolean;
   providers: ModelOption[];
-  provider: string;
+  provider?: string;
   onProviderChange: (provider: string) => void;
   onBusyChange: (busy: boolean) => void;
   onContextWindowChange: (window: ContextWindow | null) => void;
@@ -102,7 +102,7 @@ export function useSessionRuntime({
   const providerSaving = pendingProvider !== null;
   const workspaceSaving = pendingWorkspace !== null;
   const configurationPending = permissionSaving || providerSaving || workspaceSaving;
-  const displayedProvider = pendingProvider ?? provider;
+  const displayedProvider = pendingProvider ?? provider ?? "";
   const displayedWorkspace = pendingWorkspace ?? workspaceDraft;
   const workspaceSelected = Boolean(displayedWorkspace.trim());
   const running = runtimeIsActive(runtimePhase);
@@ -268,6 +268,14 @@ export function useSessionRuntime({
         }
         if (message.type === "runtime_state") {
           if (message.replayed) return;
+          if (message.phase !== "failed") {
+            setAlerts((current) => {
+              const next = { ...current };
+              delete next.connection;
+              delete next["session-open"];
+              return next;
+            });
+          }
           if (message.event_sequence !== undefined) eventCounterRef.current = message.event_sequence;
           if (toastTimeoutRef.current) {
             clearTimeout(toastTimeoutRef.current);
@@ -324,12 +332,6 @@ export function useSessionRuntime({
             toastTimeoutRef.current = null;
           }
           setToast(null);
-          setAlerts((current) => {
-            const next = { ...current };
-            delete next.connection;
-            delete next["session-open"];
-            return next;
-          });
         }
         if (message.type === "permission_changed" && !message.replayed) setPendingPermissionPreset(null);
         if (message.type === "plan_updated") setPlan(message.plan);
@@ -390,7 +392,7 @@ export function useSessionRuntime({
       },
     });
     socketRef.current = socket;
-    socketModelRef.current = provider;
+    socketModelRef.current = provider ?? "";
     return socket;
   }
 

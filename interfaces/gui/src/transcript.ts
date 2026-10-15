@@ -255,7 +255,7 @@ export function applyMessage(
         finished: true,
         feedback: {
           kind: "alert",
-          id: "turn-error",
+          id: message.type === "fatal" ? "connection" : "turn-error",
           level: "error",
           text: `${message.error.type}: ${message.error.message}`,
         },

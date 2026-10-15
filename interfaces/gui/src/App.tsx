@@ -30,7 +30,7 @@ export function App() {
   const [error, setError] = useState("");
   const [workspaceVersion, setWorkspaceVersion] = useState(0);
   const [providers, setProviders] = useState<ModelOption[]>([]);
-  const [defaultProvider, setDefaultProvider] = useState("");
+  const [defaultProvider, setDefaultProvider] = useState<string>();
   const [providerBySession, setProviderBySession] = useState<Record<string, string>>({});
   const [expandedWorkspaces, setExpandedWorkspaces] = useState<Set<string>>(new Set());
   const [settingsSection, setSettingsSection] = useState<SettingsSection | null>(null);

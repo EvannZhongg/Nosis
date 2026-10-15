@@ -529,6 +529,21 @@ describe("applyMessage", () => {
     expect(finished).toBe(true);
   });
 
+  it("reports an opening protocol failure as a connection alert", () => {
+    const { feedback, finished } = applyMessage([], {
+      type: "fatal",
+      error: { type: "ProtocolError", message: "请选择已配置的模型。", details: {} },
+    });
+
+    expect(feedback).toEqual({
+      kind: "alert",
+      id: "connection",
+      level: "error",
+      text: "ProtocolError: 请选择已配置的模型。",
+    });
+    expect(finished).toBe(true);
+  });
+
   it("reports a failed turn as a persistent alert", () => {
     const { feedback, finished } = fold([
       {

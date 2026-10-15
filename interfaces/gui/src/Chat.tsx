@@ -33,7 +33,7 @@ export function Chat({
   workspaceOptions?: string[];
   backgroundActive?: boolean;
   providers: ModelOption[];
-  provider: string;
+  provider?: string;
   onProviderChange: (provider: string) => void;
   onBusyChange: (busy: boolean) => void;
   onContextWindowChange: (window: ContextWindow | null) => void;
