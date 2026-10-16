@@ -40,7 +40,9 @@ describe("process folding in the live transcript", () => {
     HTMLElement.prototype.scrollIntoView = scrollIntoView;
     HTMLElement.prototype.scrollTo = scrollTo as HTMLElement["scrollTo"];
     vi.spyOn(HTMLElement.prototype, "scrollHeight", "get").mockImplementation(function (this: HTMLElement) {
-      return 3000 + (this.textContent?.length ?? 0) * 10;
+      const hiddenLength = Array.from(this.querySelectorAll(".turn-process:not([open]) > .turn-process-content"))
+        .reduce((total, element) => total + (element.textContent?.length ?? 0), 0);
+      return 3000 + ((this.textContent?.length ?? 0) - hiddenLength) * 10;
     });
     vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
     scrollIntoView.mockClear();
@@ -82,8 +84,7 @@ describe("process folding in the live transcript", () => {
     await receive(text("first answer"));
     expect(processes().map((group) => group.open)).toEqual([false]);
     expect(container.querySelector(".turn-process p")).toBeNull();
-    expect(scrollIntoView.mock.instances.at(-1)).toBe(container.querySelector(".user-turn"));
-    expect(scrollIntoView).toHaveBeenLastCalledWith({ block: "start" });
+    expect(scrollIntoView).not.toHaveBeenCalled();
 
     await receive(settled("first answer"));
     await receive({ type: "tool_batch_started", turn_id: "t1", model_call_index: 2, tool_calls: [{ id: "call-1", name: "shell", arguments: { command: "ls" } }] });
@@ -99,17 +100,17 @@ describe("process folding in the live transcript", () => {
 
     scrollTo.mockClear();
     await receive(text(" continues streaming"));
-    expect(scrollTo).not.toHaveBeenCalled();
+    expect(scrollTo).toHaveBeenCalled();
   });
 
-  it.each(["turn_completed", "turn_cancelled", "turn_failed"] as const)("folds a trailing process on %s and navigates to its user", async (type) => {
+  it.each(["turn_completed", "turn_cancelled", "turn_failed"] as const)("folds a trailing process on %s without navigating", async (type) => {
     await receive(reasoning("reasoning without an answer"));
     const terminal: Incoming = type === "turn_failed"
       ? { type, turn_id: "t1", error: { type: "ProviderError", message: "failed", details: {} } }
       : type === "turn_completed" ? { type, turn_id: "t1", usage: null } : { type, turn_id: "t1" };
     await receive(terminal, false);
     expect(processes()[0]?.open).toBe(false);
-    expect(scrollIntoView.mock.instances.at(-1)).toBe(container.querySelector(".user-turn"));
+    expect(scrollIntoView).not.toHaveBeenCalled();
   });
 
   it("loads history folded without navigation and lets users reopen and close a process", async () => {
@@ -123,7 +124,7 @@ describe("process folding in the live transcript", () => {
     await render(false);
     expect(group.open).toBe(true);
     await act(async () => { group.open = false; await new Promise((resolve) => setTimeout(resolve, 30)); });
-    expect(scrollIntoView.mock.instances.at(-1)).toBe(container.querySelector(".user-turn"));
+    expect(scrollIntoView).not.toHaveBeenCalled();
   });
 
   it("keeps process groups open across images until text arrives", async () => {
@@ -135,7 +136,7 @@ describe("process folding in the live transcript", () => {
     expect(processes()[0]?.open).toBe(false);
   });
 
-  it("uses the same user target for folding and the turn navigation", async () => {
+  it("navigates to a user bubble only when the turn navigation is clicked", async () => {
     items = [
       { role: "user", content: "earlier prompt" },
       { role: "assistant", reasoning: "earlier reasoning", content: "earlier answer" },
@@ -147,10 +148,11 @@ describe("process folding in the live transcript", () => {
     await act(async () => { group.open = true; await new Promise((resolve) => setTimeout(resolve, 30)); });
     await act(async () => { group.open = false; await new Promise((resolve) => setTimeout(resolve, 30)); });
     const firstUser = container.querySelector(".user-turn");
-    expect(scrollIntoView.mock.instances.at(-1)).toBe(firstUser);
+    expect(scrollIntoView).not.toHaveBeenCalled();
     const firstMark = container.querySelector<HTMLButtonElement>(".turn-navigation-mark")!;
     await act(async () => { firstMark.click(); await new Promise((resolve) => setTimeout(resolve, 30)); });
     expect(scrollIntoView.mock.instances.at(-1)).toBe(firstUser);
+    expect(scrollIntoView).toHaveBeenLastCalledWith({ block: "start" });
   });
 
   it("resumes normal bottom following when the next turn starts", async () => {
@@ -165,5 +167,55 @@ describe("process folding in the live transcript", () => {
     scrollTo.mockClear();
     await receive(reasoning(" continues"));
     expect(scrollTo).toHaveBeenCalled();
+  });
+
+  it("preserves reading above the bottom through folding and resumes following on return", async () => {
+    await receive(reasoning("reasoning before the answer"));
+    const viewport = container.querySelector<HTMLElement>(".thread-viewport")!;
+    await act(async () => {
+      viewport.scrollTop = 400;
+      viewport.dispatchEvent(new Event("scroll"));
+    });
+    scrollTo.mockClear();
+
+    await receive(text("answer"));
+    expect(processes()[0]?.open).toBe(false);
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    expect(scrollTo).not.toHaveBeenCalled();
+    expect(viewport.scrollTop).toBe(400);
+    await receive(text(" continues"));
+    expect(scrollTo).not.toHaveBeenCalled();
+
+    await act(async () => {
+      viewport.scrollTop = viewport.scrollHeight - viewport.clientHeight;
+      viewport.dispatchEvent(new Event("scroll"));
+    });
+    await receive(text(" after returning to the bottom"));
+    expect(scrollTo).toHaveBeenCalled();
+    expect(viewport.scrollTop).toBe(viewport.scrollHeight - viewport.clientHeight);
+  });
+
+  it("leaves the reading position alone when a historical process is toggled", async () => {
+    items = [
+      { role: "user", content: "earlier prompt" },
+      { role: "assistant", reasoning: "earlier reasoning", content: "earlier answer" },
+      { role: "user", content: "latest prompt" },
+      { role: "assistant", reasoning: "latest reasoning", streaming: true, content: null },
+    ];
+    await render();
+    const viewport = container.querySelector<HTMLElement>(".thread-viewport")!;
+    await act(async () => {
+      viewport.scrollTop = 400;
+      viewport.dispatchEvent(new Event("scroll"));
+    });
+    scrollTo.mockClear();
+    const group = processes()[0]!;
+    await act(async () => { group.open = true; await new Promise((resolve) => setTimeout(resolve, 30)); });
+    await act(async () => { group.open = false; await new Promise((resolve) => setTimeout(resolve, 30)); });
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    expect(scrollTo).not.toHaveBeenCalled();
+    await receive(reasoning(" continues while reading history"));
+    expect(scrollTo).not.toHaveBeenCalled();
+    expect(viewport.scrollTop).toBe(400);
   });
 });
