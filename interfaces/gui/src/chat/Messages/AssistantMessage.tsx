@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type PropsWithChildren } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState, type PropsWithChildren } from "react";
 import { ActionBarPrimitive, MessagePrimitive, useAuiState, type PartState, type ReasoningMessagePartProps } from "@assistant-ui/react";
 import { Check, ChevronRight, Copy } from "lucide-react";
 import { TURN_PROCESS_GROUP, turnProcessPartIndexes } from "../../transcript";
+import { ScrollToTurnContext } from "../TurnNavigation";
 import { SignedImage } from "./Attachments";
 import { MarkdownText, MessageTimestamp } from "./messagePrimitives";
 import { ToolCard } from "./ToolCard";
@@ -11,10 +12,13 @@ function ReasoningText({ text }: ReasoningMessagePartProps) {
   return <div className="reasoning-text">{text}</div>;
 }
 
-function TurnPartGroup({ children }: PropsWithChildren) {
-  const active = useAuiState((state) => state.thread.isRunning && state.message.isLast);
+function TurnPartGroup({ children, endIndex }: PropsWithChildren<{ endIndex: number }>) {
+  const active = useAuiState((state) => state.thread.isRunning && state.message.isLast
+    && !state.message.parts.slice(endIndex + 1).some((part) => part.type === "text"));
+  const scrollToTurn = useContext(ScrollToTurnContext);
   const [expanded, setExpanded] = useState(active);
   const wasActiveRef = useRef(active);
+  const wasOpenRef = useRef(active);
 
   useEffect(() => {
     if (active) setExpanded(true);
@@ -23,7 +27,15 @@ function TurnPartGroup({ children }: PropsWithChildren) {
   }, [active]);
 
   return <details className="turn-process" open={active || expanded} onToggle={(event) => {
-    if (!active) setExpanded(event.currentTarget.open);
+    if (event.target !== event.currentTarget) return;
+    const open = event.currentTarget.open;
+    if (!active) setExpanded(open);
+    if (wasOpenRef.current && !open) {
+      let turn = event.currentTarget.closest(".assistant-message")?.previousElementSibling;
+      while (turn && !turn.matches(".user-turn")) turn = turn.previousElementSibling;
+      if (turn instanceof HTMLElement) scrollToTurn(turn);
+    }
+    wasOpenRef.current = open;
   }}>
     <summary onClick={(event) => { if (active) event.preventDefault(); }}><ChevronRight size={14} className="turn-process-chevron" />推理与执行过程</summary>
     <div className="turn-process-content">{children}</div>
@@ -43,7 +55,7 @@ function AssistantParts() {
     {({ part, children }) => {
       switch (part.type) {
         case TURN_PROCESS_GROUP:
-          return <TurnPartGroup>{children}</TurnPartGroup>;
+          return <TurnPartGroup endIndex={part.indices[part.indices.length - 1]!}>{children}</TurnPartGroup>;
         case "text":
           return <MarkdownText />;
         case "reasoning":

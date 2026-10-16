@@ -1,10 +1,13 @@
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type RefObject } from "react";
+
+export const ScrollToTurnContext = createContext<(turn: HTMLElement) => void>(() => {});
 
 export function TurnNavigation({ previews, viewportRef, active }: {
   previews: string[];
   viewportRef: RefObject<HTMLDivElement | null>;
   active: boolean;
 }) {
+  const scrollToTurn = useContext(ScrollToTurnContext);
   const [activeTurn, setActiveTurn] = useState(Math.max(0, previews.length - 1));
   const [preview, setPreview] = useState<{ index: number; top: number } | null>(null);
   const navigationRef = useRef<HTMLElement | null>(null);
@@ -48,7 +51,7 @@ export function TurnNavigation({ previews, viewportRef, active }: {
     const turn = viewportRef.current?.querySelectorAll<HTMLElement>(".user-turn")[index];
     if (!turn) return;
     setActiveTurn(index);
-    turn.scrollIntoView({ block: "start" });
+    scrollToTurn(turn);
   };
   const showPreview = (index: number, mark: HTMLElement) => {
     const navigation = navigationRef.current;
