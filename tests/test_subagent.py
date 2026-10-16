@@ -350,6 +350,12 @@ class SubagentToolTest(unittest.TestCase):
 
             self.assertEqual(result["kind"], "subagent")
             self.assertEqual(result["status"], "submitted")
+            updates = jobs.drain_updates("turn-1")
+            self.assertEqual([update.status for update in updates], ["submitted", "running", "completed"])
+            self.assertTrue(all(
+                update.details == {"role": "researcher", "task": "look around"}
+                for update in updates
+            ))
             self.assertIn(
                 "background",
                 SubagentTool().definition(tool_context).parameters["properties"],

@@ -331,6 +331,7 @@ def event_to_message(
             "job_id": event.job_id,
             "kind": event.kind,
             "status": event.status,
+            "details": event.details,
         }
 
     raise TypeError(f"unsupported agent event: {type(event).__name__}")

@@ -80,7 +80,7 @@ class Bridge:
                 job_id = str(fields["job_id"])
                 if fields["status"] in {"submitted", "running"}:
                     self._jobs[job_id] = {
-                        key: fields[key] for key in ("job_id", "kind", "status")
+                        key: fields[key] for key in ("job_id", "kind", "status", "details")
                     }
                 else:
                     self._jobs.pop(job_id, None)

@@ -310,7 +310,7 @@ class ProtocolTest(unittest.TestCase):
     def test_encodes_background_job_status(self) -> None:
         self.assertEqual(
             event_to_message(
-                JobStatusEvent("job-1", "shell", "running"), "t1"
+                JobStatusEvent("job-1", "shell", "running", {"command": "npm test"}), "t1"
             ),
             {
                 "type": "job_status",
@@ -318,6 +318,7 @@ class ProtocolTest(unittest.TestCase):
                 "job_id": "job-1",
                 "kind": "shell",
                 "status": "running",
+                "details": {"command": "npm test"},
             },
         )
 
@@ -766,14 +767,17 @@ class BridgeApprovalTest(BridgeTestCase):
         bridge.open_session(
             open_session_message(Path(directory), session_id="s")
         )
-        bridge._emit_agent_event(JobStatusEvent("j1", "shell", "running"), "t1")
-        bridge._emit_agent_event(JobStatusEvent("j2", "shell", "running"), "t1")
-        bridge._emit_agent_event(JobStatusEvent("j2", "shell", "completed"), "t1")
+        bridge._emit_agent_event(JobStatusEvent("j1", "shell", "running", {"command": "npm test"}), "t1")
+        bridge._emit_agent_event(JobStatusEvent("j2", "subagent", "running", {"role": "researcher", "task": "inspect"}), "t1")
+        bridge._emit_runtime_state("running")
+        self.assertEqual(emitted(stdout)[-1]["jobs"][1]["details"],
+                         {"role": "researcher", "task": "inspect"})
+        bridge._emit_agent_event(JobStatusEvent("j2", "subagent", "completed", {"role": "researcher", "task": "inspect"}), "t1")
         bridge._emit_runtime_state("running")
 
         self.assertEqual(
             emitted(stdout)[-1]["jobs"],
-            [{"job_id": "j1", "kind": "shell", "status": "running"}],
+            [{"job_id": "j1", "kind": "shell", "status": "running", "details": {"command": "npm test"}}],
         )
 
     def test_runtime_state_contains_the_pending_approval(self) -> None:

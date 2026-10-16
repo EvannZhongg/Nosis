@@ -159,6 +159,7 @@ describe('reducer', () => {
         job_id: 'job-1',
         kind: 'shell',
         status: 'running',
+        details: { command: 'ls' },
       },
     });
     expect(state.entries.at(-1)).toMatchObject({

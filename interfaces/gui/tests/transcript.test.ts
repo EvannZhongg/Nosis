@@ -43,7 +43,7 @@ describe("isTurnActivity", () => {
     { type: "tool_batch_started", turn_id: "t1", model_call_index: 1, tool_calls: [] },
     { type: "tool_media", turn_id: "t1", attachments: [] },
     { type: "assistant_message", turn_id: "t1", content: "hi", timestamp_utc: "2026-09-16T00:00:00Z", model_call_index: 1 },
-    { type: "job_status", turn_id: "t1", job_id: "job-1", kind: "shell", status: "running" },
+    { type: "job_status", turn_id: "t1", job_id: "job-1", kind: "shell", status: "running", details: { command: "ls" } },
   ] satisfies Incoming[])("recognizes $type", (message) => {
     expect(isTurnActivity(message)).toBe(true);
   });
@@ -63,6 +63,7 @@ describe("isTurnActivity", () => {
       job_id: "job-1",
       kind: "subagent",
       status: "completed",
+      details: { role: "researcher", task: "inspect" },
     });
     expect(result.feedback).toBeUndefined();
   });

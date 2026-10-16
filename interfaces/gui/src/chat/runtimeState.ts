@@ -1,7 +1,7 @@
 import type { ThreadMessageLike } from "@assistant-ui/react";
-import type { Incoming, PlanSnapshot } from "@nosis/protocol";
+import type { BackgroundJob, PlanSnapshot } from "@nosis/protocol";
 
-type JobStatusMessage = Extract<Incoming, { type: "job_status" }>;
+export type { BackgroundJob } from "@nosis/protocol";
 
 export type Approval = {
   requestId: string;
@@ -11,7 +11,6 @@ export type Approval = {
   toolName?: string;
 };
 
-export type BackgroundJob = Pick<JobStatusMessage, "job_id" | "kind" | "status">;
 export type RuntimeIndicator = "plan" | "jobs";
 
 export function updateBackgroundJobs(

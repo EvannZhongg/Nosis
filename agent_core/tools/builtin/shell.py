@@ -229,6 +229,7 @@ class ShellTool(Tool):
                         cancellation=cancellation,
                     )
                 ),
+                details={"command": command},
             )
             return handle.to_dict()
         execution = (

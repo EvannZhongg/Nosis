@@ -94,6 +94,7 @@ class JobStatusEvent:
     job_id: str
     kind: str
     status: str
+    details: dict[str, str]
 
 
 AgentEvent: TypeAlias = (

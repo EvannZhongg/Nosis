@@ -8,21 +8,25 @@ describe("background job state", () => {
       job_id: "job-1",
       kind: "subagent",
       status: "submitted",
+      details: { role: "researcher", task: "inspect the workspace" },
     });
     const running = updateBackgroundJobs(submitted, {
       job_id: "job-1",
       kind: "subagent",
       status: "running",
+      details: { role: "researcher", task: "inspect the workspace" },
     });
     const completed = updateBackgroundJobs(running, {
       job_id: "job-1",
       kind: "subagent",
       status: "completed",
+      details: { role: "researcher", task: "inspect the workspace" },
     });
 
     expect(Object.keys(submitted)).toEqual(["job-1"]);
     expect(Object.keys(running)).toEqual(["job-1"]);
     expect(running["job-1"]?.status).toBe("running");
+    expect(running["job-1"]?.details).toEqual({ role: "researcher", task: "inspect the workspace" });
     expect(completed).toEqual({});
   });
 
@@ -31,20 +35,24 @@ describe("background job state", () => {
       job_id: "job-1",
       kind: "subagent",
       status: "running",
+      details: { role: "researcher", task: "inspect" },
     });
     const both = updateBackgroundJobs(first, {
       job_id: "job-2",
       kind: "shell",
       status: "running",
+      details: { command: "npm test" },
     });
     const secondOnly = updateBackgroundJobs(both, {
       job_id: "job-1",
       kind: "subagent",
       status: "failed",
+      details: { role: "researcher", task: "inspect" },
     });
 
     expect(Object.keys(both)).toEqual(["job-1", "job-2"]);
     expect(Object.keys(secondOnly)).toEqual(["job-2"]);
+    expect(secondOnly["job-2"]?.details).toEqual({ command: "npm test" });
   });
 });
 

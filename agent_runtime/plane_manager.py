@@ -320,6 +320,7 @@ class ExecutionPlaneManager:
                         job_id=update.job_id,
                         kind=update.kind,
                         status=update.status,
+                        details=update.details,
                     ),
                     update.turn_id,
                 )

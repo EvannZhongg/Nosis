@@ -184,6 +184,13 @@ export type UserQuestion = {
   allow_free_text: boolean;
 };
 
+export type BackgroundJob = {
+  job_id: string;
+  kind: string;
+  status: 'submitted' | 'running' | 'completed' | 'failed' | 'cancelled';
+  details: Record<string, string>;
+};
+
 export type RuntimeState = {
   /**
    * Authoritative execution snapshot. The first snapshot after open_session
@@ -198,11 +205,7 @@ export type RuntimeState = {
   context_window: ContextWindow | null;
   event_sequence?: number;
   workspace?: string;
-  jobs: {
-    job_id: string;
-    kind: string;
-    status: 'submitted' | 'running' | 'completed' | 'failed' | 'cancelled';
-  }[];
+  jobs: BackgroundJob[];
   approval: {
     type: 'approval_request';
     turn_id: string | null;
@@ -273,13 +276,10 @@ export type Incoming = (
       turn_id: string;
       attachments: ImageAttachment[];
     }
-  | {
+  | ({
       type: 'job_status';
       turn_id: string;
-      job_id: string;
-      kind: string;
-      status: 'submitted' | 'running' | 'completed' | 'failed' | 'cancelled';
-    }
+    } & BackgroundJob)
   | { type: 'user_steer_received'; turn_id: string | null; steer_id: string; text: string }
   | { type: 'user_steer_rejected'; turn_id: string | null; steer_id: string; text: string }
   | { type: 'user_turn_received'; turn_id: string }

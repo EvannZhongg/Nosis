@@ -277,11 +277,22 @@ pre { overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-famil
 .feedback-alert button { display: grid; place-items: center; flex: none; border: 0; border-radius: 4px; padding: 3px; background: transparent; color: currentColor; opacity: .65; cursor: pointer; }
 .feedback-alert button:hover { background: #0000000a; opacity: 1; }
 .background-jobs { position: relative; flex: none; }
-.background-job-list { position: absolute; z-index: 10; right: 0; bottom: calc(100% + 7px); width: 330px; max-width: calc(100vw - 48px); padding: 7px; border: 1px solid #dfe4ed; border-radius: 8px; background: #fff; box-shadow: 0 10px 28px #20385c1c; }
-.background-job { display: grid; grid-template-columns: 14px auto minmax(0, 1fr) auto; align-items: center; gap: 7px; padding: 7px 6px; color: #68758b; }
+.background-job-menu { position: absolute; z-index: 10; right: 0; bottom: calc(100% + 7px); width: 330px; max-width: calc(100vw - 48px); }
+.background-job-list { max-height: min(45vh, 360px); overflow-y: auto; padding: 7px; border: 1px solid #dfe4ed; border-radius: 8px; background: #fff; box-shadow: 0 10px 28px #20385c1c; }
+.background-job { display: grid; grid-template-columns: 14px auto minmax(0, 1fr) auto; align-items: center; gap: 7px; width: 100%; padding: 7px 6px; border: 0; background: transparent; color: #68758b; text-align: left; font-size: inherit; }
+.background-job:hover, .background-job[aria-expanded="true"] { background: #f0f3f7; color: #53698f; }
 .background-job + .background-job { border-top: 1px solid #f0f2f5; }
 .background-job code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #9aa3b1; font-size: 10px; }
 .background-job small { color: #8b96a7; font-size: 10px; }
+.background-job-popover { position: absolute; z-index: 11; bottom: 0; width: min(340px, calc(100vw - 48px)); max-height: min(45vh, 280px); padding: 14px; border: 1px solid #dfe4ed; border-radius: 10px; background: #fff; box-shadow: 0 12px 30px #20385c1c; color: #596477; overflow-y: auto; }
+.background-job-popover.right { left: calc(100% + 8px); }
+.background-job-popover.left { right: calc(100% + 8px); }
+.background-job-popover.overlay { left: 0; right: 0; bottom: 0; width: auto; }
+.background-job-popover-title { margin-bottom: 9px; font-size: 12px; font-weight: 650; color: #414b5c; }
+.background-job-command { margin: 0; padding: 8px; border-radius: 5px; background: #f5f7fa; color: #536078; font-size: 11px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+.background-job-task { font-size: 11px; line-height: 1.6; }
+.background-job-role { color: #536078; font-weight: 650; }
+.background-job-task p { margin: 3px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .attachment-replaced { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: #6f7b90; background: #f4f6fa; border-radius: 6px; padding: 10px 14px; margin: 8px 0 12px; font-size: 12px; }
 .attachment-replaced button { flex: none; border: 1px solid #d5dbe5; border-radius: 5px; background: #fff; color: #5f6f88; padding: 6px 10px; font-size: 11px; cursor: pointer; }
 .attachment-replaced button:disabled { opacity: .6; cursor: default; }

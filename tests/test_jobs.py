@@ -258,6 +258,9 @@ class BackgroundJobTest(unittest.TestCase):
         self.assertEqual(result["kind"], "shell")
         self.assertEqual(result["status"], "submitted")
         self.assertTrue(str(result["job_id"]).startswith("job_"))
+        updates = jobs.drain_updates("turn-1")
+        self.assertEqual([update.status for update in updates], ["submitted", "running", "completed"])
+        self.assertTrue(all(update.details == {"command": "true"} for update in updates))
         jobs.close()
 
     def test_queued_job_handle_reports_submitted(self) -> None:
@@ -271,13 +274,22 @@ class BackgroundJobTest(unittest.TestCase):
             "shell",
             "turn-1",
             lambda cancellation: entered.set() or release.wait(2),
+            details={"command": "first"},
         )
         self.assertTrue(entered.wait(1))
-        second = jobs.submit("shell", "turn-1", lambda cancellation: None)
+        second = jobs.submit("shell", "turn-1", lambda cancellation: None,
+                             details={"command": "second"})
 
         self.assertEqual(first.status, "submitted")
         self.assertEqual(second.status, "submitted")
         self.assertEqual(session.jobs[second.job_id].status, "submitted")
+        updates = jobs.drain_updates("turn-1")
+        self.assertEqual(
+            [(update.job_id, update.details) for update in updates],
+            [(first.job_id, {"command": "first"}),
+             (first.job_id, {"command": "first"}),
+             (second.job_id, {"command": "second"})],
+        )
         release.set()
         jobs.wait_for_turn("turn-1")
         jobs.close()
@@ -288,7 +300,7 @@ class BackgroundJobTest(unittest.TestCase):
         session = Session("session-1")
         session.begin_turn("turn-1")
         jobs = JobManager(session, max_workers=1)
-        jobs.submit("test", "turn-1", lambda cancellation: {"a": 1})
+        jobs.submit("test", "turn-1", lambda cancellation: {"a": 1}, details={})
         jobs.wait_for_turn("turn-1")
         context = ToolExecutionContext(
             workspace=Workspace(Path(__file__).parent),

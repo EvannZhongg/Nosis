@@ -57,6 +57,7 @@ class JobUpdate:
     turn_id: str
     kind: str
     status: JobStatus
+    details: dict[str, str]
     output: JobOutput = None
     error: ToolError | None = None
 
@@ -71,6 +72,7 @@ class _Job:
     turn_id: str
     kind: str
     token: CancellationToken
+    details: dict[str, str]
     status: JobStatus = "submitted"
     future: Future[None] | None = None
 
@@ -116,14 +118,16 @@ class JobManager:
         kind: str,
         turn_id: str,
         run: Callable[[CancellationToken], JobOutput],
+        *,
+        details: dict[str, str],
     ) -> JobHandle:
         job_id = f"job_{uuid4().hex[:12]}"
-        job = _Job(job_id, turn_id, kind, CancellationToken())
+        job = _Job(job_id, turn_id, kind, CancellationToken(), dict(details))
         with self._condition:
             if self._closed:
                 raise RuntimeError("job manager is closed")
             self._jobs[job_id] = job
-            self._publish_locked(JobUpdate(job_id, turn_id, kind, "submitted"))
+            self._publish_locked(JobUpdate(job_id, turn_id, kind, "submitted", job.details))
             self._session.job_submitted(job_id, kind, turn_id)
             try:
                 future = self._executor.submit(self._run, job, run)
@@ -150,7 +154,7 @@ class JobManager:
             job.status = "running"
             self._session.job_started(job.job_id, job.kind, job.turn_id)
             self._publish_locked(
-                JobUpdate(job.job_id, job.turn_id, job.kind, "running")
+                JobUpdate(job.job_id, job.turn_id, job.kind, "running", job.details)
             )
             self._condition.notify_all()
         try:
@@ -226,6 +230,7 @@ class JobManager:
                 job.turn_id,
                 job.kind,
                 status,
+                job.details,
                 output=output,
                 error=error,
             )
