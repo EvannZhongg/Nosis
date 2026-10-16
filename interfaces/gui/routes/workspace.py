@@ -1,6 +1,5 @@
 """Workspace selection, creation, folder opening, and browsing endpoints."""
 
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -17,6 +16,7 @@ from agent_core import (
 from agent_runtime.config import load_scratch_workspace_root
 from agent_runtime.settings import SettingsStore
 from interfaces.bridge.managed_workspaces import create_scratch_workspace
+from interfaces.gui.windows_folders import open_windows_folder
 
 
 class WorkspaceResolver:
@@ -120,10 +120,13 @@ def create_workspace_router(
             raise HTTPException(status_code=400, detail=str(error)) from error
         try:
             if sys.platform == "win32":
-                os.startfile(directory)
+                open_windows_folder(directory)
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", "-a", "Finder", str(directory)])
             else:
-                command = "open" if sys.platform == "darwin" else "xdg-open"
-                subprocess.Popen([command, str(directory)])
+                # Linux file managers request activation through the desktop session;
+                # Wayland compositors retain control over granting foreground focus.
+                subprocess.Popen(["xdg-open", str(directory)])
         except OSError as error:
             raise HTTPException(
                 status_code=500,

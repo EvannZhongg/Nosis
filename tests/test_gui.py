@@ -2139,11 +2139,11 @@ class GuiTest(unittest.TestCase):
     def test_opens_the_selected_workspace_in_the_native_file_manager(self) -> None:
         selected = self.root / "项目 files"
         selected.mkdir()
-        for platform, command in (("win32", None), ("darwin", "open"), ("linux", "xdg-open")):
+        for platform, command in (("win32", None), ("darwin", ["open", "-a", "Finder"]), ("linux", ["xdg-open"])):
             with self.subTest(platform=platform), self.client() as client:
                 with (
                     patch("interfaces.gui.routes.workspace.sys.platform", platform),
-                    patch("interfaces.gui.routes.workspace.os.startfile", create=True) as startfile,
+                    patch("interfaces.gui.routes.workspace.open_windows_folder") as open_windows,
                     patch("interfaces.gui.routes.workspace.subprocess.Popen") as popen,
                 ):
                     response = client.post(
@@ -2151,30 +2151,30 @@ class GuiTest(unittest.TestCase):
                     )
                 self.assertEqual(response.status_code, 204)
                 if command is None:
-                    startfile.assert_called_once_with(selected.resolve())
+                    open_windows.assert_called_once_with(selected.resolve())
                     popen.assert_not_called()
                 else:
-                    popen.assert_called_once_with([command, str(selected.resolve())])
-                    startfile.assert_not_called()
+                    popen.assert_called_once_with([*command, str(selected.resolve())])
+                    open_windows.assert_not_called()
 
     def test_open_workspace_rejects_invalid_directories(self) -> None:
         with (
             self.client() as client,
-            patch("interfaces.gui.routes.workspace.os.startfile", create=True) as startfile,
+            patch("interfaces.gui.routes.workspace.open_windows_folder") as open_windows,
             patch("interfaces.gui.routes.workspace.subprocess.Popen") as popen,
         ):
             for path in (self.root / "README.md", self.root / "missing"):
                 response = client.post("/api/workspace/open", json={"workspace": str(path)})
                 self.assertEqual(response.status_code, 400)
             self.assertEqual(client.post("/api/workspace/open", json={"workspace": ""}).status_code, 422)
-            startfile.assert_not_called()
+            open_windows.assert_not_called()
             popen.assert_not_called()
 
     def test_open_workspace_reports_file_manager_errors(self) -> None:
         with (
             self.client() as client,
             patch("interfaces.gui.routes.workspace.sys.platform", "win32"),
-            patch("interfaces.gui.routes.workspace.os.startfile", create=True, side_effect=OSError("cannot open")),
+            patch("interfaces.gui.routes.workspace.open_windows_folder", side_effect=OSError("cannot open")),
         ):
             response = client.post("/api/workspace/open", json={"workspace": str(self.root)})
         self.assertEqual(response.status_code, 500)

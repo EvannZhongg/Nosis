@@ -1448,6 +1448,7 @@ dependencies = [
 gui = [
     { name = "fastapi" },
     { name = "python-multipart" },
+    { name = "pywin32", marker = "sys_platform == 'win32'" },
     { name = "uvicorn" },
     { name = "websockets" },
 ]
@@ -1467,6 +1468,7 @@ requires-dist = [
     { name = "pyperclip", specifier = ">=1.11.0" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "python-multipart", marker = "extra == 'gui'", specifier = ">=0.0.9" },
+    { name = "pywin32", marker = "sys_platform == 'win32' and extra == 'gui'", specifier = ">=306" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "tzdata", specifier = ">=2022.1" },
     { name = "uvicorn", marker = "extra == 'gui'", specifier = ">=0.30" },
