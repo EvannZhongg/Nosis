@@ -328,7 +328,7 @@ class McpClientManager:
             cursor = result.next_cursor
             if not cursor:
                 break
-        return tuple(discovered)
+        return tuple(sorted(discovered, key=lambda tool: tool.remote_name))
 
     async def _call(
         self,
