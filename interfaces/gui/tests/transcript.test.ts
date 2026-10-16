@@ -1,8 +1,69 @@
 import { describe, expect, it } from "vitest";
 import type { Incoming } from "@nosis/protocol";
-import { applyMessage, isTurnActivity, toMessages, type TranscriptItem } from "../src/transcript";
+import { applyMessage, isTurnActivity, toMessages, turnProcessPartIndexes, type TranscriptItem } from "../src/transcript";
 
 const TOOL_CALL = { id: "call-1", name: "shell", arguments: { command: "ls" } };
+
+describe("process folding", () => {
+  it.each([
+    { types: [], expected: [] },
+    { types: ["text", "text"], expected: [] },
+    { types: ["reasoning", "tool-call"], expected: [0, 1] },
+    { types: ["reasoning", "text", "tool-call", "text", "reasoning", "text"], expected: [0, 2, 4] },
+    { types: ["text", "image", "file", "tool-call"], expected: [3] },
+  ])("only folds execution parts in $types", ({ types, expected }) => {
+    expect(turnProcessPartIndexes(types.map((type) => ({ type })))).toEqual(expected);
+  });
+
+  it.each(["turn_completed", "turn_cancelled", "turn_failed"] as const)(
+    "keeps an earlier answer visible through job continuation, %s and checkpoint replay",
+    (type) => {
+      const firstAnswer: Incoming[] = [
+        { type: "reasoning_delta", turn_id: "t1", text: "initial reasoning", model_call_index: 1 },
+        { type: "assistant_delta", turn_id: "t1", text: "first answer", model_call_index: 1 },
+        { type: "assistant_message", turn_id: "t1", content: "first answer", timestamp_utc: "2026-10-16T12:38:48Z", model_call_index: 1 },
+      ];
+      const continuation: Incoming[] = [
+        { type: "job_status", turn_id: "t1", job_id: "job-1", kind: "subagent", status: "completed", details: {} },
+        { type: "reasoning_delta", turn_id: "t1", text: "follow-up reasoning", model_call_index: 2 },
+        { type: "assistant_message", turn_id: "t1", content: "checking the report", timestamp_utc: "2026-10-16T12:48:25Z", model_call_index: 2 },
+        { type: "tool_batch_started", turn_id: "t1", model_call_index: 2, tool_calls: [TOOL_CALL] },
+        { type: "tool_result", turn_id: "t1", tool_call_id: TOOL_CALL.id, name: TOOL_CALL.name, ok: true, error: null, tool_index: 1, tool_count: 1 },
+        { type: "reasoning_delta", turn_id: "t1", text: "final reasoning", model_call_index: 3 },
+        { type: "assistant_delta", turn_id: "t1", text: "second answer", model_call_index: 3 },
+        { type: "assistant_message", turn_id: "t1", content: "second answer", timestamp_utc: "2026-10-16T12:49:21Z", model_call_index: 3 },
+      ];
+      const visibleText = (items: TranscriptItem[]) => toMessages(items).flatMap((message) => {
+        const parts = message.content as { type: string; text?: string }[];
+        const folded = new Set(turnProcessPartIndexes(parts));
+        return parts.filter((part, index) => part.type === "text" && !folded.has(index)).map((part) => part.text);
+      });
+      let items = fold(firstAnswer).items;
+      expect(visibleText(items)).toEqual(["first answer"]);
+      for (const event of continuation) {
+        items = applyMessage(items, event).items;
+        expect(visibleText(items)).toContain("first answer");
+      }
+
+      const terminal: Incoming = type === "turn_failed"
+        ? { type, turn_id: "t1", error: { type: "ProviderError", message: "failed", details: {} } }
+        : type === "turn_completed"
+          ? { type, turn_id: "t1", usage: null }
+          : { type, turn_id: "t1" };
+      const stored: TranscriptItem[] = [
+        { role: "assistant", content: "first answer", reasoning: "initial reasoning" },
+        { role: "user", origin: "job_result", content: "background report" },
+        { role: "assistant", content: "checking the report", reasoning: "follow-up reasoning", tool_calls: [TOOL_CALL] },
+        { role: "tool", tool_call_id: TOOL_CALL.id, content: JSON.stringify({ ok: true }) },
+        { role: "assistant", content: "second answer", reasoning: "final reasoning" },
+      ];
+      const completed = applyMessage(items, { ...terminal, transcript: { items: stored, event_sequence: 20 } });
+      expect(completed.finished).toBe(true);
+      expect(visibleText(completed.items)).toEqual(["first answer", "checking the report", "second answer"]);
+      expect(visibleText(stored)).toEqual(visibleText(items));
+    },
+  );
+});
 
 it("keeps invalid arguments as raw text with the matching tool failure", () => {
   const raw = '{"goal" "fix this"}';

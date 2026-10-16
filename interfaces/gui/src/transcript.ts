@@ -360,16 +360,11 @@ function itemParts(
   return parts;
 }
 
-/** Part indices that belong to a turn's collapsible reasoning/tool process. */
+/** Only reasoning and tool calls belong to the collapsible process. */
 export function turnProcessPartIndexes(parts: readonly { type: string }[]): number[] {
-  let processEnd = -1;
-  for (let index = parts.length - 1; index >= 0; index -= 1) {
-    if (parts[index]?.type !== "text") {
-      processEnd = index;
-      break;
-    }
-  }
-  return parts.slice(0, processEnd + 1).map((_, index) => index);
+  return parts.flatMap((part, index) => (
+    part.type === "reasoning" || part.type === "tool-call" ? [index] : []
+  ));
 }
 
 /**
