@@ -2,7 +2,7 @@
 
 from concurrent.futures import Future, ThreadPoolExecutor
 from copy import deepcopy
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass, field
 from threading import Condition, Event, Lock
 from time import monotonic
 from typing import Callable, Literal, TypeAlias
@@ -64,7 +64,17 @@ class JobSnapshot:
     cancel_requested: bool
 
     def to_dict(self) -> dict[str, JSONValue]:
-        return asdict(self)
+        return {
+            "job_id": self.job_id,
+            "kind": self.kind,
+            "status": self.status,
+            "details": dict(self.details),
+            "elapsed_seconds": self.elapsed_seconds,
+            "progress": deepcopy(self.progress),
+            "error": self.error,
+            "result_summary": deepcopy(self.result_summary),
+            "cancel_requested": self.cancel_requested,
+        }
 
 
 @dataclass(frozen=True)
@@ -106,6 +116,8 @@ class _Job:
     status: JobStatus = "submitted"
     future: Future[None] | None = None
     started_at: float | None = None
+    progress: dict[str, JSONValue] | None = None
+    progress_lock: Lock = field(default_factory=Lock)
 
 
 class JobManager:
@@ -224,11 +236,12 @@ class JobManager:
                     )
 
     def _report_progress(self, job: _Job, progress: dict[str, JSONValue]) -> None:
-        with self._condition:
+        snapshot = deepcopy(progress)
+        # Progress is transient: publishing it never acquires the manager lock
+        # or writes to the Session journal. The terminal event saves it once.
+        with job.progress_lock:
             if job.status == "running":
-                self._session.job_progressed(
-                    job.job_id, job.turn_id, deepcopy(progress),
-                )
+                job.progress = snapshot
 
     def _normalize_output(self, job: _Job, output: JobOutput) -> JSONValue:
         normalizer = self._normalizer
@@ -270,7 +283,9 @@ class JobManager:
         error: ToolError | None = None,
         result_summary: dict[str, JSONValue] | None = None,
     ) -> None:
-        job.status = status
+        with job.progress_lock:
+            job.status = status
+            progress = deepcopy(job.progress)
         self._session.job_finished(
             job.job_id,
             job.kind,
@@ -281,6 +296,7 @@ class JobManager:
                 monotonic() - job.started_at if job.started_at is not None else 0.0
             ),
             result_summary=deepcopy(result_summary),
+            progress=progress,
         )
         self._publish_locked(
             JobUpdate(
@@ -336,6 +352,11 @@ class JobManager:
         if record is None:
             raise ValueError(f"unknown job_id: {job_id}")
         job = self._jobs.get(job_id)
+        if job is not None:
+            with job.progress_lock:
+                progress = deepcopy(job.progress)
+        else:
+            progress = deepcopy(record.progress)
         elapsed = record.elapsed_seconds
         if job is not None and job.status == "running" and job.started_at is not None:
             elapsed = monotonic() - job.started_at
@@ -345,7 +366,7 @@ class JobManager:
             status=record.status,
             details=dict(record.details),
             elapsed_seconds=elapsed,
-            progress=deepcopy(record.progress),
+            progress=progress,
             error=record.error,
             result_summary=deepcopy(record.result_summary),
             cancel_requested=(

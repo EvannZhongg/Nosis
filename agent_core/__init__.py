@@ -59,7 +59,10 @@ from .errors import (
     RuntimeErrorInfo,
     runtime_error_info,
 )
-from .jobs import CancellationToken, JobCancelled, JobHandle, JobManager, JobSnapshot, JobUpdate
+from .jobs import (
+    CancellationToken, JobCancelled, JobContext, JobHandle, JobManager,
+    JobResult, JobSnapshot, JobUpdate,
+)
 from .llm import LLMProvider, LLMRequest, LLMResponse, TokenUsage, ProviderCapabilities
 from .image_generation import GeneratedImage, ImageGenerator
 from .content import (
@@ -250,8 +253,10 @@ __all__ = [
     "HostCommandExecutor",
     "platform_shell_launcher",
     "JobCancelled",
+    "JobContext",
     "JobHandle",
     "JobManager",
+    "JobResult",
     "JobSnapshot",
     "JobControlTool",
     "JobStatusEvent",

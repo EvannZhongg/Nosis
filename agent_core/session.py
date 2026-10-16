@@ -258,8 +258,6 @@ class Session:
                     self.jobs[job_id] = job
                 job.status = "running"
                 job.started_at = event.timestamp_utc
-        elif event.event_type == "job_progressed":
-            self.jobs[payload["job_id"]].progress = payload["progress"]
         elif event.event_type in {
             "job_completed", "job_failed", "job_cancelled", "job_interrupted"
         }:
@@ -290,6 +288,7 @@ class Session:
                 job.completed_at = event.timestamp_utc
                 job.elapsed_seconds = payload["elapsed_seconds"]
                 job.result_summary = payload["result_summary"]
+                job.progress = payload["progress"]
                 job.error = (
                     payload.get("error")
                     if isinstance(payload.get("error"), str)
@@ -355,6 +354,7 @@ class Session:
                             # process downtime as execution time.
                             "elapsed_seconds": None if job.started_at is not None else 0.0,
                             "result_summary": None,
+                            "progress": None,
                         },
                     )
                 )
@@ -471,11 +471,6 @@ class Session:
             {"job_id": job_id, "kind": kind, "status": "submitted", "details": dict(details)},
         )
 
-    def job_progressed(
-        self, job_id: str, turn_id: str, progress: dict[str, JSONValue],
-    ) -> None:
-        self._event("job_progressed", turn_id, {"job_id": job_id, "progress": progress})
-
     def job_started(self, job_id: str, kind: str, turn_id: str) -> None:
         self._event(
             "job_started",
@@ -492,6 +487,7 @@ class Session:
         turn_id: str,
         elapsed_seconds: float,
         result_summary: dict[str, JSONValue] | None,
+        progress: dict[str, JSONValue] | None,
         error: str | None = None,
     ) -> None:
         payload: dict[str, object] = {
@@ -500,6 +496,7 @@ class Session:
             "status": status,
             "elapsed_seconds": elapsed_seconds,
             "result_summary": result_summary,
+            "progress": progress,
         }
         if error is not None:
             payload["error"] = error

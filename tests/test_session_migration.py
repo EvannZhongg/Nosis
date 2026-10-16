@@ -56,6 +56,7 @@ class SessionMigrationTest(unittest.TestCase):
             self.assertEqual(migrated[2]["payload"]["details"], {})
             self.assertIsNone(migrated[4]["payload"]["elapsed_seconds"])
             self.assertIsNone(migrated[4]["payload"]["result_summary"])
+            self.assertIsNone(migrated[4]["payload"]["progress"])
             self.assertEqual(migrated[1], records[1])
             restored = JsonlSessionStore(root).load("session-1", recover=False)
             self.assertEqual(restored.items[0].content, "旧对话")

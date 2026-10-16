@@ -267,6 +267,7 @@ class _SubagentProgress:
             ):
                 self._text = self._pending_text[1]
             self._pending_text = None
+            return
         elif isinstance(event, ToolCallEvent):
             self._recent_tools.append({
                 "tool_call_id": event.tool_call.id,
@@ -281,6 +282,8 @@ class _SubagentProgress:
                         "failed" if event.tool_result.error is not None else "completed"
                     )
                     break
+            else:
+                return
         else:
             return
         self._publish({

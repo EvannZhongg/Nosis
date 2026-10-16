@@ -55,6 +55,10 @@ def migrate_journal(path: Path) -> bool:
             if "result_summary" not in payload:
                 payload["result_summary"] = None
                 updated = True
+            if "progress" not in payload:
+                # V1 kept no progress; V2 carries it only in the terminal event.
+                payload["progress"] = None
+                updated = True
 
         if updated:
             ending = "\r\n" if line.endswith("\r\n") else "\n" if line.endswith("\n") else ""

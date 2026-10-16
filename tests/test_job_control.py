@@ -7,11 +7,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agent_core import (
-    CommandExecutionResult, ExecutionRouter, JobControlTool, JobManager,
+    CommandExecutionResult, ExecutionRouter, JobContext, JobControlTool, JobManager, JobResult,
     JsonlSessionStore, Session, ShellTool, ToolCall, ToolExecutionContext,
     ToolResultNormalizer, Workspace, builtin_catalog,
 )
-from agent_core.jobs import JobResult
 
 
 class JobControlTest(unittest.TestCase):
@@ -129,8 +128,6 @@ class JobControlTest(unittest.TestCase):
     def test_recovered_interrupted_is_queryable_but_inactive(self):
         self.session.job_submitted("running", "subagent", "turn", details={"task": "investigate"})
         self.session.job_started("running", "subagent", "turn")
-        progress = {"recent_tools": [{"name": "read_file", "status": "running"}], "text": "reading"}
-        self.session.job_progressed("running", "turn", progress)
         self.session.job_submitted("queued", "shell", "turn", details={"command": "pwd"})
         self.session.recover()
         for job_id, duration in (("running", None), ("queued", 0)):
@@ -138,7 +135,7 @@ class JobControlTest(unittest.TestCase):
             self.assertEqual(snapshot["status"], "interrupted")
             self.assertEqual(snapshot["elapsed_seconds"], duration)
             self.assertEqual(self.call("cancel", job_id), {"job": snapshot})
-        self.assertEqual(self.jobs.get("running").progress, progress)
+        self.assertIsNone(self.jobs.get("running").progress)
         self.assertEqual(self.jobs.list(), ())
 
     def test_normalization_failure_keeps_execution_summary(self):
@@ -214,6 +211,89 @@ class JobControlTest(unittest.TestCase):
         snapshot.details["task"] = "changed again"
         self.assertEqual(self.jobs.get(handle.job_id).details, {"task": "original"})
         self.assertEqual(self.jobs.get(handle.job_id).progress["recent_tools"], [{"name": "read_file"}])
+
+    def test_progress_burst_does_not_take_manager_lock_or_write_journal(self):
+        entered = threading.Event()
+        publish = threading.Event()
+        published = threading.Event()
+        release = threading.Event()
+        self.addCleanup(release.set)
+        self.addCleanup(publish.set)
+        writes = []
+        self.session.attach_journal_sink(writes.extend)
+
+        def run(job: JobContext):
+            entered.set()
+            publish.wait(5)
+            for index in range(150):
+                job.report_progress({"recent_tools": [], "text": f"step {index}"})
+            published.set()
+            release.wait(5)
+            return "final report"
+
+        handle = self.jobs.submit("subagent", "turn", run, details={"role": "researcher"})
+        self.assertTrue(entered.wait(2))
+        with self.jobs._condition:
+            publish.set()
+            self.assertTrue(published.wait(2), "progress blocked on the manager lock")
+        self.assertEqual([event.event_type for event in writes], ["job_submitted", "job_started"])
+        latest = self.jobs.get(handle.job_id)
+        self.assertEqual(latest.progress["text"], "step 149")
+        self.assertIsNone(self.session.jobs[handle.job_id].progress)
+
+        release.set()
+        self.jobs.wait_for_turn("turn")
+        self.jobs.drain_terminal_state("turn")
+        self.assertEqual([event.event_type for event in writes],
+                         ["job_submitted", "job_started", "job_completed"])
+        self.assertEqual(writes[-1].payload["progress"], latest.progress)
+        terminal = self.jobs.get(handle.job_id)
+        with tempfile.TemporaryDirectory() as directory:
+            store = JsonlSessionStore(Path(directory), group_by_workspace=False)
+            store.append_events(self.session.session_id, self.session.journal)
+            recovered = JobManager(store.load("parent"))
+            try:
+                self.assertEqual(recovered.get(handle.job_id), terminal)
+            finally:
+                recovered.close()
+
+    def test_failed_and_cancelled_jobs_preserve_last_progress(self):
+        for status in ("failed", "cancelled"):
+            with self.subTest(status=status):
+                def run(job: JobContext):
+                    job.report_progress({"text": "latest progress"})
+                    if status == "cancelled":
+                        job.cancellation.cancel()
+                        job.cancellation.raise_if_cancelled()
+                    raise RuntimeError("failed")
+
+                handle = self.jobs.submit("subagent", "turn", run, details={})
+                self.jobs.wait_for_turn("turn")
+                self.jobs.drain_updates("turn")
+                snapshot = self.jobs.get(handle.job_id)
+                self.assertEqual(snapshot.status, status)
+                self.assertEqual(snapshot.progress, {"text": "latest progress"})
+
+    def test_snapshot_serialization_has_explicit_fields_and_detached_values(self):
+        def run(job: JobContext):
+            job.report_progress({"recent_tools": [{"name": "read_file"}]})
+            return JobResult("output", {"exit_code": 0})
+
+        handle = self.jobs.submit("shell", "turn", run, details={"command": "pwd"})
+        self.jobs.wait_for_turn("turn")
+        snapshot = self.jobs.get(handle.job_id)
+        data = snapshot.to_dict()
+        self.assertEqual(set(data), {
+            "job_id", "kind", "status", "details", "elapsed_seconds", "progress",
+            "error", "result_summary", "cancel_requested",
+        })
+        self.assertEqual(json.loads(json.dumps(data)), data)
+        data["details"].clear()
+        data["progress"]["recent_tools"].clear()
+        data["result_summary"].clear()
+        self.assertEqual(snapshot.details, {"command": "pwd"})
+        self.assertEqual(snapshot.progress, {"recent_tools": [{"name": "read_file"}]})
+        self.assertEqual(snapshot.result_summary, {"exit_code": 0})
 
     def test_validation_and_unavailable_child_context(self):
         for arguments in (
