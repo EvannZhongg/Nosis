@@ -41,7 +41,10 @@ from agent_core import (
     ToolExecutionContext,
     UpdatePlanTool,
 )
-from agent_core.context_manager import ARCHIVE_RETRY_COUNT
+from agent_core.context_manager import (
+    ARCHIVE_RETRY_COUNT,
+    _validated_archive_summary,
+)
 
 REQUEST_TIME = datetime(2026, 9, 9, 8, 0, tzinfo=timezone.utc)
 TOOL_CALL_TIME = datetime(2026, 9, 9, 8, 0, 10, tzinfo=timezone.utc)
@@ -540,7 +543,22 @@ class AgentTest(unittest.TestCase):
         context.archive()
 
         self.assertEqual(len(provider.requests), 2)
-        self.assertEqual(provider.requests[0], provider.requests[1])
+        self.assertEqual(
+            provider.requests[0].messages,
+            provider.requests[1].messages[1:],
+        )
+        self.assertEqual(
+            provider.requests[0].system_prompt,
+            CONSOLIDATOR_PROMPT,
+        )
+        self.assertIn(
+            "The previous checkpoint was rejected:",
+            provider.requests[1].messages[0].content,
+        )
+        self.assertIn(
+            "checkpoint lines must use '- [mark] fact'",
+            provider.requests[1].messages[0].content,
+        )
         self.assertEqual(
             session.archived_summary,
             (
@@ -586,6 +604,32 @@ class AgentTest(unittest.TestCase):
         self.assertIsNone(session.archived_summary)
         self.assertEqual(session.archived_item_cursor, 0)
         self.assertEqual(session.compression_count, 0)
+
+    def test_archive_validation_allows_only_harmless_outer_formatting(self) -> None:
+        self.assertEqual(
+            _validated_archive_summary(LLMResponse(
+                content=(
+                    " \n```markdown\n\n"
+                    " - [durable] Keep the project decision. \n\n"
+                    " - [ephemeral] Continue the active task. \n"
+                    "``` \n"
+                ),
+            )),
+            (
+                "- [durable] Keep the project decision.\n"
+                "- [ephemeral] Continue the active task."
+            ),
+        )
+        self.assertEqual(
+            _validated_archive_summary(LLMResponse(
+                content="```text\n(nothing)\n```",
+            )),
+            "(nothing)",
+        )
+        with self.assertRaisesRegex(ValueError, "checkpoint lines"):
+            _validated_archive_summary(LLMResponse(
+                content="Summary:\n- [durable] Keep the project decision.",
+            ))
 
     def test_archive_accepts_nothing_checkpoint(self) -> None:
         session = Session(

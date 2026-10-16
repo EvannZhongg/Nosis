@@ -21,6 +21,12 @@ ARCHIVE_RETRY_COUNT = 5
 _ARCHIVE_LINE = re.compile(
     r"^- \[(?:permanent|durable|ephemeral|correction)\] \S(?:.*\S)?$"
 )
+_ARCHIVE_OPEN_FENCE = re.compile(r"^```(?:text|markdown)?$")
+_ARCHIVE_REPAIR_PROMPT = (
+    "The previous checkpoint was rejected: {error}. Return only the "
+    "checkpoint, with one '- [mark] fact' per line or exactly '(nothing)'; "
+    "do not include explanations, headings, or prompt text."
+)
 
 
 class ContextWindowExceededError(RuntimeError):
@@ -194,9 +200,14 @@ class ContextManager:
         )
         summary = ""
         validation_error: ValueError | None = None
-        for _ in range(ARCHIVE_RETRY_COUNT + 1):
+        for attempt in range(ARCHIVE_RETRY_COUNT + 1):
+            attempt_request = (
+                _archive_repair_request(request, validation_error)
+                if attempt > 0 and validation_error is not None
+                else request
+            )
             response = self._provider.stream_cancellable(
-                request, lambda _text: None, None, check_cancelled,
+                attempt_request, lambda _text: None, None, check_cancelled,
             )
             try:
                 summary = _validated_archive_summary(response)
@@ -381,14 +392,40 @@ def _validated_archive_summary(response: LLMResponse) -> str:
     summary = response.content.strip() if response.content else ""
     if not summary:
         raise ValueError("checkpoint must not be empty")
-    if summary == "(nothing)":
-        return summary
-    lines = summary.splitlines()
+    lines = [line.strip() for line in summary.splitlines()]
+    lines = [line for line in lines if line]
+    if lines and _ARCHIVE_OPEN_FENCE.fullmatch(lines[0]):
+        if lines[-1] != "```" or len(lines) < 3:
+            raise ValueError(
+                "checkpoint code fence must wrap the complete checkpoint"
+            )
+        lines = lines[1:-1]
+    if len(lines) == 1 and lines[0] == "(nothing)":
+        return "(nothing)"
     if any(not _ARCHIVE_LINE.fullmatch(line) for line in lines):
         raise ValueError(
             "checkpoint lines must use '- [mark] fact' with a supported mark"
         )
-    return summary
+    if not lines:
+        raise ValueError("checkpoint must not be empty")
+    return "\n".join(lines)
+
+
+def _archive_repair_request(
+    request: LLMRequest,
+    validation_error: ValueError,
+) -> LLMRequest:
+    repair = Message(
+        role="system",
+        content=_ARCHIVE_REPAIR_PROMPT.format(error=validation_error),
+    )
+    return LLMRequest(
+        system_prompt=request.system_prompt,
+        messages=(repair, *request.messages),
+        tools=request.tools,
+        max_generation_tokens=request.max_generation_tokens,
+        media_root=request.media_root,
+    )
 
 
 def _render_user_anchors(
