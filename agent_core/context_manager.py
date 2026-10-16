@@ -211,11 +211,11 @@ class ContextManager:
 
     def _stable_runtime_context_message(self) -> Message | None:
         sections = ["[Runtime Context]"]
+        if self._memory_context is not None:
+            sections.append(self._memory_context.prompt_section())
         archived_summary = self._archived_summary_text()
         if archived_summary is not None:
             sections.append(archived_summary)
-        if self._memory_context is not None:
-            sections.append(self._memory_context.prompt_section())
         if len(sections) == 1:
             return None
         return Message(role="system", content="\n\n".join(sections))
