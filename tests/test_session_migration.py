@@ -24,6 +24,22 @@ def event(seq: int, event_type: str, payload: dict[str, object]) -> dict[str, ob
     }
 
 
+def write_journal(path: Path, records: list[dict[str, object]]) -> bytes:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = (
+        "\n".join(json.dumps(record, ensure_ascii=False) for record in records) + "\n"
+    ).encode("utf-8")
+    path.write_bytes(body)
+    return body
+
+
+def run_migration(root: Path, *, check: bool = True) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(SCRIPT), "--sessions-dir", str(root)],
+        capture_output=True, text=True, check=check,
+    )
+
+
 class SessionMigrationTest(unittest.TestCase):
     def test_v1_job_journal_migrates_and_replays(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -39,16 +55,12 @@ class SessionMigrationTest(unittest.TestCase):
                 event(5, "job_completed", {"job_id": "job-1", "kind": "shell", "status": "completed"}),
                 event(6, "turn_completed", {"status": "completed"}),
             ]
-            original = ("\n".join(json.dumps(record, ensure_ascii=False) for record in records) + "\n").encode("utf-8")
-            path.write_bytes(original)
+            original = write_journal(path, records)
             unrelated = root / "artifact.jsonl"
             unrelated.write_text("not a Session Journal\n", encoding="utf-8")
 
-            first = subprocess.run(
-                [sys.executable, str(SCRIPT), "--sessions-dir", str(root)],
-                capture_output=True, text=True, check=True,
-            )
-            self.assertIn("Migrated 1 Session journal(s).", first.stdout)
+            first = run_migration(root)
+            self.assertIn("Migrated 1 Session journal(s), skipped 0", first.stdout)
             self.assertEqual(path.with_name(path.name + ".v1.bak").read_bytes(), original)
             self.assertEqual(unrelated.read_text(encoding="utf-8"), "not a Session Journal\n")
 
@@ -63,12 +75,63 @@ class SessionMigrationTest(unittest.TestCase):
             self.assertEqual(restored.jobs["job-1"].status, "completed")
 
             after_first = path.read_bytes()
-            second = subprocess.run(
-                [sys.executable, str(SCRIPT), "--sessions-dir", str(root)],
-                capture_output=True, text=True, check=True,
-            )
-            self.assertIn("Migrated 0 Session journal(s).", second.stdout)
+            second = run_migration(root)
+            self.assertIn("Migrated 0 Session journal(s), skipped 1", second.stdout)
             self.assertEqual(path.read_bytes(), after_first)
+
+    def test_up_to_date_journal_is_skipped_without_a_backup(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "session-1" / "session-1.jsonl"
+            body = write_journal(path, [
+                event(1, "job_submitted", {
+                    "job_id": "job-1", "kind": "shell", "status": "submitted",
+                    "details": {"command": "echo hi"},
+                }),
+                event(2, "job_completed", {
+                    "job_id": "job-1", "kind": "shell", "status": "completed",
+                    "elapsed_seconds": 1.0, "result_summary": "hi", "progress": None,
+                }),
+            ])
+
+            result = run_migration(root)
+
+            self.assertIn("Migrated 0 Session journal(s), skipped 1", result.stdout)
+            self.assertEqual(path.read_bytes(), body)
+            self.assertFalse(path.with_name(path.name + ".v1.bak").exists())
+
+    def test_rerun_overwrites_a_stale_backup(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "session-1" / "session-1.jsonl"
+            # A journal written by an older revision of the script can still
+            # miss a field this revision knows about, even when its backup
+            # already exists.
+            body = write_journal(path, [
+                event(1, "job_submitted", {
+                    "job_id": "job-1", "kind": "shell", "status": "submitted",
+                    "details": {},
+                }),
+                event(2, "job_completed", {
+                    "job_id": "job-1", "kind": "shell", "status": "completed",
+                    "elapsed_seconds": None, "result_summary": None,
+                }),
+            ])
+            backup = path.with_name(path.name + ".v1.bak")
+            backup.write_bytes(b"stale backup\n")
+
+            first = run_migration(root)
+
+            self.assertIn("Migrated 1 Session journal(s), skipped 0", first.stdout)
+            self.assertEqual(backup.read_bytes(), body)
+            migrated = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+            self.assertIsNone(migrated[1]["payload"]["progress"])
+
+            after_first = path.read_bytes()
+            second = run_migration(root)
+            self.assertIn("Migrated 0 Session journal(s), skipped 1", second.stdout)
+            self.assertEqual(path.read_bytes(), after_first)
+            self.assertEqual(backup.read_bytes(), body)
 
     def test_invalid_journal_is_not_changed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -77,10 +140,7 @@ class SessionMigrationTest(unittest.TestCase):
             path.parent.mkdir()
             path.write_text("{invalid}\n", encoding="utf-8")
 
-            result = subprocess.run(
-                [sys.executable, str(SCRIPT), "--sessions-dir", str(root)],
-                capture_output=True, text=True,
-            )
+            result = run_migration(root, check=False)
 
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(path.read_text(encoding="utf-8"), "{invalid}\n")

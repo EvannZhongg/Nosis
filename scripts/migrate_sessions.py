@@ -71,8 +71,10 @@ def migrate_journal(path: Path) -> bool:
         return False
 
     backup = path.with_name(path.name + ".v1.bak")
-    # Never overwrite the original V1 backup, including on a later rerun.
-    with backup.open("xb") as file:
+    # Reruns overwrite the backup: a journal migrated by an older revision of
+    # this script can still need changes, and the file on disk is the only
+    # remaining pre-migration copy at that point.
+    with backup.open("wb") as file:
         file.write(original)
         file.flush()
         os.fsync(file.fileno())
@@ -106,13 +108,16 @@ def main() -> None:
         parser.error(f"Session directory does not exist: {root}")
 
     migrated = 0
+    skipped = 0
     for path in sorted(root.rglob("*.jsonl")):
         if path.stem != path.parent.name:
             continue
         if migrate_journal(path):
             print(f"Migrated: {path}")
             migrated += 1
-    print(f"Migrated {migrated} Session journal(s).")
+        else:
+            skipped += 1
+    print(f"Migrated {migrated} Session journal(s), skipped {skipped} already up to date.")
 
 
 if __name__ == "__main__":

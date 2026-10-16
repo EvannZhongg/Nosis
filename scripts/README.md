@@ -20,8 +20,8 @@ python scripts/migrate_sessions.py --sessions-dir /path/to/sessions
 
 - 逐行校验 JSON；遇到非法事件立即中止，不改动任何文件。
 - 只处理会话自身的日志（文件名与所在目录同名），Artifact 等其它 `.jsonl` 不受影响。
-- 需要改写的日志先保存一份 `<name>.jsonl.v1.bak`，已存在的备份不会被覆盖。
+- 需要改写的日志先保存一份 `<name>.jsonl.v1.bak`（内容是这次迁移前的日志），重复运行会覆盖该备份。
 - 通过同目录临时文件加原子替换写回，并保留原文件权限。
-- 幂等：字段齐备的日志不会改写，再次运行输出 `Migrated 0 Session journal(s).`。
+- 幂等：字段齐备的日志不改写也不生成备份，运行结果输出 `Migrated 0 Session journal(s), skipped N already up to date.`。
 
 脚本只负责相邻版本（V1 → V2）的迁移；后续格式变更需要各自的迁移脚本，不要用它跨越多个版本。
