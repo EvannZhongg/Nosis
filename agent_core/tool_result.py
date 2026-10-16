@@ -120,12 +120,12 @@ class ToolResultNormalizer:
             }
             if result.artifact_preview is not None:
                 # JSON null occupies four characters in the empty summary.
-                budget = (
+                json_budget = (
                     self._max_chars
                     - len(json.dumps(summary, ensure_ascii=False))
                     + 4
                 )
-                summary["preview"] = result.artifact_preview(budget)
+                summary["preview"] = result.artifact_preview(json_budget)
             else:
                 if body is None:
                     body = artifact_body(result)
@@ -135,7 +135,13 @@ class ToolResultNormalizer:
                 result.artifact_preview is not None
                 and len(normalized) > self._max_chars
             ):
-                raise ValueError("tool artifact preview exceeds output limit")
+                preview_chars = len(json.dumps(summary["preview"], ensure_ascii=False))
+                raise ValueError(
+                    f"artifact_preview for tool '{result.name}' exceeds its JSON "
+                    f"budget: serialized preview has {preview_chars} characters, "
+                    f"allowed {json_budget}; normalized result has "
+                    f"{len(normalized)} characters, limit {self._max_chars}"
+                )
             return normalized
         finally:
             if result.artifact_cleanup is not None:

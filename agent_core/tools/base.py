@@ -106,7 +106,9 @@ class ToolResult:
     artifact_cleanup: Callable[[], None] | None = field(
         default=None, compare=False, repr=False
     )
-    # Receives the serialized JSON budget for the preview value alone.
+    # Called with json_budget for the returned JSONValue alone. Must satisfy
+    # len(json.dumps(value, ensure_ascii=False)) <= json_budget, including
+    # JSON syntax, string quotes, and escapes; not the raw string length.
     artifact_preview: Callable[[int], JSONValue] | None = field(
         default=None, compare=False, repr=False
     )
@@ -153,6 +155,9 @@ class ToolOutput:
     artifact_cleanup: Callable[[], None] | None = field(
         default=None, compare=False, repr=False
     )
+    # Called with json_budget for the returned JSONValue alone. Must satisfy
+    # len(json.dumps(value, ensure_ascii=False)) <= json_budget, including
+    # JSON syntax, string quotes, and escapes; not the raw string length.
     artifact_preview: Callable[[int], JSONValue] | None = field(
         default=None, compare=False, repr=False
     )

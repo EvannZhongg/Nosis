@@ -270,17 +270,19 @@ def _command_output(execution: CommandExecutionResult) -> JSONValue | ToolOutput
         output=output,
         artifact_writer=writer,
         artifact_cleanup=_cleanup_spools(stdout_spool, stderr_spool),
-        artifact_preview=lambda budget: _shell_artifact_preview(execution, output, budget),
+        artifact_preview=lambda json_budget: _shell_artifact_preview(
+            execution, output, json_budget
+        ),
     )
 
 
 def _shell_artifact_preview(
     execution: CommandExecutionResult,
     output: dict[str, JSONValue],
-    budget: int,
+    json_budget: int,
 ) -> JSONValue:
     preview = {**output, "command": "", "stdout": "", "stderr": ""}
-    remaining = budget - len(json.dumps(preview, ensure_ascii=False))
+    remaining = json_budget - len(json.dumps(preview, ensure_ascii=False))
     if remaining < 0:
         raise ValueError("shell artifact preview metadata exceeds output limit")
 
@@ -293,7 +295,7 @@ def _shell_artifact_preview(
         excerpts[name] = (
             TextExcerpt(value, value, len(value))
             if spool is None
-            else spool.excerpt(budget)
+            else spool.excerpt(json_budget)
         )
 
     # Satisfy short fields first, then divide the remaining serialized
@@ -302,7 +304,7 @@ def _shell_artifact_preview(
         name: (
             escaped_length(excerpt.head)
             if len(excerpt.head) == excerpt.size_chars
-            else budget + 1
+            else json_budget + 1
         )
         for name, excerpt in excerpts.items()
     }

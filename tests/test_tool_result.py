@@ -188,15 +188,53 @@ class ToolResultNormalizerTest(unittest.TestCase):
             )
             self.assertFalse(spool.exists())
 
-    def test_cleans_spool_when_custom_preview_exceeds_budget(self) -> None:
+    def test_string_previews_fit_serialized_json_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+            normalizer = ToolResultNormalizer(
+                workspace, "session", max_chars=1000,
+                sessions_directory=workspace.path / "sessions",
+            )
+            for prefix in ("", '中文"\\\n\t\x00'):
+                with self.subTest(prefix=prefix):
+                    values = []
+
+                    def preview(json_budget):
+                        syntax_chars = len(json.dumps(prefix, ensure_ascii=False))
+                        value = prefix + "x" * (json_budget - syntax_chars)
+                        self.assertEqual(
+                            len(json.dumps(value, ensure_ascii=False)), json_budget
+                        )
+                        values.append(value)
+                        return value
+
+                    result = ToolResult(
+                        tool_call_id="string-preview", name="custom",
+                        artifact_writer=lambda path: path.write_text(
+                            "full output", encoding="utf-8"
+                        ),
+                        artifact_preview=preview,
+                    )
+                    normalized = normalizer.normalize(result)
+
+                    self.assertEqual(len(normalized), 1000)
+                    self.assertEqual(json.loads(normalized)["preview"], values[0])
+
+    def test_reports_json_budget_violation_and_cleans_spool(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Workspace(Path(directory))
             cleanup = Mock()
+            budgets = []
+
+            def preview(json_budget):
+                budgets.append(json_budget)
+                return "x" * json_budget
+
             result = ToolResult(
                 tool_call_id="oversized-preview",
                 name="custom",
                 artifact_writer=lambda path: path.write_text("full output", encoding="utf-8"),
-                artifact_preview=lambda budget: "x" * (budget + 1),
+                artifact_preview=preview,
                 artifact_cleanup=cleanup,
             )
             normalizer = ToolResultNormalizer(
@@ -204,9 +242,15 @@ class ToolResultNormalizerTest(unittest.TestCase):
                 sessions_directory=workspace.path / "sessions",
             )
 
-            with self.assertRaisesRegex(ValueError, "preview exceeds output limit"):
+            with self.assertRaises(ValueError) as raised:
                 normalizer.normalize(result)
 
+            self.assertEqual(
+                str(raised.exception),
+                "artifact_preview for tool 'custom' exceeds its JSON budget: "
+                f"serialized preview has {budgets[0] + 2} characters, "
+                f"allowed {budgets[0]}; normalized result has 1002 characters, limit 1000",
+            )
             cleanup.assert_called_once()
 
 
