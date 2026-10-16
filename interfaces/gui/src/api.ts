@@ -138,6 +138,18 @@ export async function selectWorkspace(): Promise<string | null> {
   return (await response.json() as { workspace: string | null }).workspace;
 }
 
+export async function openWorkspaceFolder(workspace: string): Promise<void> {
+  const response = await fetch("/api/workspace/open", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ workspace }),
+  });
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.detail ?? `打开工作区文件夹失败 (${response.status})`);
+  }
+}
+
 export async function createScratchWorkspace(sessionId: string): Promise<string> {
   const response = await fetch("/api/workspaces/scratch", {
     method: "POST",

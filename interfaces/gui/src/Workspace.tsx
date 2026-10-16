@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, File, Folder, FolderOpen, PanelRightClose, RefreshCw } from "lucide-react";
-import { get, type Directory } from "./api";
+import { get, openWorkspaceFolder, type Directory } from "./api";
 import { CopyTextButton } from "./CopyTextButton";
 
 function DirectoryTree({ path, version, workspace }: { path: string; version: number; workspace: string }) {
@@ -76,16 +76,24 @@ function DirectoryTree({ path, version, workspace }: { path: string; version: nu
 
 export function Workspace({ version, workspace, collapsed, onCollapsedChange }: { version: number; workspace?: string | null; collapsed: boolean; onCollapsedChange: (collapsed: boolean) => void }) {
   const [refresh, setRefresh] = useState(0);
+  const [error, setError] = useState("");
   const selectedWorkspace = workspace?.trim() ?? "";
+  const openFolder = async () => {
+    setError("");
+    try {
+      await openWorkspaceFolder(selectedWorkspace);
+    } catch (error) {
+      setError(String(error));
+    }
+  };
   return <aside className={`workspace-panel ${collapsed ? "collapsed" : ""}`} aria-label="Workspace">
     <button className="workspace-rail-button" aria-label="展开工作区" title="展开工作区" onClick={() => onCollapsedChange(false)}><Folder size={19} /></button>
     <div className="workspace-content">
-      <header className="workspace-header"><span>Workspace</span><div className="workspace-header-actions"><button className="icon-button" aria-label="刷新目录" title="刷新目录" disabled={!selectedWorkspace} onClick={() => setRefresh((value) => value + 1)}><RefreshCw size={14} /></button><button className="icon-button" aria-label="收起工作区" title="收起工作区" onClick={() => onCollapsedChange(true)}><PanelRightClose size={15} /></button></div></header>
-      <div className="workspace-files">{selectedWorkspace
+      <header className="workspace-header"><span>Workspace</span><div className="workspace-header-actions"><button className="icon-button" aria-label="打开工作区文件夹" title="打开工作区文件夹" disabled={!selectedWorkspace} onClick={() => { void openFolder(); }}><FolderOpen size={14} /></button><button className="icon-button" aria-label="刷新目录" title="刷新目录" disabled={!selectedWorkspace} onClick={() => setRefresh((value) => value + 1)}><RefreshCw size={14} /></button><button className="icon-button" aria-label="收起工作区" title="收起工作区" onClick={() => onCollapsedChange(true)}><PanelRightClose size={15} /></button></div></header>
+      <div className="workspace-files">{error && <p className="tree-error" role="alert">{error}</p>}{selectedWorkspace
         ? <DirectoryTree key={selectedWorkspace} path="." version={version + refresh} workspace={selectedWorkspace} />
         : <div className="workspace-unselected"><Folder size={20} /><span>未选择工作区</span></div>}
       </div>
-      <div className="workspace-footer"><Folder size={13} /> {selectedWorkspace ? "项目文件" : "未选择工作区"}</div>
     </div>
   </aside>;
 }

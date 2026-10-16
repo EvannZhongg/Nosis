@@ -1,5 +1,8 @@
-"""Workspace selection, creation, and read-only browsing endpoints."""
+"""Workspace selection, creation, folder opening, and browsing endpoints."""
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 from fastapi import APIRouter, Body, HTTPException
@@ -106,5 +109,25 @@ def create_workspace_router(
         except (OSError, ValueError) as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
         return {"root": str(current_workspace.path), **listing}
+
+    @router.post("/api/workspace/open", status_code=204)
+    def open_workspace(
+        workspace: str = Body(..., embed=True, min_length=1),
+    ) -> None:
+        try:
+            directory = Workspace(Path(workspace)).path
+        except (OSError, ValueError) as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        try:
+            if sys.platform == "win32":
+                os.startfile(directory)
+            else:
+                command = "open" if sys.platform == "darwin" else "xdg-open"
+                subprocess.Popen([command, str(directory)])
+        except OSError as error:
+            raise HTTPException(
+                status_code=500,
+                detail=f"无法打开工作区文件夹：{error}",
+            ) from error
 
     return router
