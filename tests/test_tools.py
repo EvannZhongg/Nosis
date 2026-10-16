@@ -38,6 +38,7 @@ from agent_core import (
     builtin_catalog,
 )
 from agent_core.permissions import PermissionPreset
+from agent_core.turn_control import AgentCancelled, TurnControl
 from agent_core.scheduler import CronTrigger, IntervalTrigger, SchedulerService
 from agent_core.tools.builtin.schedule import ScheduledTaskTool
 from agent_core.tools.budget import MAX_TOOL_RESULT_CHARS
@@ -2339,7 +2340,10 @@ class SearchFilesToolTest(unittest.TestCase):
     def test_skips_common_dependency_and_build_directories(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Workspace(Path(directory))
-            for name in ("node_modules", ".venv", "build"):
+            for name in (
+                "node_modules", ".venv", "build", ".pnpm-store", ".npm",
+                ".cache", ".yarn", "pip-cache", "uv-cache",
+            ):
                 excluded = workspace.path / name
                 excluded.mkdir()
                 (excluded / "match.txt").write_text(
@@ -2360,6 +2364,137 @@ class SearchFilesToolTest(unittest.TestCase):
                 ["match.txt"],
             )
             self.assertEqual(result["scanned_files"], 1)
+
+    def test_can_search_an_explicit_cache_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+            cache = workspace.path / ".pnpm-store"
+            cache.mkdir()
+            (cache / "match.txt").write_text("Nosis", encoding="utf-8")
+
+            result = _Bound(SearchFilesTool(), workspace).execute(
+                {"path": ".pnpm-store", "pattern": "Nosis"}
+            )
+
+            self.assertEqual(result["matches"][0]["path"], ".pnpm-store/match.txt")
+
+    def test_resolves_only_the_search_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+            nested = workspace.path / "nested"
+            nested.mkdir()
+            (nested / "match.txt").write_text("Nosis", encoding="utf-8")
+            tool = _Bound(SearchFilesTool(), workspace)
+            resolved = []
+            original_resolve = Path.resolve
+
+            def resolve(path, *args, **kwargs):
+                resolved.append(path)
+                return original_resolve(path, *args, **kwargs)
+
+            with patch.object(Path, "resolve", resolve):
+                result = tool.execute({"path": ".", "pattern": "Nosis"})
+
+            self.assertEqual(result["scanned_files"], 1)
+            self.assertEqual(resolved, [workspace.path])
+
+    def test_times_out_during_directory_enumeration(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+            (workspace.path / "empty").mkdir()
+            tool = _Bound(SearchFilesTool(), workspace)
+            clock = SimpleNamespace(now=0.0)
+            with os.scandir(workspace.path) as iterator:
+                entries = list(iterator)
+
+            def slow_entries():
+                clock.now = 1.0
+                yield from entries
+
+            with (
+                patch("agent_core.tools.builtin.search_files.os.scandir") as scandir,
+                patch(
+                    "agent_core.tools.builtin.search_files.time.monotonic",
+                    side_effect=lambda: clock.now,
+                ),
+            ):
+                scandir.return_value.__enter__.return_value = slow_entries()
+                with self.assertRaisesRegex(TimeoutError, "after 1 seconds"):
+                    tool.execute({"path": ".", "pattern": "x", "timeout_seconds": 1})
+
+    def test_times_out_while_scanning_lines_without_matches(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+            (workspace.path / "notes.txt").write_text("one\ntwo", encoding="utf-8")
+            tool = _Bound(SearchFilesTool(), workspace)
+            clock = SimpleNamespace(now=0.0)
+
+            def slow_match(_value):
+                clock.now = 2.0
+                return False
+
+            matcher = Mock(side_effect=slow_match)
+            with (
+                patch(
+                    "agent_core.tools.builtin.search_files._create_matcher",
+                    return_value=matcher,
+                ),
+                patch(
+                    "agent_core.tools.builtin.search_files.time.monotonic",
+                    side_effect=lambda: clock.now,
+                ),
+            ):
+                with self.assertRaises(TimeoutError):
+                    tool.execute({"path": ".", "pattern": "x", "timeout_seconds": 2})
+
+            self.assertEqual(matcher.call_count, 1)
+
+    def test_checks_deadline_after_last_file_in_files_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+            (workspace.path / "notes.txt").write_text("", encoding="utf-8")
+            tool = _Bound(SearchFilesTool(), workspace)
+            clock = SimpleNamespace(now=0.0)
+
+            def slow_match(_value):
+                clock.now = 60.0
+                return False
+
+            schema = tool.definition.parameters["properties"]["timeout_seconds"]
+            self.assertEqual(schema["default"], 60)
+            with (
+                patch(
+                    "agent_core.tools.builtin.search_files._create_matcher",
+                    return_value=slow_match,
+                ),
+                patch(
+                    "agent_core.tools.builtin.search_files.time.monotonic",
+                    side_effect=lambda: clock.now,
+                ),
+            ):
+                with self.assertRaisesRegex(TimeoutError, "after 60 seconds"):
+                    tool.execute({"path": ".", "pattern": "x", "mode": "files"})
+
+    def test_honors_cancellation_during_search(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+            (workspace.path / "notes.txt").write_text("one\ntwo", encoding="utf-8")
+            control = TurnControl()
+            tool = _Bound(SearchFilesTool(), workspace, cancellation=control)
+
+            def cancel(_value):
+                control.cancel()
+                return False
+
+            matcher = Mock(side_effect=cancel)
+            with patch(
+                "agent_core.tools.builtin.search_files._create_matcher",
+                return_value=matcher,
+            ):
+                with self.assertRaises(AgentCancelled):
+                    tool.execute({"path": ".", "pattern": "x"})
+
+            self.assertEqual(matcher.call_count, 1)
 
     def test_skips_files_larger_than_scan_limit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2571,6 +2706,37 @@ class SearchFilesToolTest(unittest.TestCase):
             self.assertEqual(result["matches"], [])
             self.assertEqual(result["skipped_files"], 1)
 
+    @unittest.skipUnless(os.name == "nt", "directory junctions are a Windows feature")
+    def test_skips_junctions_to_descendants_and_ancestors(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+            nested = workspace.path / "nested"
+            nested.mkdir()
+            (nested / "match.txt").write_text("Nosis", encoding="utf-8")
+            links = [workspace.path / "alias", nested / "ancestor"]
+            for link, target in zip(links, (nested, workspace.path)):
+                subprocess.run(
+                    ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+                    check=True,
+                    capture_output=True,
+                )
+            try:
+                tool = _Bound(SearchFilesTool(), workspace)
+                for mode in ("files", "content"):
+                    with self.subTest(mode=mode):
+                        result = tool.execute(
+                            {"path": ".", "pattern": "match" if mode == "files" else "Nosis", "mode": mode}
+                        )
+                        self.assertEqual(
+                            [match["path"] for match in result["matches"]],
+                            ["nested/match.txt"],
+                        )
+                        self.assertEqual(result["scanned_files"], 1)
+                        self.assertEqual(result["skipped_files"], 2)
+            finally:
+                for link in links:
+                    link.rmdir()
+
     def test_rejects_path_outside_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             tool = _Bound(SearchFilesTool(), Workspace(Path(directory)))
@@ -2615,6 +2781,11 @@ class SearchFilesToolTest(unittest.TestCase):
                     "case_insensitive": 1,
                 },
                 {"path": ".", "pattern": "x", "fixed_strings": 1},
+                {"path": ".", "pattern": "x", "timeout_seconds": 0},
+                {"path": ".", "pattern": "x", "timeout_seconds": -1},
+                {"path": ".", "pattern": "x", "timeout_seconds": True},
+                {"path": ".", "pattern": "x", "timeout_seconds": 1.5},
+                {"path": ".", "pattern": "x", "timeout_seconds": "1"},
                 {"path": ".", "pattern": "x", "unknown": True},
             )
 

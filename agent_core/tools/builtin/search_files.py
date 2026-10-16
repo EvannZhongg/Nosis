@@ -1,9 +1,14 @@
+import os
 import re
+import stat
+import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-from ...path_utils import is_path_within, path_for_comparison
+from ...execution.process import CancellationSignal
+from ...path_utils import path_for_comparison
+from ...turn_control import AgentCancelled
 from ..base import JSONValue, Tool, ToolDefinition
 from ..budget import output_fits
 from ..context import ToolExecutionContext
@@ -14,22 +19,29 @@ DEFAULT_SEARCH_LIMIT = 200
 MAX_SEARCH_LIMIT = 200
 MAX_CONTEXT_LINES = 20
 MAX_FILE_SIZE_BYTES = 1024 * 1024
+DEFAULT_SEARCH_TIMEOUT_SECONDS = 60
 DEFAULT_EXCLUDED_DIRECTORIES = frozenset(
     {
+        ".cache",
         ".git",
         ".hg",
         ".mypy_cache",
+        ".npm",
+        ".pnpm-store",
         ".pytest_cache",
         ".ruff_cache",
         ".svn",
         ".tox",
         ".venv",
+        ".yarn",
         "__pycache__",
         "build",
         "coverage",
         "dist",
         "node_modules",
+        "pip-cache",
         "target",
+        "uv-cache",
         "venv",
         "vendor",
     }
@@ -37,8 +49,19 @@ DEFAULT_EXCLUDED_DIRECTORIES = frozenset(
 
 
 @dataclass
-class _TraversalStats:
+class _SearchState:
+    deadline: float
+    timeout_seconds: int
+    cancellation: CancellationSignal | None
     skipped_files: int = 0
+
+    def check(self) -> None:
+        if self.cancellation is not None and self.cancellation.cancelled:
+            raise AgentCancelled
+        if time.monotonic() >= self.deadline:
+            raise TimeoutError(
+                f"search_files timed out after {self.timeout_seconds} seconds"
+            )
 
 
 class SearchFilesTool(Tool):
@@ -53,7 +76,10 @@ class SearchFilesTool(Tool):
                 "lines are returned around each hit. In files mode, pattern "
                 "matches file paths relative to the requested directory. "
                 "Glob filtering, regular expressions, fixed strings, and "
-                "paginated matches are supported."
+                "paginated matches are supported. Symlinks, directory "
+                "junctions, and common dependency/cache/build directories "
+                "are skipped. Searches time out after "
+                f"{DEFAULT_SEARCH_TIMEOUT_SECONDS} seconds by default."
             ),
             parameters={
                 "type": "object",
@@ -99,6 +125,15 @@ class SearchFilesTool(Tool):
                         "default": DEFAULT_SEARCH_LIMIT,
                         "description": "Maximum number of matches to return.",
                     },
+                    "timeout_seconds": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "default": DEFAULT_SEARCH_TIMEOUT_SECONDS,
+                        "description": (
+                            "Search time budget in seconds. Exceeding the "
+                            "budget returns a timeout error."
+                        ),
+                    },
                     "context_before": {
                         "type": "integer",
                         "minimum": 0,
@@ -142,6 +177,14 @@ class SearchFilesTool(Tool):
         context: ToolExecutionContext,
     ) -> JSONValue:
         options = _parse_arguments(arguments)
+        timeout_seconds = options["timeout_seconds"]
+        assert isinstance(timeout_seconds, int)
+        state = _SearchState(
+            deadline=time.monotonic() + timeout_seconds,
+            timeout_seconds=timeout_seconds,
+            cancellation=context.cancellation,
+        )
+        state.check()
         workspace = context.workspace
         directory_path = workspace.resolve_path(options["path"])
         if not directory_path.is_dir():
@@ -152,19 +195,20 @@ class SearchFilesTool(Tool):
             options["case_insensitive"],
             options["fixed_strings"],
         )
-        stats = _TraversalStats()
-        files = _iter_files(directory_path, options["glob"], stats)
+        files = _iter_files(directory_path, options["glob"], state)
+        workspace_root = path_for_comparison(workspace.path)
         matches: list[dict[str, JSONValue]] = []
         scanned_files = 0
         seen_matches = 0
         has_more = False
 
         for file_path in files:
+            state.check()
             relative_search_path = file_path.relative_to(
                 directory_path
             ).as_posix()
             workspace_path = path_for_comparison(file_path).relative_to(
-                path_for_comparison(workspace.path)
+                workspace_root
             ).as_posix()
             if options["mode"] == "files":
                 scanned_files += 1
@@ -176,11 +220,11 @@ class SearchFilesTool(Tool):
             else:
                 try:
                     if file_path.stat().st_size > MAX_FILE_SIZE_BYTES:
-                        stats.skipped_files += 1
+                        state.skipped_files += 1
                         continue
                     lines = file_path.read_bytes().decode("utf-8").splitlines()
                 except (OSError, UnicodeDecodeError):
-                    stats.skipped_files += 1
+                    state.skipped_files += 1
                     continue
                 scanned_files += 1
                 candidates = _content_matches(
@@ -189,9 +233,11 @@ class SearchFilesTool(Tool):
                     matcher,
                     options["context_before"],
                     options["context_after"],
+                    state,
                 )
 
             for match in candidates:
+                state.check()
                 if seen_matches < options["offset"]:
                     seen_matches += 1
                     continue
@@ -208,6 +254,7 @@ class SearchFilesTool(Tool):
             if has_more:
                 break
 
+        state.check()
         return {
             "matches": matches,
             "has_more": has_more,
@@ -215,7 +262,7 @@ class SearchFilesTool(Tool):
                 options["offset"] + len(matches) if has_more else None
             ),
             "scanned_files": scanned_files,
-            "skipped_files": stats.skipped_files,
+            "skipped_files": state.skipped_files,
         }
 
 
@@ -227,6 +274,7 @@ def _parse_arguments(arguments: dict[str, JSONValue]) -> dict[str, object]:
         "glob",
         "offset",
         "limit",
+        "timeout_seconds",
         "context_before",
         "context_after",
         "case_insensitive",
@@ -235,8 +283,8 @@ def _parse_arguments(arguments: dict[str, JSONValue]) -> dict[str, object]:
     if not set(arguments) <= allowed:
         raise ValueError(
             "search_files accepts only 'path', 'pattern', 'mode', 'glob', "
-            "'offset', 'limit', 'context_before', 'context_after', "
-            "'case_insensitive', and 'fixed_strings'"
+            "'offset', 'limit', 'timeout_seconds', 'context_before', "
+            "'context_after', 'case_insensitive', and 'fixed_strings'"
         )
 
     options: dict[str, object] = {
@@ -246,6 +294,9 @@ def _parse_arguments(arguments: dict[str, JSONValue]) -> dict[str, object]:
         "glob": arguments.get("glob", "**/*"),
         "offset": arguments.get("offset", 0),
         "limit": arguments.get("limit", DEFAULT_SEARCH_LIMIT),
+        "timeout_seconds": arguments.get(
+            "timeout_seconds", DEFAULT_SEARCH_TIMEOUT_SECONDS
+        ),
         "context_before": arguments.get("context_before", 0),
         "context_after": arguments.get("context_after", 0),
         "case_insensitive": arguments.get("case_insensitive", False),
@@ -260,6 +311,9 @@ def _parse_arguments(arguments: dict[str, JSONValue]) -> dict[str, object]:
     if not isinstance(options["glob"], str) or not options["glob"]:
         raise ValueError("search_files requires 'glob' to be a non-empty string")
     _validate_bounded_integer(options["offset"], "offset", minimum=0)
+    _validate_bounded_integer(
+        options["timeout_seconds"], "timeout_seconds", minimum=1
+    )
     _validate_bounded_integer(
         options["limit"], "limit", minimum=1, maximum=MAX_SEARCH_LIMIT
     )
@@ -331,40 +385,58 @@ def _create_matcher(
 def _iter_files(
     directory_path: Path,
     glob: object,
-    stats: _TraversalStats,
+    state: _SearchState,
 ) -> Iterator[Path]:
     assert isinstance(glob, str)
-    yield from _iter_directory_files(directory_path, directory_path, glob, stats)
+    yield from _iter_directory_files(directory_path, directory_path, glob, state)
 
 
 def _iter_directory_files(
     current_directory: Path,
     search_root: Path,
     glob: str,
-    stats: _TraversalStats,
+    state: _SearchState,
 ) -> Iterator[Path]:
+    state.check()
     try:
-        entries = sorted(current_directory.iterdir(), key=lambda path: path.name)
+        with os.scandir(current_directory) as iterator:
+            entries = []
+            for entry in iterator:
+                state.check()
+                entries.append(entry)
+        entries.sort(key=lambda entry: entry.name)
+    except TimeoutError:
+        raise
     except OSError:
         return
     for entry in entries:
-        relative_path = entry.relative_to(search_root)
+        state.check()
+        entry_path = Path(entry.path)
+        relative_path = entry_path.relative_to(search_root)
         try:
-            if entry.is_symlink() or not is_path_within(entry, search_root):
-                if matches_path_glob(relative_path, glob):
-                    stats.skipped_files += 1
-                continue
-            if entry.is_dir():
-                if entry.name not in DEFAULT_EXCLUDED_DIRECTORIES:
-                    yield from _iter_directory_files(
-                        entry, search_root, glob, stats
-                    )
-                continue
-            if entry.is_file() and matches_path_glob(relative_path, glob):
-                yield entry
+            # Windows scandir caches the reparse tag; junctions are not
+            # symlinks and must be rejected before following a directory.
+            linked = entry.is_symlink() or (
+                os.name == "nt"
+                and entry.stat(follow_symlinks=False).st_reparse_tag
+                == stat.IO_REPARSE_TAG_MOUNT_POINT
+            )
+            is_directory = not linked and entry.is_dir(follow_symlinks=False)
+            is_file = not linked and entry.is_file(follow_symlinks=False)
         except OSError:
             if matches_path_glob(relative_path, glob):
-                stats.skipped_files += 1
+                state.skipped_files += 1
+            continue
+        if linked:
+            if matches_path_glob(relative_path, glob):
+                state.skipped_files += 1
+        elif is_directory:
+            if entry.name not in DEFAULT_EXCLUDED_DIRECTORIES:
+                yield from _iter_directory_files(
+                    entry_path, search_root, glob, state
+                )
+        elif is_file and matches_path_glob(relative_path, glob):
+            yield entry_path
 
 
 def _content_matches(
@@ -373,10 +445,12 @@ def _content_matches(
     matcher: Callable[[str], object],
     context_before: object,
     context_after: object,
+    state: _SearchState,
 ) -> Iterator[dict[str, JSONValue]]:
     assert isinstance(context_before, int)
     assert isinstance(context_after, int)
     for index, line in enumerate(lines):
+        state.check()
         if not matcher(line):
             continue
         match: dict[str, JSONValue] = {

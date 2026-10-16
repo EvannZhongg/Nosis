@@ -1,9 +1,13 @@
+import json
+import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from agent_core import (
     Session,
+    SearchFilesTool,
     Tool,
     ToolBatchExecutor,
     ToolCall,
@@ -58,6 +62,37 @@ class FailingNormalizer:
 
 
 class ToolBatchExecutorTest(unittest.TestCase):
+    def test_search_timeout_is_journaled_and_returned_as_a_tool_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            session = Session("search-timeout")
+            turn_id = session.begin_turn("turn")
+            context = ToolExecutionContext(workspace=Workspace(Path(directory)), session=session)
+            tool = SearchFilesTool()
+            tools = ToolCatalog((tool,)).select((tool.name,), context)
+            call = ToolCall("search", tool.name, {"path": ".", "pattern": "x"})
+
+            class Normalizer:
+                def normalize(self, result):
+                    return result.to_content()
+
+            executor = ToolBatchExecutor(tools, session, Normalizer(), now=lambda: NOW)
+            with patch(
+                "agent_core.tools.builtin.search_files.time.monotonic",
+                side_effect=[0.0, 0.0, 60.0],
+            ):
+                executor.execute((call,), turn_id=turn_id)
+
+            self.assertEqual(session.tool_executions[call.id].status, "failed")
+            events = [event for event in session.journal if event.tool_call_id == call.id]
+            self.assertEqual(
+                [event.event_type for event in events],
+                ["tool_started", "tool_failed", "message_appended"],
+            )
+            content = json.loads(session.items[-1].content)
+            self.assertFalse(content["ok"])
+            self.assertEqual(content["error"]["type"], "TimeoutError")
+            self.assertIn("60 seconds", content["error"]["message"])
+
     def test_invalid_arguments_do_not_block_valid_siblings_in_either_execution_mode(self):
         for concurrent in (False, True):
             with self.subTest(concurrent=concurrent):
