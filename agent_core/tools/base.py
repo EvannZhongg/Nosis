@@ -106,6 +106,10 @@ class ToolResult:
     artifact_cleanup: Callable[[], None] | None = field(
         default=None, compare=False, repr=False
     )
+    # Receives the serialized JSON budget for the preview value alone.
+    artifact_preview: Callable[[int], JSONValue] | None = field(
+        default=None, compare=False, repr=False
+    )
 
     def __del__(self) -> None:
         # Last-resort cleanup when a tool result is abandoned before the
@@ -147,6 +151,9 @@ class ToolOutput:
         default=None, compare=False, repr=False
     )
     artifact_cleanup: Callable[[], None] | None = field(
+        default=None, compare=False, repr=False
+    )
+    artifact_preview: Callable[[int], JSONValue] | None = field(
         default=None, compare=False, repr=False
     )
 

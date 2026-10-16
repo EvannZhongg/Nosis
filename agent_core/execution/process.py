@@ -35,12 +35,35 @@ class CommandExecutionResult:
 
 
 @dataclass(frozen=True)
+class TextExcerpt:
+    """Original stream ends and length, before any truncation markers."""
+
+    head: str
+    tail: str
+    size_chars: int
+
+    def render(self, kept_chars: int) -> str:
+        if kept_chars >= self.size_chars:
+            return self.head
+        head_chars = (kept_chars + 1) // 2
+        tail_chars = kept_chars // 2
+        return (
+            self.head[:head_chars]
+            + f"\n... [truncated {self.size_chars - kept_chars} characters] ...\n"
+            + (self.tail[-tail_chars:] if tail_chars else "")
+        )
+
+
+@dataclass(frozen=True)
 class CommandOutputSpool:
     """A complete command stream retained on disk for artifact creation."""
 
     path: Path
     size_chars: int
     encoding: str
+
+    def excerpt(self, limit: int) -> TextExcerpt:
+        return _read_text_excerpt(self.path, limit, self.encoding, "replace")
 
     def cleanup(self) -> None:
         try:
@@ -356,8 +379,26 @@ def _read_text_preview_with_encoding(
     encoding: str,
     errors: str,
 ) -> tuple[str, int]:
+    excerpt = _read_text_excerpt(path, budget, encoding, errors)
+    if excerpt.size_chars <= budget:
+        return excerpt.head, excerpt.size_chars
+    kept_chars = budget
+    while True:
+        preview = excerpt.render(kept_chars)
+        overflow = len(preview) - budget
+        if overflow <= 0:
+            return preview, excerpt.size_chars
+        kept_chars = max(0, kept_chars - overflow)
+
+
+def _read_text_excerpt(
+    path: Path,
+    limit: int,
+    encoding: str,
+    errors: str,
+) -> TextExcerpt:
     head: list[str] = []
-    tail: deque[str] = deque(maxlen=budget)
+    tail: deque[str] = deque(maxlen=limit)
     size_chars = 0
     with path.open("r", encoding=encoding, errors=errors, newline="") as file:
         while True:
@@ -365,30 +406,12 @@ def _read_text_preview_with_encoding(
             if not chunk:
                 break
             size_chars += len(chunk)
-            remaining_head = budget - len(head)
+            remaining_head = limit - len(head)
             if remaining_head > 0:
                 head.extend(chunk[:remaining_head])
             tail.extend(chunk)
 
-    if size_chars <= budget:
-        return "".join(head), size_chars
-    kept_chars = budget
-    omitted_chars = size_chars - kept_chars
-    while True:
-        marker = f"\n... [truncated {omitted_chars} characters] ...\n"
-        kept_chars = max(0, budget - len(marker))
-        next_omitted_chars = size_chars - kept_chars
-        if next_omitted_chars == omitted_chars:
-            break
-        omitted_chars = next_omitted_chars
-    head_chars = (kept_chars + 1) // 2
-    tail_chars = kept_chars // 2
-    return (
-        "".join(head[:head_chars])
-        + marker
-        + ("".join(tail)[-tail_chars:] if tail_chars else ""),
-        size_chars,
-    )
+    return TextExcerpt("".join(head), "".join(tail), size_chars)
 
 
 atexit.register(_cleanup_registered_spools)

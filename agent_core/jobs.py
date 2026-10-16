@@ -205,6 +205,9 @@ class JobManager:
             artifact_cleanup=(
                 output.artifact_cleanup if isinstance(output, ToolOutput) else None
             ),
+            artifact_preview=(
+                output.artifact_preview if isinstance(output, ToolOutput) else None
+            ),
         )
         return normalizer.normalize(result)
 

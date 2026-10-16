@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 from typing import Callable
@@ -8,9 +9,11 @@ from ...execution.process import (
     MAX_COMMAND_TIMEOUT_SECONDS,
     CommandExecutionResult,
     CommandOutputSpool,
+    TextExcerpt,
 )
 from ...execution.sandbox.base import FilesystemAccess, NetworkAccess
 from ..base import JSONValue, Tool, ToolDefinition, ToolOutput
+from ..budget import escaped_length, output_fits
 from ..context import ToolExecutionContext
 
 
@@ -245,7 +248,7 @@ class ShellTool(Tool):
 
 
 def _command_output(execution: CommandExecutionResult) -> JSONValue | ToolOutput:
-    output = {
+    output: dict[str, JSONValue] = {
         "command": execution.command,
         "exit_code": execution.exit_code,
         "stdout": execution.stdout,
@@ -255,7 +258,7 @@ def _command_output(execution: CommandExecutionResult) -> JSONValue | ToolOutput
     }
     stdout_spool = execution.stdout_spool
     stderr_spool = execution.stderr_spool
-    if stdout_spool is None and stderr_spool is None:
+    if stdout_spool is None and stderr_spool is None and output_fits(output):
         return output
 
     writer = _shell_artifact_writer(
@@ -267,7 +270,80 @@ def _command_output(execution: CommandExecutionResult) -> JSONValue | ToolOutput
         output=output,
         artifact_writer=writer,
         artifact_cleanup=_cleanup_spools(stdout_spool, stderr_spool),
+        artifact_preview=lambda budget: _shell_artifact_preview(execution, output, budget),
     )
+
+
+def _shell_artifact_preview(
+    execution: CommandExecutionResult,
+    output: dict[str, JSONValue],
+    budget: int,
+) -> JSONValue:
+    preview = {**output, "command": "", "stdout": "", "stderr": ""}
+    remaining = budget - len(json.dumps(preview, ensure_ascii=False))
+    if remaining < 0:
+        raise ValueError("shell artifact preview metadata exceeds output limit")
+
+    excerpts: dict[str, TextExcerpt] = {}
+    for name, value, spool in (
+        ("command", execution.command, None),
+        ("stdout", execution.stdout, execution.stdout_spool),
+        ("stderr", execution.stderr, execution.stderr_spool),
+    ):
+        excerpts[name] = (
+            TextExcerpt(value, value, len(value))
+            if spool is None
+            else spool.excerpt(budget)
+        )
+
+    # Satisfy short fields first, then divide the remaining serialized
+    # budget evenly so neither output stream can crowd the other out.
+    needs = {
+        name: (
+            escaped_length(excerpt.head)
+            if len(excerpt.head) == excerpt.size_chars
+            else budget + 1
+        )
+        for name, excerpt in excerpts.items()
+    }
+    pending = list(excerpts)
+    allocations: dict[str, int] = {}
+    while pending:
+        share, extra = divmod(remaining, len(pending))
+        satisfied = [name for name in pending if needs[name] <= share]
+        if not satisfied:
+            allocations.update(
+                (name, share + (index < extra))
+                for index, name in enumerate(pending)
+            )
+            break
+        for name in satisfied:
+            allocations[name] = needs[name]
+            remaining -= needs[name]
+            pending.remove(name)
+
+    for name, excerpt in excerpts.items():
+        preview[name] = _fit_excerpt(excerpt, allocations[name])
+    return preview
+
+
+def _fit_excerpt(excerpt: TextExcerpt, budget: int) -> str:
+    if (
+        len(excerpt.head) == excerpt.size_chars
+        and escaped_length(excerpt.head) <= budget
+    ):
+        return excerpt.head
+    if escaped_length(excerpt.render(0)) > budget:
+        raise ValueError("shell artifact preview budget is too small")
+    low = 0
+    high = min(excerpt.size_chars - 1, budget)
+    while low < high:
+        middle = (low + high + 1) // 2
+        if escaped_length(excerpt.render(middle)) <= budget:
+            low = middle
+        else:
+            high = middle - 1
+    return excerpt.render(low)
 
 
 def _cleanup_spools(

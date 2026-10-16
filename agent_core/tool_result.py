@@ -4,7 +4,7 @@ from urllib.parse import quote
 
 from .path_utils import path_for_comparison
 from .session_paths import default_sessions_directory, session_directory
-from .tools import ToolResult
+from .tools import JSONValue, ToolResult
 from .tools.budget import MAX_TOOL_RESULT_CHARS
 from .workspace import Workspace
 
@@ -85,16 +85,13 @@ class ToolResultNormalizer:
         # would enter the model's context.  Rendering the payload is
         # only worth doing once that spill is certain: the common case
         # returns the envelope and never touches the payload again.
-        spooled = result.artifact_writer is not None
-        if not spooled and len(content) <= self._max_chars:
+        has_writer = result.artifact_writer is not None
+        if not has_writer and len(content) <= self._max_chars:
             if result.artifact_cleanup is not None:
                 result.artifact_cleanup()
             return content
 
-        # What gets written is the payload, because that is what a
-        # reader needs back.
-        body = artifact_body(result)
-        size_chars = len(body)
+        body = None
         artifact_path = (
             self._artifact_path_prefix
             / f"{quote(result.tool_call_id, safe='')}.txt"
@@ -102,33 +99,47 @@ class ToolResultNormalizer:
         try:
             absolute_path = self._absolute_artifact_path(artifact_path)
             absolute_path.parent.mkdir(parents=True, exist_ok=True)
-            if spooled:
-                # A spooled result is already known to be larger than the
-                # inline budget.  Let its writer stream the complete
-                # payload directly from disk instead of materializing it
-                # in memory again.
+            if has_writer:
                 size_chars = result.artifact_writer(absolute_path)
             else:
+                body = artifact_body(result)
+                size_chars = len(body)
                 absolute_path.write_text(body, encoding="utf-8")
-        finally:
-            if result.artifact_cleanup is not None:
-                result.artifact_cleanup()
 
-        relative_path = artifact_path.as_posix()
-        return json.dumps(
-            {
+            relative_path = artifact_path.as_posix()
+            summary: dict[str, JSONValue] = {
                 "artifact_path": relative_path,
                 "size_chars": size_chars,
-                "preview": body[: self._preview_chars],
+                "preview": None,
                 "read_instruction": (
                     "Use read_file with path "
                     f"'{relative_path}' to read the complete tool result. "
                     "It holds the raw result text, so page through it "
                     "with 'offset' when one read does not reach the end."
                 ),
-            },
-            ensure_ascii=False,
-        )
+            }
+            if result.artifact_preview is not None:
+                # JSON null occupies four characters in the empty summary.
+                budget = (
+                    self._max_chars
+                    - len(json.dumps(summary, ensure_ascii=False))
+                    + 4
+                )
+                summary["preview"] = result.artifact_preview(budget)
+            else:
+                if body is None:
+                    body = artifact_body(result)
+                summary["preview"] = body[: self._preview_chars]
+            normalized = json.dumps(summary, ensure_ascii=False)
+            if (
+                result.artifact_preview is not None
+                and len(normalized) > self._max_chars
+            ):
+                raise ValueError("tool artifact preview exceeds output limit")
+            return normalized
+        finally:
+            if result.artifact_cleanup is not None:
+                result.artifact_cleanup()
 
     def _absolute_artifact_path(self, artifact_path: Path) -> Path:
         absolute_path = (

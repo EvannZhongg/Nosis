@@ -144,6 +144,7 @@ class ToolSet:
                 attachments=output.attachments,
                 artifact_writer=output.artifact_writer,
                 artifact_cleanup=output.artifact_cleanup,
+                artifact_preview=output.artifact_preview,
             )
         return ToolResult(
             tool_call_id=call.id,
