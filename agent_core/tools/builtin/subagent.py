@@ -89,8 +89,9 @@ class SubagentTool(Tool):
             handle = jobs.submit(
                 "subagent",
                 turn_id,
-                lambda cancellation: context.subagents.run(
-                    role.strip(), task.strip(), context, cancellation
+                lambda job: context.subagents.run(
+                    role.strip(), task.strip(), context, job.cancellation,
+                    on_progress=job.report_progress,
                 ),
                 details={"role": role.strip(), "task": task.strip()},
             )

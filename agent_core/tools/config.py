@@ -13,6 +13,7 @@ TOOL_NAMES = (
     "web_search",
     "web_fetch",
     "subagent",
+    "job_control",
     "scheduled_task",
     "computer_screenshot",
     "computer_action",
@@ -22,7 +23,7 @@ TOOL_NAMES = (
 # they are derived from Runtime capabilities rather than configured. See
 # ``agent_core.subagent``.
 
-# A role runs inside a sub-agent, so it cannot delegate again. Image
+# A role runs inside a sub-agent, so it cannot delegate or manage parent jobs. Image
 # generation is kept on the main Agent so generated media joins the visible
 # parent conversation directly.
 ROLE_TOOL_NAMES = tuple(
@@ -30,6 +31,7 @@ ROLE_TOOL_NAMES = tuple(
     for name in TOOL_NAMES
     if name not in {
         "subagent",
+        "job_control",
         "generate_image",
         "computer_screenshot",
         "computer_action",

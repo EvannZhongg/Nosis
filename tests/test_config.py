@@ -276,6 +276,7 @@ class ConfigTest(unittest.TestCase):
             )
             self.assertIn("--output-dir", servers[0].args)
             self.assertTrue(agent_config["main_agent"]["tools"]["read_file"])
+            self.assertTrue(agent_config["main_agent"]["tools"]["job_control"])
             # Every shipped role carries an explicit enable switch.
             for name, role in agent_config["subagent_roles"].items():
                 self.assertIsInstance(role["enabled"], bool, name)

@@ -42,6 +42,7 @@
       "web_search": false,
       "web_fetch": true,
       "subagent": true,
+      "job_control": true,
       "scheduled_task": true,
       "computer_screenshot": true,
       "computer_action": true

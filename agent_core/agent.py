@@ -160,6 +160,7 @@ class Agent:
             system_prompt=system_prompt,
             consolidator_prompt=consolidator_prompt,
             memory_context=memory_context,
+            jobs=context.jobs,
             config=config,
             media_root=context.workspace.path,
         )

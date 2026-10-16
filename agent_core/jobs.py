@@ -1,19 +1,19 @@
 """Turn-scoped background work managed by the Agent Runtime."""
 
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass
+from copy import deepcopy
+from dataclasses import asdict, dataclass
 from threading import Condition, Event, Lock
+from time import monotonic
 from typing import Callable, Literal, TypeAlias
 from uuid import uuid4
 
-from .session import Session
+from .session import JobExecutionStatus, Session
 from .tools.base import JSONValue, ToolError, ToolOutput, ToolResult
 from .tool_result import ToolResultNormalizer
 
 
-JobStatus: TypeAlias = Literal[
-    "submitted", "running", "completed", "failed", "cancelled"
-]
+JobStatus: TypeAlias = JobExecutionStatus
 JobOutput: TypeAlias = JSONValue | ToolOutput
 
 
@@ -52,6 +52,36 @@ class JobHandle:
 
 
 @dataclass(frozen=True)
+class JobSnapshot:
+    job_id: str
+    kind: str
+    status: JobStatus
+    details: dict[str, str]
+    elapsed_seconds: float | None
+    progress: dict[str, JSONValue] | None
+    error: str | None
+    result_summary: dict[str, JSONValue] | None
+    cancel_requested: bool
+
+    def to_dict(self) -> dict[str, JSONValue]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class JobResult:
+    """Execution-owned summary, separate from the full result delivery."""
+
+    output: JobOutput
+    result_summary: dict[str, JSONValue]
+
+
+@dataclass(frozen=True)
+class JobContext:
+    cancellation: CancellationToken
+    report_progress: Callable[[dict[str, JSONValue]], None]
+
+
+@dataclass(frozen=True)
 class JobUpdate:
     job_id: str
     turn_id: str
@@ -75,6 +105,7 @@ class _Job:
     details: dict[str, str]
     status: JobStatus = "submitted"
     future: Future[None] | None = None
+    started_at: float | None = None
 
 
 class JobManager:
@@ -117,7 +148,7 @@ class JobManager:
         self,
         kind: str,
         turn_id: str,
-        run: Callable[[CancellationToken], JobOutput],
+        run: Callable[[JobContext], JobOutput | JobResult],
         *,
         details: dict[str, str],
     ) -> JobHandle:
@@ -128,7 +159,7 @@ class JobManager:
                 raise RuntimeError("job manager is closed")
             self._jobs[job_id] = job
             self._publish_locked(JobUpdate(job_id, turn_id, kind, "submitted", job.details))
-            self._session.job_submitted(job_id, kind, turn_id)
+            self._session.job_submitted(job_id, kind, turn_id, details=job.details)
             try:
                 future = self._executor.submit(self._run, job, run)
             except BaseException:
@@ -145,20 +176,24 @@ class JobManager:
     def _run(
         self,
         job: _Job,
-        run: Callable[[CancellationToken], JobOutput],
+        run: Callable[[JobContext], JobOutput | JobResult],
     ) -> None:
         with self._condition:
             if job.token.cancelled:
                 self._finish_locked(job, "cancelled")
                 return
             job.status = "running"
+            job.started_at = monotonic()
             self._session.job_started(job.job_id, job.kind, job.turn_id)
             self._publish_locked(
                 JobUpdate(job.job_id, job.turn_id, job.kind, "running", job.details)
             )
             self._condition.notify_all()
         try:
-            output = run(job.token)
+            output = run(JobContext(
+                cancellation=job.token,
+                report_progress=lambda progress: self._report_progress(job, progress),
+            ))
         except JobCancelled:
             with self._condition:
                 self._finish_locked(job, "cancelled")
@@ -170,15 +205,30 @@ class JobManager:
                     error_payload = ToolError(type(error).__name__, str(error))
                     self._finish_locked(job, "failed", error=error_payload)
         else:
+            summary = None
+            if isinstance(output, JobResult):
+                summary = output.result_summary
+                output = output.output
             try:
                 normalized = self._normalize_output(job, output)
             except BaseException as error:
                 error_payload = ToolError(type(error).__name__, str(error))
                 with self._condition:
-                    self._finish_locked(job, "failed", error=error_payload)
+                    self._finish_locked(
+                        job, "failed", error=error_payload, result_summary=summary,
+                    )
             else:
                 with self._condition:
-                    self._finish_locked(job, "completed", output=normalized)
+                    self._finish_locked(
+                        job, "completed", output=normalized, result_summary=summary,
+                    )
+
+    def _report_progress(self, job: _Job, progress: dict[str, JSONValue]) -> None:
+        with self._condition:
+            if job.status == "running":
+                self._session.job_progressed(
+                    job.job_id, job.turn_id, deepcopy(progress),
+                )
 
     def _normalize_output(self, job: _Job, output: JobOutput) -> JSONValue:
         normalizer = self._normalizer
@@ -218,6 +268,7 @@ class JobManager:
         *,
         output: JobOutput = None,
         error: ToolError | None = None,
+        result_summary: dict[str, JSONValue] | None = None,
     ) -> None:
         job.status = status
         self._session.job_finished(
@@ -226,6 +277,10 @@ class JobManager:
             status,
             turn_id=job.turn_id,
             error=error.message if error is not None else None,
+            elapsed_seconds=(
+                monotonic() - job.started_at if job.started_at is not None else 0.0
+            ),
+            result_summary=deepcopy(result_summary),
         )
         self._publish_locked(
             JobUpdate(
@@ -276,12 +331,54 @@ class JobManager:
             )
             return selected, pending
 
-    def snapshot(self) -> tuple[JobHandle, ...]:
+    def _snapshot_locked(self, job_id: str) -> JobSnapshot:
+        record = self._session.jobs.get(job_id)
+        if record is None:
+            raise ValueError(f"unknown job_id: {job_id}")
+        job = self._jobs.get(job_id)
+        elapsed = record.elapsed_seconds
+        if job is not None and job.status == "running" and job.started_at is not None:
+            elapsed = monotonic() - job.started_at
+        return JobSnapshot(
+            job_id=record.job_id,
+            kind=record.kind,
+            status=record.status,
+            details=dict(record.details),
+            elapsed_seconds=elapsed,
+            progress=deepcopy(record.progress),
+            error=record.error,
+            result_summary=deepcopy(record.result_summary),
+            cancel_requested=(
+                job is not None and job.status in {"submitted", "running"}
+                and job.token.cancelled
+            ),
+        )
+
+    def get(self, job_id: str) -> JobSnapshot:
+        with self._condition:
+            return self._snapshot_locked(job_id)
+
+    def list(self) -> tuple[JobSnapshot, ...]:
         with self._condition:
             return tuple(
-                JobHandle(job.job_id, job.kind, job.status)
+                self._snapshot_locked(job.job_id)
                 for job in self._jobs.values()
+                if job.status in {"submitted", "running"}
             )
+
+    def cancel(self, job_id: str) -> JobSnapshot:
+        with self._condition:
+            snapshot = self._snapshot_locked(job_id)
+            if snapshot.status in {"submitted", "running"}:
+                self._cancel_locked(self._jobs[job_id])
+            return self._snapshot_locked(job_id)
+
+    def _cancel_locked(self, job: _Job) -> None:
+        if job.status in {"submitted", "running"}:
+            job.token.cancel()
+            if job.future is not None and job.future.cancel():
+                self._finish_locked(job, "cancelled")
+        self._condition.notify_all()
 
     def wait_for_update(self, turn_id: str, timeout: float = 0.1) -> bool:
         with self._condition:
@@ -300,11 +397,7 @@ class JobManager:
         with self._condition:
             jobs = [job for job in self._jobs.values() if job.turn_id == turn_id]
             for job in jobs:
-                if job.status in {"submitted", "running"}:
-                    job.token.cancel()
-                    if job.future is not None and job.future.cancel():
-                        self._finish_locked(job, "cancelled")
-            self._condition.notify_all()
+                self._cancel_locked(job)
 
     def wait_for_turn(self, turn_id: str) -> None:
         with self._condition:

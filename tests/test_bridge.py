@@ -3001,7 +3001,7 @@ class SubagentRoleStartTest(BridgeTestCase):
                     "max_same_tool_calls": 5,
                     "output_reserve_tokens": 100,
                     "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
-                    "main_agent": {"tools": {"subagent": True}},
+                    "main_agent": {"tools": {"subagent": True, "job_control": True}},
                     "subagent_roles": {
                         "researcher": {
                             "description": "Reads.",
@@ -3029,8 +3029,10 @@ class SubagentRoleStartTest(BridgeTestCase):
 
         self.assertIn("ask_user", main_names)
         self.assertIn("update_plan", main_names)
+        self.assertIn("job_control", main_names)
         self.assertNotIn("ask_user", role_names)
         self.assertNotIn("update_plan", role_names)
+        self.assertNotIn("job_control", role_names)
         self.assertNotIn("remember", role_names)
 
 

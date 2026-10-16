@@ -2,7 +2,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Iterable
+from typing import TYPE_CHECKING, Callable, Iterable
 
 from .config import AgentConfig
 from .content import historical_content
@@ -12,6 +12,9 @@ from .plan import plan_snapshot_to_dict
 from .projection import ContextUnit, project_context_units
 from .session import Message, Session, UserAnchor
 from .tools import ToolDefinition
+
+if TYPE_CHECKING:
+    from .jobs import JobManager
 
 
 ARCHIVE_RETRY_COUNT = 5
@@ -71,12 +74,14 @@ class ContextManager:
         config: AgentConfig,
         media_root: Path | None = None,
         memory_context: MemoryContext | None = None,
+        jobs: "JobManager | None" = None,
     ) -> None:
         self._provider = provider
         self._session = session
         self._system_prompt = system_prompt
         self._consolidator_prompt = consolidator_prompt
         self._memory_context = memory_context
+        self._jobs = jobs
         self._output_reserve_tokens = config.output_reserve_tokens
         self._max_generation_tokens = config.max_generation_tokens
         self._media_root = media_root
@@ -221,18 +226,28 @@ class ContextManager:
         return Message(role="system", content="\n\n".join(sections))
 
     def _dynamic_runtime_context_message(self) -> Message | None:
-        if self._session.plan is None or not self._session.plan.is_active:
-            return None
-        return Message(
-            role="system",
-            content=(
+        sections = []
+        if self._session.plan is not None and self._session.plan.is_active:
+            sections.append(
                 "[Current Plan]\n"
                 + json.dumps(
                     plan_snapshot_to_dict(self._session.plan),
                     ensure_ascii=False,
                 )
-            ),
-        )
+            )
+        if self._jobs is not None:
+            lines = []
+            for job in self._jobs.list():
+                fields = [job.kind]
+                if job.kind == "subagent" and "role" in job.details:
+                    fields.append(job.details["role"])
+                fields.append(job.status)
+                lines.append(f"{job.job_id}: {' / '.join(fields)}")
+            if lines:
+                sections.append("[Active Jobs]\n" + "\n".join(lines))
+        if not sections:
+            return None
+        return Message(role="system", content="\n\n".join(sections))
 
     def _archived_summary_message(self) -> Message | None:
         content = self._archived_summary_text()

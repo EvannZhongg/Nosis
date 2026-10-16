@@ -59,7 +59,7 @@ from .errors import (
     RuntimeErrorInfo,
     runtime_error_info,
 )
-from .jobs import CancellationToken, JobCancelled, JobHandle, JobManager, JobUpdate
+from .jobs import CancellationToken, JobCancelled, JobHandle, JobManager, JobSnapshot, JobUpdate
 from .llm import LLMProvider, LLMRequest, LLMResponse, TokenUsage, ProviderCapabilities
 from .image_generation import GeneratedImage, ImageGenerator
 from .content import (
@@ -162,6 +162,7 @@ from .tools import (
     ShellApprovalPolicy,
     ShellTool,
     SubagentTool,
+    JobControlTool,
     UpdatePlanTool,
     Tool,
     ToolCall,
@@ -251,6 +252,8 @@ __all__ = [
     "JobCancelled",
     "JobHandle",
     "JobManager",
+    "JobSnapshot",
+    "JobControlTool",
     "JobStatusEvent",
     "JobUpdate",
     "CancellationToken",

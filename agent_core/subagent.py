@@ -6,7 +6,7 @@ Runtime's Tool Catalog, so adding one costs configuration rather than a new
 Tool implementation.
 """
 from dataclasses import dataclass, replace
-from typing import Iterable
+from typing import TYPE_CHECKING, Callable, Iterable
 
 from .config import AgentConfig
 from .content import AttachmentPart, ImagePart
@@ -19,11 +19,14 @@ from .skills import SkillRegistry
 from .tool_result import ToolResultNormalizer
 from .tools.catalog import ToolCatalog
 from .tools.context import ToolExecutionContext
-from .tools.base import ToolPolicy
+from .tools.base import JSONValue, ToolPolicy
 from .tools.builtin import AnalyzeImageTool, ReadImageTool, ReadSkillTool
 from .execution.process import CancellationSignal
 from .turn_control import TurnControl
 from .workspace_instructions import WorkspaceInstructions
+
+if TYPE_CHECKING:
+    from .agent import AgentEvent
 
 
 def vision_aware_tool_names(
@@ -142,6 +145,8 @@ class SubagentRuntime:
         task: str,
         parent: ToolExecutionContext,
         cancellation: CancellationSignal | None = None,
+        *,
+        on_progress: Callable[[dict[str, JSONValue]], None] | None = None,
     ) -> str:
         from .agent import Agent
 
@@ -203,6 +208,9 @@ class SubagentRuntime:
             try:
                 result = child.run(
                     task,
+                    on_event=(
+                        _SubagentProgress(on_progress) if on_progress is not None else None
+                    ),
                     attachments=_latest_attachments(parent.session),
                     turn_control=(
                         TurnControl(external_cancelled=lambda: cancellation.cancelled)
@@ -212,8 +220,7 @@ class SubagentRuntime:
                 )
             finally:
                 session.attach_journal_sink(None)
-        # The parent sees the final report only: no child reasoning and
-        # no intermediate tool calls.
+        # Full report delivery is separate from the bounded progress snapshots.
         return result.response.content or ""
 
     def _store(self, parent: ToolExecutionContext) -> JsonlSessionStore:
@@ -232,6 +239,54 @@ class SubagentRuntime:
             / "subagents",
             group_by_workspace=False,
         )
+
+
+class _SubagentProgress:
+    """Project execution events without exposing results or final response text."""
+
+    def __init__(self, publish: Callable[[dict[str, JSONValue]], None]) -> None:
+        self._publish = publish
+        self._recent_tools: list[dict[str, JSONValue]] = []
+        self._pending_text: tuple[int, str] | None = None
+        self._text: str | None = None
+
+    def __call__(self, event: "AgentEvent") -> None:
+        from .agent import (
+            AssistantMessageEvent, ToolBatchStartedEvent, ToolCallEvent, ToolResultEvent,
+        )
+
+        if isinstance(event, AssistantMessageEvent):
+            # Only a following tool batch proves this is intermediate text.
+            # Streaming text and final response text are never published.
+            self._pending_text = (event.model_call_index, event.content[:1000])
+            return
+        if isinstance(event, ToolBatchStartedEvent):
+            if (
+                self._pending_text is not None
+                and self._pending_text[0] == event.model_call_index
+            ):
+                self._text = self._pending_text[1]
+            self._pending_text = None
+        elif isinstance(event, ToolCallEvent):
+            self._recent_tools.append({
+                "tool_call_id": event.tool_call.id,
+                "name": event.tool_call.name,
+                "status": "running",
+            })
+            self._recent_tools = self._recent_tools[-5:]
+        elif isinstance(event, ToolResultEvent):
+            for call in self._recent_tools:
+                if call["tool_call_id"] == event.tool_result.tool_call_id:
+                    call["status"] = (
+                        "failed" if event.tool_result.error is not None else "completed"
+                    )
+                    break
+        else:
+            return
+        self._publish({
+            "recent_tools": [dict(call) for call in self._recent_tools],
+            "text": self._text,
+        })
 
 
 def _latest_attachments(session: Session) -> tuple[AttachmentPart, ...]:

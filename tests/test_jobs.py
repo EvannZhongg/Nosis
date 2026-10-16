@@ -1,3 +1,4 @@
+import json
 import threading
 import unittest
 from dataclasses import replace
@@ -23,7 +24,11 @@ from agent_core import (
     ToolExecutionContext,
     TurnControl,
     Workspace,
+    PlanManager,
+    PlanStep,
 )
+from agent_core.agent import _apply_job_results
+from agent_core.context_manager import ContextManager
 
 
 CONFIG = AgentConfig(
@@ -89,6 +94,92 @@ class ImmediateExecutor:
 
 
 class BackgroundJobTest(unittest.TestCase):
+    def test_active_jobs_refresh_at_tail_beside_plan_without_entering_history(self):
+        session = Session("dynamic-jobs")
+        session.begin_turn("turn")
+        session.add_item("user", "Investigate")
+        session.set_archived_summary("- [durable] Existing context.", 0)
+        PlanManager(session).update(
+            "Investigate", (PlanStep("inspect", "Inspect", "in_progress"),),
+        )
+        jobs = JobManager(session, max_workers=1)
+        provider = SequencedProvider(())
+        manager = ContextManager(
+            provider, session, "system", CONSOLIDATOR_PROMPT, CONFIG, jobs=jobs,
+        )
+        context = ToolExecutionContext(
+            workspace=Workspace(Path(__file__).parent), session=session, jobs=jobs,
+        )
+        first_entered = threading.Event()
+        first_release = threading.Event()
+        second_entered = threading.Event()
+        second_release = threading.Event()
+
+        def first(job):
+            job.report_progress({"text": "private progress"})
+            first_entered.set()
+            first_release.wait(5)
+            return "research report"
+
+        def second(job):
+            second_entered.set()
+            second_release.wait(5)
+            return "review report"
+
+        try:
+            initial = manager.build_request()
+            self.assertNotIn("[Active Jobs]", str(initial))
+            researcher = jobs.submit(
+                "subagent", "turn", first,
+                details={"role": "researcher", "task": "private task"},
+            )
+            self.assertTrue(first_entered.wait(2))
+            reviewer = jobs.submit(
+                "subagent", "turn", second, details={"role": "reviewer", "task": "review"},
+            )
+            shell = jobs.submit(
+                "shell", "turn", lambda job: "command output", details={"command": "private command"},
+            )
+            pending = manager.build_request()
+            self.assertEqual(pending.system_prompt, initial.system_prompt)
+            self.assertEqual(pending.messages[:-1], initial.messages[:-1])
+            self.assertEqual(pending.messages[-1].role, "system")
+            plan, active = pending.messages[-1].content.split("\n\n[Active Jobs]\n")
+            self.assertEqual(plan, initial.messages[-1].content)
+            self.assertEqual(active.splitlines(), [
+                f"{researcher.job_id}: subagent / researcher / running",
+                f"{reviewer.job_id}: subagent / reviewer / submitted",
+                f"{shell.job_id}: shell / submitted",
+            ])
+            self.assertNotIn("private", active)
+
+            first_release.set()
+            self.assertTrue(second_entered.wait(2))
+            _apply_job_results(session, context, "turn", lambda: datetime.now(timezone.utc))
+            advanced = manager.build_request()
+            active = advanced.messages[-1].content
+            self.assertNotIn(researcher.job_id, active)
+            self.assertIn(f"{reviewer.job_id}: subagent / reviewer / running", active)
+            self.assertIn("research report", str(advanced.messages[:-1]))
+            self.assertEqual(advanced.messages[0], initial.messages[0])
+            self.assertIn(f"{researcher.job_id}: subagent / researcher / running",
+                          pending.messages[-1].content)
+
+            second_release.set()
+            jobs.wait_for_turn("turn")
+            _apply_job_results(session, context, "turn", lambda: datetime.now(timezone.utc))
+            finished = manager.build_request()
+            self.assertNotIn("[Active Jobs]", str(finished))
+            self.assertEqual(finished.messages[-1], initial.messages[-1])
+            self.assertIn("review report", str(finished))
+            self.assertIn("command output", str(finished))
+            self.assertNotIn("[Active Jobs]", str(session.items))
+            self.assertNotIn("[Active Jobs]", str(session.journal))
+        finally:
+            first_release.set()
+            second_release.set()
+            jobs.close()
+
     def test_turn_control_cancels_foreground_shell_batches_without_leaking(self) -> None:
         for count in (1, 2):
             with self.subTest(count=count):
@@ -208,6 +299,13 @@ class BackgroundJobTest(unittest.TestCase):
             raise errors[0]
 
         self.assertEqual(len(provider.requests), 3)
+        job_id = json.loads(handle.content)["output"]["job_id"]
+        self.assertNotIn("[Active Jobs]", str(provider.requests[0]))
+        active = provider.requests[1].messages[-1]
+        self.assertEqual(active.role, "system")
+        self.assertIn(f"[Active Jobs]\n{job_id}: shell / ", active.content)
+        self.assertNotIn("[Active Jobs]", str(provider.requests[2]))
+        self.assertIn("background output", str(provider.requests[2].messages))
         job_messages = [
             item for item in session.items if item.origin == "job_result"
         ]
@@ -221,7 +319,7 @@ class BackgroundJobTest(unittest.TestCase):
     def test_recovery_marks_unfinished_jobs_interrupted(self) -> None:
         session = Session("session-1")
         session.begin_turn("turn-1")
-        session.job_submitted("job-1", "shell", "turn-1")
+        session.job_submitted("job-1", "shell", "turn-1", details={"command": "slow"})
         session.job_started("job-1", "shell", "turn-1")
 
         session.recover()

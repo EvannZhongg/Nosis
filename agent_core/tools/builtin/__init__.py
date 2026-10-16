@@ -12,6 +12,7 @@ from .shell import ShellTool
 from .web_search import WebSearchTool
 from .web_fetch import WebFetchTool
 from .subagent import SubagentTool
+from .job_control import JobControlTool
 from .analyze_image import AnalyzeImageTool
 from .write_file import WriteFileTool
 from .ask_user import AskUserTool
@@ -47,6 +48,7 @@ def builtin_catalog():
             AnalyzeImageTool(),
             ReadSkillTool(),
             SubagentTool(),
+            JobControlTool(),
             AskUserTool(),
             UpdatePlanTool(),
             RememberTool(),
@@ -71,6 +73,7 @@ __all__ = [
     "SearchFilesTool",
     "ShellTool",
     "SubagentTool",
+    "JobControlTool",
     "UpdatePlanTool",
     "RememberTool",
     "WebSearchTool",

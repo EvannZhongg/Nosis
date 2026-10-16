@@ -218,20 +218,27 @@ class ShellTool(Tool):
             raise RuntimeError("shell execution was not resolved")
         executor = route.executor
         if background:
+            from ...jobs import JobContext, JobResult
+
             jobs = context.jobs
             turn_id = context.session.current_turn_id
             if jobs is None or turn_id is None:
                 raise ValueError("background shell requires an active JobManager turn")
+            def run(job: JobContext) -> JobResult:
+                execution = executor.execute(
+                    command, timeout_seconds, cancellation=job.cancellation,
+                )
+                return JobResult(
+                    output=_command_output(execution),
+                    result_summary={
+                        "exit_code": execution.exit_code,
+                        "timed_out": execution.timed_out,
+                        "timeout_seconds": execution.timeout_seconds,
+                    },
+                )
+
             handle = jobs.submit(
-                "shell",
-                turn_id,
-                lambda cancellation: _command_output(
-                    executor.execute(
-                        command,
-                        timeout_seconds,
-                        cancellation=cancellation,
-                    )
-                ),
+                "shell", turn_id, run,
                 details={"command": command},
             )
             return handle.to_dict()

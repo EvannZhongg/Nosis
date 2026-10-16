@@ -211,6 +211,96 @@ class SubagentRoleRegistryTest(unittest.TestCase):
 
 
 class SubagentToolTest(unittest.TestCase):
+    def test_background_progress_is_bounded_and_excludes_final_report(self) -> None:
+        final_entered = threading.Event()
+        final_release = threading.Event()
+
+        class ProgressProvider(StaticProvider):
+            def stream(self, request, on_text_delta, on_reasoning_delta=None):
+                self.requests.append(request)
+                index = len(self.requests)
+                if index <= 7:
+                    text = f"step {index} " + "x" * 2000
+                    on_text_delta(text)
+                    return LLMResponse(
+                        content=text, reasoning="private reasoning",
+                        tool_calls=(ToolCall(
+                            f"call-{index}", "list_directory",
+                            {"path": "." if index == 7 else f"missing-{index}"},
+                        ),),
+                    )
+                on_text_delta("FINAL REPORT SECRET")
+                final_entered.set()
+                final_release.wait(5)
+                return LLMResponse("FINAL REPORT SECRET")
+
+        with tempfile.TemporaryDirectory() as directory:
+            session = Session("parent")
+            provider = ProgressProvider()
+            # Even an explicitly selected management tool stays unavailable in a child.
+            worker = role("worker", "Inspect", ("list_directory", "job_control"), provider=provider)
+            base = context(Path(directory), (worker,), session=session)
+            jobs = JobManager(session)
+            session.begin_turn("turn")
+            try:
+                handle = SubagentTool().execute(
+                    {"role": "worker", "task": "inspect", "background": True},
+                    replace(base, jobs=jobs),
+                )
+                self.assertTrue(final_entered.wait(3))
+                snapshot = jobs.get(handle["job_id"])
+                self.assertEqual(snapshot.status, "running")
+                recent = snapshot.progress["recent_tools"]
+                self.assertEqual([call["tool_call_id"] for call in recent],
+                                 [f"call-{index}" for index in range(3, 8)])
+                self.assertEqual([call["status"] for call in recent], ["failed"] * 4 + ["completed"])
+                self.assertTrue(snapshot.progress["text"].startswith("step 7 "))
+                self.assertEqual(len(snapshot.progress["text"]), 1000)
+                self.assertNotIn("SECRET", json.dumps(snapshot.to_dict()))
+                self.assertNotIn("private reasoning", json.dumps(snapshot.to_dict()))
+                final_release.set()
+                jobs.wait_for_turn("turn")
+                updates = jobs.drain_updates("turn")
+                self.assertEqual(updates[-1].output, "FINAL REPORT SECRET")
+                terminal = jobs.get(handle["job_id"])
+                self.assertEqual(terminal.progress, snapshot.progress)
+                self.assertNotIn("SECRET", json.dumps(terminal.to_dict()))
+                self.assertIsNone(terminal.result_summary)
+                self.assertNotIn("job_control", [tool.name for tool in provider.requests[0].tools])
+            finally:
+                final_release.set()
+                jobs.close()
+
+    def test_background_child_can_be_cancelled_by_job_id(self) -> None:
+        entered = threading.Event()
+
+        class WaitingProvider(StaticProvider):
+            def stream_cancellable(self, request, on_text_delta, on_reasoning_delta,
+                                   check_cancelled):
+                entered.set()
+                for _ in range(500):
+                    check_cancelled()
+                    threading.Event().wait(0.01)
+                return LLMResponse("unexpected completion")
+
+        with tempfile.TemporaryDirectory() as directory:
+            session = Session("parent")
+            base = context(Path(directory), (role("worker", "Wait", provider=WaitingProvider()),), session=session)
+            jobs = JobManager(session)
+            session.begin_turn("turn")
+            try:
+                handle = SubagentTool().execute(
+                    {"role": "worker", "task": "wait", "background": True},
+                    replace(base, jobs=jobs),
+                )
+                self.assertTrue(entered.wait(2))
+                jobs.cancel(handle["job_id"])
+                jobs.wait_for_turn("turn")
+                self.assertEqual(jobs.get(handle["job_id"]).status, "cancelled")
+                self.assertIsNone(jobs.get(handle["job_id"]).error)
+            finally:
+                jobs.close()
+
     def test_foreground_call_propagates_turn_cancellation_into_child_loop(self) -> None:
         entered = threading.Event()
         release = threading.Event()

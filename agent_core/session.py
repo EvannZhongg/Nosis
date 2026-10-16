@@ -13,6 +13,7 @@ from .errors import (
 from .permissions import PermissionPreset
 from .plan import PlanSnapshot, plan_snapshot_from_dict, plan_snapshot_to_dict
 from .tools import ToolCall
+from .tools.base import JSONValue
 from .time_utils import format_utc as _format_utc, parse_utc as _parse_utc
 
 MessageRole = Literal["system", "user", "assistant", "tool"]
@@ -108,6 +109,10 @@ class JobExecution:
     started_at: datetime | None = None
     completed_at: datetime | None = None
     error: str | None = None
+    details: dict[str, str] = field(default_factory=dict)
+    elapsed_seconds: float | None = 0.0
+    progress: dict[str, JSONValue] | None = None
+    result_summary: dict[str, JSONValue] | None = None
 
 
 @dataclass(frozen=True)
@@ -240,6 +245,7 @@ class Session:
                     kind=str(payload.get("kind", "")),
                     status="submitted",
                     submitted_at=event.timestamp_utc,
+                    details=dict(payload["details"]),
                 )
         elif event.event_type == "job_started":
             job_id = payload.get("job_id")
@@ -252,6 +258,8 @@ class Session:
                     self.jobs[job_id] = job
                 job.status = "running"
                 job.started_at = event.timestamp_utc
+        elif event.event_type == "job_progressed":
+            self.jobs[payload["job_id"]].progress = payload["progress"]
         elif event.event_type in {
             "job_completed", "job_failed", "job_cancelled", "job_interrupted"
         }:
@@ -280,6 +288,8 @@ class Session:
                     else "interrupted"
                 )
                 job.completed_at = event.timestamp_utc
+                job.elapsed_seconds = payload["elapsed_seconds"]
+                job.result_summary = payload["result_summary"]
                 job.error = (
                     payload.get("error")
                     if isinstance(payload.get("error"), str)
@@ -341,6 +351,10 @@ class Session:
                             "job_id": job.job_id,
                             "kind": job.kind,
                             "status": "interrupted",
+                            # A crash has no reliable finish time. Do not count
+                            # process downtime as execution time.
+                            "elapsed_seconds": None if job.started_at is not None else 0.0,
+                            "result_summary": None,
                         },
                     )
                 )
@@ -448,12 +462,19 @@ class Session:
             payload["error"] = error
         self._event(f"tool_{status}", turn_id, payload, call.id)
 
-    def job_submitted(self, job_id: str, kind: str, turn_id: str) -> None:
+    def job_submitted(
+        self, job_id: str, kind: str, turn_id: str, *, details: dict[str, str],
+    ) -> None:
         self._event(
             "job_submitted",
             turn_id,
-            {"job_id": job_id, "kind": kind, "status": "submitted"},
+            {"job_id": job_id, "kind": kind, "status": "submitted", "details": dict(details)},
         )
+
+    def job_progressed(
+        self, job_id: str, turn_id: str, progress: dict[str, JSONValue],
+    ) -> None:
+        self._event("job_progressed", turn_id, {"job_id": job_id, "progress": progress})
 
     def job_started(self, job_id: str, kind: str, turn_id: str) -> None:
         self._event(
@@ -469,12 +490,16 @@ class Session:
         status: Literal["completed", "failed", "cancelled"],
         *,
         turn_id: str,
+        elapsed_seconds: float,
+        result_summary: dict[str, JSONValue] | None,
         error: str | None = None,
     ) -> None:
         payload: dict[str, object] = {
             "job_id": job_id,
             "kind": kind,
             "status": status,
+            "elapsed_seconds": elapsed_seconds,
+            "result_summary": result_summary,
         }
         if error is not None:
             payload["error"] = error
