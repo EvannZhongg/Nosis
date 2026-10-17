@@ -15,7 +15,7 @@ const READY = {
 };
 
 const RUNTIME_READY = {
-  type: 'runtime_state' as const,
+  type: 'runtime_state' as const, cache_usage: null,
   phase: 'idle' as const,
   turn_id: null,
   provider: 'deepseek',
@@ -448,11 +448,16 @@ describe('reducer', () => {
 
   it('updates usage on each model completion without ending the turn', () => {
     let state = ready();
+    state = reducer(state, { type: 'message', message: {
+      ...RUNTIME_READY, cache_usage: { input_tokens: 100, cache_read_tokens: 58 },
+    } });
+    expect(state.cacheUsage).toEqual({ input_tokens: 100, cache_read_tokens: 58 });
     state = reducer(state, { type: 'submit', turnId: 't1', text: 'work' });
     state = reducer(state, {
       type: 'message',
       message: {
         type: 'model_completed',
+        cache_usage: { input_tokens: 100, cache_read_tokens: 58 },
         turn_id: 't1',
         model_call_index: 1,
         usage: {
@@ -466,6 +471,7 @@ describe('reducer', () => {
     expect(state.usage?.total_tokens).toBe(12);
     expect(state.usage?.cache_read_tokens).toBe(8);
     expect(state.usage?.cache_write_tokens).toBeNull();
+    expect(state.cacheUsage).toEqual({ input_tokens: 100, cache_read_tokens: 58 });
     expect(reducer(state, { type: 'submit', turnId: 't2', text: 'continue' }).usage)
       .toEqual(state.usage);
     expect(reducer(state, {
@@ -477,11 +483,14 @@ describe('reducer', () => {
     ];
     for (const message of messages) {
       expect(reducer(state, { type: 'message', message }).usage).toBeNull();
+      expect(reducer(state, { type: 'message', message }).cacheUsage).toEqual(state.cacheUsage);
     }
     state = reducer(state, { type: 'message', message: {
       type: 'model_completed', turn_id: 't1', model_call_index: 2, usage: null,
+      cache_usage: { input_tokens: 100, cache_read_tokens: 58 },
     } });
     expect(state.usage).toBeNull();
+    expect(state.cacheUsage).toEqual({ input_tokens: 100, cache_read_tokens: 58 });
     expect(state.status).toBe('streaming');
     expect(state.turnId).toBe('t1');
   });

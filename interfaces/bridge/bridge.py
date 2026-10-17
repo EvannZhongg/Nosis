@@ -7,7 +7,7 @@ from threading import Lock, RLock, Thread
 from typing import TextIO, TYPE_CHECKING
 
 from agent_core import AgentCancelled as Cancelled, AgentEvent, PermissionPreset, SchedulerService, SessionInUseError, message_to_dict, runtime_error_info
-from agent_core.usage import usage_to_dict
+from agent_core.usage import cache_usage_to_dict, usage_to_dict
 if TYPE_CHECKING:
     from agent_core.mcp.manager import McpServerStatus
 from agent_runtime.host import RuntimeHost
@@ -93,7 +93,7 @@ class Bridge:
                 state = message
             elif type in {
                 "permission_changed", "provider_changed", "workspace_changed",
-                "plan_updated", "context_window", "job_status", "fatal",
+                "plan_updated", "context_window", "model_completed", "job_status", "fatal",
                 "turn_completed", "turn_cancelled", "turn_failed",
             }:
                 state = self._runtime_snapshot()
@@ -382,6 +382,8 @@ class Bridge:
                 else None
             ),
             jobs=list(self._jobs.values()),
+            cache_usage=cache_usage_to_dict(self.host.sessions.session.cache_usage)
+            if self.host.sessions.session is not None else None,
             runtime_warnings=self._runtime_warnings,
             plan=self.host.sessions.plan.snapshot if self.host.sessions.plan is not None else None,
             workspace=str(self.host.sessions.workspace.path) if self.host.sessions.workspace is not None else None,

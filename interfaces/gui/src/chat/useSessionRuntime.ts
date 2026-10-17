@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef, useState, useEffect } from "react";
 import { useExternalStoreRuntime, type AppendMessage } from "@assistant-ui/react";
-import { runtimeIsActive, type ContextWindow, type PermissionPreset, type PlanSnapshot, type RuntimePhase, type Usage, type UserQuestion } from "@nosis/protocol";
+import { runtimeIsActive, type CacheUsage, type ContextWindow, type PermissionPreset, type PlanSnapshot, type RuntimePhase, type UserQuestion } from "@nosis/protocol";
 import { createScratchWorkspace, releaseActiveSession, selectWorkspace, uploadAttachments, type ModelOption, type Session, type UserAttachment } from "../api";
 import { SessionSocket } from "../session";
 import { applyMessage, isTurnActivity, toMessages, type Feedback, type TranscriptItem } from "../transcript";
@@ -45,7 +45,7 @@ export function useSessionRuntime({
   onInitialPromptConsumed,
 }: SessionRuntimeOptions) {
   const [items, setItems] = useState<TranscriptItem[]>(session.items);
-  const [usage, setUsage] = useState<Usage | null>(null);
+  const [cacheUsage, setCacheUsage] = useState<CacheUsage | null>(session.cache_usage ?? null);
   // The fork's first render includes its prompt, even before socket startup.
   const [pendingUserItem, setPendingUserItem] = useState<TranscriptItem | null>(() =>
     initialPrompt ? { role: "user", content: initialPrompt } : null);
@@ -309,6 +309,7 @@ export function useSessionRuntime({
           setPermissionPreset(message.permission_preset);
           setPlan(message.plan ?? null);
           onContextWindowChange(message.context_window);
+          setCacheUsage(message.cache_usage);
           if (message.runtime_warnings?.length) {
             showAlert({ kind: "alert", id: "runtime-warnings", level: "warning", text: message.runtime_warnings.join("\n") });
           }
@@ -356,7 +357,7 @@ export function useSessionRuntime({
         if (applied.feedback?.kind === "toast") showToast(applied.feedback);
         if (applied.feedback?.kind === "alert") showAlert(applied.feedback);
         if (applied.contextWindow !== undefined) onContextWindowChange(applied.contextWindow);
-        if (applied.usage !== undefined) setUsage(applied.usage);
+        if (applied.cacheUsage !== undefined) setCacheUsage(applied.cacheUsage);
         if (applied.approval !== undefined) setApproval(applied.approval);
         if (applied.question !== undefined) {
           setQuestion(applied.question);
@@ -615,7 +616,7 @@ export function useSessionRuntime({
     stop,
     contextWindow,
     providers,
-    usage,
+    cacheUsage,
   };
 }
 

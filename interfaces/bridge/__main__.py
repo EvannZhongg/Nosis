@@ -61,7 +61,7 @@ def main() -> None:
             message["resume_after"] = 0
             message["runtime"] = runtime_state_message(
                 phase="failed", approval=None, question=None, provider=None,
-                permission_preset="ask_for_approval", context_window=None, jobs=[],
+                permission_preset="ask_for_approval", context_window=None, jobs=[], cache_usage=None,
             )
             protocol_out.write(json.dumps(message, ensure_ascii=False) + "\n")
         raise SystemExit(1)

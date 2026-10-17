@@ -316,7 +316,7 @@ export function StatusBar({ state, elapsed }: { state: State; elapsed: number })
     state.status === 'streaming' ||
     state.status === 'running' ||
     state.status === 'cancelling';
-  const cachePercent = cacheHitPercent(state.usage);
+  const cachePercent = cacheHitPercent(state.cacheUsage);
   const model = `${state.model}${
     state.contextWindow
       ? ` · Cache hit: ${cachePercent === null ? 'unknown' : `${cachePercent.toFixed(1)}%`}`

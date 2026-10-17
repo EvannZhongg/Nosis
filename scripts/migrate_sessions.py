@@ -1,11 +1,10 @@
-"""Migrate V1 Session journals to the adjacent V2 Job event format.
+"""Migrate historical Session journals to the current Job and token usage format.
 
 Run with Python 3.11+ on Windows, macOS, or Linux after stopping Nosis:
     python scripts/migrate_sessions.py
     python scripts/migrate_sessions.py --sessions-dir /path/to/sessions
 
-This script is only for the V1 -> V2 transition. Future releases must provide
-their own adjacent-version migration; never use this script to skip a version.
+Missing historical cache counts remain unknown (null), not cache misses (0).
 """
 
 import argparse
@@ -43,7 +42,16 @@ def migrate_journal(path: Path) -> bool:
         payload = event["payload"]
         event_type = event.get("event_type")
         updated = False
-        if event_type == "job_submitted" and "details" not in payload:
+        if event_type == "model_completed":
+            usage = payload["usage"]
+            if usage is not None:
+                if not isinstance(usage, dict):
+                    raise ValueError(f"{path}:{number}: model_completed usage must be an object or null")
+                for field in ("cache_read_tokens", "cache_write_tokens"):
+                    if field not in usage:
+                        usage[field] = None
+                        updated = True
+        elif event_type == "job_submitted" and "details" not in payload:
             # V1 did not record Job details; an empty object means unknown.
             payload["details"] = {}
             updated = True
@@ -70,7 +78,7 @@ def migrate_journal(path: Path) -> bool:
     if not changed:
         return False
 
-    backup = path.with_name(path.name + ".v1.bak")
+    backup = path.with_name(path.name + ".bak")
     # Reruns overwrite the backup: a journal migrated by an older revision of
     # this script can still need changes, and the file on disk is the only
     # remaining pre-migration copy at that point.

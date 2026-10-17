@@ -1,5 +1,5 @@
 import type { ThreadMessageLike } from "@assistant-ui/react";
-import type { ContextWindow, Incoming, PermissionPreset, Usage, UserQuestion } from "@nosis/protocol";
+import type { CacheUsage, ContextWindow, Incoming, PermissionPreset, UserQuestion } from "@nosis/protocol";
 import { attachmentDownloadUrl, type SessionItem } from "./api";
 
 /** A transcript item, plus the streaming state the live turn needs. */
@@ -14,7 +14,7 @@ export type Applied = {
   items: TranscriptItem[];
   feedback?: Feedback;
   contextWindow?: ContextWindow;
-  usage?: Usage | null;
+  cacheUsage?: CacheUsage | null;
   approval?: {
     requestId: string;
     command: string;
@@ -70,7 +70,6 @@ export function applyMessage(
     case "session_ready":
       return {
         items,
-        usage: null,
         permissionPreset: message.permission_preset,
       };
 
@@ -79,6 +78,7 @@ export function applyMessage(
         items,
         permissionPreset: message.permission_preset,
         contextWindow: message.context_window ?? undefined,
+        cacheUsage: message.cache_usage,
         feedback: message.runtime_warnings?.length
           ? {
               kind: "alert",
@@ -213,7 +213,6 @@ export function applyMessage(
     case "provider_changed":
       return {
         items,
-        usage: null,
         feedback: {
           kind: "toast",
           level: "info",
@@ -224,7 +223,6 @@ export function applyMessage(
     case "workspace_changed":
       return {
         items,
-        usage: null,
         feedback: {
           kind: "toast",
           level: "info",
@@ -236,10 +234,10 @@ export function applyMessage(
       return { items, approval: null, question: message };
 
     case "model_completed":
-      return { items, usage: message.usage };
+      return { items, cacheUsage: message.cache_usage };
 
     case "turn_completed":
-      return { items, usage: message.usage, approval: null, question: null, finished: true };
+      return { items, approval: null, question: null, finished: true };
 
     case "turn_cancelled":
       return {

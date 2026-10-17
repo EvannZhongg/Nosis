@@ -39,7 +39,7 @@ class FakeWebSocket {
 }
 
 const snapshot: Incoming = {
-  type: "runtime_state",
+  type: "runtime_state", cache_usage: null,
   phase: "inactive",
   turn_id: null,
   provider: "default",

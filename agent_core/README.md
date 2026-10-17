@@ -127,7 +127,7 @@ Shell 通过 `ExecutionRouter` 根据 `ExecutionScope` 和当前 `ExecutionAutho
 
 `LLMProvider` 定义模型调用接口、能力信息、流式响应和 token usage。`OpenAIProvider` 使用原生 SDK 实现 Responses 与 Chat Completions 协议，官方服务和中转使用同一实现；其他服务商路由由 `LiteLLMProvider` 承担。
 
-`usage.py` 统一定义 `TokenUsage` 和序列化：`input_tokens` 包含缓存部分，`cache_read_tokens` 与 `cache_write_tokens` 记录其读取、写入明细，未报告时为 `None`，明确报告无缓存活动时为 `0`。每次模型调用的完整用量写入 Session 的 `model_completed` Journal 事件后，通过 `ModelCompletedEvent` 经 Bridge 推送为 `model_completed` 消息，两个前端立即更新用量和缓存命中率，无需等待工具执行或 Turn 结束。辅助调用日志和 Bridge 使用相同序列化。Bridge 的 `turn_completed.usage` 表示最后一次模型调用的用量，不是整个 Turn 的累计用量。
+`usage.py` 统一定义 `TokenUsage` 和序列化：`input_tokens` 包含缓存部分，`cache_read_tokens` 与 `cache_write_tokens` 记录其读取、写入明细，未报告时为 `None`，明确报告无缓存活动时为 `0`。Session 在应用 `model_completed` Journal 事件时累计 `CacheUsage`，只计入同时报告输入和缓存读取 token 的调用；会话缓存命中率为 `Σcache_read_tokens / Σinput_tokens`，Journal 重载时恢复，跨 Turn、模型与工作区切换保持累计。每次调用落盘后，`ModelCompletedEvent` 经 Bridge 推送本次用量和会话累计快照，两个前端立即更新，无需等待工具执行或 Turn 结束。`runtime_state.cache_usage` 与 GUI 历史读取提供相同累计快照，事件重放不会重复计数。辅助调用日志和 Bridge 使用相同序列化。Bridge 的 `turn_completed.usage` 表示最后一次模型调用的用量，不是整个 Turn 的累计用量。
 
 `ModelProvider` 共享媒体序列化、token 估算、模型信息和可取消的流读取。模型上下文窗口、输出限制和视觉能力仍从 LiteLLM 的模型目录取得：保留其联网更新及库内置目录，未知模型必须显式配置 `max_context_tokens`，不猜测窗口大小。
 

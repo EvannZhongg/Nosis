@@ -14,6 +14,20 @@ class TokenUsage:
     cache_write_tokens: int | None
 
 
+@dataclass(frozen=True)
+class CacheUsage:
+    """Session totals for calls reporting both input and cache-read tokens."""
+
+    input_tokens: int
+    cache_read_tokens: int
+
+
+def cache_usage_to_dict(usage: CacheUsage | None) -> dict[str, int] | None:
+    if usage is None:
+        return None
+    return {"input_tokens": usage.input_tokens, "cache_read_tokens": usage.cache_read_tokens}
+
+
 def usage_to_dict(usage: TokenUsage | None) -> dict[str, int | None] | None:
     if usage is None:
         return None

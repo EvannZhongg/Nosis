@@ -35,7 +35,7 @@ class ActiveSession:
         self.state = runtime_state_message(
             phase="inactive", approval=None, question=None, provider=provider,
             workspace=workspace, permission_preset="ask_for_approval",
-            context_window=None, jobs=[],
+            context_window=None, jobs=[], cache_usage=None,
         )
         self.transcript = {"items": items, "event_sequence": 0}
         self._pending_turn: str | None = None

@@ -25,7 +25,7 @@ from agent_core import (
     RuntimeErrorInfo,
     plan_snapshot_to_dict,
 )
-from agent_core.usage import usage_to_dict
+from agent_core.usage import cache_usage_to_dict, usage_to_dict
 
 
 def encode(message: dict[str, object]) -> str:
@@ -118,6 +118,7 @@ def runtime_state_message(
     provider: str | None,
     permission_preset: str,
     context_window: dict[str, object] | None,
+    cache_usage: dict[str, int] | None,
     jobs: list[dict[str, object]],
     event_sequence: int | None = None,
     runtime_warnings: tuple[str, ...] = (),
@@ -138,6 +139,7 @@ def runtime_state_message(
         "provider": provider,
         "permission_preset": permission_preset,
         "context_window": context_window,
+        "cache_usage": cache_usage,
         "jobs": jobs,
         "runtime_warnings": list(runtime_warnings),
         "plan": _plan_payload(plan),
@@ -240,6 +242,7 @@ def event_to_message(
             "turn_id": turn_id,
             "model_call_index": event.model_call_index,
             "usage": usage_to_dict(event.usage),
+            "cache_usage": cache_usage_to_dict(event.cache_usage),
         }
 
     if isinstance(event, ContextWindowEvent):

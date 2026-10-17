@@ -53,6 +53,8 @@ open_session
 
 公共数据类型还包括附件、Tool Call、token usage、权限 preset、计划、Context Window、Session Item、设置快照与结构化 Runtime error。
 
+`model_completed.cache_usage` 和 `runtime_state.cache_usage` 是 Core 维护的会话累计快照，包含累计输入与缓存读取 token；仅统计同时报告两项数据的调用。前端使用 `Σread / Σinput` 显示命中率，直接替换快照，不在本地累加。`turn_completed.usage` 仍是最后一次调用的用量，不参与二次累计。
+
 ## 事件顺序与恢复
 
 Bridge 为输出消息分配单调递增的 `event_sequence`。GUI 原样保存序号，并用 `after_event` 请求后续事件；不得根据 phase 推算或重置会话内容的游标。

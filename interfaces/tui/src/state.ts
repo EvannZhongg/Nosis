@@ -1,5 +1,6 @@
 import type {
   Incoming,
+  CacheUsage,
   ContextWindow,
   PermissionPreset,
   PlanSnapshot,
@@ -75,6 +76,7 @@ export type State = {
   settings: SettingsSnapshot | null;
   turnId: string | null;
   usage: Usage | null;
+  cacheUsage: CacheUsage | null;
   contextWindow: ContextWindow | null;
   plan: PlanSnapshot | null;
   pendingSteers: number;
@@ -112,6 +114,7 @@ export const initialState: State = {
   settings: null,
   turnId: null,
   usage: null,
+  cacheUsage: null,
   contextWindow: null,
   plan: null,
   pendingSteers: 0,
@@ -451,6 +454,7 @@ function applyMessage(state: State, message: Incoming): State {
         turnId: message.turn_id,
         permissionPreset: message.permission_preset,
         contextWindow: message.context_window ?? state.contextWindow,
+        cacheUsage: message.cache_usage,
         plan: visiblePlan(message.plan),
         mcpStatus: message.phase === 'starting' ? state.mcpStatus : null,
         question: message.question ? questionState(message.question) : null,
@@ -686,7 +690,7 @@ function applyMessage(state: State, message: Incoming): State {
     }
 
     case 'model_completed':
-      return { ...state, usage: message.usage };
+      return { ...state, usage: message.usage, cacheUsage: message.cache_usage };
 
     case 'turn_completed':
       return { ...state, turnId: null, approval: null, question: null, pendingSteers: 0, usage: message.usage };

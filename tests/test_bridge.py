@@ -56,7 +56,7 @@ from agent_core.scheduler import (
     ScheduledRun,
     SchedulerService,
 )
-from agent_core.usage import TokenUsage, usage_to_dict
+from agent_core.usage import CacheUsage, TokenUsage, usage_to_dict
 from agent_core.session_paths import session_directory
 from agent_core.projection import project_context_units
 from agent_core.providers import ModelProvider
@@ -223,9 +223,10 @@ class ProtocolTest(unittest.TestCase):
             (None, None),
         ):
             with self.subTest(usage=usage):
-                self.assertEqual(event_to_message(ModelCompletedEvent(2, usage), "t1"), {
+                self.assertEqual(event_to_message(ModelCompletedEvent(2, usage, CacheUsage(2000, 1500)), "t1"), {
                     "type": "model_completed", "turn_id": "t1", "model_call_index": 2,
                     "usage": expected,
+                    "cache_usage": {"input_tokens": 2000, "cache_read_tokens": 1500},
                 })
 
     def test_encodes_context_window(self) -> None:
@@ -400,6 +401,7 @@ class ProtocolTest(unittest.TestCase):
         }
         self.assertEqual(
             runtime_state_message(
+                cache_usage=None,
                 phase="waiting_approval",
                 turn_id="t1",
                 approval=approval,
@@ -425,6 +427,7 @@ class ProtocolTest(unittest.TestCase):
                 "provider": "second",
                 "permission_preset": "full_access",
                 "context_window": {"input_tokens": 120},
+                "cache_usage": None,
                 "event_sequence": 12,
                 "jobs": [{"job_id": "j1", "kind": "shell", "status": "running"}],
                 "runtime_warnings": [],
@@ -1457,6 +1460,10 @@ class InterruptedTurnTest(BridgeTestCase):
         self.assertEqual(fatal["runtime"]["phase"], "failed")
 
     def test_turn_completed_preserves_cache_usage_from_the_model_call(self) -> None:
+        self.session.begin_turn("previous")
+        self.session.model_completed(1, usage=TokenUsage(100, 10, 110, 50, None),
+                                     has_tool_calls=False)
+        self.session.finish_turn("completed")
         plane = self.bridge.host.planes.ensure(self.bridge.host.sessions)
         plane.memory = MemorySpy()
         emit = self.bridge.emit
@@ -1484,14 +1491,20 @@ class InterruptedTurnTest(BridgeTestCase):
             "cache_read_tokens": 800, "cache_write_tokens": None,
         })
         stored = self.store.load(self.session_id)
-        call = next(event for event in stored.journal if event.event_type == "model_completed")
+        call = [event for event in stored.journal if event.event_type == "model_completed"][-1]
         self.assertEqual(call.payload["usage"], message["usage"])
         completed = [item for item in emitted(self.stdout) if item["type"] == "model_completed"]
         self.assertEqual(len(completed), 1)
         self.assertEqual(completed[0]["turn_id"], "t1")
         self.assertEqual(completed[0]["model_call_index"], 1)
         self.assertEqual(completed[0]["usage"], message["usage"])
+        totals = {"input_tokens": 1100, "cache_read_tokens": 850}
+        self.assertEqual(completed[0]["cache_usage"], totals)
+        self.assertEqual(completed[0]["runtime"]["cache_usage"], totals)
         self.assertLess(completed[0]["event_sequence"], message["event_sequence"])
+        workspace = str(self.bridge.host.sessions.workspace.path)
+        self.bridge.open_session({"workspace": workspace, "session_id": self.session_id})
+        self.assertEqual(emitted(self.stdout)[-1]["cache_usage"], totals)
 
     def test_running_checkpoint_contains_new_user_input_and_prior_turns(self) -> None:
         plane = self.bridge.host.planes.ensure(self.bridge.host.sessions)

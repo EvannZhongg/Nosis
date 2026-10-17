@@ -13,7 +13,7 @@ from .errors import (
 from .permissions import PermissionPreset
 from .plan import PlanSnapshot, plan_snapshot_from_dict, plan_snapshot_to_dict
 from .tools import ToolCall
-from .usage import TokenUsage, usage_to_dict
+from .usage import CacheUsage, TokenUsage, usage_to_dict
 from .tools.base import JSONValue
 from .time_utils import format_utc as _format_utc, parse_utc as _parse_utc
 
@@ -138,6 +138,7 @@ class Session:
     compression_count: int = 0
     permission_preset: PermissionPreset = PermissionPreset.ASK_FOR_APPROVAL
     plan: PlanSnapshot | None = None
+    cache_usage: CacheUsage | None = field(default=None, init=False)
     journal: list[JournalEvent] = field(default_factory=list, repr=False)
     turns: dict[str, Turn] = field(default_factory=dict, repr=False)
     tool_executions: dict[str, ToolExecution] = field(default_factory=dict, repr=False)
@@ -181,6 +182,17 @@ class Session:
                         item_index=item_index,
                     )
                 )
+        elif event.event_type == "model_completed":
+            usage = payload["usage"]
+            if usage is not None:
+                input_tokens = usage["input_tokens"]
+                cache_read_tokens = usage["cache_read_tokens"]
+                if input_tokens is not None and cache_read_tokens is not None:
+                    previous = self.cache_usage or CacheUsage(0, 0)
+                    self.cache_usage = CacheUsage(
+                        previous.input_tokens + input_tokens,
+                        previous.cache_read_tokens + cache_read_tokens,
+                    )
         elif event.event_type == "turn_started" and event.turn_id:
             self.turns[event.turn_id] = Turn(
                 event.turn_id,

@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
 
 from agent_core import JsonlSessionStore, Workspace, message_to_dict, plan_snapshot_to_dict
+from agent_core.usage import cache_usage_to_dict
 from agent_runtime.settings import SettingsStore
 from interfaces.bridge.managed_workspaces import (
     delete_scratch_workspace,
@@ -107,6 +108,7 @@ def create_sessions_router(
                     "provider": store.provider_for(session.session_id),
                     "permission_preset": session.permission_preset.value,
                     "context_window": None,
+                    "cache_usage": cache_usage_to_dict(session.cache_usage),
                     "event_sequence": 0,
                     "plan": (
                         plan_snapshot_to_dict(session.plan)
@@ -285,6 +287,11 @@ def create_sessions_router(
             attach_only=attach_only,
         )
         if runtime is None:
+            stored_session = (
+                store.load(opening_session_id, recover=False)
+                if opening_session_id and store.has_journal(opening_session_id)
+                else None
+            )
             await websocket.send_json(
                 runtime_state_message(
                     phase="inactive",
@@ -294,6 +301,8 @@ def create_sessions_router(
                     provider=None,
                     permission_preset="ask_for_approval",
                     context_window=None,
+                    cache_usage=cache_usage_to_dict(stored_session.cache_usage)
+                    if stored_session is not None else None,
                     event_sequence=0,
                     jobs=[],
                 )

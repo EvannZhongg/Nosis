@@ -46,7 +46,7 @@ from agent_core.context_manager import (
     ARCHIVE_RETRY_COUNT,
     _validated_archive_summary,
 )
-from agent_core.usage import TokenUsage
+from agent_core.usage import CacheUsage, TokenUsage
 
 REQUEST_TIME = datetime(2026, 9, 9, 8, 0, tzinfo=timezone.utc)
 TOOL_CALL_TIME = datetime(2026, 9, 9, 8, 0, 10, tzinfo=timezone.utc)
@@ -1611,8 +1611,8 @@ class AgentTest(unittest.TestCase):
         self.assertEqual(result.response.content, "tool completed")
         completed = [event for event in events if isinstance(event, ModelCompletedEvent)]
         self.assertEqual(completed, [
-            ModelCompletedEvent(1, TokenUsage(1000, 20, 1020, 800, 100)),
-            ModelCompletedEvent(2, TokenUsage(1100, 30, 1130, 1000, None)),
+            ModelCompletedEvent(1, TokenUsage(1000, 20, 1020, 800, 100), CacheUsage(1000, 800)),
+            ModelCompletedEvent(2, TokenUsage(1100, 30, 1130, 1000, None), CacheUsage(2100, 1800)),
         ])
         self.assertLess(events.index(completed[0]), next(
             index for index, event in enumerate(events) if isinstance(event, ToolBatchStartedEvent)

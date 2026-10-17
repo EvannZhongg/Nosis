@@ -166,7 +166,7 @@ export function Composer({ runtime }: { runtime: SessionRuntime }) {
             <option value="full_access">完全访问</option>
           </select>{runtime.permissionSaving ? <LoaderCircle size={12} className="spin" aria-label="正在保存权限" /> : <ChevronDown size={12} />}
         </label>
-        <div className="composer-actions"><ContextWindowIndicator window={runtime.contextWindow} usage={runtime.usage} />{runtime.pendingFiles.length > 0
+        <div className="composer-actions"><ContextWindowIndicator window={runtime.contextWindow} cacheUsage={runtime.cacheUsage} />{runtime.pendingFiles.length > 0
           ? <button type="submit" className="send-button" aria-label="发送消息" disabled={runtime.composerGate.sendDisabled || runtime.sessionRunning}><ArrowUp size={19} /></button>
           : <ComposerPrimitive.Send className="send-button" aria-label={runtime.running ? "发送引导" : "发送消息"}><ArrowUp size={19} /></ComposerPrimitive.Send>}
         </div>

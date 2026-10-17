@@ -30,7 +30,7 @@ vi.mock('../src/bridge.js', () => ({
               permission_preset: 'ask_for_approval',
             });
             emit({
-              type: 'runtime_state',
+              type: 'runtime_state', cache_usage: null,
               phase: 'inactive',
               turn_id: null,
               provider: 'test',
@@ -185,6 +185,7 @@ describe('App', () => {
         input_tokens: 1000, output_tokens: 20, total_tokens: 1020,
         cache_read_tokens: 995, cache_write_tokens: null,
       },
+      cache_usage: { input_tokens: 1000, cache_read_tokens: 995 },
     });
     await waitFor(() => expect(lastFrame()).toContain('Cache hit: 99.5%'));
     emit({ type: 'assistant_delta', turn_id: 't1', text: ' continuing', model_call_index: 2 });
@@ -197,10 +198,12 @@ describe('App', () => {
         input_tokens: 100, output_tokens: 20, total_tokens: 120,
         cache_read_tokens: 0, cache_write_tokens: null,
       },
+      cache_usage: { input_tokens: 1100, cache_read_tokens: 995 },
     });
-    await waitFor(() => expect(lastFrame()).toContain('Cache hit: 0.0%'));
-    emit({ type: 'model_completed', turn_id: 't1', model_call_index: 3, usage: null });
-    await waitFor(() => expect(lastFrame()).toContain('Cache hit: unknown'));
+    await waitFor(() => expect(lastFrame()).toContain('Cache hit: 90.5%'));
+    emit({ type: 'model_completed', turn_id: 't1', model_call_index: 3, usage: null,
+      cache_usage: { input_tokens: 1100, cache_read_tokens: 995 } });
+    await waitFor(() => expect(lastFrame()).toContain('Cache hit: 90.5%'));
     unmount();
   });
 
@@ -271,7 +274,7 @@ describe('App', () => {
       permission_preset: 'ask_for_approval',
     });
     emit({
-      type: 'runtime_state',
+      type: 'runtime_state', cache_usage: null,
       phase: 'inactive',
       turn_id: null,
       provider: 'test',
@@ -676,7 +679,7 @@ describe('App', () => {
       timestamp_utc: '2026-09-15T12:00:00Z',
     });
     emit({
-      type: 'runtime_state',
+      type: 'runtime_state', cache_usage: null,
       phase: 'idle',
       turn_id: null,
       provider: 'test',
@@ -764,7 +767,7 @@ describe('App', () => {
       permission_preset: 'ask_for_approval',
     });
     emit({
-      type: 'runtime_state',
+      type: 'runtime_state', cache_usage: null,
       phase: 'inactive',
       turn_id: null,
       provider: 'test',

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { MouseEvent as ReactMouseEvent } from "react";
-import { cacheHitPercent, type ContextWindow, type Usage } from "@nosis/protocol";
+import { cacheHitPercent, type CacheUsage, type ContextWindow } from "@nosis/protocol";
 
 function formatTokens(value: number): string {
   return new Intl.NumberFormat("en-US").format(value);
@@ -12,7 +12,7 @@ function containMouseDown(event: ReactMouseEvent<HTMLDivElement>): void {
   event.stopPropagation();
 }
 
-export function ContextWindowIndicator({ window, usage }: { window: ContextWindow | null; usage: Usage | null }) {
+export function ContextWindowIndicator({ window, cacheUsage }: { window: ContextWindow | null; cacheUsage: CacheUsage | null }) {
   const [open, setOpen] = useState(false);
   const [summaryOpen, setSummaryOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -34,7 +34,7 @@ export function ContextWindowIndicator({ window, usage }: { window: ContextWindo
   const circumference = 2 * Math.PI * 7;
   const remaining = Math.max(0, window.max_input_tokens - window.input_tokens);
   const percent = Math.round(ratio * 100);
-  const cachePercent = cacheHitPercent(usage);
+  const cachePercent = cacheHitPercent(cacheUsage);
   return <div className="context-window" ref={rootRef}>
     <button type="button" className="context-window-trigger" aria-label={`上下文窗口已使用 ${percent}%`} aria-expanded={open} title="查看上下文窗口" onClick={() => setOpen((value) => !value)}>
       <svg className="context-ring" viewBox="0 0 18 18" aria-hidden="true">
@@ -47,7 +47,7 @@ export function ContextWindowIndicator({ window, usage }: { window: ContextWindo
       <div className="context-popover-title">Context window</div>
       <dl>
         <div><dt>当前输入</dt><dd>{formatTokens(window.input_tokens)}</dd></div>
-        <div title="最近一次完成的模型调用"><dt>缓存命中</dt><dd>{cachePercent === null ? "未知" : `${cachePercent.toFixed(1)}%`}</dd></div>
+        <div><dt>缓存命中</dt><dd>{cachePercent === null ? "未知" : `${cachePercent.toFixed(1)}%`}</dd></div>
         <div><dt>可用输入上限</dt><dd>{formatTokens(window.max_input_tokens)}</dd></div>
         <div><dt>剩余输入空间</dt><dd>{formatTokens(remaining)}</dd></div>
         <div><dt>压缩触发点</dt><dd>{formatTokens(window.compression_threshold)}</dd></div>

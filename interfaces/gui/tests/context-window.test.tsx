@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
-import type { ContextWindow, Usage } from "@nosis/protocol";
+import type { CacheUsage, ContextWindow } from "@nosis/protocol";
 import { ContextWindowIndicator } from "../src/chat/RuntimeIndicators/ContextWindow";
 
 const window: ContextWindow = {
@@ -27,17 +27,16 @@ describe("context window cache usage", () => {
     const container = document.createElement("div");
     document.body.append(container);
     const root = createRoot(container);
-    const usage: Usage = {
-      input_tokens: input, output_tokens: 20, total_tokens: 120,
-      cache_read_tokens: cached, cache_write_tokens: null,
+    const cacheUsage: CacheUsage | null = input === null || cached === null ? null : {
+      input_tokens: input, cache_read_tokens: cached,
     };
     try {
-      await act(async () => root.render(<ContextWindowIndicator window={window} usage={usage} />));
+      await act(async () => root.render(<ContextWindowIndicator window={window} cacheUsage={cacheUsage} />));
       await act(async () => container.querySelector("button")!.click());
       const row = Array.from(container.querySelectorAll("dl > div"))
         .find((element) => element.querySelector("dt")?.textContent === "缓存命中")!;
       expect(row.querySelector("dd")?.textContent).toBe(expected);
-      await act(async () => root.render(<ContextWindowIndicator window={window} usage={null} />));
+      await act(async () => root.render(<ContextWindowIndicator window={window} cacheUsage={null} />));
       expect(row.querySelector("dd")?.textContent).toBe("未知");
     } finally {
       await act(async () => root.unmount());

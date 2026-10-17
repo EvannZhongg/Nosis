@@ -16,9 +16,44 @@ from agent_core import (
 from agent_core.projection import project_context_units
 from agent_core.content import historical_content
 from agent_core.session import message_from_dict
+from agent_core.usage import CacheUsage
 
 
 class SessionJournalTest(unittest.TestCase):
+    def test_session_cache_totals_weight_tokens_across_turns_and_reload(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = JsonlSessionStore(root / "sessions")
+            store.bind_workspace("s", root)
+            session = Session("s")
+            self.assertIsNone(session.cache_usage)
+            session.begin_turn("t1")
+            session.add_item("user", "first")
+            for index, usage in enumerate((
+                TokenUsage(100, 10, 110, 80, 0),
+                TokenUsage(900, 10, 910, 90, None),
+                TokenUsage(100000, 10, 100010, None, None),
+                TokenUsage(None, 10, None, 10000, None),
+                None,
+            ), 1):
+                session.model_completed(index, usage=usage, has_tool_calls=False)
+            self.assertEqual(session.cache_usage, CacheUsage(1000, 170))
+            session.finish_turn("failed")
+            store.append_events("s", session.journal, workspace=root)
+            resumed = store.load("s")
+            self.assertEqual(resumed.cache_usage, CacheUsage(1000, 170))
+            resumed.begin_turn("t2")
+            resumed.add_item("user", "second")
+            resumed.model_completed(1, usage=TokenUsage(1000, 10, 1010, 0, None),
+                                    has_tool_calls=False)
+            resumed.finish_turn("completed")
+            self.assertEqual(resumed.cache_usage, CacheUsage(2000, 170))
+            store.append_events("s", resumed.journal[len(session.journal):], workspace=root)
+            self.assertEqual(store.load("s").cache_usage, CacheUsage(2000, 170))
+            anchor = store.editable_user_messages("s")[0]["anchor_id"]
+            forked = store.fork_session("s", "fork", anchor)
+            self.assertEqual(forked.cache_usage, CacheUsage(1000, 170))
+
     def test_model_cache_usage_survives_journal_reload_after_turn_failure(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)

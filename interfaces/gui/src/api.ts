@@ -1,4 +1,4 @@
-import type { ContextWindow, PermissionPreset, PlanSnapshot, SessionItem, SessionSummary, UserAttachment } from "@nosis/protocol";
+import type { CacheUsage, ContextWindow, PermissionPreset, PlanSnapshot, SessionItem, SessionSummary, UserAttachment } from "@nosis/protocol";
 import type { SettingsSnapshot } from "@nosis/protocol";
 
 export type { SessionItem, SessionSummary };
@@ -10,6 +10,7 @@ export type Session = {
   permission_preset: PermissionPreset;
   provider?: string | null;
   context_window?: ContextWindow | null;
+  cache_usage?: CacheUsage | null;
   event_sequence?: number;
   plan?: PlanSnapshot | null;
   editable_user_messages?: EditableUserMessage[];

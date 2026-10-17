@@ -5,18 +5,30 @@ import { applyMessage, isTurnActivity, toMessages, turnProcessPartIndexes, type 
 const TOOL_CALL = { id: "call-1", name: "shell", arguments: { command: "ls" } };
 
 describe("process folding", () => {
-  it("updates usage for every model call without completing the turn or changing the transcript", () => {
+  it("restores Session totals from a runtime snapshot", () => {
+    const applied = applyMessage([], {
+      type: "runtime_state", phase: "inactive", turn_id: null,
+      provider: "test", permission_preset: "ask_for_approval", context_window: null,
+      jobs: [], approval: null, question: null, plan: null,
+      cache_usage: { input_tokens: 1000, cache_read_tokens: 170 },
+    });
+    expect(applied.cacheUsage).toEqual({ input_tokens: 1000, cache_read_tokens: 170 });
+  });
+
+  it("uses authoritative Session totals without counting replayed events twice", () => {
     const items: TranscriptItem[] = [{ role: "user", content: "work" }];
     for (const [index, cached] of [995, 0, null].entries()) {
       const message: Incoming = {
         type: "model_completed", turn_id: "t1", model_call_index: index + 1,
+        cache_usage: { input_tokens: index === 0 ? 1000 : 2000, cache_read_tokens: 995 },
         usage: cached === null ? null : {
           input_tokens: 1000, output_tokens: 20, total_tokens: 1020,
           cache_read_tokens: cached, cache_write_tokens: null,
         },
       };
       const applied = applyMessage(items, message);
-      expect(applied.usage).toEqual(message.usage);
+      expect(applied.cacheUsage).toEqual(message.cache_usage);
+      expect(applyMessage(items, message).cacheUsage).toEqual(applied.cacheUsage);
       expect(applied.items).toBe(items);
       expect(applied.finished).toBeUndefined();
       expect(applied.approval).toBeUndefined();
@@ -25,29 +37,29 @@ describe("process folding", () => {
     }
   });
 
-  it("keeps completed usage during a new turn and clears it on configuration changes", () => {
+  it("preserves Session cache totals across turns and configuration changes", () => {
     const usage = {
       input_tokens: 100, output_tokens: 20, total_tokens: 120,
       cache_read_tokens: 80, cache_write_tokens: null,
     };
     expect(applyMessage([], {
       type: "turn_completed", turn_id: "t1", usage,
-    }).usage).toEqual(usage);
+    }).cacheUsage).toBeUndefined();
     expect(applyMessage([], {
       type: "turn_completed", turn_id: "t2", usage: null,
-    }).usage).toBeNull();
+    }).cacheUsage).toBeUndefined();
     expect(applyMessage([], {
       type: "user_turn_received", turn_id: "t3",
-    }).usage).toBeUndefined();
+    }).cacheUsage).toBeUndefined();
     expect(applyMessage([], {
       type: "assistant_delta", turn_id: "t3", text: "working", model_call_index: 1,
-    }).usage).toBeUndefined();
+    }).cacheUsage).toBeUndefined();
     expect(applyMessage([], {
       type: "provider_changed", provider: "next", model: "next/model",
-    }).usage).toBeNull();
+    }).cacheUsage).toBeUndefined();
     expect(applyMessage([], {
       type: "workspace_changed", workspace: "/next",
-    }).usage).toBeNull();
+    }).cacheUsage).toBeUndefined();
   });
 
   it.each([
@@ -330,7 +342,7 @@ describe("applyMessage", () => {
   });
   it("shows warnings from runtime initialization", () => {
     const { feedback } = applyMessage([], {
-      type: "runtime_state",
+      type: "runtime_state", cache_usage: null,
       phase: "running",
       turn_id: "t1",
       provider: "test",

@@ -22,6 +22,7 @@ from agent_core import (
     Workspace,
 )
 from agent_core.scheduler import IntervalTrigger, OneShotTrigger, SchedulerService
+from agent_core.usage import TokenUsage
 from interfaces.bridge.managed_workspaces import create_scratch_workspace
 from agent_runtime.settings import SettingsStore
 
@@ -81,6 +82,7 @@ class FakeBridge:
         self._messages: asyncio.Queue[dict | None] = asyncio.Queue()
         self._stream = EventStream()
         self.state = bridge_protocol.runtime_state_message(
+            cache_usage=None,
             phase="inactive", approval=None, question=None, provider=None,
             permission_preset="ask_for_approval", context_window=None, jobs=[],
         )
@@ -235,6 +237,7 @@ class ActiveSessionTest(unittest.IsolatedAsyncioTestCase):
         items = [{"role": "user", "content": "second turn"}]
         bridge._messages.put_nowait({
             **bridge_protocol.runtime_state_message(
+                cache_usage=None,
                 phase="running", turn_id="t2", approval=None, question=None,
                 provider="first", permission_preset="full_access", context_window=None, jobs=[],
             ),
@@ -294,6 +297,7 @@ class ActiveSessionTest(unittest.IsolatedAsyncioTestCase):
             "command": "ls",
         }
         bridge.emit(bridge_protocol.runtime_state_message(
+            cache_usage=None,
             phase="waiting_approval",
             turn_id="t1",
             approval=approval,
@@ -318,6 +322,7 @@ class ActiveSessionTest(unittest.IsolatedAsyncioTestCase):
         first = {"plan_id": "plan-1", "goal": "Ship", "revision": 1, "steps": []}
         second = {"plan_id": "plan-1", "goal": "Ship", "revision": 2, "steps": []}
         bridge.emit(bridge_protocol.runtime_state_message(
+            cache_usage=None,
             phase="running",
             turn_id="t1",
             approval=None,
@@ -375,6 +380,7 @@ class RuntimeSnapshotTest(unittest.IsolatedAsyncioTestCase):
 
         bridge.emit(
             bridge_protocol.runtime_state_message(
+                cache_usage=None,
                 phase="running",
                 turn_id="t1",
                 approval=None,
@@ -388,6 +394,7 @@ class RuntimeSnapshotTest(unittest.IsolatedAsyncioTestCase):
         )
         bridge.emit(
             bridge_protocol.runtime_state_message(
+                cache_usage=None,
                 phase="idle",
                 turn_id=None,
                 approval=None,
@@ -1512,6 +1519,7 @@ class GuiTest(unittest.TestCase):
 
     def test_reconnecting_marks_old_snapshots_as_replay_before_current_state(self) -> None:
         snapshot = bridge_protocol.runtime_state_message(
+            cache_usage=None,
             phase="inactive", turn_id=None, approval=None, question=None,
             provider="first", permission_preset="ask_for_approval",
             context_window=None, jobs=[],
@@ -1786,6 +1794,8 @@ class GuiTest(unittest.TestCase):
         session = Session("from-tui")
         session.begin_turn("turn-1")
         session.add_item("user", "TUI 对话")
+        session.model_completed(1, usage=TokenUsage(1000, 20, 1020, 750, None),
+                                has_tool_calls=False)
         session.add_item("assistant", "你好", provider_data={
             "openai_responses": [{"type": "reasoning", "encrypted_content": "native-state"}],
         })
@@ -1807,6 +1817,7 @@ class GuiTest(unittest.TestCase):
 
         self.assertEqual(data["items"][0]["content"], "TUI 对话")
         self.assertEqual(data["permission_preset"], "ask_for_approval")
+        self.assertEqual(data["cache_usage"], {"input_tokens": 1000, "cache_read_tokens": 750})
         self.assertNotIn("provider_data", data["items"][1])
         self.assertNotIn("native-state", json.dumps(data))
         self.assertEqual(

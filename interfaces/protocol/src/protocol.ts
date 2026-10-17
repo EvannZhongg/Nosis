@@ -51,10 +51,14 @@ export type Usage = {
   cache_write_tokens: number | null;
 };
 
-/** Cache reads as a percentage of the same model call's reported input. */
-export function cacheHitPercent(usage: Usage | null): number | null {
-  if (usage === null || usage.input_tokens === null || usage.input_tokens === 0
-    || usage.cache_read_tokens === null) return null;
+export type CacheUsage = {
+  input_tokens: number;
+  cache_read_tokens: number;
+};
+
+/** Token-weighted cache hit percentage over the Session's reported calls. */
+export function cacheHitPercent(usage: CacheUsage | null): number | null {
+  if (usage === null || usage.input_tokens === 0) return null;
   return usage.cache_read_tokens / usage.input_tokens * 100;
 }
 
@@ -213,6 +217,7 @@ export type RuntimeState = {
   provider: string | null;
   permission_preset: PermissionPreset;
   context_window: ContextWindow | null;
+  cache_usage: CacheUsage | null;
   event_sequence?: number;
   workspace?: string;
   jobs: BackgroundJob[];
@@ -250,7 +255,7 @@ export type Incoming = (
     }
   | { type: 'assistant_delta'; turn_id: string; text: string; model_call_index: number }
   | { type: 'reasoning_delta'; turn_id: string; text: string; model_call_index: number }
-  | { type: 'model_completed'; turn_id: string; model_call_index: number; usage: Usage | null }
+  | { type: 'model_completed'; turn_id: string; model_call_index: number; usage: Usage | null; cache_usage: CacheUsage | null }
   | ({ type: 'context_window'; turn_id: string | null } & ContextWindow)
   | {
       type: 'assistant_message';
