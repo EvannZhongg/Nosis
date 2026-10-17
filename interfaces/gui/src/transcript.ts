@@ -237,9 +237,6 @@ export function applyMessage(
     case "turn_completed":
       return { items, usage: message.usage, approval: null, question: null, finished: true };
 
-    case "user_turn_received":
-      return { items, usage: null };
-
     case "turn_cancelled":
       return {
         items: settle(items),

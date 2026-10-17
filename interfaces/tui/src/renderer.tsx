@@ -319,7 +319,7 @@ export function StatusBar({ state, elapsed }: { state: State; elapsed: number })
   const cachePercent = cacheHitPercent(state.usage);
   const model = `${state.model}${
     state.contextWindow
-      ? ` · Cache hit: ${cachePercent === null ? 'unknown' : `${cachePercent}%`}`
+      ? ` · Cache hit: ${cachePercent === null ? 'unknown' : `${cachePercent.toFixed(1)}%`}`
       : ''
   }${
     state.usage?.total_tokens ? ` · ${state.usage.total_tokens} tokens` : ''

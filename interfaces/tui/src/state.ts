@@ -350,7 +350,6 @@ function reduceAction(state: State, action: Action): State {
         ...state,
         status: 'streaming',
         turnId: action.turnId,
-        usage: null,
         entries: [
           ...state.entries,
           { kind: 'user', id: nextId('user'), text: action.text },
@@ -590,7 +589,6 @@ function applyMessage(state: State, message: Incoming): State {
       return { ...state, plan: visiblePlan(message.plan) };
 
     case 'user_turn_received':
-      return { ...state, usage: null };
     case 'user_steer_received':
       return state;
 

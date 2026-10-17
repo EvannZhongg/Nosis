@@ -47,7 +47,7 @@ export function ContextWindowIndicator({ window, usage }: { window: ContextWindo
       <div className="context-popover-title">Context window</div>
       <dl>
         <div><dt>当前输入</dt><dd>{formatTokens(window.input_tokens)}</dd></div>
-        <div title="最近一次完成的模型调用"><dt>缓存命中</dt><dd>{cachePercent === null ? "未知" : `${cachePercent}%`}</dd></div>
+        <div title="最近一次完成的模型调用"><dt>缓存命中</dt><dd>{cachePercent === null ? "未知" : `${cachePercent.toFixed(1)}%`}</dd></div>
         <div><dt>可用输入上限</dt><dd>{formatTokens(window.max_input_tokens)}</dd></div>
         <div><dt>剩余输入空间</dt><dd>{formatTokens(remaining)}</dd></div>
         <div><dt>压缩触发点</dt><dd>{formatTokens(window.compression_threshold)}</dd></div>

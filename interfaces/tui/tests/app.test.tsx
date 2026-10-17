@@ -169,7 +169,7 @@ describe('App', () => {
     autoReady = true;
   });
 
-  it('shows cache hit percentage and clears it when the next turn starts', async () => {
+  it('shows one decimal of cache hits and keeps it while the next turn runs', async () => {
     const { lastFrame, unmount } = renderApp();
     await waitForReady(lastFrame);
     emit({
@@ -180,19 +180,25 @@ describe('App', () => {
     });
     emit({
       type: 'turn_completed', turn_id: 't1', usage: {
-        input_tokens: 100, output_tokens: 20, total_tokens: 120,
-        cache_read_tokens: 80, cache_write_tokens: null,
+        input_tokens: 1000, output_tokens: 20, total_tokens: 1020,
+        cache_read_tokens: 995, cache_write_tokens: null,
       },
     });
-    await waitFor(() => expect(lastFrame()).toContain('Cache hit: 80%'));
+    await waitFor(() => expect(lastFrame()).toContain('Cache hit: 99.5%'));
+    emit({ type: 'user_turn_received', turn_id: 't2' });
+    emit({ type: 'assistant_delta', turn_id: 't2', text: 'working', model_call_index: 1 });
+    await waitFor(() => {
+      expect(lastFrame()).toContain('working');
+      expect(lastFrame()).toContain('Cache hit: 99.5%');
+    });
     emit({
       type: 'turn_completed', turn_id: 't2', usage: {
         input_tokens: 100, output_tokens: 20, total_tokens: 120,
         cache_read_tokens: 0, cache_write_tokens: null,
       },
     });
-    await waitFor(() => expect(lastFrame()).toContain('Cache hit: 0%'));
-    emit({ type: 'user_turn_received', turn_id: 't3' });
+    await waitFor(() => expect(lastFrame()).toContain('Cache hit: 0.0%'));
+    emit({ type: 'turn_completed', turn_id: 't3', usage: null });
     await waitFor(() => expect(lastFrame()).toContain('Cache hit: unknown'));
     unmount();
   });

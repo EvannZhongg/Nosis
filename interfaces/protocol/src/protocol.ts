@@ -55,7 +55,7 @@ export type Usage = {
 export function cacheHitPercent(usage: Usage | null): number | null {
   if (usage === null || usage.input_tokens === null || usage.input_tokens === 0
     || usage.cache_read_tokens === null) return null;
-  return Math.round(usage.cache_read_tokens / usage.input_tokens * 100);
+  return usage.cache_read_tokens / usage.input_tokens * 100;
 }
 
 export type ContextWindow = {

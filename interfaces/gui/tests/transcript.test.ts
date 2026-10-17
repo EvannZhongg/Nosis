@@ -5,7 +5,7 @@ import { applyMessage, isTurnActivity, toMessages, turnProcessPartIndexes, type 
 const TOOL_CALL = { id: "call-1", name: "shell", arguments: { command: "ls" } };
 
 describe("process folding", () => {
-  it("passes completed usage to the view and clears it for a new turn or configuration", () => {
+  it("keeps completed usage during a new turn and clears it on configuration changes", () => {
     const usage = {
       input_tokens: 100, output_tokens: 20, total_tokens: 120,
       cache_read_tokens: 80, cache_write_tokens: null,
@@ -18,7 +18,10 @@ describe("process folding", () => {
     }).usage).toBeNull();
     expect(applyMessage([], {
       type: "user_turn_received", turn_id: "t3",
-    }).usage).toBeNull();
+    }).usage).toBeUndefined();
+    expect(applyMessage([], {
+      type: "assistant_delta", turn_id: "t3", text: "working", model_call_index: 1,
+    }).usage).toBeUndefined();
     expect(applyMessage([], {
       type: "provider_changed", provider: "next", model: "next/model",
     }).usage).toBeNull();

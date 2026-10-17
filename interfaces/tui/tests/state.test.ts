@@ -468,8 +468,12 @@ describe('reducer', () => {
     expect(state.usage?.total_tokens).toBe(12);
     expect(state.usage?.cache_read_tokens).toBe(8);
     expect(state.usage?.cache_write_tokens).toBeNull();
+    expect(reducer(state, { type: 'submit', turnId: 't2', text: 'continue' }).usage)
+      .toEqual(state.usage);
+    expect(reducer(state, {
+      type: 'message', message: { type: 'user_turn_received', turn_id: 't2' },
+    }).usage).toEqual(state.usage);
     const messages: Incoming[] = [
-      { type: 'user_turn_received', turn_id: 't2' },
       { type: 'provider_changed', provider: 'next', model: 'next/model' },
       { type: 'workspace_changed', workspace: '/next' },
     ];

@@ -445,7 +445,6 @@ export function useSessionRuntime({
       content: attachments.length ? [{ type: "text", text }, ...attachments] : text,
     };
     showPendingUserItem(submittedItem);
-    setUsage(null);
     applyRuntimePhase("starting");
     if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
     setToast(null);
