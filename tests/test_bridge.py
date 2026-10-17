@@ -55,7 +55,7 @@ from agent_core.scheduler import (
     ScheduledRun,
     SchedulerService,
 )
-from agent_core.llm import TokenUsage
+from agent_core.usage import TokenUsage, usage_to_dict
 from agent_core.session_paths import session_directory
 from agent_core.projection import project_context_units
 from agent_core.providers import ModelProvider
@@ -74,7 +74,6 @@ from interfaces.bridge.protocol import (
     format_timestamp,
     session_ready_message,
     runtime_state_message,
-    usage_to_dict,
     runtime_failure_to_dict,
 )
 
@@ -348,9 +347,10 @@ class ProtocolTest(unittest.TestCase):
         self.assertIsNone(usage_to_dict(None))
         self.assertEqual(
             usage_to_dict(
-                TokenUsage(input_tokens=1, output_tokens=2, total_tokens=3)
+                TokenUsage(1, 2, 3, 0, None)
             ),
-            {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3},
+            {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3,
+             "cache_read_tokens": 0, "cache_write_tokens": None},
         )
 
     def test_session_ready_message_describes_the_control_plane(self) -> None:
@@ -1441,6 +1441,27 @@ class InterruptedTurnTest(BridgeTestCase):
         self.assertNotIn("transcript", fatal)
         self.assertEqual(fatal["runtime"]["phase"], "failed")
 
+    def test_turn_completed_preserves_cache_usage_from_the_model_call(self) -> None:
+        plane = self.bridge.host.planes.ensure(self.bridge.host.sessions)
+        plane.memory = MemorySpy()
+        with (
+            patch.object(plane.provider, "count_input_tokens", return_value=1),
+            patch.object(plane.provider, "stream_cancellable", return_value=LLMResponse(
+                content="done", usage=TokenUsage(1000, 20, 1020, 800, None),
+            )),
+        ):
+            self.bridge.run_turn({"turn_id": "t1", "text": "do the work"})
+
+        message = emitted(self.stdout)[-1]
+        self.assertEqual(message["type"], "turn_completed")
+        self.assertEqual(message["usage"], {
+            "input_tokens": 1000, "output_tokens": 20, "total_tokens": 1020,
+            "cache_read_tokens": 800, "cache_write_tokens": None,
+        })
+        stored = self.store.load(self.session_id)
+        call = next(event for event in stored.journal if event.event_type == "model_completed")
+        self.assertEqual(call.payload["usage"], message["usage"])
+
     def test_running_checkpoint_contains_new_user_input_and_prior_turns(self) -> None:
         plane = self.bridge.host.planes.ensure(self.bridge.host.sessions)
         plane.agent = SuccessfulAgent(self.session)
@@ -2096,7 +2117,7 @@ class BridgeSessionOpenTest(BridgeTestCase):
         with patch.object(
             plane.fast_provider, "stream_cancellable",
             return_value=LLMResponse(
-                content="- [durable] Prior work.", usage=TokenUsage(50, 8, 58),
+                content="- [durable] Prior work.", usage=TokenUsage(50, 8, 58, 30, 10),
             ),
         ):
             plane.agent._context.archive()
@@ -2105,7 +2126,7 @@ class BridgeSessionOpenTest(BridgeTestCase):
             plane.fast_provider, "stream",
             return_value=LLMResponse(
                 content='{"entries":[{"kind":"fact","content":"A fact."}]}',
-                usage=TokenUsage(12, 6, 18),
+                usage=TokenUsage(12, 6, 18, 0, None),
             ),
         ):
             plane.memory.reconcile_pending()
@@ -2126,6 +2147,11 @@ class BridgeSessionOpenTest(BridgeTestCase):
         ))
         self.assertEqual(records[0]["usage"], {
             "input_tokens": 50, "output_tokens": 8, "total_tokens": 58,
+            "cache_read_tokens": 30, "cache_write_tokens": 10,
+        })
+        self.assertEqual(records[1]["usage"], {
+            "input_tokens": 12, "output_tokens": 6, "total_tokens": 18,
+            "cache_read_tokens": 0, "cache_write_tokens": None,
         })
 
     def test_subagent_compression_and_memory_are_logged_in_parent_session(self) -> None:

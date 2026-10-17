@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from litellm.exceptions import MidStreamFallbackError
+from litellm.types.utils import Usage
 
 from agent_core import (
     AgentCancelled,
@@ -64,6 +65,41 @@ USAGE = type(
 
 
 class LiteLLMProviderTest(unittest.TestCase):
+    @patch("agent_core.providers.litellm_provider.completion")
+    def test_final_usage_chunk_preserves_normalized_cache_details(self, completion_mock):
+        cases = (
+            ("openai/test", {"prompt_tokens_details": {
+                "cached_tokens": 800, "cache_write_tokens": 100,
+            }}, 800, 100),
+            ("anthropic/claude-sonnet-4-5", {
+                "cache_read_input_tokens": 800, "cache_creation_input_tokens": 100,
+            }, 800, 100),
+            ("deepseek/deepseek-flash", {
+                "prompt_cache_hit_tokens": 800, "prompt_cache_miss_tokens": 200,
+            }, 800, None),
+            ("dashscope/qwen-plus", {"prompt_tokens_details": {
+                "cached_tokens": 800, "cache_creation_input_tokens": 100,
+            }}, 800, 100),
+            ("gemini/gemini-2.5-flash", {"prompt_tokens_details": {
+                "cached_tokens": 800,
+            }}, 800, None),
+            ("openai/test", {"prompt_tokens_details": {
+                "cached_tokens": 0, "cache_write_tokens": 0,
+            }}, 0, 0),
+            ("ollama/llama3.1", {}, None, None),
+        )
+        for model, details, read_tokens, write_tokens in cases:
+            with self.subTest(model=model, details=details):
+                usage = Usage(prompt_tokens=1000, completion_tokens=5, total_tokens=1005, **details)
+                # Usage can arrive after the content and finish marker, without choices.
+                completion_mock.return_value = iter([
+                    chunk(content="OK", finish_reason="stop"),
+                    type("UsageChunk", (), {"choices": [], "usage": usage})(),
+                ])
+                provider = LiteLLMProvider(model=model, max_context_tokens=2000)
+                result = provider.stream(LLMRequest("Test", ()), lambda _: None)
+                self.assertEqual(result.usage, TokenUsage(1000, 5, 1005, read_tokens, write_tokens))
+
     @patch("agent_core.providers.litellm_provider.completion")
     def test_invalid_fragments_are_preserved_without_guessing_or_repair(self, completion_mock):
         cases = (
@@ -476,6 +512,8 @@ class LiteLLMProviderTest(unittest.TestCase):
                 input_tokens=12,
                 output_tokens=5,
                 total_tokens=17,
+                cache_read_tokens=None,
+                cache_write_tokens=None,
             ),
         )
         token_counter_mock.assert_called_once_with(

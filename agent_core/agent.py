@@ -301,14 +301,9 @@ class Agent:
                         "model_call_index": model_call_index,
                     },
                 ) from error
-            usage = response.usage
             self._session.model_completed(
                 model_call_index,
-                input_tokens=(usage.input_tokens if usage is not None else None),
-                output_tokens=(
-                    usage.output_tokens if usage is not None else None
-                ),
-                total_tokens=(usage.total_tokens if usage is not None else None),
+                usage=response.usage,
                 has_tool_calls=bool(response.tool_calls),
             )
             continuation.raise_if_cancelled()

@@ -101,7 +101,7 @@ class OpenAIProviderTest(unittest.TestCase):
             )
         self.assertEqual(result.tool_calls, (ToolCall("call_1", "probe", {"value": "ping"}),
                                             ToolCall("call_2", "probe", {})))
-        self.assertEqual(result.usage, TokenUsage(12, 5, 17))
+        self.assertEqual(result.usage, TokenUsage(12, 5, 17, 0, None))
         self.assertFalse(seen)
         self.assertEqual(str(requests[0].url), "https://relay.example/v1/responses")
         body = json.loads(requests[0].content)
@@ -266,7 +266,7 @@ class OpenAIProviderTest(unittest.TestCase):
                 "thinking": {"type": "enabled"}, "extra_body": {"enable_thinking": True},
             }).stream(self.request(max_generation_tokens=100), text.append, reasoning.append)
         self.assertEqual(result.tool_calls, (ToolCall("call_1", "probe", {"value": "ping"}),))
-        self.assertEqual(result.usage, TokenUsage(12, 5, 17))
+        self.assertEqual(result.usage, TokenUsage(12, 5, 17, None, None))
         self.assertEqual(text, ["Calling"])
         self.assertEqual(reasoning, ["Thinking"])
         self.assertEqual(str(requests[0].url), "https://relay.example/v1/chat/completions")
@@ -282,6 +282,44 @@ class OpenAIProviderTest(unittest.TestCase):
             with self.subTest(finish=finish), self.transport([chat_chunk({"content": "partial"}, finish)]):
                 with self.assertRaises(ProviderStreamError):
                     self.provider(api="chat_completions").stream(self.request(), lambda _: None)
+
+    def test_cache_usage_preserves_reads_writes_zero_and_unreported_fields(self):
+        cases = (
+            (None, None, None),
+            ({}, None, None),
+            ({"cached_tokens": 0, "cache_write_tokens": 0}, 0, 0),
+            ({"cached_tokens": 8}, 8, None),
+            ({"cache_write_tokens": 4}, None, 4),
+            ({"cached_tokens": 8, "cache_write_tokens": 4}, 8, 4),
+        )
+        for api in ("responses", "chat_completions"):
+            for details, read_tokens, write_tokens in cases:
+                with self.subTest(api=api, details=details):
+                    if api == "responses":
+                        usage = {
+                            "input_tokens": 12, "output_tokens": 5, "total_tokens": 17,
+                            "input_tokens_details": details,
+                            "output_tokens_details": {"reasoning_tokens": 2},
+                        }
+                        events = [response_event(usage=usage)]
+                    else:
+                        usage = {
+                            "prompt_tokens": 12, "completion_tokens": 5, "total_tokens": 17,
+                            "prompt_tokens_details": details,
+                        }
+                        events = [chat_chunk({"content": "OK"}, "stop"), chat_chunk(usage=usage)]
+                    with self.transport(events):
+                        result = self.provider(api=api).stream(self.request(), lambda _: None)
+                    self.assertEqual(result.usage, TokenUsage(12, 5, 17, read_tokens, write_tokens))
+
+    def test_missing_usage_is_none_in_both_protocols(self):
+        for api in ("responses", "chat_completions"):
+            events = [response_event(usage=None)] if api == "responses" else [
+                chat_chunk({"content": "OK"}, "stop"),
+            ]
+            with self.subTest(api=api), self.transport(events):
+                result = self.provider(api=api).stream(self.request(), lambda _: None)
+            self.assertIsNone(result.usage)
 
     def test_midstream_transport_failure_is_not_retried(self):
         class BrokenStream(httpx.SyncByteStream):
@@ -317,7 +355,7 @@ class OpenAIProviderTest(unittest.TestCase):
         with self.transport(stream) as requests:
             result = self.provider().stream(self.request(), lambda _: None)
         self.assertEqual(result.content, "OK")
-        self.assertEqual(result.usage, TokenUsage(12, 5, 17))
+        self.assertEqual(result.usage, TokenUsage(12, 5, 17, 0, None))
         self.assertTrue(stream.closed)
         self.assertEqual(len(requests), 1)
 

@@ -6,10 +6,12 @@ import httpx
 from openai import APIError, OpenAI
 
 from agent_core.errors import ProviderProtocolError, ProviderStreamError
-from agent_core.llm import LLMRequest, LLMResponse, TokenUsage
+from agent_core.llm import LLMRequest, LLMResponse
 from agent_core.tools import ToolCall
+from agent_core.usage import TokenUsage
 
 from .base import ModelProvider, _cancellable_chunks, _request_messages, _request_tools
+from ._utils import get_field
 from .reasoning import reasoning_arguments
 from .tool_call_stream import ToolCallStreamAssembler
 from . import OPENAI_APIS
@@ -157,7 +159,13 @@ class OpenAIProvider(ModelProvider):
             content="".join(content) or None,
             reasoning=reasoning_text or None,
             tool_calls=tuple(calls),
-            usage=TokenUsage(usage.input_tokens, usage.output_tokens, usage.total_tokens)
+            usage=TokenUsage(
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                total_tokens=usage.total_tokens,
+                cache_read_tokens=get_field(usage.input_tokens_details, "cached_tokens"),
+                cache_write_tokens=get_field(usage.input_tokens_details, "cache_write_tokens"),
+            )
             if usage is not None else None,
             provider_data=provider_data,
         )
@@ -232,7 +240,13 @@ class OpenAIProvider(ModelProvider):
         return LLMResponse(
             content=content or None, reasoning=reasoning_text or None,
             tool_calls=calls.finish(),
-            usage=TokenUsage(usage.prompt_tokens, usage.completion_tokens, usage.total_tokens)
+            usage=TokenUsage(
+                input_tokens=usage.prompt_tokens,
+                output_tokens=usage.completion_tokens,
+                total_tokens=usage.total_tokens,
+                cache_read_tokens=get_field(usage.prompt_tokens_details, "cached_tokens"),
+                cache_write_tokens=get_field(usage.prompt_tokens_details, "cache_write_tokens"),
+            )
             if usage is not None else None,
         )
 

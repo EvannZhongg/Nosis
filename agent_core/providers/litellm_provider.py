@@ -4,7 +4,8 @@ from litellm import completion
 from litellm.exceptions import MidStreamFallbackError
 
 from agent_core.errors import ProviderStreamError
-from agent_core.llm import LLMRequest, LLMResponse, TokenUsage
+from agent_core.llm import LLMRequest, LLMResponse
+from agent_core.usage import TokenUsage
 
 from .base import ModelProvider, _cancellable_chunks, _request_messages, _request_tools, _text_from_content
 from ._utils import get_field
@@ -118,8 +119,11 @@ class LiteLLMProvider(ModelProvider):
 def _token_usage(usage: object | None) -> TokenUsage | None:
     if usage is None:
         return None
+    details = get_field(usage, "prompt_tokens_details")
     return TokenUsage(
         input_tokens=getattr(usage, "prompt_tokens"),
         output_tokens=getattr(usage, "completion_tokens"),
         total_tokens=getattr(usage, "total_tokens"),
+        cache_read_tokens=get_field(details, "cached_tokens"),
+        cache_write_tokens=get_field(details, "cache_write_tokens"),
     )

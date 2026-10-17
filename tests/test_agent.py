@@ -45,6 +45,7 @@ from agent_core.context_manager import (
     ARCHIVE_RETRY_COUNT,
     _validated_archive_summary,
 )
+from agent_core.usage import TokenUsage
 
 REQUEST_TIME = datetime(2026, 9, 9, 8, 0, tzinfo=timezone.utc)
 TOOL_CALL_TIME = datetime(2026, 9, 9, 8, 0, 10, tzinfo=timezone.utc)
@@ -1578,8 +1579,10 @@ class AgentTest(unittest.TestCase):
                     tool_calls=(tool_call,),
                     reasoning="I need to inspect the requested input first.",
                     provider_data={"native_state": "tool-round"},
+                    usage=TokenUsage(1000, 20, 1020, 800, 100),
                 ),
-                LLMResponse(content="tool completed", provider_data={"native_state": "final"}),
+                LLMResponse(content="tool completed", provider_data={"native_state": "final"},
+                            usage=TokenUsage(1100, 30, 1130, 1000, None)),
             ]
         )
         session = Session(session_id="session-1")
@@ -1605,6 +1608,17 @@ class AgentTest(unittest.TestCase):
         result = agent.run("use the echo tool", on_event=events.append)
 
         self.assertEqual(result.response.content, "tool completed")
+        calls = [event for event in session.journal if event.event_type == "model_completed"]
+        self.assertEqual([event.payload for event in calls], [
+            {"model_call_index": 1, "has_tool_calls": True, "usage": {
+                "input_tokens": 1000, "output_tokens": 20, "total_tokens": 1020,
+                "cache_read_tokens": 800, "cache_write_tokens": 100,
+            }},
+            {"model_call_index": 2, "has_tool_calls": False, "usage": {
+                "input_tokens": 1100, "output_tokens": 30, "total_tokens": 1130,
+                "cache_read_tokens": 1000, "cache_write_tokens": None,
+            }},
+        ])
         self.assertEqual(len(provider.requests), 2)
         self.assertEqual(result.request, provider.requests[1])
         self.assertEqual(

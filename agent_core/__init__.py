@@ -63,7 +63,8 @@ from .jobs import (
     CancellationToken, JobCancelled, JobContext, JobHandle, JobManager,
     JobResult, JobSnapshot, JobUpdate,
 )
-from .llm import LLMProvider, LLMRequest, LLMResponse, TokenUsage, ProviderCapabilities
+from .llm import LLMProvider, LLMRequest, LLMResponse, ProviderCapabilities
+from .usage import TokenUsage
 from .image_generation import GeneratedImage, ImageGenerator
 from .content import (
     AttachmentPart,

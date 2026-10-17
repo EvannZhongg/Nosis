@@ -7,6 +7,7 @@ from threading import Lock, RLock, Thread
 from typing import TextIO, TYPE_CHECKING
 
 from agent_core import AgentCancelled as Cancelled, AgentEvent, PermissionPreset, SchedulerService, SessionInUseError, message_to_dict, runtime_error_info
+from agent_core.usage import usage_to_dict
 if TYPE_CHECKING:
     from agent_core.mcp.manager import McpServerStatus
 from agent_runtime.host import RuntimeHost
@@ -27,7 +28,6 @@ from .protocol import (
     sessions_listed_message,
     settings_snapshot_message,
     settings_update_failed_message,
-    usage_to_dict,
     user_turn_received_message,
 )
 from .event_stream import EventStream

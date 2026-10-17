@@ -13,6 +13,7 @@ from .errors import (
 from .permissions import PermissionPreset
 from .plan import PlanSnapshot, plan_snapshot_from_dict, plan_snapshot_to_dict
 from .tools import ToolCall
+from .usage import TokenUsage, usage_to_dict
 from .tools.base import JSONValue
 from .time_utils import format_utc as _format_utc, parse_utc as _parse_utc
 
@@ -429,9 +430,7 @@ class Session:
         self,
         model_call_index: int,
         *,
-        input_tokens: int | None,
-        output_tokens: int | None,
-        total_tokens: int | None,
+        usage: TokenUsage | None,
         has_tool_calls: bool,
     ) -> None:
         self._event(
@@ -440,11 +439,7 @@ class Session:
             {
                 "model_call_index": model_call_index,
                 "has_tool_calls": has_tool_calls,
-                "usage": {
-                    "input_tokens": input_tokens,
-                    "output_tokens": output_tokens,
-                    "total_tokens": total_tokens,
-                },
+                "usage": usage_to_dict(usage),
             },
         )
 

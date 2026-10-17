@@ -6,6 +6,7 @@ from typing import Callable, Literal
 
 from .session import Message
 from .tools import ToolCall, ToolDefinition
+from .usage import TokenUsage
 
 
 @dataclass(frozen=True)
@@ -17,13 +18,6 @@ class LLMRequest:
     # Runtime-only root used to resolve relative media paths. It is not
     # persisted in session logs or sent to the provider API.
     media_root: Path | None = None
-
-
-@dataclass(frozen=True)
-class TokenUsage:
-    input_tokens: int | None
-    output_tokens: int | None
-    total_tokens: int | None
 
 
 @dataclass(frozen=True)

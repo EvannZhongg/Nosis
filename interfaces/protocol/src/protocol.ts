@@ -47,6 +47,8 @@ export type Usage = {
   input_tokens: number | null;
   output_tokens: number | null;
   total_tokens: number | null;
+  cache_read_tokens: number | null;
+  cache_write_tokens: number | null;
 };
 
 export type ContextWindow = {

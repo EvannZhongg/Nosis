@@ -457,11 +457,16 @@ describe('reducer', () => {
       message: {
         type: 'turn_completed',
         turn_id: 't1',
-        usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
+        usage: {
+          input_tokens: 10, output_tokens: 2, total_tokens: 12,
+          cache_read_tokens: 8, cache_write_tokens: null,
+        },
       },
     });
     expect(state.status).toBe('idle');
     expect(state.usage?.total_tokens).toBe(12);
+    expect(state.usage?.cache_read_tokens).toBe(8);
+    expect(state.usage?.cache_write_tokens).toBeNull();
   });
 
   it('records the current context window', () => {

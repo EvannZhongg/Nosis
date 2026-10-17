@@ -24,7 +24,6 @@ from agent_core import (
     RuntimeErrorInfo,
     plan_snapshot_to_dict,
 )
-from agent_core.llm import TokenUsage
 
 
 def encode(message: dict[str, object]) -> str:
@@ -46,16 +45,6 @@ def format_timestamp(value: datetime) -> str:
         .isoformat(timespec="microseconds")
         .replace("+00:00", "Z")
     )
-
-
-def usage_to_dict(usage: TokenUsage | None) -> dict[str, object] | None:
-    if usage is None:
-        return None
-    return {
-        "input_tokens": usage.input_tokens,
-        "output_tokens": usage.output_tokens,
-        "total_tokens": usage.total_tokens,
-    }
 
 
 def runtime_failure_to_dict(error: RuntimeErrorInfo) -> dict[str, object]:

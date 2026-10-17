@@ -11,6 +11,7 @@ from agent_core import (
     RuntimeErrorInfo,
     Session,
     ToolCall,
+    TokenUsage,
 )
 from agent_core.projection import project_context_units
 from agent_core.content import historical_content
@@ -18,6 +19,38 @@ from agent_core.session import message_from_dict
 
 
 class SessionJournalTest(unittest.TestCase):
+    def test_model_cache_usage_survives_journal_reload_after_turn_failure(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = JsonlSessionStore(root / "sessions")
+            store.bind_workspace("s", root)
+            session = Session("s")
+            session.begin_turn("t")
+            session.model_completed(1, usage=TokenUsage(12000, 300, 12300, 10000, 1000),
+                                    has_tool_calls=True)
+            session.model_completed(2, usage=TokenUsage(12000, 300, 12300, 0, None),
+                                    has_tool_calls=False)
+            session.model_completed(3, usage=None, has_tool_calls=False)
+            session.finish_turn("failed")
+            store.append_events("s", session.journal, workspace=root)
+
+            restored = store.load("s")
+
+        calls = [event for event in restored.journal if event.event_type == "model_completed"]
+        self.assertEqual([event.turn_id for event in calls], ["t", "t", "t"])
+        self.assertEqual(calls[0].payload, {
+            "model_call_index": 1, "has_tool_calls": True,
+            "usage": {
+                "input_tokens": 12000, "output_tokens": 300, "total_tokens": 12300,
+                "cache_read_tokens": 10000, "cache_write_tokens": 1000,
+            },
+        })
+        self.assertEqual(calls[1].payload["usage"], {
+            "input_tokens": 12000, "output_tokens": 300, "total_tokens": 12300,
+            "cache_read_tokens": 0, "cache_write_tokens": None,
+        })
+        self.assertIsNone(calls[2].payload["usage"])
+
     def test_invalid_tool_call_and_matching_error_survive_journal_reload(self):
         raw = ' {"goal":"修正计划","steps" [ } '
         call = ToolCall.from_raw_arguments("invalid", "update_plan", raw)

@@ -6,6 +6,7 @@ from pathlib import Path
 from threading import Lock
 
 from agent_core.llm import AuxiliaryModelCall
+from agent_core.usage import usage_to_dict
 
 
 class AuxiliaryUsageLog:
@@ -21,7 +22,6 @@ class AuxiliaryUsageLog:
         subagent_session_id: str | None,
         call: AuxiliaryModelCall,
     ) -> None:
-        usage = call.usage
         record = {
             "timestamp_utc": call.started_at_utc.isoformat().replace("+00:00", "Z"),
             "source": source,
@@ -33,11 +33,7 @@ class AuxiliaryUsageLog:
             "attempt": call.attempt,
             "status": call.status,
             "duration_ms": call.duration_ms,
-            "usage": {
-                "input_tokens": usage.input_tokens,
-                "output_tokens": usage.output_tokens,
-                "total_tokens": usage.total_tokens,
-            } if usage is not None else None,
+            "usage": usage_to_dict(call.usage),
             "error": call.error,
         }
         with self._lock:
