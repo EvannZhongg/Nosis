@@ -2,7 +2,7 @@ import React from 'react';
 import { Box, Static, Text, useBoxMetrics } from 'ink';
 import type { DOMElement } from 'ink';
 import Spinner from 'ink-spinner';
-import { formatArguments } from '@nosis/protocol';
+import { cacheHitPercent, formatArguments } from '@nosis/protocol';
 import type { PermissionPreset, PlanSnapshot, SessionSummary, SettingsSnapshot } from '@nosis/protocol';
 import type { ApprovalChoice, Entry, State, UserQuestionState } from './state.js';
 
@@ -316,7 +316,12 @@ export function StatusBar({ state, elapsed }: { state: State; elapsed: number })
     state.status === 'streaming' ||
     state.status === 'running' ||
     state.status === 'cancelling';
+  const cachePercent = cacheHitPercent(state.usage);
   const model = `${state.model}${
+    state.contextWindow
+      ? ` · Cache hit: ${cachePercent === null ? 'unknown' : `${cachePercent}%`}`
+      : ''
+  }${
     state.usage?.total_tokens ? ` · ${state.usage.total_tokens} tokens` : ''
   }${state.sessionId ? ` · ${state.sessionId.slice(0, 8)}` : ''}${
     state.contextWindow

@@ -169,6 +169,34 @@ describe('App', () => {
     autoReady = true;
   });
 
+  it('shows cache hit percentage and clears it when the next turn starts', async () => {
+    const { lastFrame, unmount } = renderApp();
+    await waitForReady(lastFrame);
+    emit({
+      type: 'context_window', turn_id: 't1',
+      input_tokens: 120, max_input_tokens: 900, max_context_tokens: 1000,
+      output_reserve_tokens: 100, compression_threshold: 800,
+      compression_count: 0, compression_summary: null,
+    });
+    emit({
+      type: 'turn_completed', turn_id: 't1', usage: {
+        input_tokens: 100, output_tokens: 20, total_tokens: 120,
+        cache_read_tokens: 80, cache_write_tokens: null,
+      },
+    });
+    await waitFor(() => expect(lastFrame()).toContain('Cache hit: 80%'));
+    emit({
+      type: 'turn_completed', turn_id: 't2', usage: {
+        input_tokens: 100, output_tokens: 20, total_tokens: 120,
+        cache_read_tokens: 0, cache_write_tokens: null,
+      },
+    });
+    await waitFor(() => expect(lastFrame()).toContain('Cache hit: 0%'));
+    emit({ type: 'user_turn_received', turn_id: 't3' });
+    await waitFor(() => expect(lastFrame()).toContain('Cache hit: unknown'));
+    unmount();
+  });
+
   it('renders plan progress from structured protocol state', async () => {
     const { lastFrame } = renderApp();
     await waitForReady(lastFrame);

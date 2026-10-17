@@ -486,6 +486,7 @@ function applyMessage(state: State, message: Incoming): State {
       return {
         ...state,
         sessionId: message.session_id,
+        usage: null,
         workspace: message.workspace,
         provider: message.provider,
         model: message.model,
@@ -589,6 +590,7 @@ function applyMessage(state: State, message: Incoming): State {
       return { ...state, plan: visiblePlan(message.plan) };
 
     case 'user_turn_received':
+      return { ...state, usage: null };
     case 'user_steer_received':
       return state;
 
@@ -653,7 +655,7 @@ function applyMessage(state: State, message: Incoming): State {
       };
 
     case 'provider_changed':
-      return { ...state, provider: message.provider, model: message.model };
+      return { ...state, provider: message.provider, model: message.model, usage: null };
 
     case 'settings_snapshot':
       return { ...state, settings: message.settings };
@@ -665,7 +667,7 @@ function applyMessage(state: State, message: Incoming): State {
       };
 
     case 'workspace_changed':
-      return state;
+      return { ...state, usage: null };
 
     case 'sessions_listed':
       return state.sessions === null

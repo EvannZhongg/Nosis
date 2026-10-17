@@ -51,6 +51,13 @@ export type Usage = {
   cache_write_tokens: number | null;
 };
 
+/** Cache reads as a percentage of the same model call's reported input. */
+export function cacheHitPercent(usage: Usage | null): number | null {
+  if (usage === null || usage.input_tokens === null || usage.input_tokens === 0
+    || usage.cache_read_tokens === null) return null;
+  return Math.round(usage.cache_read_tokens / usage.input_tokens * 100);
+}
+
 export type ContextWindow = {
   input_tokens: number;
   max_input_tokens: number;

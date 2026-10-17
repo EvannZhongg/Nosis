@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef, useState, useEffect } from "react";
 import { useExternalStoreRuntime, type AppendMessage } from "@assistant-ui/react";
-import { runtimeIsActive, type ContextWindow, type PermissionPreset, type PlanSnapshot, type RuntimePhase, type UserQuestion } from "@nosis/protocol";
+import { runtimeIsActive, type ContextWindow, type PermissionPreset, type PlanSnapshot, type RuntimePhase, type Usage, type UserQuestion } from "@nosis/protocol";
 import { createScratchWorkspace, releaseActiveSession, selectWorkspace, uploadAttachments, type ModelOption, type Session, type UserAttachment } from "../api";
 import { SessionSocket } from "../session";
 import { applyMessage, isTurnActivity, toMessages, type Feedback, type TranscriptItem } from "../transcript";
@@ -45,6 +45,7 @@ export function useSessionRuntime({
   onInitialPromptConsumed,
 }: SessionRuntimeOptions) {
   const [items, setItems] = useState<TranscriptItem[]>(session.items);
+  const [usage, setUsage] = useState<Usage | null>(null);
   // The fork's first render includes its prompt, even before socket startup.
   const [pendingUserItem, setPendingUserItem] = useState<TranscriptItem | null>(() =>
     initialPrompt ? { role: "user", content: initialPrompt } : null);
@@ -355,6 +356,7 @@ export function useSessionRuntime({
         if (applied.feedback?.kind === "toast") showToast(applied.feedback);
         if (applied.feedback?.kind === "alert") showAlert(applied.feedback);
         if (applied.contextWindow !== undefined) onContextWindowChange(applied.contextWindow);
+        if (applied.usage !== undefined) setUsage(applied.usage);
         if (applied.approval !== undefined) setApproval(applied.approval);
         if (applied.question !== undefined) {
           setQuestion(applied.question);
@@ -443,6 +445,7 @@ export function useSessionRuntime({
       content: attachments.length ? [{ type: "text", text }, ...attachments] : text,
     };
     showPendingUserItem(submittedItem);
+    setUsage(null);
     applyRuntimePhase("starting");
     if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
     setToast(null);
@@ -613,6 +616,7 @@ export function useSessionRuntime({
     stop,
     contextWindow,
     providers,
+    usage,
   };
 }
 

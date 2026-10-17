@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { MessageDecoder, formatArguments } from '@nosis/protocol';
+import type { Incoming } from '@nosis/protocol';
 import { initialState, reducer, type State } from '../src/state.js';
 
 const READY = {
@@ -467,6 +468,14 @@ describe('reducer', () => {
     expect(state.usage?.total_tokens).toBe(12);
     expect(state.usage?.cache_read_tokens).toBe(8);
     expect(state.usage?.cache_write_tokens).toBeNull();
+    const messages: Incoming[] = [
+      { type: 'user_turn_received', turn_id: 't2' },
+      { type: 'provider_changed', provider: 'next', model: 'next/model' },
+      { type: 'workspace_changed', workspace: '/next' },
+    ];
+    for (const message of messages) {
+      expect(reducer(state, { type: 'message', message }).usage).toBeNull();
+    }
   });
 
   it('records the current context window', () => {

@@ -1,5 +1,5 @@
 import type { ThreadMessageLike } from "@assistant-ui/react";
-import type { ContextWindow, Incoming, PermissionPreset, UserQuestion } from "@nosis/protocol";
+import type { ContextWindow, Incoming, PermissionPreset, Usage, UserQuestion } from "@nosis/protocol";
 import { attachmentDownloadUrl, type SessionItem } from "./api";
 
 /** A transcript item, plus the streaming state the live turn needs. */
@@ -14,6 +14,7 @@ export type Applied = {
   items: TranscriptItem[];
   feedback?: Feedback;
   contextWindow?: ContextWindow;
+  usage?: Usage | null;
   approval?: {
     requestId: string;
     command: string;
@@ -68,6 +69,7 @@ export function applyMessage(
     case "session_ready":
       return {
         items,
+        usage: null,
         permissionPreset: message.permission_preset,
       };
 
@@ -210,6 +212,7 @@ export function applyMessage(
     case "provider_changed":
       return {
         items,
+        usage: null,
         feedback: {
           kind: "toast",
           level: "info",
@@ -220,6 +223,7 @@ export function applyMessage(
     case "workspace_changed":
       return {
         items,
+        usage: null,
         feedback: {
           kind: "toast",
           level: "info",
@@ -231,7 +235,10 @@ export function applyMessage(
       return { items, approval: null, question: message };
 
     case "turn_completed":
-      return { items, approval: null, question: null, finished: true };
+      return { items, usage: message.usage, approval: null, question: null, finished: true };
+
+    case "user_turn_received":
+      return { items, usage: null };
 
     case "turn_cancelled":
       return {
