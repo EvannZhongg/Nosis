@@ -44,6 +44,7 @@ open_session
 
 - `session_ready` 和权威 `runtime_state`
 - assistant / reasoning 流式内容和完整消息
+- 每次模型调用完成时的 `model_completed` 用量（含缓存读取、写入明细）
 - Tool 批次、调用、结果与媒体
 - 上下文窗口、计划和后台 Job
 - steer、授权、用户提问与 MCP 状态

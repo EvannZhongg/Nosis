@@ -39,6 +39,7 @@ export function isTurnActivity(message: Incoming): boolean {
     || message.type === "tool_batch_started"
     || message.type === "tool_media"
     || message.type === "assistant_message"
+    || message.type === "model_completed"
     || message.type === "job_status";
 }
 
@@ -233,6 +234,9 @@ export function applyMessage(
 
     case "user_question":
       return { items, approval: null, question: message };
+
+    case "model_completed":
+      return { items, usage: message.usage };
 
     case "turn_completed":
       return { items, usage: message.usage, approval: null, question: null, finished: true };

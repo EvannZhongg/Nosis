@@ -685,6 +685,9 @@ function applyMessage(state: State, message: Incoming): State {
       };
     }
 
+    case 'model_completed':
+      return { ...state, usage: message.usage };
+
     case 'turn_completed':
       return { ...state, turnId: null, approval: null, question: null, pendingSteers: 0, usage: message.usage };
 

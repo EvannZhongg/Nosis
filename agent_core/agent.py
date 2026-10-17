@@ -21,6 +21,7 @@ from .tools import ToolCall, ToolExecutionContext, ToolResult, ToolSet
 from .turn_control import AgentCancelled, TurnControl, UserSteer
 from .loop_policy import ToolCallRepetitionGuard, TurnContinuationPolicy
 from .memory import MemoryContext
+from .usage import TokenUsage
 
 
 @dataclass(frozen=True)
@@ -49,6 +50,12 @@ class AssistantMessageEvent:
     content: str
     timestamp_utc: datetime
     model_call_index: int
+
+
+@dataclass(frozen=True)
+class ModelCompletedEvent:
+    model_call_index: int
+    usage: TokenUsage | None
 
 
 @dataclass(frozen=True)
@@ -102,6 +109,7 @@ AgentEvent: TypeAlias = (
     AssistantMessageDeltaEvent
     | ReasoningDeltaEvent
     | AssistantMessageEvent
+    | ModelCompletedEvent
     | ToolBatchStartedEvent
     | ToolCallEvent
     | ToolResultEvent
@@ -306,6 +314,8 @@ class Agent:
                 usage=response.usage,
                 has_tool_calls=bool(response.tool_calls),
             )
+            if on_event is not None:
+                on_event(ModelCompletedEvent(model_call_index, response.usage))
             continuation.raise_if_cancelled()
 
             if response.tool_calls:

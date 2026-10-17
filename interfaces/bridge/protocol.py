@@ -12,6 +12,7 @@ from agent_core import (
     AssistantMessageDeltaEvent,
     ReasoningDeltaEvent,
     AssistantMessageEvent,
+    ModelCompletedEvent,
     ContextWindow,
     ContextWindowEvent,
     ToolBatchStartedEvent,
@@ -24,6 +25,7 @@ from agent_core import (
     RuntimeErrorInfo,
     plan_snapshot_to_dict,
 )
+from agent_core.usage import usage_to_dict
 
 
 def encode(message: dict[str, object]) -> str:
@@ -231,6 +233,14 @@ def event_to_message(
         }
     if isinstance(event, ReasoningDeltaEvent):
         return {"type": "reasoning_delta", "turn_id": turn_id, "text": event.text, "model_call_index": event.model_call_index}
+
+    if isinstance(event, ModelCompletedEvent):
+        return {
+            "type": "model_completed",
+            "turn_id": turn_id,
+            "model_call_index": event.model_call_index,
+            "usage": usage_to_dict(event.usage),
+        }
 
     if isinstance(event, ContextWindowEvent):
         return {

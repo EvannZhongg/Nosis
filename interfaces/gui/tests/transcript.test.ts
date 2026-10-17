@@ -5,6 +5,26 @@ import { applyMessage, isTurnActivity, toMessages, turnProcessPartIndexes, type 
 const TOOL_CALL = { id: "call-1", name: "shell", arguments: { command: "ls" } };
 
 describe("process folding", () => {
+  it("updates usage for every model call without completing the turn or changing the transcript", () => {
+    const items: TranscriptItem[] = [{ role: "user", content: "work" }];
+    for (const [index, cached] of [995, 0, null].entries()) {
+      const message: Incoming = {
+        type: "model_completed", turn_id: "t1", model_call_index: index + 1,
+        usage: cached === null ? null : {
+          input_tokens: 1000, output_tokens: 20, total_tokens: 1020,
+          cache_read_tokens: cached, cache_write_tokens: null,
+        },
+      };
+      const applied = applyMessage(items, message);
+      expect(applied.usage).toEqual(message.usage);
+      expect(applied.items).toBe(items);
+      expect(applied.finished).toBeUndefined();
+      expect(applied.approval).toBeUndefined();
+      expect(applied.question).toBeUndefined();
+      expect(isTurnActivity(message)).toBe(true);
+    }
+  });
+
   it("keeps completed usage during a new turn and clears it on configuration changes", () => {
     const usage = {
       input_tokens: 100, output_tokens: 20, total_tokens: 120,

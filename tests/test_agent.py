@@ -11,6 +11,7 @@ from agent_core import (
     AgentConfig,
     AssistantMessageDeltaEvent,
     AssistantMessageEvent,
+    ModelCompletedEvent,
     ContextManager,
     ContextCompressionConfig,
     ContextWindowEvent,
@@ -1608,6 +1609,14 @@ class AgentTest(unittest.TestCase):
         result = agent.run("use the echo tool", on_event=events.append)
 
         self.assertEqual(result.response.content, "tool completed")
+        completed = [event for event in events if isinstance(event, ModelCompletedEvent)]
+        self.assertEqual(completed, [
+            ModelCompletedEvent(1, TokenUsage(1000, 20, 1020, 800, 100)),
+            ModelCompletedEvent(2, TokenUsage(1100, 30, 1130, 1000, None)),
+        ])
+        self.assertLess(events.index(completed[0]), next(
+            index for index, event in enumerate(events) if isinstance(event, ToolBatchStartedEvent)
+        ))
         calls = [event for event in session.journal if event.event_type == "model_completed"]
         self.assertEqual([event.payload for event in calls], [
             {"model_call_index": 1, "has_tool_calls": True, "usage": {
@@ -1722,7 +1731,7 @@ class AgentTest(unittest.TestCase):
             for event in events
             if not isinstance(
                 event,
-                (AssistantMessageDeltaEvent, ContextWindowEvent),
+                (AssistantMessageDeltaEvent, ContextWindowEvent, ModelCompletedEvent),
             )
         ]
         self.assertEqual(

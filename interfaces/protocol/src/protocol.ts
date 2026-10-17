@@ -250,6 +250,7 @@ export type Incoming = (
     }
   | { type: 'assistant_delta'; turn_id: string; text: string; model_call_index: number }
   | { type: 'reasoning_delta'; turn_id: string; text: string; model_call_index: number }
+  | { type: 'model_completed'; turn_id: string; model_call_index: number; usage: Usage | null }
   | ({ type: 'context_window'; turn_id: string | null } & ContextWindow)
   | {
       type: 'assistant_message';

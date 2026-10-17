@@ -169,7 +169,7 @@ describe('App', () => {
     autoReady = true;
   });
 
-  it('shows one decimal of cache hits and keeps it while the next turn runs', async () => {
+  it('updates cache hits after each model call while the turn is still running', async () => {
     const { lastFrame, unmount } = renderApp();
     await waitForReady(lastFrame);
     emit({
@@ -178,27 +178,28 @@ describe('App', () => {
       output_reserve_tokens: 100, compression_threshold: 800,
       compression_count: 0, compression_summary: null,
     });
+    emit({ type: 'assistant_delta', turn_id: 't1', text: 'working', model_call_index: 1 });
+    await waitFor(() => expect(lastFrame()).toContain('Cache hit: unknown'));
     emit({
-      type: 'turn_completed', turn_id: 't1', usage: {
+      type: 'model_completed', turn_id: 't1', model_call_index: 1, usage: {
         input_tokens: 1000, output_tokens: 20, total_tokens: 1020,
         cache_read_tokens: 995, cache_write_tokens: null,
       },
     });
     await waitFor(() => expect(lastFrame()).toContain('Cache hit: 99.5%'));
-    emit({ type: 'user_turn_received', turn_id: 't2' });
-    emit({ type: 'assistant_delta', turn_id: 't2', text: 'working', model_call_index: 1 });
+    emit({ type: 'assistant_delta', turn_id: 't1', text: ' continuing', model_call_index: 2 });
     await waitFor(() => {
       expect(lastFrame()).toContain('working');
       expect(lastFrame()).toContain('Cache hit: 99.5%');
     });
     emit({
-      type: 'turn_completed', turn_id: 't2', usage: {
+      type: 'model_completed', turn_id: 't1', model_call_index: 2, usage: {
         input_tokens: 100, output_tokens: 20, total_tokens: 120,
         cache_read_tokens: 0, cache_write_tokens: null,
       },
     });
     await waitFor(() => expect(lastFrame()).toContain('Cache hit: 0.0%'));
-    emit({ type: 'turn_completed', turn_id: 't3', usage: null });
+    emit({ type: 'model_completed', turn_id: 't1', model_call_index: 3, usage: null });
     await waitFor(() => expect(lastFrame()).toContain('Cache hit: unknown'));
     unmount();
   });

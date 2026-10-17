@@ -18,6 +18,7 @@ from agent_core import (
     AssistantMessageDeltaEvent,
     ProviderCapabilities,
     AssistantMessageEvent,
+    ModelCompletedEvent,
     ContextWindow,
     ContextWindowEvent,
     ExecutionScope,
@@ -212,6 +213,20 @@ class ProtocolTest(unittest.TestCase):
                 "model_call_index": 1,
             },
         )
+
+    def test_encodes_model_completed_usage_including_unreported_usage(self) -> None:
+        for usage, expected in (
+            (TokenUsage(1000, 20, 1020, 800, None), {
+                "input_tokens": 1000, "output_tokens": 20, "total_tokens": 1020,
+                "cache_read_tokens": 800, "cache_write_tokens": None,
+            }),
+            (None, None),
+        ):
+            with self.subTest(usage=usage):
+                self.assertEqual(event_to_message(ModelCompletedEvent(2, usage), "t1"), {
+                    "type": "model_completed", "turn_id": "t1", "model_call_index": 2,
+                    "usage": expected,
+                })
 
     def test_encodes_context_window(self) -> None:
         self.assertEqual(
@@ -1444,7 +1459,17 @@ class InterruptedTurnTest(BridgeTestCase):
     def test_turn_completed_preserves_cache_usage_from_the_model_call(self) -> None:
         plane = self.bridge.host.planes.ensure(self.bridge.host.sessions)
         plane.memory = MemorySpy()
+        emit = self.bridge.emit
+
+        def check_model_completion(type, **fields):
+            if type == "model_completed":
+                self.assertEqual(self.session.turns["t1"].status, "running")
+                self.assertFalse(any(message["type"] == "turn_completed" for message in emitted(self.stdout)))
+                self.assertEqual(self.session.journal[-1].event_type, "model_completed")
+            emit(type, **fields)
+
         with (
+            patch.object(self.bridge, "emit", side_effect=check_model_completion),
             patch.object(plane.provider, "count_input_tokens", return_value=1),
             patch.object(plane.provider, "stream_cancellable", return_value=LLMResponse(
                 content="done", usage=TokenUsage(1000, 20, 1020, 800, None),
@@ -1461,6 +1486,12 @@ class InterruptedTurnTest(BridgeTestCase):
         stored = self.store.load(self.session_id)
         call = next(event for event in stored.journal if event.event_type == "model_completed")
         self.assertEqual(call.payload["usage"], message["usage"])
+        completed = [item for item in emitted(self.stdout) if item["type"] == "model_completed"]
+        self.assertEqual(len(completed), 1)
+        self.assertEqual(completed[0]["turn_id"], "t1")
+        self.assertEqual(completed[0]["model_call_index"], 1)
+        self.assertEqual(completed[0]["usage"], message["usage"])
+        self.assertLess(completed[0]["event_sequence"], message["event_sequence"])
 
     def test_running_checkpoint_contains_new_user_input_and_prior_turns(self) -> None:
         plane = self.bridge.host.planes.ensure(self.bridge.host.sessions)

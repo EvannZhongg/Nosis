@@ -446,25 +446,23 @@ describe('reducer', () => {
     });
   });
 
-  it('records usage when a turn completes', () => {
+  it('updates usage on each model completion without ending the turn', () => {
     let state = ready();
     state = reducer(state, { type: 'submit', turnId: 't1', text: 'work' });
     state = reducer(state, {
       type: 'message',
-      message: { ...RUNTIME_READY, phase: 'idle', turn_id: null },
-    });
-    state = reducer(state, {
-      type: 'message',
       message: {
-        type: 'turn_completed',
+        type: 'model_completed',
         turn_id: 't1',
+        model_call_index: 1,
         usage: {
           input_tokens: 10, output_tokens: 2, total_tokens: 12,
           cache_read_tokens: 8, cache_write_tokens: null,
         },
       },
     });
-    expect(state.status).toBe('idle');
+    expect(state.status).toBe('streaming');
+    expect(state.turnId).toBe('t1');
     expect(state.usage?.total_tokens).toBe(12);
     expect(state.usage?.cache_read_tokens).toBe(8);
     expect(state.usage?.cache_write_tokens).toBeNull();
@@ -480,6 +478,12 @@ describe('reducer', () => {
     for (const message of messages) {
       expect(reducer(state, { type: 'message', message }).usage).toBeNull();
     }
+    state = reducer(state, { type: 'message', message: {
+      type: 'model_completed', turn_id: 't1', model_call_index: 2, usage: null,
+    } });
+    expect(state.usage).toBeNull();
+    expect(state.status).toBe('streaming');
+    expect(state.turnId).toBe('t1');
   });
 
   it('records the current context window', () => {
