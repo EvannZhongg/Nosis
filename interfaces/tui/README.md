@@ -24,7 +24,7 @@ TUI 在启动或切换 Session 时先发送 `open_session`，收到首个 `runti
 
 - assistant 文本与 reasoning 流
 - Tool 调用、结果和错误
-- Context Window、计划及后台 Job
+- Context Window 占用、token 用量、缓存命中率、计划及后台 Job
 - Provider、权限和 Runtime phase
 - 授权请求与结构化用户提问
 - 历史 Session 列表和恢复结果

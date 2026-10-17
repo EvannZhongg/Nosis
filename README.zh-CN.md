@@ -21,10 +21,11 @@ GUI ── FastAPI ─┘
 
 - **受控本地执行**：Session 支持 `Ask for approval`、`Workspace Access` 和 `Full Access` 三种权限 preset；Shell 根据 scope 进入 Workspace 沙箱或宿主环境，文件 Tool 始终限制在当前 Workspace。
 - **桌面自动化**：主 Agent 可通过 `computer_screenshot` 与 `computer_action` 观察并操作可见桌面，覆盖截图、点击、拖拽、滚动、按键与文本输入；两项 Tool 默认开启且只对主 Agent 可见，调用时按当前权限 preset 确认。
+- **Web 检索**：`web_fetch` 读取公开网页；启用 `web_search` 后默认使用 DuckDuckGo 检索，也可切换为 Exa。
 - **完整 Agent Loop**：支持流式响应、Tool 批次、上下文压缩、steer、取消、计划和后台 Job。
 - **可恢复 Session**：对话和执行事件写入 append-only JSONL Journal，TUI 与 GUI 可读取同一类 Session。
 - **记忆与定时任务**：维护全局及 Workspace 长期记忆，并可创建 one-shot、interval 和 cron 任务。
-- **模型与媒体**：OpenAI-compatible 端点通过原生 OpenAI SDK 接入，其他路由及图片生成使用 LiteLLM；可为主 Agent、视觉、图片生成及不同子 Agent 角色独立路由 Provider。
+- **模型与媒体**：OpenAI-compatible 端点通过原生 OpenAI SDK 接入，其他路由及图片生成使用 LiteLLM；可为主 Agent、视觉、图片生成、辅助模型调用及不同子 Agent 角色独立路由 Provider。
 - **扩展系统**：支持 standalone Skill、Plugin 提供的 Skill / Agent / MCP 组件，以及独立 MCP Server。
 - **两个前端**：TUI 适合终端工作流；GUI 提供多会话、附件、文件树、设置、记忆和定时任务管理。
 
@@ -89,7 +90,7 @@ GUI 默认监听 <http://127.0.0.1:8737>。
 
 | 路径 | 内容 |
 | --- | --- |
-| `~/.nosis/provider_config.json` | Provider、模型和角色路由 |
+| `~/.nosis/provider_config.json` | Provider、模型和角色路由（含可选的 `fast_model`） |
 | `~/.nosis/agent_config.json` | Tool、上下文、记忆、Skill 路径、子 Agent、MCP、Workspace Instructions 与 scratch Workspace 设置 |
 | `~/.nosis/.env` | 配置引用的密钥和环境变量 |
 | `~/.nosis/prompts/` | 主 Agent、子 Agent、压缩与记忆 Prompt |
@@ -97,7 +98,7 @@ GUI 默认监听 <http://127.0.0.1:8737>。
 | `~/.nosis/plugins/` | Plugin capability package |
 | `~/.nosis/AGENTS.md` | 用户级全局 Workspace Instruction |
 | `~/.nosis/MEMORY.md` | 全局长期记忆 |
-| `~/.nosis/sessions/` | Session Journal、Workspace 记忆、Artifact 和子 Agent 记录 |
+| `~/.nosis/sessions/` | Session Journal、Workspace 记忆、Artifact、子 Agent 记录与 Session 级辅助调用用量日志 |
 | `~/.nosis/schedule.jsonl` | 定时任务及运行记录 |
 | `<workspace>/.nosis/attachments/` | 上传附件和 Agent 生成的图片 |
 
@@ -113,6 +114,8 @@ source .venv/bin/activate
 python -m pip install -e ".[gui]"
 python -m unittest discover -s tests -v
 ```
+
+在 Windows 上改用 `.venv\Scripts\Activate.ps1` 激活环境。
 
 GUI extra 包含 FastAPI、Uvicorn、WebSocket 后端和 multipart 支持；Windows、macOS 与 Linux 使用相同的安装方式。
 

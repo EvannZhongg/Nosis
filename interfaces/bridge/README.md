@@ -38,13 +38,13 @@ Bridge 路由的输入包括：
 - 设置读取及 Provider、Agent、路由更新
 - `shutdown`
 
-Bridge 把 Core 的 `AgentEvent`、Runtime phase、计划、MCP 状态和结束结果转换为协议消息。实时 Tool 事件只包含执行状态；会话检查点包含 Core 已规范化的对话内容与 Artifact 引用，大输出仍由 Core 落盘。
+Bridge 把 Core 的 `AgentEvent`、Runtime phase、计划、MCP 状态和结束结果转换为协议消息。每次模型调用结束时立即推送 `model_completed`（本次用量与会话累计缓存快照），不等待 Tool 执行或 Turn 结束。实时 Tool 事件只包含执行状态；会话检查点包含 Core 已规范化的对话内容与 Artifact 引用，大输出仍由 Core 落盘。
 
 ## 执行状态与交互
 
 Bridge 维护的是协议侧投影，而不是另一套 Runtime 状态。它负责：
 
-- 发布包含 phase、turn、授权、提问、Job、计划和上下文窗口的 `runtime_state`
+- 发布包含 phase、turn、授权、提问、Job、计划、上下文窗口、会话累计缓存用量、Workspace 路径和 Runtime warning 的 `runtime_state`
 - 为事件分配序号，并发送与会话内容绑定的 transcript 检查点及续传游标
 - 将同步的授权和用户提问等待转换为协议 request / response
 - 把运行中的新输入转发为 steer

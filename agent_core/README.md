@@ -43,7 +43,7 @@ interfaces → agent_runtime → agent_core
 
 消息内容统一表示为文本、图片和文件 part。图片可以进入支持视觉的 Provider；普通附件以 Workspace 文件引用进入上下文。
 
-`ContextManager` 按完整语义单元投影 Session 历史，计算窗口占用，并在达到阈值时压缩较早上下文、保留近期单元和用户锚点。压缩记录写回 Session；超过硬上限时明确失败。
+`ContextManager` 按完整语义单元投影 Session 历史，计算窗口占用，并在达到阈值时压缩较早上下文、保留近期单元和用户锚点。可用输入预算为模型窗口减去 `output_reserve_tokens`；默认阈值在窗口不超过 32K 时取预算的 75%，更大窗口取 `min(预算的 80%, 256K)`，配置 `trigger_ratio` 时以它为准，并在主模型与 fast 模型之间取较小值。用户锚点先保留最近两整轮，再按 `user_anchor_token_budget` 向前扩展连续 Turn，判断时计入已选中的全部输入，压缩不会改变保留范围。压缩记录写回 Session；超过硬上限时明确失败。
 
 | 模块 | 职责 |
 | --- | --- |
@@ -73,7 +73,7 @@ Runtime 通过 `JsonlSessionStore.open_journal()` 持有当前 Session 的写入
 
 ## Tool 系统
 
-所有 Tool 使用统一的 `Tool`、`ToolDefinition`、`ToolCall`、`ToolResult` 和 `ToolExecutionContext` 接口。`ToolCatalog` 保存完整能力集合，`ToolSet` 按 Agent 角色选择实际可见 Tool，`ToolPolicy` 在执行前处理授权。
+所有 Tool 使用统一的 `Tool`、`ToolDefinition`、`ToolCall`、`ToolResult` 和 `ToolExecutionContext` 接口。`ToolCatalog` 保存完整能力集合，`ToolSet` 按 Agent 角色选择实际可见 Tool，`ToolPolicy` 在执行前处理授权。参数不是合法的 JSON object 时，`ToolCall` 保留 Provider 的原文并直接得到 `invalid_tool_arguments` 错误结果，模型可据此重新调用，Turn 不中断。
 
 内置 Tool 覆盖：
 
@@ -83,10 +83,15 @@ Runtime 通过 `JsonlSessionStore.open_journal()` 持有当前 Session 的写入
 - 图片读取、分析与生成
 - 桌面截图与输入
 - Skill 读取和子 Agent 派发
+- 后台 Shell 与子 Agent Job 的查询和取消
 - 用户提问、计划更新与长期记忆写入
 - 定时任务创建、修改、查询和删除
 
-`ask_user`、`update_plan`、`remember` 等 Tool 依赖注入的 Runtime 能力，不把应用决策复制到 Tool 内。图片生成与桌面自动化只面向主 Agent；角色可见性由装配阶段选择。
+`ask_user`、`update_plan`、`remember`、`job_control` 等 Tool 依赖注入的 Runtime 能力，不把应用决策复制到 Tool 内。图片生成与桌面自动化只面向主 Agent；`job_control` 只能查看和取消父 Session 的 Job，子 Agent 角色不可见；角色可见性由装配阶段选择。
+
+`web_search` 的检索后端由 `tools/builtin/web_fetch.py` 的 `WEB_SEARCH_PROVIDER` 选择：默认 `duckduckgo`（`ddgs` 库，无需密钥），改为 `exa` 时使用 `EXA_API_KEY`。后端同时决定 Tool schema 暴露的参数，例如 Exa 的 `include_domains`。
+
+`search_files` 默认 60 秒超时并响应取消，跳过符号链接、junction 以及常见依赖、缓存和构建目录。
 
 `tools/` 内的主要分工：
 
@@ -104,7 +109,7 @@ Runtime 通过 `JsonlSessionStore.open_journal()` 持有当前 Session 的写入
 
 ## 命令执行与权限
 
-Shell 通过 `ExecutionRouter` 根据 `ExecutionScope` 和当前 `ExecutionAuthority` 选择宿主执行器或 Workspace 沙箱执行器。`PermissionController` 把 Session 的权限 preset 转换为默认 scope、允许范围和人工确认规则。
+Shell 通过 `ExecutionRouter` 根据 `ExecutionScope` 和当前 `ExecutionAuthority` 选择宿主执行器或 Workspace 沙箱执行器。`permissions.py` 的 `PermissionController` 把 Session 的权限 preset 转换为默认 scope、允许范围和人工确认规则。
 
 | preset | 默认 scope | 授权行为 |
 | --- | --- | --- |
@@ -141,9 +146,11 @@ Responses 工具参数从 `response.completed` 的完整 output 读取，推理�
 | `providers/base.py` | 模型元数据、token 估算、媒体与取消机制 |
 | `providers/openai_provider.py` | 原生 Responses 与 Chat Completions 协议 |
 | `providers/litellm_provider.py` | LiteLLM 文本和视觉适配 |
+| `providers/reasoning.py` | `reasoning_effort` 与自定义推理参数的校验和路由映射 |
 | `providers/tool_call_stream.py` | 流式 Tool Call 组装与校验 |
 | `image_generation.py` | 图片生成抽象 |
 | `providers/image_generation.py` | LiteLLM 图片生成实现 |
+| `auxiliary.py` | 辅助模型调用的耗时、结果与用量统计 |
 
 ## Skill、MCP 与子 Agent
 
@@ -159,7 +166,7 @@ Core 只定义扩展机制，不决定扩展从哪个目录加载：
 
 长期记忆分为全局和 Workspace 两层。`MemoryManager` 在 Turn 开始时提供记忆上下文，收集候选更新，并在成功结束后通过 `MemoryReconciler` 合并；失败或取消时丢弃待提交更新。
 
-`JobManager` 管理可取消的后台任务和状态事件，供子 Agent 等长任务使用。
+`JobManager` 管理可取消的后台任务和状态事件，供子 Agent 等长任务使用。Job 快照（原始详情、耗时、progress、错误与结果摘要）随 Journal 持久化，Turn 恢复后仍可由 `job_control` 查询；已恢复的中断 Job 不能再取消。
 
 `SchedulerService` 定义 one-shot、interval、cron trigger，以及任务、运行记录、错过执行的处理和 JSONL 持久化。它通过注入的 runner 发起 Agent Turn，但不负责组装应用 Runtime。
 

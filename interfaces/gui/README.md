@@ -9,7 +9,7 @@ uv sync --extra gui
 # 或：python -m pip install -e ".[gui]"
 ```
 
-其中包含 Uvicorn 的 WebSocket 后端；Windows、macOS 与 Linux 使用相同命令。若缺少 WebSocket 后端，`nosis-gui` 会在启动时直接提示安装命令。
+其中包含 Uvicorn 的 WebSocket 后端，Windows 上还包含用于通过 Explorer 打开 Workspace 文件夹的 `pywin32`；三个平台使用相同命令。若缺少 WebSocket 后端，`nosis-gui` 会在启动时直接提示安装命令。
 
 ## 启动
 
@@ -31,8 +31,9 @@ nosis-gui --workspace ~/projects/my-project
 - 选择普通 Workspace，创建与回收 scratch Workspace
 - 提供已脱敏设置快照及配置更新 API
 - 展示长期记忆和定时任务，并允许启停任务
+- 从某条历史用户消息的锚点创建分支 Session（fork），源 Session 保持不变
 - 上传附件、下载文件和签发短期图片访问 URL
-- 提供限制在当前 Session Workspace 内的文件树
+- 提供限制在当前 Session Workspace 内的文件树，并在系统文件管理器中打开该 Workspace
 
 `ActiveSessionRegistry` 按 Session 保存后台运行的 `ActiveSession`。页面切换或临时断线不会取消 Turn；重新连接可以从 Bridge 分配的 `event_sequence` 继续。宿主缓存 Bridge 的完整运行快照和 transcript 检查点，不再维护运行状态 reducer 或按 phase 推导续传游标。一个 Session 同时只有一个控制页面，新页面只有显式 takeover 才替换现有 attachment。
 
@@ -40,17 +41,25 @@ HTTP / WebSocket 路由按模块拆分：
 
 | 模块 | 路由范围 |
 | --- | --- |
-| `routes/sessions.py` | Session 查询、删除、active session 与 `/api/session` WebSocket |
-| `routes/workspace.py` | Workspace 选择、scratch 创建和文件树 |
+| `routes/sessions.py` | Session 查询、删除、fork、active session 与 `/api/session` WebSocket |
+| `routes/workspace.py` | Workspace 选择、scratch 创建、文件树和打开文件夹 |
 | `routes/media.py` | 附件上传、签名图片和附件下载 |
 | `routes/settings.py` | 模型、设置、路由更新和长期记忆读取 |
 | `routes/schedules.py` | 定时任务列表与启停 |
 
-服务端只直接复用 Core 的只读 Session / Workspace 能力和 Runtime 的设置服务；所有会改变 Session 或 Workspace 执行状态的 Agent 操作仍经 Bridge 协议完成。
+服务端非路由模块：
+
+| 模块 | 职责 |
+| --- | --- |
+| `active_session.py` | 活动 Session 注册表、页面附着与事件续传 |
+| `bridge_process.py` | 单 Session 的 Bridge 子进程生命周期与消息流 |
+| `windows_folders.py` | 通过 Windows Explorer 定位并打开 Workspace 文件夹 |
+
+服务端只直接复用 Core 的只读 Session / Workspace 能力和 Runtime 的设置服务，唯一的 Session 写入是 fork：Session Store 复制锚点所在 Turn 之前的 Journal 生成新 Session，并记录来源和锚点，不经过 Bridge，也不改写源 Session。所有会改变 Session 或 Workspace 执行状态的 Agent 操作仍经 Bridge 协议完成。
 
 ## 前端
 
-React 应用提供可折叠的 Session 列表、对话区和 Workspace 文件树。多个 Session 会稳定挂载，因此可以并行执行并在页面内切换。
+React 应用提供可折叠的 Session 列表、对话区和 Workspace 文件树。多个 Session 会稳定挂载，因此可以并行执行并在页面内切换。编辑历史用户消息不会改写原会话：GUI 以该消息为锚点创建分支 Session，先在源会话中预览待提交的内容，创建成功后再切换过去。
 
 切换到其他会话时，只断开空闲会话的 WebSocket，保留其 Bridge、Provider 和 MCP；返回后附着已有 Runtime。离开浏览器页面时释放该页面持有的空闲会话，删除会话和关闭 GUI 宿主也会释放资源。因此浏览过的会话会在页面存续期间占用进程与内存，新建会话仍有独立执行面。
 
@@ -95,6 +104,8 @@ React 应用提供可折叠的 Session 列表、对话区和 Workspace 文件树
 ## 设置与运行状态
 
 Settings 页面覆盖 Provider、默认路由、Agent Tool、上下文、Memory、Skill、Plugin、MCP 和 Schedule。API key 只写入 `~/.nosis/.env`，服务端返回的设置快照只包含凭据来源与是否已配置。
+
+Context Window 指示器展开后显示当前输入、缓存命中率、可用输入上限、剩余输入空间、压缩触发点、模型总窗口、压缩次数与当前压缩总结。后台任务指示器显示任务数量、类型、Job ID 与状态，shell Job 展开命令、subagent Job 展开角色与任务描述。Assistant 消息把 reasoning 与 Tool 调用折叠为可展开的推理与执行过程区块：Turn 运行且尚未出现回答文本时默认展开，回答开始后自动折叠，回答本身始终可见。
 
 执行过程完全由结构化协议渲染，不从 assistant 自由文本推断 Tool、计划或状态。停止操作会取消当前 Turn，但不会撤销已完成的 Tool 操作。
 

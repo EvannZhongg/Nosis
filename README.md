@@ -21,10 +21,11 @@ GUI ── FastAPI ─┘
 
 - **Controlled local execution**: A session supports three permission presets — `Ask for approval`, `Workspace Access`, and `Full Access`. Shell enters the workspace sandbox or the host environment according to scope, while file tools are always confined to the current workspace.
 - **Desktop automation**: The main agent can observe and operate the visible desktop through `computer_screenshot` and `computer_action`, covering screenshots, clicks, drags, scrolling, key presses, and text input. Both tools are on by default and visible only to the main agent, and each call is confirmed according to the current permission preset.
+- **Web research**: `web_fetch` reads public pages; `web_search`, when enabled, queries DuckDuckGo by default and can switch to Exa.
 - **A complete agent loop**: streaming responses, tool batches, context compaction, steer, cancel, plans, and background jobs.
 - **Resumable sessions**: conversation and execution events are written to an append-only JSONL journal, and the TUI and GUI can read the same kind of session.
 - **Memory and scheduled tasks**: global and workspace-scoped long-term memory, plus one-shot, interval, and cron tasks.
-- **Models and media**: OpenAI-compatible endpoints use the native OpenAI SDK; other routes and image generation use LiteLLM. Providers can be routed independently for the main agent, vision, image generation, and each subagent role.
+- **Models and media**: OpenAI-compatible endpoints use the native OpenAI SDK; other routes and image generation use LiteLLM. Providers can be routed independently for the main agent, vision, image generation, auxiliary model calls, and each subagent role.
 - **Extension system**: standalone skills, skills / agents / MCP components provided by plugins, and standalone MCP servers.
 - **Two frontends**: the TUI suits terminal workflows; the GUI offers multi-session management, attachments, a file tree, settings, memory, and scheduled tasks.
 
@@ -89,7 +90,7 @@ The GUI listens on <http://127.0.0.1:8737> by default.
 
 | Path | Contents |
 | --- | --- |
-| `~/.nosis/provider_config.json` | Providers, models, and role routing |
+| `~/.nosis/provider_config.json` | Providers, models, and role routing, including the optional `fast_model` |
 | `~/.nosis/agent_config.json` | Tools, context, memory, skill paths, subagents, MCP, workspace instructions, and scratch workspace settings |
 | `~/.nosis/.env` | The secrets and environment variables referenced by the configuration |
 | `~/.nosis/prompts/` | Main agent, subagent, compaction, and memory prompts |
@@ -97,7 +98,7 @@ The GUI listens on <http://127.0.0.1:8737> by default.
 | `~/.nosis/plugins/` | Plugin capability packages |
 | `~/.nosis/AGENTS.md` | User-level global workspace instruction |
 | `~/.nosis/MEMORY.md` | Global long-term memory |
-| `~/.nosis/sessions/` | Session journals, workspace memory, artifacts, and subagent records |
+| `~/.nosis/sessions/` | Session journals, workspace memory, artifacts, subagent records, and per-session auxiliary usage logs |
 | `~/.nosis/schedule.jsonl` | Scheduled tasks and run records |
 | `<workspace>/.nosis/attachments/` | Uploaded attachments and agent-generated images |
 
@@ -113,6 +114,8 @@ source .venv/bin/activate
 python -m pip install -e ".[gui]"
 python -m unittest discover -s tests -v
 ```
+
+On Windows, activate the environment with `.venv\Scripts\Activate.ps1`.
 
 The GUI extra includes FastAPI, Uvicorn, the WebSocket backend, and multipart support; Windows, macOS, and Linux use the same installation.
 
