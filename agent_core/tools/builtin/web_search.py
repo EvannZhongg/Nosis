@@ -1,4 +1,4 @@
-from urllib.parse import urlparse
+from typing import cast
 
 from ..base import JSONValue, Tool, ToolDefinition
 from ..context import ToolExecutionContext
@@ -16,6 +16,45 @@ class WebSearchTool(Tool):
     name = "web_search"
 
     def definition(self, context: ToolExecutionContext) -> ToolDefinition:
+        provider = web_fetch.WEB_SEARCH_PROVIDER
+        query_description = (
+            "Web search query. Use site:domain to search a specific "
+            "site, for example 'python site:docs.python.org'."
+            if provider == "duckduckgo"
+            else "Web search query."
+        )
+        properties: dict[str, JSONValue] = {
+            "query": {
+                "type": "string",
+                "description": query_description,
+            },
+            "num_results": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": MAX_NUM_RESULTS,
+                "default": DEFAULT_NUM_RESULTS,
+                "description": "Maximum number of results to return.",
+            },
+        }
+        if provider == "exa":
+            properties.update({
+                "include_domains": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "Return results only from these domains, for "
+                        "example ['docs.python.org']."
+                    ),
+                },
+                "exclude_domains": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Never return results from these domains.",
+                },
+            })
+        elif provider != "duckduckgo":
+            raise ValueError(f"Unsupported web search provider: {provider}")
+
         return ToolDefinition(
             name=self.name,
             description=(
@@ -25,32 +64,7 @@ class WebSearchTool(Tool):
             ),
             parameters={
                 "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Web search query.",
-                    },
-                    "num_results": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": MAX_NUM_RESULTS,
-                        "default": DEFAULT_NUM_RESULTS,
-                        "description": "Maximum number of results to return.",
-                    },
-                    "include_domains": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": (
-                            "Return results only from these domains, for "
-                            "example ['docs.python.org']."
-                        ),
-                    },
-                    "exclude_domains": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "Never return results from these domains.",
-                    },
-                },
+                "properties": properties,
                 "required": ["query"],
                 "additionalProperties": False,
             },
@@ -63,13 +77,8 @@ class WebSearchTool(Tool):
     ) -> JSONValue:
         query = arguments.get("query")
         num_results = arguments.get("num_results", DEFAULT_NUM_RESULTS)
-        include_domains = _parse_domains(
-            arguments.get("include_domains"),
-            "include_domains",
-        )
-        exclude_domains = _parse_domains(
-            arguments.get("exclude_domains"),
-            "exclude_domains",
+        properties = cast(
+            dict[str, JSONValue], self.definition(context).parameters["properties"],
         )
 
         if not isinstance(query, str) or not query:
@@ -84,23 +93,20 @@ class WebSearchTool(Tool):
                 "web_search requires 'num_results' to be an integer between "
                 f"1 and {MAX_NUM_RESULTS}"
             )
-        if not set(arguments) <= {
-            "query",
-            "num_results",
-            "include_domains",
-            "exclude_domains",
-        }:
-            raise ValueError(
-                "web_search accepts only 'query', 'num_results', "
-                "'include_domains', and 'exclude_domains'"
-            )
+        if not arguments.keys() <= properties.keys():
+            allowed = ", ".join(repr(name) for name in properties)
+            raise ValueError(f"web_search accepts only {allowed}")
 
         provider = web_fetch.WEB_SEARCH_PROVIDER
         if provider == "duckduckgo":
-            results = _search_duckduckgo(
-                query, num_results, include_domains, exclude_domains,
-            )
+            results = _search_duckduckgo(query, num_results)
         elif provider == "exa":
+            include_domains = _parse_domains(
+                arguments.get("include_domains"), "include_domains",
+            )
+            exclude_domains = _parse_domains(
+                arguments.get("exclude_domains"), "exclude_domains",
+            )
             results = _search_exa(
                 query, num_results, include_domains, exclude_domains,
             )
@@ -113,43 +119,18 @@ class WebSearchTool(Tool):
 def _search_duckduckgo(
     query: str,
     num_results: int,
-    include_domains: list[str] | None,
-    exclude_domains: list[str] | None,
 ) -> list[JSONValue]:
     from ddgs import DDGS
 
-    search_query = query
-    if include_domains:
-        sites = " OR ".join(f"site:{domain}" for domain in include_domains)
-        search_query += f" ({sites})"
-    if exclude_domains:
-        search_query += " " + " ".join(
-            f"-site:{domain}" for domain in exclude_domains
-        )
-
     response = DDGS(timeout=10).text(
-        search_query, max_results=num_results, backend="duckduckgo",
+        query, max_results=num_results, backend="duckduckgo",
     )
     results: list[JSONValue] = []
     for item in response:
-        url = item.get("href", "")
-        hostname = urlparse(url).hostname or ""
-        # Search operators guide ranking; check returned hosts as well so
-        # the tool's domain filters also apply to provider-side outliers.
-        if include_domains and not any(
-            hostname == domain.lower() or hostname.endswith("." + domain.lower())
-            for domain in include_domains
-        ):
-            continue
-        if exclude_domains and any(
-            hostname == domain.lower() or hostname.endswith("." + domain.lower())
-            for domain in exclude_domains
-        ):
-            continue
         snippet = item.get("body", "")[:MAX_HIGHLIGHT_CHARACTERS]
         results.append({
             "title": item.get("title", ""),
-            "url": url,
+            "url": item.get("href", ""),
             "published_date": None,
             "highlights": [snippet] if snippet else None,
         })

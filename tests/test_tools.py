@@ -1272,49 +1272,62 @@ class DuckDuckGoSearchToolTest(unittest.TestCase):
             ],
         })
 
-    def test_domain_filters_match_hosts_and_subdomains(self) -> None:
+    def test_schema_follows_provider_for_shared_tool(self) -> None:
         tool = _Bound(WebSearchTool(), _TMP_WORKSPACE)
-        urls = [
-            "https://docs.python.org/3/", "https://python.org/",
-            "https://pytest.org/", "https://blocked.python.org/",
-            "https://sub.blocked.python.org/", "https://other.org/python.org",
-            "https://notpython.org/", "https://python.org.evil.org/",
-        ]
-        with patch("ddgs.DDGS") as ddgs:
-            ddgs.return_value.text.return_value = [
-                {"title": "Page", "href": url, "body": "Snippet"}
-                for url in urls
-            ]
-            result = tool.execute({
-                "query": "python testing", "num_results": 3,
-                "include_domains": ["PYTHON.ORG", "pytest.org"],
-                "exclude_domains": ["blocked.python.org"],
-            })
-
-        ddgs.return_value.text.assert_called_once_with(
-            "python testing (site:PYTHON.ORG OR site:pytest.org) -site:blocked.python.org",
-            max_results=3, backend="duckduckgo",
-        )
-        self.assertEqual([item["url"] for item in result["results"]], urls[:3])
-
-    def test_exclude_domains_without_include_domains(self) -> None:
-        tool = _Bound(WebSearchTool(), _TMP_WORKSPACE)
-        with patch("ddgs.DDGS") as ddgs:
-            ddgs.return_value.text.return_value = [
-                {"href": "https://medium.com/post"},
-                {"href": "https://example.com/post"},
-            ]
-            result = tool.execute({
-                "query": "python", "exclude_domains": ["medium.com"],
-            })
-
-        ddgs.return_value.text.assert_called_once_with(
-            "python -site:medium.com", max_results=5, backend="duckduckgo",
-        )
+        duckduckgo = tool.definition
         self.assertEqual(
-            [item["url"] for item in result["results"]],
-            ["https://example.com/post"],
+            set(duckduckgo.parameters["properties"]), {"query", "num_results"},
         )
+        self.assertIn(
+            "site:", duckduckgo.parameters["properties"]["query"]["description"],
+        )
+
+        with patch(
+            "agent_core.tools.builtin.web_fetch.WEB_SEARCH_PROVIDER", "exa",
+        ):
+            exa = tool.definition
+            self.assertEqual(set(exa.parameters["properties"]), {
+                "query", "num_results", "include_domains", "exclude_domains",
+            })
+
+        self.assertEqual(tool.definition, duckduckgo)
+        for definition in (duckduckgo, exa):
+            self.assertEqual(definition.name, "web_search")
+            self.assertEqual(definition.parameters["required"], ["query"])
+            self.assertFalse(definition.parameters["additionalProperties"])
+
+    def test_passes_site_query_and_result_limit_without_filtering_results(self) -> None:
+        tool = _Bound(WebSearchTool(), _TMP_WORKSPACE)
+        query = "python site:docs.python.org"
+        with patch("ddgs.DDGS") as ddgs:
+            ddgs.return_value.text.return_value = [
+                {"href": "https://docs.python.org/3/"},
+                {"href": "https://python.org/"},
+                {"href": "https://example.com/"},
+            ]
+            result = tool.execute({
+                "query": query, "num_results": 2,
+            })
+
+        ddgs.return_value.text.assert_called_once_with(
+            query, max_results=2, backend="duckduckgo",
+        )
+        self.assertEqual(result["query"], query)
+        self.assertEqual([item["url"] for item in result["results"]], [
+            "https://docs.python.org/3/", "https://python.org/",
+        ])
+
+    def test_rejects_domain_parameters_before_calling_provider(self) -> None:
+        tool = _Bound(WebSearchTool(), _TMP_WORKSPACE)
+        with patch("ddgs.DDGS") as ddgs:
+            for argument in ("include_domains", "exclude_domains", "extra"):
+                for value in (["python.org"], [], None):
+                    with self.subTest(argument=argument, value=value):
+                        with self.assertRaisesRegex(
+                            ValueError, "accepts only 'query', 'num_results'",
+                        ):
+                            tool.execute({"query": "python", argument: value})
+        ddgs.assert_not_called()
 
     def test_empty_results(self) -> None:
         tool = _Bound(WebSearchTool(), _TMP_WORKSPACE)
@@ -1338,6 +1351,8 @@ class DuckDuckGoSearchToolTest(unittest.TestCase):
         with patch(
             "agent_core.tools.builtin.web_fetch.WEB_SEARCH_PROVIDER", "unknown",
         ):
+            with self.assertRaisesRegex(ValueError, "Unsupported web search provider"):
+                tool.definition
             with self.assertRaisesRegex(ValueError, "Unsupported web search provider"):
                 tool.execute({"query": "python"})
 
