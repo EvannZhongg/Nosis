@@ -5,9 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agent_core import JsonlSessionStore
+from agent_core import CacheUsage, JsonlSessionStore
 from agent_core.session_paths import session_log_path
-from agent_core.usage import CacheUsage
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "migrate_sessions.py"

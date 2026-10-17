@@ -15,6 +15,8 @@ from typing import Callable
 from unittest.mock import patch
 
 from agent_core import (
+    CacheUsage,
+    TokenUsage,
     AssistantMessageDeltaEvent,
     ProviderCapabilities,
     AssistantMessageEvent,
@@ -56,7 +58,7 @@ from agent_core.scheduler import (
     ScheduledRun,
     SchedulerService,
 )
-from agent_core.usage import CacheUsage, TokenUsage, usage_to_dict
+from agent_core.usage import usage_to_dict
 from agent_core.session_paths import session_directory
 from agent_core.projection import project_context_units
 from agent_core.providers import ModelProvider

@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 from agent_core import (
+    TokenUsage,
     JsonlSessionStore,
     LLMRequest,
     LLMResponse,
@@ -22,7 +23,6 @@ from agent_core import (
     Workspace,
 )
 from agent_core.scheduler import IntervalTrigger, OneShotTrigger, SchedulerService
-from agent_core.usage import TokenUsage
 from interfaces.bridge.managed_workspaces import create_scratch_workspace
 from agent_runtime.settings import SettingsStore
 

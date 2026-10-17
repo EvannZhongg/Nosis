@@ -9,6 +9,8 @@ from agent_core import (
     Agent,
     AgentCancelled,
     AgentConfig,
+    CacheUsage,
+    TokenUsage,
     AssistantMessageDeltaEvent,
     AssistantMessageEvent,
     ModelCompletedEvent,
@@ -46,7 +48,6 @@ from agent_core.context_manager import (
     ARCHIVE_RETRY_COUNT,
     _validated_archive_summary,
 )
-from agent_core.usage import CacheUsage, TokenUsage
 
 REQUEST_TIME = datetime(2026, 9, 9, 8, 0, tzinfo=timezone.utc)
 TOOL_CALL_TIME = datetime(2026, 9, 9, 8, 0, 10, tzinfo=timezone.utc)

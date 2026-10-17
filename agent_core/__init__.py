@@ -65,7 +65,7 @@ from .jobs import (
     JobResult, JobSnapshot, JobUpdate,
 )
 from .llm import LLMProvider, LLMRequest, LLMResponse, ProviderCapabilities
-from .usage import TokenUsage
+from .usage import CacheUsage, TokenUsage
 from .image_generation import GeneratedImage, ImageGenerator
 from .content import (
     AttachmentPart,
@@ -216,6 +216,7 @@ __all__ = [
     "AgentRunResult",
     "AnalyzeImageTool",
     "AskUserTool",
+    "CacheUsage",
     "AssistantMessageDeltaEvent",
     "AssistantMessageEvent",
     "ModelCompletedEvent",

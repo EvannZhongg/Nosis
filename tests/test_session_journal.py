@@ -3,6 +3,7 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from agent_core import (
+    CacheUsage,
     FilePart,
     ImagePart,
     JsonlSessionStore,
@@ -16,7 +17,6 @@ from agent_core import (
 from agent_core.projection import project_context_units
 from agent_core.content import historical_content
 from agent_core.session import message_from_dict
-from agent_core.usage import CacheUsage
 
 
 class SessionJournalTest(unittest.TestCase):
