@@ -1107,6 +1107,11 @@ class FakeExa:
 
 
 class WebSearchToolTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.enterContext(patch(
+            "agent_core.tools.builtin.web_fetch.WEB_SEARCH_PROVIDER", "exa",
+        ))
+
     def test_returns_ranked_results_with_highlights(self) -> None:
         client = FakeExa()
         tool = _Bound(WebSearchTool(), _TMP_WORKSPACE)
@@ -1233,6 +1238,108 @@ class WebSearchToolTest(unittest.TestCase):
                 tool.execute({"query": "exa", "exclude_domains": [""]})
             with self.assertRaisesRegex(ValueError, "accepts only"):
                 tool.execute({"query": "exa", "extra": True})
+
+
+class DuckDuckGoSearchToolTest(unittest.TestCase):
+    def test_default_provider_returns_shared_result_format_without_api_key(self) -> None:
+        tool = _Bound(WebSearchTool(), _TMP_WORKSPACE)
+        with patch.dict("os.environ"), patch("ddgs.DDGS") as ddgs, patch(
+            "exa_py.Exa",
+        ) as exa:
+            os.environ.pop("EXA_API_KEY", None)
+            ddgs.return_value.text.return_value = [
+                {"title": "Python", "href": "https://python.org", "body": "x" * 1200},
+                {"title": "Docs", "href": "https://docs.python.org"},
+            ]
+            result = tool.execute({"query": "python"})
+
+        ddgs.assert_called_once_with(timeout=10)
+        ddgs.return_value.text.assert_called_once_with(
+            "python", max_results=5, backend="duckduckgo",
+        )
+        exa.assert_not_called()
+        self.assertEqual(result, {
+            "query": "python",
+            "results": [
+                {
+                    "title": "Python", "url": "https://python.org",
+                    "published_date": None, "highlights": ["x" * 1000],
+                },
+                {
+                    "title": "Docs", "url": "https://docs.python.org",
+                    "published_date": None, "highlights": None,
+                },
+            ],
+        })
+
+    def test_domain_filters_match_hosts_and_subdomains(self) -> None:
+        tool = _Bound(WebSearchTool(), _TMP_WORKSPACE)
+        urls = [
+            "https://docs.python.org/3/", "https://python.org/",
+            "https://pytest.org/", "https://blocked.python.org/",
+            "https://sub.blocked.python.org/", "https://other.org/python.org",
+            "https://notpython.org/", "https://python.org.evil.org/",
+        ]
+        with patch("ddgs.DDGS") as ddgs:
+            ddgs.return_value.text.return_value = [
+                {"title": "Page", "href": url, "body": "Snippet"}
+                for url in urls
+            ]
+            result = tool.execute({
+                "query": "python testing", "num_results": 3,
+                "include_domains": ["PYTHON.ORG", "pytest.org"],
+                "exclude_domains": ["blocked.python.org"],
+            })
+
+        ddgs.return_value.text.assert_called_once_with(
+            "python testing (site:PYTHON.ORG OR site:pytest.org) -site:blocked.python.org",
+            max_results=3, backend="duckduckgo",
+        )
+        self.assertEqual([item["url"] for item in result["results"]], urls[:3])
+
+    def test_exclude_domains_without_include_domains(self) -> None:
+        tool = _Bound(WebSearchTool(), _TMP_WORKSPACE)
+        with patch("ddgs.DDGS") as ddgs:
+            ddgs.return_value.text.return_value = [
+                {"href": "https://medium.com/post"},
+                {"href": "https://example.com/post"},
+            ]
+            result = tool.execute({
+                "query": "python", "exclude_domains": ["medium.com"],
+            })
+
+        ddgs.return_value.text.assert_called_once_with(
+            "python -site:medium.com", max_results=5, backend="duckduckgo",
+        )
+        self.assertEqual(
+            [item["url"] for item in result["results"]],
+            ["https://example.com/post"],
+        )
+
+    def test_empty_results(self) -> None:
+        tool = _Bound(WebSearchTool(), _TMP_WORKSPACE)
+        with patch("ddgs.DDGS") as ddgs:
+            ddgs.return_value.text.return_value = []
+            self.assertEqual(
+                tool.execute({"query": "no results"}),
+                {"query": "no results", "results": []},
+            )
+
+    def test_search_failure_propagates_without_switching_provider(self) -> None:
+        tool = _Bound(WebSearchTool(), _TMP_WORKSPACE)
+        with patch("ddgs.DDGS") as ddgs, patch("exa_py.Exa") as exa:
+            ddgs.return_value.text.side_effect = TimeoutError("search timed out")
+            with self.assertRaisesRegex(TimeoutError, "search timed out"):
+                tool.execute({"query": "python"})
+        exa.assert_not_called()
+
+    def test_rejects_unknown_provider(self) -> None:
+        tool = _Bound(WebSearchTool(), _TMP_WORKSPACE)
+        with patch(
+            "agent_core.tools.builtin.web_fetch.WEB_SEARCH_PROVIDER", "unknown",
+        ):
+            with self.assertRaisesRegex(ValueError, "Unsupported web search provider"):
+                tool.execute({"query": "python"})
 
 
 class ReadFileToolTest(unittest.TestCase):

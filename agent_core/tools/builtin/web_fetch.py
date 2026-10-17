@@ -15,6 +15,9 @@ from ..context import ToolExecutionContext
 from ...public_url import require_public_url
 
 
+WEB_SEARCH_PROVIDER = "duckduckgo"
+# WEB_SEARCH_PROVIDER = "exa"
+
 MAX_REDIRECTS = 5
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 REQUEST_TIMEOUT_SECONDS = 20.0

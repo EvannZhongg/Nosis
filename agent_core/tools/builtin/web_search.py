@@ -1,5 +1,8 @@
+from urllib.parse import urlparse
+
 from ..base import JSONValue, Tool, ToolDefinition
 from ..context import ToolExecutionContext
+from . import web_fetch
 
 
 DEFAULT_NUM_RESULTS = 5
@@ -17,8 +20,8 @@ class WebSearchTool(Tool):
             name=self.name,
             description=(
                 "Search the web for current information and return ranked "
-                "results, each with its title, URL, publication date and the "
-                "most relevant excerpts of the page."
+                "results with titles, URLs and relevant excerpts. "
+                "Publication dates are included when available."
             ),
             parameters={
                 "type": "object",
@@ -92,35 +95,97 @@ class WebSearchTool(Tool):
                 "'include_domains', and 'exclude_domains'"
             )
 
-        # Built per call: the tool instance is shared by every Agent of
-        # the Runtime and may run on several threads, so it caches nothing.
-        # A missing EXA_API_KEY therefore fails this call rather than
-        # preventing the agent from starting.
-        from exa_py import Exa
+        provider = web_fetch.WEB_SEARCH_PROVIDER
+        if provider == "duckduckgo":
+            results = _search_duckduckgo(
+                query, num_results, include_domains, exclude_domains,
+            )
+        elif provider == "exa":
+            results = _search_exa(
+                query, num_results, include_domains, exclude_domains,
+            )
+        else:
+            raise ValueError(f"Unsupported web search provider: {provider}")
 
-        response = Exa().search(
-            query,
-            type="auto",
-            num_results=num_results,
-            include_domains=include_domains,
-            exclude_domains=exclude_domains,
-            contents={
-                "highlights": {"max_characters": MAX_HIGHLIGHT_CHARACTERS}
-            },
+        return {"query": query, "results": results}
+
+
+def _search_duckduckgo(
+    query: str,
+    num_results: int,
+    include_domains: list[str] | None,
+    exclude_domains: list[str] | None,
+) -> list[JSONValue]:
+    from ddgs import DDGS
+
+    search_query = query
+    if include_domains:
+        sites = " OR ".join(f"site:{domain}" for domain in include_domains)
+        search_query += f" ({sites})"
+    if exclude_domains:
+        search_query += " " + " ".join(
+            f"-site:{domain}" for domain in exclude_domains
         )
 
-        return {
-            "query": query,
-            "results": [
-                {
-                    "title": result.title,
-                    "url": result.url,
-                    "published_date": result.published_date,
-                    "highlights": result.highlights,
-                }
-                for result in response.results
-            ],
+    response = DDGS(timeout=10).text(
+        search_query, max_results=num_results, backend="duckduckgo",
+    )
+    results: list[JSONValue] = []
+    for item in response:
+        url = item.get("href", "")
+        hostname = urlparse(url).hostname or ""
+        # Search operators guide ranking; check returned hosts as well so
+        # the tool's domain filters also apply to provider-side outliers.
+        if include_domains and not any(
+            hostname == domain.lower() or hostname.endswith("." + domain.lower())
+            for domain in include_domains
+        ):
+            continue
+        if exclude_domains and any(
+            hostname == domain.lower() or hostname.endswith("." + domain.lower())
+            for domain in exclude_domains
+        ):
+            continue
+        snippet = item.get("body", "")[:MAX_HIGHLIGHT_CHARACTERS]
+        results.append({
+            "title": item.get("title", ""),
+            "url": url,
+            "published_date": None,
+            "highlights": [snippet] if snippet else None,
+        })
+    return results[:num_results]
+
+
+def _search_exa(
+    query: str,
+    num_results: int,
+    include_domains: list[str] | None,
+    exclude_domains: list[str] | None,
+) -> list[JSONValue]:
+    # Clients are built per call because the tool is shared by Agents.
+    # A missing EXA_API_KEY fails this call rather than agent startup.
+    from exa_py import Exa
+
+    response = Exa().search(
+        query,
+        type="auto",
+        num_results=num_results,
+        include_domains=include_domains,
+        exclude_domains=exclude_domains,
+        contents={
+            "highlights": {"max_characters": MAX_HIGHLIGHT_CHARACTERS}
+        },
+    )
+
+    return [
+        {
+            "title": result.title,
+            "url": result.url,
+            "published_date": result.published_date,
+            "highlights": result.highlights,
         }
+        for result in response.results
+    ]
 
 
 def _parse_domains(value: JSONValue, argument: str) -> list[str] | None:
