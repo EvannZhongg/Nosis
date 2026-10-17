@@ -219,9 +219,11 @@ class SettingsStore:
         ]
 
         main_agent = provider_document.get("main_agent")
+        fast_model = provider_document.get("fast_model", {})
         subagent = provider_document.get("subagent", {})
         roles = provider_document.get("subagent_roles", {})
         assert isinstance(main_agent, dict)
+        assert isinstance(fast_model, dict)
         assert isinstance(subagent, dict)
         assert isinstance(roles, dict)
 
@@ -232,6 +234,7 @@ class SettingsStore:
             "providers": providers,
             "routing": {
                 "main_agent": main_agent.get("provider"),
+                "fast_model": fast_model.get("provider") or None,
                 "vision_provider": main_agent.get("vision_provider") or None,
                 "subagent": subagent.get("provider") or None,
                 "subagent_vision_provider": subagent.get("vision_provider") or None,
@@ -425,7 +428,7 @@ class SettingsStore:
             if not isinstance(payload, dict):
                 raise ValueError("routing settings must be an object")
             allowed = {
-                "main_agent", "vision_provider", "subagent",
+                "main_agent", "fast_model", "vision_provider", "subagent",
                 "subagent_vision_provider", "roles",
             }
             unknown = set(payload) - allowed
@@ -437,6 +440,7 @@ class SettingsStore:
             if not isinstance(main, dict) or not isinstance(subagent, dict):
                 raise ValueError("provider routing blocks must be objects")
             main["provider"] = payload.get("main_agent")
+            document["fast_model"] = {"provider": payload.get("fast_model") or ""}
             main["vision_provider"] = payload.get("vision_provider") or ""
             subagent["provider"] = payload.get("subagent") or ""
             subagent["vision_provider"] = payload.get("subagent_vision_provider") or ""
@@ -484,6 +488,7 @@ class SettingsStore:
     def _validate_provider_document(self, document: dict[str, object]) -> None:
         unknown_top_level = set(document) - {
             "main_agent",
+            "fast_model",
             "subagent",
             "subagent_roles",
             "providers",
@@ -536,11 +541,12 @@ class SettingsStore:
                 api = value.get("api")
                 if api is not None and (not isinstance(api, str) or api not in OPENAI_APIS):
                     raise ValueError("provider api must be responses or chat_completions")
-            for label in ("main_agent", "subagent"):
+            for label in ("main_agent", "subagent", "fast_model"):
                 route = document.get(label, {})
                 if not isinstance(route, dict):
                     raise ValueError(f"config field '{label}' must be an object")
-                unknown = set(route) - {"provider", "vision_provider"}
+                fields = {"provider"} if label == "fast_model" else {"provider", "vision_provider"}
+                unknown = set(route) - fields
                 if unknown:
                     raise ValueError(f"unknown field(s) in '{label}': {', '.join(sorted(unknown))}")
                 self._validate_routes(route, providers, label)

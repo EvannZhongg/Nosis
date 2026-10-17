@@ -6,6 +6,7 @@ from typing import Callable, TypeAlias
 from .config import AgentConfig
 from .context_manager import ContextManager, ContextWindow, ContextWindowExceededError
 from .llm import (
+    AuxiliaryModelCall,
     LLMProvider,
     LLMRequest,
     LLMResponse,
@@ -131,6 +132,8 @@ class Agent:
         now: Callable[[], datetime] | None = None,
         tool_result_normalizer: ToolResultNormalizer | None = None,
         memory_context: MemoryContext | None = None,
+        consolidator_provider: LLMProvider | None = None,
+        on_auxiliary_call: Callable[[AuxiliaryModelCall], None] | None = None,
     ) -> None:
         self._provider = provider
         self._session = session
@@ -160,6 +163,8 @@ class Agent:
             system_prompt=system_prompt,
             consolidator_prompt=consolidator_prompt,
             memory_context=memory_context,
+            consolidator_provider=consolidator_provider,
+            on_auxiliary_call=on_auxiliary_call,
             jobs=context.jobs,
             config=config,
             media_root=context.workspace.path,

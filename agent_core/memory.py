@@ -8,9 +8,10 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
-from typing import Literal
+from typing import Callable, Literal
 
-from .llm import LLMProvider, LLMRequest
+from .auxiliary import AuxiliaryCallTracker
+from .llm import AuxiliaryModelCall, LLMProvider, LLMRequest
 from .atomic import atomic_write_text
 from .session import Message
 from .session_paths import workspace_directory, workspace_from_key
@@ -83,6 +84,7 @@ class MemoryStore:
         self.global_path = global_path.expanduser()
         self.sessions_directory = sessions_directory.expanduser()
         self._lock = Lock()
+        self.reconciliation_lock = Lock()
 
     def workspace_path(self, workspace: Path) -> Path:
         return workspace_directory(self.sessions_directory, workspace) / "MEMORY.md"
@@ -182,8 +184,10 @@ class MemoryReconciler:
         workspace_prompt: str,
         global_max_tokens: int,
         workspace_max_tokens: int,
+        on_auxiliary_call: Callable[[AuxiliaryModelCall], None] | None = None,
     ) -> None:
         self._provider = provider
+        self._on_auxiliary_call = on_auxiliary_call
         self._prompts = {
             "global": global_prompt.replace(
                 "{{global_max_tokens}}", str(global_max_tokens)
@@ -218,10 +222,13 @@ class MemoryReconciler:
                 ),
             ),
         )
-        response = self._provider.stream(request, lambda _text: None)
-        if response.content is None or response.tool_calls:
-            raise ValueError("memory reconciler must return JSON content only")
-        return _document_from_json(response.content)
+        with AuxiliaryCallTracker(
+            self._on_auxiliary_call, task="memory", scope=scope,
+        ) as call:
+            response = call.response = self._provider.stream(request, lambda _text: None)
+            if response.content is None or response.tool_calls:
+                raise ValueError("memory reconciler must return JSON content only")
+            return _document_from_json(response.content)
 
 
 class MemoryManager:
@@ -262,33 +269,24 @@ class MemoryManager:
         if not candidates:
             return False
 
-        context = self.store.load(self.workspace)
-        global_candidates = tuple(
-            candidate for candidate in candidates if candidate.scope == "global"
-        )
-        workspace_candidates = tuple(
-            candidate for candidate in candidates if candidate.scope == "workspace"
-        )
-        global_memory = (
-            self.reconciler.reconcile(
-                "global", context.global_memory, global_candidates
+        with self.store.reconciliation_lock:
+            context = self.store.load(self.workspace)
+            updates: dict[MemoryScope, MemoryDocument] = {}
+            for scope, current in (
+                ("global", context.global_memory),
+                ("workspace", context.workspace_memory),
+            ):
+                scoped_candidates = tuple(
+                    candidate for candidate in candidates if candidate.scope == scope
+                )
+                if scoped_candidates:
+                    updates[scope] = self.reconciler.reconcile(scope, current, scoped_candidates)
+            self.store.write_updates(
+                self.workspace,
+                global_memory=updates.get("global"),
+                workspace_memory=updates.get("workspace"),
+                expected=context,
             )
-            if global_candidates
-            else None
-        )
-        workspace_memory = (
-            self.reconciler.reconcile(
-                "workspace", context.workspace_memory, workspace_candidates
-            )
-            if workspace_candidates
-            else None
-        )
-        self.store.write_updates(
-            self.workspace,
-            global_memory=global_memory,
-            workspace_memory=workspace_memory,
-            expected=context,
-        )
         return True
 
 

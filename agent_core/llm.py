@@ -1,7 +1,8 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, replace
+from datetime import datetime
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Literal
 
 from .session import Message
 from .tools import ToolCall, ToolDefinition
@@ -23,6 +24,18 @@ class TokenUsage:
     input_tokens: int | None
     output_tokens: int | None
     total_tokens: int | None
+
+
+@dataclass(frozen=True)
+class AuxiliaryModelCall:
+    task: Literal["compression", "memory"]
+    scope: str | None
+    attempt: int
+    status: Literal["completed", "invalid_response", "failed", "cancelled"]
+    started_at_utc: datetime
+    duration_ms: int
+    usage: TokenUsage | None = None
+    error: str | None = None
 
 
 @dataclass(frozen=True)

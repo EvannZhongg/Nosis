@@ -12,6 +12,7 @@ from agent_runtime.config import (
     default_config_directory,
     initialize_config_directory,
     load_config,
+    load_fast_config,
     load_image_generation_config,
     load_model_options,
     load_prompt_templates,
@@ -23,6 +24,30 @@ from agent_runtime.plugins import PluginManager
 
 
 class ConfigTest(unittest.TestCase):
+    def test_fast_model_selection_and_inheritance(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            document = {
+                "main_agent": {"provider": "first"},
+                "fast_model": {"provider": ""},
+                "providers": {
+                    "first": {"model": "openai/first"},
+                    "second": {"model": "openai/second"},
+                },
+            }
+            path.write_text(json.dumps(document), encoding="utf-8")
+            self.assertIsNone(load_fast_config(path))
+            document["fast_model"]["provider"] = None
+            path.write_text(json.dumps(document), encoding="utf-8")
+            self.assertIsNone(load_fast_config(path))
+            document["fast_model"]["provider"] = "second"
+            path.write_text(json.dumps(document), encoding="utf-8")
+            self.assertEqual(load_fast_config(path).model, "openai/second")
+            document["fast_model"]["provider"] = "missing"
+            path.write_text(json.dumps(document), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "not configured"):
+                load_fast_config(path)
+
     def test_requires_main_agent_configuration(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.json"
@@ -194,6 +219,7 @@ class ConfigTest(unittest.TestCase):
                 "openai",
             )
             self.assertEqual(provider_config["subagent"]["provider"], "")
+            self.assertEqual(provider_config["fast_model"]["provider"], "")
             self.assertIn("openai", provider_config["providers"])
             self.assertEqual(
                 provider_config["providers"]["qwen"],

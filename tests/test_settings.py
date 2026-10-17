@@ -10,6 +10,7 @@ from agent_runtime.settings import EnvironmentReloader, SettingsStore, configura
 
 PROVIDERS = {
     "main_agent": {"provider": "first", "vision_provider": ""},
+    "fast_model": {"provider": ""},
     "subagent": {"provider": "", "vision_provider": ""},
     "subagent_roles": {},
     "providers": {"first": {"model": "openai/first", "key": "${FIRST_KEY}"}},
@@ -224,6 +225,20 @@ class SettingsStoreTest(unittest.TestCase):
             "roles": {},
         }, snapshot["revision"])
         self.assertEqual(updated["routing"]["subagent"], "first")
+
+    def test_updates_fast_model_routing(self) -> None:
+        document = json.loads(self.store.provider_path.read_text(encoding="utf-8"))
+        document["providers"]["second"] = {"model": "openai/second"}
+        self.store.provider_path.write_text(json.dumps(document), encoding="utf-8")
+        routing = self.store.snapshot()["routing"]
+        self.assertIsNone(routing["fast_model"])
+        routing["fast_model"] = "second"
+        snapshot = self.store.save_routing(routing)
+        self.assertEqual(snapshot["routing"]["fast_model"], "second")
+        self.assertEqual(json.loads(self.store.provider_path.read_text())["fast_model"], {"provider": "second"})
+        routing["fast_model"] = "missing"
+        with self.assertRaisesRegex(ValueError, "fast_model.provider"):
+            self.store.save_routing(routing)
 
     def test_provider_save_preserves_image_generation_config(self) -> None:
         document = json.loads(

@@ -4,9 +4,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Iterable
 
+from .auxiliary import AuxiliaryCallTracker
 from .config import AgentConfig
 from .content import historical_content
-from .llm import LLMProvider, LLMRequest, LLMResponse, with_generation_limit
+from .llm import (
+    AuxiliaryModelCall, LLMProvider, LLMRequest, LLMResponse,
+    with_generation_limit,
+)
 from .memory import MemoryContext
 from .plan import plan_snapshot_to_dict
 from .projection import ContextUnit, project_context_units
@@ -81,8 +85,12 @@ class ContextManager:
         media_root: Path | None = None,
         memory_context: MemoryContext | None = None,
         jobs: "JobManager | None" = None,
+        consolidator_provider: LLMProvider | None = None,
+        on_auxiliary_call: Callable[[AuxiliaryModelCall], None] | None = None,
     ) -> None:
         self._provider = provider
+        self._consolidator_provider = consolidator_provider or provider
+        self._on_auxiliary_call = on_auxiliary_call
         self._session = session
         self._system_prompt = system_prompt
         self._consolidator_prompt = consolidator_prompt
@@ -111,6 +119,24 @@ class ContextManager:
             hard_limit,
             compression.trigger_ratio,
         )
+        if compression.enabled and self._consolidator_provider is not provider:
+            fast_hard_limit = (
+                self._consolidator_provider.max_context_tokens
+                - self._output_reserve_tokens
+            )
+            if fast_hard_limit <= 1:
+                raise ValueError(
+                    "fast model max_context_tokens minus output_reserve_tokens "
+                    "must be greater than 1 for compression"
+                )
+            threshold = min(
+                threshold,
+                _compression_threshold(
+                    self._consolidator_provider.max_context_tokens,
+                    fast_hard_limit,
+                    compression.trigger_ratio,
+                ),
+            )
         self.limits = ContextLimits(
             hard_limit=hard_limit,
             compression_enabled=compression.enabled,
@@ -170,34 +196,56 @@ class ContextManager:
             or input_tokens < self.limits.compression_threshold
         ):
             return False
-        _, items = self._archivable_items()
-        return bool(items)
+        return bool(self._archivable_units())
 
     def archive(self, check_cancelled: Callable[[], None] = lambda: None) -> int:
         """Compress the unarchived transcript into the session checkpoint."""
-        archive_end, items = self._archivable_items()
-        content = _compression_record(items)
+        units = self._archivable_units()
         anchors = self._lossless_user_anchor_content()
-        if anchors is not None:
-            content = f"{anchors}\n\n{content}"
-        messages: list[Message] = []
         archived_context = self._archived_summary_message()
-        if archived_context is not None:
-            messages.append(archived_context)
-        # Keep the material being summarized as the final message. This makes
-        # the consolidator's target unambiguous and avoids summarizing runtime
-        # state that only provides context for the compression.
-        messages.append(Message(role="user", content=content))
-        request = LLMRequest(
-            system_prompt=self._consolidator_prompt,
-            messages=tuple(messages),
-            media_root=self._media_root,
+        archive_end = (
+            units[-1].end if units else self._session.archived_item_cursor
         )
-        request = with_generation_limit(
-            request,
-            self._provider,
-            self._max_generation_tokens,
+        request = self._archive_request(
+            _unit_messages(units), anchors, archived_context,
         )
+        fast_hard_limit = (
+            self._consolidator_provider.max_context_tokens
+            - self._output_reserve_tokens
+        )
+        if units and self._consolidator_provider is not self._provider:
+            if (
+                self._consolidator_provider.count_input_tokens(request)
+                > fast_hard_limit
+            ):
+                first = self._archive_request(
+                    _unit_messages(units[:1]), anchors, archived_context,
+                )
+                first_tokens = self._consolidator_provider.count_input_tokens(first)
+                if first_tokens > fast_hard_limit:
+                    raise ValueError(
+                        "compression cannot fit the next complete context unit "
+                        f"in the fast model window ({first_tokens} input tokens, "
+                        f"{fast_hard_limit} available); configure a fast model "
+                        "with a larger context window"
+                    )
+                request = first
+                archive_end = units[0].end
+                low, high = 2, len(units) - 1
+                while low <= high:
+                    middle = (low + high) // 2
+                    candidate = self._archive_request(
+                        _unit_messages(units[:middle]), anchors, archived_context,
+                    )
+                    if (
+                        self._consolidator_provider.count_input_tokens(candidate)
+                        <= fast_hard_limit
+                    ):
+                        request = candidate
+                        archive_end = units[middle - 1].end
+                        low = middle + 1
+                    else:
+                        high = middle - 1
         summary = ""
         validation_error: ValueError | None = None
         for attempt in range(ARCHIVE_RETRY_COUNT + 1):
@@ -206,14 +254,29 @@ class ContextManager:
                 if attempt > 0 and validation_error is not None
                 else request
             )
-            response = self._provider.stream_cancellable(
-                attempt_request, lambda _text: None, None, check_cancelled,
-            )
+            if self._consolidator_provider is not self._provider:
+                input_tokens = self._consolidator_provider.count_input_tokens(
+                    attempt_request
+                )
+                if input_tokens > fast_hard_limit:
+                    raise ValueError(
+                        "compression retry cannot fit in the fast model window "
+                        f"({input_tokens} input tokens, {fast_hard_limit} available)"
+                    )
             try:
-                summary = _validated_archive_summary(response)
-                break
+                with AuxiliaryCallTracker(
+                    self._on_auxiliary_call, task="compression", attempt=attempt + 1,
+                ) as call:
+                    response = call.response = self._consolidator_provider.stream_cancellable(
+                        attempt_request, lambda _text: None, None, check_cancelled,
+                    )
+                    summary = _validated_archive_summary(response)
             except ValueError as error:
+                if call.response is None:
+                    raise
                 validation_error = error
+                continue
+            break
         else:
             raise ValueError(
                 "context consolidator returned an invalid checkpoint after "
@@ -224,6 +287,30 @@ class ContextManager:
             archive_end,
         )
         return self._session.archived_item_cursor
+
+    def _archive_request(
+        self,
+        items: list[Message],
+        anchors: str | None,
+        archived_context: Message | None,
+    ) -> LLMRequest:
+        content = _compression_record(items)
+        if anchors is not None:
+            content = f"{anchors}\n\n{content}"
+        # The material being summarized stays last so the target is clear.
+        messages = []
+        if archived_context is not None:
+            messages.append(archived_context)
+        messages.append(Message(role="user", content=content))
+        return with_generation_limit(
+            LLMRequest(
+                system_prompt=self._consolidator_prompt,
+                messages=tuple(messages),
+                media_root=self._media_root,
+            ),
+            self._consolidator_provider,
+            self._max_generation_tokens,
+        )
 
     def _stable_runtime_context_message(self) -> Message | None:
         sections = ["[Runtime Context]"]
@@ -350,7 +437,7 @@ class ContextManager:
             messages.append(message)
         return messages
 
-    def _archivable_items(self) -> tuple[int, list[Message]]:
+    def _archivable_units(self) -> tuple[ContextUnit, ...]:
         """Return complete context units before the retained tail."""
         archive_start = self._session.archived_item_cursor
         units = project_context_units(
@@ -359,10 +446,9 @@ class ContextManager:
         )
         visible_units = [unit for unit in units if unit.messages]
         if len(visible_units) <= self.limits.keep_recent_units:
-            return archive_start, []
+            return ()
         retained_start = visible_units[-self.limits.keep_recent_units].start
-        archived = [unit for unit in units if unit.end <= retained_start]
-        return retained_start, _unit_messages(archived)
+        return tuple(unit for unit in units if unit.end <= retained_start)
 
     def _context_messages(self) -> list[Message]:
         archive_start = self._session.archived_item_cursor

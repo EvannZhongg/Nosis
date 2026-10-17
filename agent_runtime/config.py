@@ -438,6 +438,21 @@ def load_vision_config(
     return result
 
 
+def load_fast_config(path: Path) -> ModelConfig | None:
+    """Return the optional fast model; None means use the selected main model."""
+    with path.open(encoding="utf-8") as file:
+        document = json.load(file)
+    route = document.get("fast_model", {})
+    if not isinstance(route, dict):
+        raise ValueError("config field 'fast_model' must be an object")
+    provider = route.get("provider", "")
+    if provider in (None, ""):
+        return None
+    if not isinstance(provider, str) or not provider.strip():
+        raise ValueError("config field 'fast_model.provider' must name a configured provider")
+    return load_config(path, provider.strip())
+
+
 def load_image_generation_config(
     path: Path,
 ) -> ImageGenerationConfig | None:

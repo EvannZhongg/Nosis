@@ -1,5 +1,6 @@
 {
   "main_agent": {"provider": "openai", "vision_provider": ""},
+  "fast_model": {"provider": ""},
   "subagent": {"provider": "", "vision_provider": ""},
   "subagent_roles": {},
   "image_generation": {

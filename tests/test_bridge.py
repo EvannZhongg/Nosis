@@ -24,6 +24,8 @@ from agent_core import (
     JsonlSessionStore,
     JobStatusEvent,
     Message,
+    LLMResponse,
+    MemoryCandidate,
     MemoryDocument,
     MemoryStore,
     PermissionPreset,
@@ -54,6 +56,7 @@ from agent_core.scheduler import (
     SchedulerService,
 )
 from agent_core.llm import TokenUsage
+from agent_core.session_paths import session_directory
 from agent_core.projection import project_context_units
 from agent_core.providers import ModelProvider
 from agent_core.subagent import vision_aware_tool_names
@@ -2062,6 +2065,159 @@ class BridgeSessionOpenTest(BridgeTestCase):
             ["session_ready", "runtime_state"],
         )
         self.assertEqual(emitted(stdout)[-1]["phase"], "inactive")
+
+    def test_fast_model_is_shared_by_memory_and_compression(self) -> None:
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        bridge, _ = self.make_bridge([], root)
+        bridge.open_session(open_session_message(
+            root,
+            provider_config={
+                "main_agent": {"provider": "first"},
+                "fast_model": {"provider": "second"},
+                "providers": {
+                    "first": {"model": "openai/first", "max_context_tokens": 1000},
+                    "second": {"model": "openai/second", "max_context_tokens": 1000},
+                },
+            },
+        ))
+        plane = bridge.host.planes.ensure(bridge.host.sessions)
+        self.assertIs(plane.agent._provider, plane.provider)
+        self.assertIs(plane.agent._context._consolidator_provider, plane.fast_provider)
+        self.assertIs(plane.memory.reconciler._provider, plane.fast_provider)
+        self.assertIsNot(plane.provider, plane.fast_provider)
+
+        usage_files = list((root / "sessions").rglob("auxiliary_model_usage.jsonl"))
+        self.assertEqual(usage_files, [])
+        session = bridge.host.sessions.session
+        for index in range(8):
+            session.add_item("user", f"request {index}")
+            session.add_item("assistant", f"answer {index}")
+        with patch.object(
+            plane.fast_provider, "stream_cancellable",
+            return_value=LLMResponse(
+                content="- [durable] Prior work.", usage=TokenUsage(50, 8, 58),
+            ),
+        ):
+            plane.agent._context.archive()
+        plane.memory.remember(MemoryCandidate("fact", "global", "A fact."))
+        with patch.object(
+            plane.fast_provider, "stream",
+            return_value=LLMResponse(
+                content='{"entries":[{"kind":"fact","content":"A fact."}]}',
+                usage=TokenUsage(12, 6, 18),
+            ),
+        ):
+            plane.memory.reconcile_pending()
+        usage_path = session_directory(
+            root / "sessions", root, session.session_id,
+        ) / "auxiliary_model_usage.jsonl"
+        self.assertTrue(usage_path.is_file())
+        records = [json.loads(line) for line in usage_path.read_text().splitlines()]
+        self.assertEqual([(r["task"], r["scope"], r["model"], r["status"]) for r in records], [
+            ("compression", None, "openai/second", "completed"),
+            ("memory", "global", "openai/second", "completed"),
+        ])
+        self.assertTrue(all(
+            record["source"] == "main_agent"
+            and record["role"] is None
+            and record["subagent_session_id"] is None
+            for record in records
+        ))
+        self.assertEqual(records[0]["usage"], {
+            "input_tokens": 50, "output_tokens": 8, "total_tokens": 58,
+        })
+
+    def test_subagent_compression_and_memory_are_logged_in_parent_session(self) -> None:
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        bridge, _ = self.make_bridge([], root)
+        bridge.open_session(open_session_message(
+            root,
+            agent_config={
+                "max_same_tool_calls": 5,
+                "output_reserve_tokens": 100,
+                "workspace_instruction_files": [],
+                "context": {"compression": {"keep_recent_units": 1}},
+                "main_agent": {"tools": {"subagent": True}},
+                "subagent_roles": {
+                    "researcher": {
+                        "description": "Reads files.",
+                        "tools": {},
+                    },
+                },
+            },
+            provider_config={
+                "main_agent": {"provider": "first"},
+                "subagent_roles": {"researcher": {"provider": "second"}},
+                "providers": {
+                    "first": {"model": "openai/first", "max_context_tokens": 1000},
+                    "second": {"model": "openai/second", "max_context_tokens": 1000},
+                },
+            },
+        ))
+        plane = bridge.host.planes.ensure(bridge.host.sessions)
+        context = plane.agent._tools._context
+        subagents = context.subagents
+        assert subagents is not None
+        provider = subagents.roles.get("researcher").provider
+        responses = [
+            LLMResponse(content=None, tool_calls=(
+                ToolCall("child-call", "remember", {
+                    "kind": "fact", "scope": "global", "content": "A durable fact.",
+                }),
+            )),
+            LLMResponse(content="Finished inspection."),
+        ]
+        with (
+            patch.object(
+                provider, "count_input_tokens",
+                side_effect=lambda request: (
+                    800 if any(message.role == "tool" for message in request.messages)
+                    else 1
+                ),
+            ),
+            patch.object(provider, "stream_cancellable", side_effect=responses),
+            patch.object(
+                plane.fast_provider, "stream_cancellable",
+                return_value=LLMResponse(
+                    content="- [durable] Inspected the directory.",
+                ),
+            ),
+            patch.object(
+                plane.fast_provider, "stream",
+                return_value=LLMResponse(content=json.dumps({"entries": [
+                    {"kind": "fact", "content": "A durable fact."},
+                ]})),
+            ),
+        ):
+            answer = subagents.run("researcher", "inspect", context)
+
+        self.assertEqual(answer, "Finished inspection.")
+        parent_session = bridge.host.sessions.session
+        usage_path = session_directory(
+            root / "sessions", root, parent_session.session_id,
+        ) / "auxiliary_model_usage.jsonl"
+        records = [json.loads(line) for line in usage_path.read_text().splitlines()]
+        self.assertEqual(len(records), 2)
+        self.assertEqual(
+            (records[0]["source"], records[0]["role"], records[0]["task"],
+             records[0]["model"], records[0]["status"]),
+            ("subagent", "researcher", "compression", "openai/first", "completed"),
+        )
+        self.assertEqual(
+            (records[1]["source"], records[1]["role"], records[1]["task"],
+             records[1]["scope"], records[1]["model"], records[1]["status"]),
+            ("subagent", "researcher", "memory", "global", "openai/first", "completed"),
+        )
+        child_id = records[0]["subagent_session_id"]
+        self.assertTrue(child_id)
+        self.assertEqual(records[1]["subagent_session_id"], child_id)
+        self.assertTrue((usage_path.parent / "subagents" / child_id / f"{child_id}.jsonl").is_file())
+        self.assertEqual(
+            plane.memory.store.load(root).global_memory.facts,
+            ("A durable fact.",),
+        )
 
     def test_applies_provider_request_policy_to_all_chat_providers(self) -> None:
         directory = self.enterContext(tempfile.TemporaryDirectory())

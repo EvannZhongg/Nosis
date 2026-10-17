@@ -111,6 +111,7 @@ export type SettingsSnapshot = {
   providers: ProviderSetting[];
   routing: {
     main_agent: string;
+    fast_model: string | null;
     vision_provider: string | null;
     subagent: string | null;
     subagent_vision_provider: string | null;

@@ -511,6 +511,123 @@ class AgentTest(unittest.TestCase):
             ["third"],
         )
 
+    def test_archive_uses_separate_consolidator_provider(self) -> None:
+        session = Session(
+            "session-1",
+            items=[Message("user", "first"), Message("assistant", "one")],
+        )
+        main = MockProvider([])
+        fast = MockProvider(["- [durable] First summary."])
+        context = ContextManager(
+            main, session, "System", CONSOLIDATOR_PROMPT, AGENT_CONFIG,
+            consolidator_provider=fast,
+        )
+        context.archive()
+        self.assertEqual(len(fast.requests), 1)
+        self.assertEqual(main.requests, [])
+        self.assertEqual(session.archived_summary, "- [durable] First summary.")
+
+    def test_small_fast_window_archives_complete_prefixes_until_progress_stops(self) -> None:
+        class CountingProvider(MockProvider):
+            def count_input_tokens(self, request):
+                return len(request.system_prompt.split()) + sum(
+                    len(str(message.content).split()) for message in request.messages
+                )
+
+            def stream(self, request, on_text_delta, on_reasoning_delta=None):
+                if self.count_input_tokens(request) > self.max_context_tokens - 5:
+                    raise RuntimeError("fast model input exceeds its window")
+                return super().stream(request, on_text_delta, on_reasoning_delta)
+
+        session = Session("small-fast-window")
+        for index in range(12):
+            session.add_item("user", f"request {index} " + "word " * 8)
+            session.add_item("assistant", f"answer {index} " + "word " * 8)
+        main = CountingProvider(["done"], max_context_tokens=1000)
+        fast = CountingProvider(
+            ["- [durable] Progress recorded."] * 30,
+            max_context_tokens=60,
+        )
+        config = replace(
+            AGENT_CONFIG, output_reserve_tokens=5,
+            context=ContextCompressionConfig(keep_recent_units=1),
+        )
+        agent = Agent(
+            main, session, "System", CONSOLIDATOR_PROMPT, config,
+            tool_set(session=session),
+            ToolExecutionContext(workspace=TEST_WORKSPACE, session=session),
+            consolidator_provider=fast,
+        )
+        self.assertEqual(agent._context.limits.compression_threshold, 41)
+        result = agent.run("new request")
+        self.assertEqual(result.response.content, "done")
+        self.assertGreater(session.compression_count, 1)
+        self.assertGreater(session.archived_item_cursor, 0)
+        self.assertTrue(all(
+            fast.count_input_tokens(request) <= 55 for request in fast.requests
+        ))
+        self.assertEqual(len(main.requests), 1)
+
+    def test_fast_window_reports_when_one_context_unit_cannot_fit(self) -> None:
+        class CountingProvider(MockProvider):
+            def count_input_tokens(self, request):
+                return len(request.system_prompt.split()) + sum(
+                    len(str(message.content).split()) for message in request.messages
+                )
+
+        session = Session("oversized-unit")
+        session.add_item("user", "word " * 100)
+        session.add_item("assistant", "done")
+        main = CountingProvider([], max_context_tokens=1000)
+        fast = CountingProvider([], max_context_tokens=40)
+        context = ContextManager(
+            main, session, "System", CONSOLIDATOR_PROMPT,
+            replace(AGENT_CONFIG, output_reserve_tokens=5,
+                    context=ContextCompressionConfig(keep_recent_units=1)),
+            consolidator_provider=fast,
+        )
+        with self.assertRaisesRegex(ValueError, "fast model window"):
+            context.archive()
+        self.assertEqual(fast.requests, [])
+        self.assertEqual(session.archived_item_cursor, 0)
+
+    def test_empty_compression_error_is_recorded_as_null(self) -> None:
+        class FailingProvider(MockProvider):
+            def stream(self, request, on_text_delta, on_reasoning_delta=None):
+                raise RuntimeError()
+
+        calls = []
+        session = Session("compression-error")
+        session.add_item("user", "old")
+        session.add_item("assistant", "answer")
+        context = ContextManager(
+            FailingProvider([]), session, "System", CONSOLIDATOR_PROMPT,
+            AGENT_CONFIG, on_auxiliary_call=calls.append,
+        )
+        with self.assertRaises(RuntimeError):
+            context.archive()
+        self.assertEqual(calls[0].status, "failed")
+        self.assertIsNone(calls[0].error)
+
+    def test_compression_does_not_retry_provider_validation_errors(self) -> None:
+        class FailingProvider(MockProvider):
+            def stream(self, request, on_text_delta, on_reasoning_delta=None):
+                raise ValueError("invalid provider configuration")
+
+        calls = []
+        session = Session("compression-provider-error")
+        session.add_item("user", "old")
+        session.add_item("assistant", "answer")
+        context = ContextManager(
+            FailingProvider([]), session, "System", CONSOLIDATOR_PROMPT,
+            AGENT_CONFIG, on_auxiliary_call=calls.append,
+        )
+        with self.assertRaisesRegex(ValueError, "invalid provider configuration"):
+            context.archive()
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0].status, "failed")
+        self.assertEqual(session.archived_item_cursor, 0)
+
     def test_archive_retries_invalid_shape_before_committing(self) -> None:
         session = Session(
             "session-1",
@@ -525,6 +642,7 @@ class AgentTest(unittest.TestCase):
                 "- [correction] Use the latest corrected value."
             ),
         ])
+        auxiliary_calls = []
         context = ContextManager(
             provider,
             session,
@@ -537,12 +655,17 @@ class AgentTest(unittest.TestCase):
                 workspace_instruction_files=(),
                 context=ContextCompressionConfig(keep_recent_units=1),
             ),
+            on_auxiliary_call=auxiliary_calls.append,
         )
         session.add_item("user", "second")
 
         context.archive()
 
         self.assertEqual(len(provider.requests), 2)
+        self.assertEqual(
+            [(call.task, call.attempt, call.status) for call in auxiliary_calls],
+            [("compression", 1, "invalid_response"), ("compression", 2, "completed")],
+        )
         self.assertEqual(
             provider.requests[0].messages,
             provider.requests[1].messages[1:],
@@ -2214,6 +2337,7 @@ class CooperativeCancellationTest(unittest.TestCase):
 
     def test_compression_observes_cancellation_before_committing_a_summary(self) -> None:
         control = TurnControl()
+        auxiliary_calls = []
 
         class CancellingProvider(MockProvider):
             def stream(self, *args):
@@ -2225,11 +2349,16 @@ class CooperativeCancellationTest(unittest.TestCase):
         session.add_item("assistant", "old answer")
         context = ContextManager(
             CancellingProvider([]), session, "system", CONSOLIDATOR_PROMPT, AGENT_CONFIG,
+            on_auxiliary_call=auxiliary_calls.append,
         )
         with self.assertRaises(AgentCancelled):
             context.archive(control.raise_if_cancelled)
         self.assertEqual(session.archived_item_cursor, 0)
         self.assertIsNone(session.archived_summary)
+        self.assertEqual(
+            [(call.task, call.status) for call in auxiliary_calls],
+            [("compression", "cancelled")],
+        )
 
 
 class BlockingTool(Tool):

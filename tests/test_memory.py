@@ -1,9 +1,12 @@
 import json
 import tempfile
+import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from agent_core import (
+    AgentCancelled,
     LLMProvider,
     LLMRequest,
     LLMResponse,
@@ -169,6 +172,49 @@ class MemoryTest(unittest.TestCase):
             ("First durable fact.", "Second durable fact."),
         )
 
+    def test_parallel_managers_preserve_both_memory_updates(self) -> None:
+        class MergingProvider(ReconcilerProvider):
+            def __init__(self) -> None:
+                super().__init__([])
+
+            def stream(self, request, on_text_delta, on_reasoning_delta=None):
+                payload = json.loads(request.messages[0].content)
+                time.sleep(0.02)
+                content = json.dumps({
+                    "entries": [
+                        *payload["current_memory"],
+                        *payload["candidates"],
+                    ],
+                })
+                return LLMResponse(content=content)
+
+        provider = MergingProvider()
+        managers = [
+            MemoryManager(
+                self.workspace,
+                self.store,
+                MemoryReconciler(
+                    provider,
+                    global_prompt="global prompt",
+                    workspace_prompt="workspace prompt",
+                    global_max_tokens=2000,
+                    workspace_max_tokens=3000,
+                ),
+            )
+            for _ in range(2)
+        ]
+        for index, manager in enumerate(managers):
+            manager.remember(MemoryCandidate("fact", "global", f"Fact {index}."))
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            self.assertEqual(
+                list(pool.map(lambda manager: manager.reconcile_pending(), managers)),
+                [True, True],
+            )
+        self.assertCountEqual(
+            self.store.load(self.workspace).global_memory.facts,
+            ("Fact 0.", "Fact 1."),
+        )
+
     def test_token_limits_are_only_rendered_as_prompt_guidance(self) -> None:
         provider = ReconcilerProvider([
             json.dumps({
@@ -195,6 +241,64 @@ class MemoryTest(unittest.TestCase):
 
         self.assertIn("around 12 tokens", provider.requests[0].system_prompt)
         self.assertIsNone(provider.requests[0].max_generation_tokens)
+
+    def test_invalid_reconciliation_is_recorded(self) -> None:
+        calls = []
+        reconciler = MemoryReconciler(
+            ReconcilerProvider(["not JSON"]),
+            global_prompt="global", workspace_prompt="workspace",
+            global_max_tokens=2000, workspace_max_tokens=3000,
+            on_auxiliary_call=calls.append,
+        )
+        with self.assertRaisesRegex(ValueError, "invalid JSON"):
+            reconciler.reconcile(
+                "global", MemoryDocument(),
+                (MemoryCandidate("fact", "global", "A fact."),),
+            )
+        self.assertEqual((calls[0].task, calls[0].scope, calls[0].status),
+                         ("memory", "global", "invalid_response"))
+
+    def test_empty_provider_error_is_recorded_as_null(self) -> None:
+        class FailingProvider(ReconcilerProvider):
+            def stream(self, request, on_text_delta, on_reasoning_delta=None):
+                raise RuntimeError()
+
+        calls = []
+        reconciler = MemoryReconciler(
+            FailingProvider([]),
+            global_prompt="global", workspace_prompt="workspace",
+            global_max_tokens=2000, workspace_max_tokens=3000,
+            on_auxiliary_call=calls.append,
+        )
+        with self.assertRaises(RuntimeError):
+            reconciler.reconcile(
+                "global", MemoryDocument(),
+                (MemoryCandidate("fact", "global", "A fact."),),
+            )
+        self.assertEqual(calls[0].status, "failed")
+        self.assertIsNone(calls[0].error)
+
+    def test_reconciliation_cancellation_is_recorded_and_propagated(self) -> None:
+        for exception in (AgentCancelled, KeyboardInterrupt):
+            with self.subTest(exception=exception):
+                class CancellingProvider(ReconcilerProvider):
+                    def stream(self, request, on_text_delta, on_reasoning_delta=None):
+                        raise exception()
+
+                calls = []
+                reconciler = MemoryReconciler(
+                    CancellingProvider([]),
+                    global_prompt="global", workspace_prompt="workspace",
+                    global_max_tokens=2000, workspace_max_tokens=3000,
+                    on_auxiliary_call=calls.append,
+                )
+                with self.assertRaises(exception):
+                    reconciler.reconcile(
+                        "global", MemoryDocument(),
+                        (MemoryCandidate("fact", "global", "A fact."),),
+                    )
+                self.assertEqual(len(calls), 1)
+                self.assertEqual(calls[0].status, "cancelled")
 
     def test_store_round_trips_stable_markdown(self) -> None:
         self.store.write_updates(

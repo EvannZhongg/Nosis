@@ -36,6 +36,8 @@ class ExecutionPlane:
     configuration_fingerprint: str
     instructions: WorkspaceInstructions
     provider: LLMProvider
+    fast_provider: LLMProvider
+    fast_model_name: str
     vision_provider: LLMProvider | None
     image_generator: ImageGenerator | None
     catalog: ToolCatalog
