@@ -8,7 +8,6 @@ from .context_manager import ContextManager, ContextWindow, ContextWindowExceede
 from .llm import (
     AuxiliaryModelCall,
     LLMProvider,
-    LLMResponse,
     with_generation_limit,
 )
 from .session import Session
@@ -21,6 +20,20 @@ from .turn_control import AgentCancelled, TurnControl, UserSteer
 from .loop_policy import ToolCallRepetitionGuard, TurnContinuationPolicy
 from .memory import MemoryContext
 from .usage import CacheUsage, TokenUsage
+
+
+@dataclass(frozen=True)
+class AgentRunResult:
+    """Final answer from a completed Agent turn.
+
+    ``usage`` is from the last ordinary model call that produced ``content``,
+    not the total across the turn's tool loop. Per-call usage is journaled
+    and emitted via ``ModelCompletedEvent``. Cumulative session cache
+    statistics are available in ``Session.cache_usage``.
+    """
+
+    content: str
+    usage: TokenUsage | None = None
 
 
 @dataclass(frozen=True)
@@ -181,7 +194,7 @@ class Agent:
         attachments: tuple[AttachmentPart, ...] = (),
         turn_id: str | None = None,
         turn_control: TurnControl | None = None,
-    ) -> LLMResponse:
+    ) -> AgentRunResult:
         try:
             result = self._run(
                 user_input,
@@ -222,7 +235,7 @@ class Agent:
         attachments: tuple[AttachmentPart, ...] = (),
         turn_id: str | None = None,
         turn_control: TurnControl | None = None,
-    ) -> LLMResponse:
+    ) -> AgentRunResult:
         turn_id = self._session.begin_turn(turn_id)
         model_call_index = 0
         repetition = ToolCallRepetitionGuard(self._config.max_same_tool_calls)
@@ -419,7 +432,7 @@ class Agent:
                 lambda: jobs.wait_for_update(turn_id) if jobs is not None else False,
             ):
                 continue
-            return response
+            return AgentRunResult(content=response.content, usage=response.usage)
 
 
 def _append_steering(

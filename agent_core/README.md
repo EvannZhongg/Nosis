@@ -14,6 +14,8 @@ interfaces → agent_runtime → agent_core
 
 `Agent` 实现显式的 Agent Loop：构造模型请求、接收流式输出、组装 Tool Call、执行 Tool 批次、把结果回灌模型，并根据完成、错误、取消和调用上限结束当前 Turn。
 
+`Agent.run()` 成功返回 `AgentRunResult`，包含最终回答 `content` 和最后一次普通模型调用的 `usage`。执行过程和 Provider 状态保存在 Session Journal 中。
+
 执行过程通过结构化事件输出，包括文本与 reasoning 增量、完整消息、Tool 批次、Tool 调用与结果、媒体、上下文窗口、steer 应用和后台 Job 状态。Core 不决定这些事件在前端如何展示。
 
 相关模块：

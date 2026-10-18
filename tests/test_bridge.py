@@ -15,6 +15,7 @@ from typing import Callable
 from unittest.mock import patch
 
 from agent_core import (
+    AgentRunResult,
     CacheUsage,
     TokenUsage,
     AssistantMessageDeltaEvent,
@@ -1408,7 +1409,7 @@ class SuccessfulAgent:
         self._session.add_item("user", user_input)
         self._session.add_item("assistant", "done")
         self._session.finish_turn("completed", turn_id)
-        return LLMResponse("done")
+        return AgentRunResult("done")
 
 
 class MemorySpy:
@@ -1538,7 +1539,7 @@ class InterruptedTurnTest(BridgeTestCase):
                 on_event(AssistantMessageDeltaEvent("partial", 1))
                 session.add_item("assistant", "done")
                 session.finish_turn("completed", turn_id)
-                return LLMResponse("done")
+                return AgentRunResult("done")
 
         plane.agent = StreamingAgent()
         self.bridge.run_turn({"turn_id": "t2", "text": "second"})
@@ -1894,7 +1895,7 @@ class ScheduledTurnTest(unittest.TestCase):
                     self.session.add_item("user", user_input)
                     self.session.add_item("assistant", "scheduled answer")
                     self.session.finish_turn("completed")
-                    return LLMResponse("scheduled answer")
+                    return AgentRunResult("scheduled answer")
 
             def execution_plane(manager, state) -> object:
                 assert state.session is not None

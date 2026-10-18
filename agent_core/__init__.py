@@ -1,6 +1,7 @@
 from .agent import (
     Agent,
     AgentEvent,
+    AgentRunResult,
     AssistantMessageDeltaEvent,
     ReasoningDeltaEvent,
     AssistantMessageEvent,
@@ -213,6 +214,7 @@ __all__ = [
     "AgentCancelled",
     "AgentConfig",
     "AgentEvent",
+    "AgentRunResult",
     "AnalyzeImageTool",
     "AskUserTool",
     "CacheUsage",

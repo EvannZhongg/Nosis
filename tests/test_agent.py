@@ -10,6 +10,7 @@ from agent_core.memory import MemoryContext, MemoryDocument
 from agent_core.plan import PlanSnapshot, PlanStep
 
 from agent_core import (
+    AgentRunResult,
     Agent,
     AgentCancelled,
     AgentConfig,
@@ -1710,7 +1711,10 @@ class AgentTest(unittest.TestCase):
 
         result = agent.run("use the echo tool", on_event=events.append)
 
-        self.assertEqual(result.content, "tool completed")
+        self.assertEqual(
+            result,
+            AgentRunResult("tool completed", TokenUsage(1100, 30, 1130, 1000, None)),
+        )
         completed = [event for event in events if isinstance(event, ModelCompletedEvent)]
         self.assertEqual(completed, [
             ModelCompletedEvent(1, TokenUsage(1000, 20, 1020, 800, 100), CacheUsage(1000, 800)),

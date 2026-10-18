@@ -236,7 +236,7 @@ class SubagentRuntime:
             finally:
                 session.attach_journal_sink(None)
         # Full report delivery is separate from the bounded progress snapshots.
-        return result.content or ""
+        return result.content
 
     def _store(self, parent: ToolExecutionContext) -> JsonlSessionStore:
         """Nest the child transcript under the parent session.
