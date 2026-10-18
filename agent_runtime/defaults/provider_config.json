@@ -29,7 +29,7 @@
     "deepseek": {
       "model": "deepseek/deepseek-flash",
       "url": "https://api.deepseek.com",
-      "key": "${DEEPSEEK_KEY}"
+      "key": "${DEEPSEEK_API_KEY}"
     },
     "qwen": {
       "model": "dashscope/qwen-plus",

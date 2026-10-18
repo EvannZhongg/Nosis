@@ -1,4 +1,7 @@
+import os
 from typing import cast
+
+import httpx
 
 from ..base import JSONValue, Tool, ToolDefinition
 from ..context import ToolExecutionContext
@@ -10,6 +13,8 @@ MAX_NUM_RESULTS = 10
 # Excerpts are capped so a full result set stays inside the tool result
 # limit that the agent can feed back to the model.
 MAX_HIGHLIGHT_CHARACTERS = 1000
+DEEPSEEK_MAX_QUERY_CHARACTERS = 128
+DEEPSEEK_SEARCH_URL = "https://api.deepseek.com/v1/tools/search"
 
 
 class WebSearchTool(Tool):
@@ -51,6 +56,19 @@ class WebSearchTool(Tool):
                     "items": {"type": "string"},
                     "description": "Never return results from these domains.",
                 },
+            })
+        elif provider == "deepseek":
+            query_schema = cast(dict[str, JSONValue], properties["query"])
+            query_schema.update({
+                "minLength": 1,
+                "maxLength": DEEPSEEK_MAX_QUERY_CHARACTERS,
+                "description": (
+                    "Web search query, 1-128 Unicode characters, not all "
+                    "whitespace. Supports site:domain, -site:domain, quoted "
+                    "phrases, -keyword, lang:zh,en, after:YYYY-MM-DD and "
+                    "before:YYYY-MM-DD. Combine sites with OR, for example "
+                    "'python site:docs.python.org OR site:python.org'."
+                ),
             })
         elif provider != "duckduckgo":
             raise ValueError(f"Unsupported web search provider: {provider}")
@@ -110,6 +128,8 @@ class WebSearchTool(Tool):
             results = _search_exa(
                 query, num_results, include_domains, exclude_domains,
             )
+        elif provider == "deepseek":
+            results = _search_deepseek(query, num_results)
         else:
             raise ValueError(f"Unsupported web search provider: {provider}")
 
@@ -167,6 +187,37 @@ def _search_exa(
         }
         for result in response.results
     ]
+
+
+def _search_deepseek(query: str, num_results: int) -> list[JSONValue]:
+    if not query.strip() or len(query) > DEEPSEEK_MAX_QUERY_CHARACTERS:
+        raise ValueError(
+            "web_search requires 'query' to be 1-128 Unicode characters "
+            "and not all whitespace for DeepSeek"
+        )
+    api_key = os.environ.get("DEEPSEEK_API_KEY")
+    if not api_key:
+        raise ValueError("DeepSeek web search requires DEEPSEEK_API_KEY")
+
+    with httpx.Client(timeout=20.0) as client:
+        response = client.post(
+            DEEPSEEK_SEARCH_URL,
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={"query": query, "count": num_results, "need_content": False},
+        )
+        response.raise_for_status()
+        items = response.json()["results"]
+
+    results: list[JSONValue] = []
+    for item in items[:num_results]:
+        summary = item["summary"][:MAX_HIGHLIGHT_CHARACTERS]
+        results.append({
+            "title": item["title"],
+            "url": item["url"],
+            "published_date": item["date"],
+            "highlights": [summary] if summary else None,
+        })
+    return results
 
 
 def _parse_domains(value: JSONValue, argument: str) -> list[str] | None:

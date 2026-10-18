@@ -21,7 +21,7 @@ GUI ── FastAPI ─┘
 
 - **Controlled local execution**: A session supports three permission presets — `Ask for approval`, `Workspace Access`, and `Full Access`. Shell enters the workspace sandbox or the host environment according to scope, while file tools are always confined to the current workspace.
 - **Desktop automation**: The main agent can observe and operate the visible desktop through `computer_screenshot` and `computer_action`, covering screenshots, clicks, drags, scrolling, key presses, and text input. Both tools are on by default and visible only to the main agent, and each call is confirmed according to the current permission preset.
-- **Web research**: `web_fetch` reads public pages; `web_search`, when enabled, queries DuckDuckGo by default and can switch to Exa.
+- **Web research**: `web_fetch` reads public pages; `web_search`, when enabled, queries DuckDuckGo by default and can switch to Exa or DeepSeek.
 - **A complete agent loop**: streaming responses, tool batches, context compaction, steer, cancel, plans, and background jobs.
 - **Resumable sessions**: conversation and execution events are written to an append-only JSONL journal, and the TUI and GUI can read the same kind of session.
 - **Memory and scheduled tasks**: global and workspace-scoped long-term memory, plus one-shot, interval, and cron tasks.

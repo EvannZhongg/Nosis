@@ -9,6 +9,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+import httpx
+
 from agent_core import (
     ApplyPatchTool,
     AskUserTool,
@@ -1290,8 +1292,21 @@ class DuckDuckGoSearchToolTest(unittest.TestCase):
                 "query", "num_results", "include_domains", "exclude_domains",
             })
 
+        with patch(
+            "agent_core.tools.builtin.web_fetch.WEB_SEARCH_PROVIDER", "deepseek",
+        ):
+            deepseek = tool.definition
+            self.assertEqual(
+                set(deepseek.parameters["properties"]), {"query", "num_results"},
+            )
+            query = deepseek.parameters["properties"]["query"]
+            self.assertEqual(query["minLength"], 1)
+            self.assertEqual(query["maxLength"], 128)
+            for syntax in ("site:", "-site:", "lang:", "after:", "before:", "OR"):
+                self.assertIn(syntax, query["description"])
+
         self.assertEqual(tool.definition, duckduckgo)
-        for definition in (duckduckgo, exa):
+        for definition in (duckduckgo, exa, deepseek):
             self.assertEqual(definition.name, "web_search")
             self.assertEqual(definition.parameters["required"], ["query"])
             self.assertFalse(definition.parameters["additionalProperties"])
@@ -1355,6 +1370,143 @@ class DuckDuckGoSearchToolTest(unittest.TestCase):
                 tool.definition
             with self.assertRaisesRegex(ValueError, "Unsupported web search provider"):
                 tool.execute({"query": "python"})
+
+
+class DeepSeekSearchToolTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.enterContext(patch(
+            "agent_core.tools.builtin.web_fetch.WEB_SEARCH_PROVIDER", "deepseek",
+        ))
+        self.enterContext(patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}))
+        self.tool = _Bound(WebSearchTool(), _TMP_WORKSPACE)
+        self.request = Mock(return_value=httpx.Response(200, json={"results": []}))
+        client_type = httpx.Client
+        self.client = self.enterContext(patch(
+            "agent_core.tools.builtin.web_search.httpx.Client",
+            side_effect=lambda **options: client_type(
+                transport=httpx.MockTransport(self.request), **options,
+            ),
+        ))
+
+    def test_posts_authenticated_query_and_returns_shared_result_format(self) -> None:
+        query = "Python site:docs.python.org lang:zh after:2025"
+        self.request.return_value = httpx.Response(200, json={"results": [
+            {
+                "title": "Python Docs", "url": "https://docs.python.org/3/",
+                "date": "2026-10-17T00:00:00Z", "summary": "正文摘要" * 300,
+                "snippet": "short excerpt", "content": "",
+                "rerank_score": 2.4, "authority": 3,
+                "site_name": "Python", "site_icon": None,
+            },
+            {
+                "title": "Python", "url": "https://python.org/",
+                "date": None, "summary": "", "snippet": "", "content": "",
+                "rerank_score": 1.5, "authority": -1,
+                "site_name": None, "site_icon": None,
+            },
+        ]})
+
+        result = self.tool.execute({"query": query})
+
+        self.client.assert_called_once_with(timeout=20.0)
+        self.request.assert_called_once()
+        request = self.request.call_args.args[0]
+        self.assertEqual(request.method, "POST")
+        self.assertEqual(str(request.url), "https://api.deepseek.com/v1/tools/search")
+        self.assertEqual(request.headers["Authorization"], "Bearer test-key")
+        self.assertEqual(request.headers["Content-Type"], "application/json")
+        self.assertEqual(json.loads(request.content), {
+            "query": query, "count": 5, "need_content": False,
+        })
+        self.assertEqual(result, {
+            "query": query,
+            "results": [
+                {
+                    "title": "Python Docs", "url": "https://docs.python.org/3/",
+                    "published_date": "2026-10-17T00:00:00Z",
+                    "highlights": [("正文摘要" * 300)[:1000]],
+                },
+                {
+                    "title": "Python", "url": "https://python.org/",
+                    "published_date": None, "highlights": None,
+                },
+            ],
+        })
+
+    def test_passes_count_and_bounds_returned_results(self) -> None:
+        self.request.return_value = httpx.Response(200, json={"results": [
+            {"title": "First", "url": "https://example.com/1", "date": None,
+             "summary": "First summary"},
+            {"title": "Second", "url": "https://example.com/2", "date": None,
+             "summary": "Second summary"},
+        ]})
+        result = self.tool.execute({"query": "python", "num_results": 1})
+        self.assertEqual(json.loads(self.request.call_args.args[0].content)["count"], 1)
+        self.assertEqual(len(result["results"]), 1)
+        self.assertEqual(result["results"][0]["title"], "First")
+
+    def test_empty_results(self) -> None:
+        self.assertEqual(self.tool.execute({"query": "no results"}), {
+            "query": "no results", "results": [],
+        })
+
+    def test_accepts_unicode_query_boundary_and_maximum_result_count(self) -> None:
+        query = "搜" * 128
+        self.tool.execute({"query": query, "num_results": 10})
+        self.assertEqual(json.loads(self.request.call_args.args[0].content), {
+            "query": query, "count": 10, "need_content": False,
+        })
+
+    def test_rejects_invalid_queries_before_network_request(self) -> None:
+        for query in (None, True, 12, "", " \t\n", "\u3000", "搜" * 129):
+            with self.subTest(query=query), self.assertRaisesRegex(ValueError, "query"):
+                self.tool.execute({"query": query})
+        self.client.assert_not_called()
+
+    def test_rejects_invalid_counts_and_unsupported_parameters(self) -> None:
+        for count in (0, 11, True, "3", 1.5, None):
+            with self.subTest(count=count), self.assertRaisesRegex(ValueError, "num_results"):
+                self.tool.execute({"query": "python", "num_results": count})
+        for argument in ("include_domains", "exclude_domains", "need_content", "extra"):
+            with self.subTest(argument=argument), self.assertRaisesRegex(ValueError, "accepts only"):
+                self.tool.execute({"query": "python", argument: True})
+        self.client.assert_not_called()
+
+    def test_missing_key_fails_call_without_preventing_tool_definition(self) -> None:
+        os.environ.pop("DEEPSEEK_API_KEY")
+        self.assertEqual(self.tool.definition.name, "web_search")
+        with self.assertRaisesRegex(ValueError, "DEEPSEEK_API_KEY"):
+            self.tool.execute({"query": "python"})
+        self.client.assert_not_called()
+
+    def test_reads_key_for_each_call(self) -> None:
+        for key in ("first-key", "second-key"):
+            os.environ["DEEPSEEK_API_KEY"] = key
+            self.tool.execute({"query": "python"})
+            self.assertEqual(
+                self.request.call_args.args[0].headers["Authorization"],
+                f"Bearer {key}",
+            )
+
+    def test_http_errors_propagate_without_retry_or_provider_switch(self) -> None:
+        with patch("ddgs.DDGS") as ddgs, patch("exa_py.Exa") as exa:
+            for status in (400, 401, 402, 429, 500, 504):
+                with self.subTest(status=status):
+                    self.request.reset_mock()
+                    self.request.return_value = httpx.Response(
+                        status, json={"error": {"message": "search failed"}},
+                    )
+                    with self.assertRaises(httpx.HTTPStatusError):
+                        self.tool.execute({"query": "python"})
+                    self.request.assert_called_once()
+        ddgs.assert_not_called()
+        exa.assert_not_called()
+
+    def test_network_timeout_propagates(self) -> None:
+        self.request.side_effect = httpx.ReadTimeout("search timed out")
+        with self.assertRaisesRegex(httpx.ReadTimeout, "search timed out"):
+            self.tool.execute({"query": "python"})
+        self.request.assert_called_once()
 
 
 class ReadFileToolTest(unittest.TestCase):
