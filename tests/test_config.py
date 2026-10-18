@@ -498,7 +498,7 @@ class ConfigTest(unittest.TestCase):
                             "deepseek": {
                                 "model": "deepseek/test-model",
                                 "url": "https://example.com",
-                                "key": "${DEEPSEEK_KEY}",
+                                "key": "${DEEPSEEK_API_KEY}",
                             },
                         },
                     }
@@ -508,7 +508,7 @@ class ConfigTest(unittest.TestCase):
 
             with patch.dict(
                 "os.environ",
-                {"DEEPSEEK_KEY": "secret"},
+                {"DEEPSEEK_API_KEY": "secret"},
                 clear=True,
             ):
                 self.assertEqual(
