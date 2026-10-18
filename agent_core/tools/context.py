@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Callable
 from ..session_paths import default_sessions_directory
 from ..workspace import Workspace
 from .base import JSONValue
+from .config import ToolSettings
 
 if TYPE_CHECKING:
     from ..execution.router import ExecutionRouter, ResolvedExecution
@@ -59,6 +60,7 @@ class ToolExecutionContext:
     ) = None
     scheduler: object | None = None
     memory: "MemoryManager | None" = None
+    tool_settings: ToolSettings = field(default_factory=ToolSettings)
     # Runtime-provided screenshot capture. Core owns the tool contract while
     # the Runtime chooses the platform-specific capture implementation.
     screenshot: Callable[[str], Path] | None = None

@@ -1,6 +1,6 @@
 """Workspace resources and their replaceable Session binding."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from agent_core import (
@@ -17,6 +17,7 @@ from agent_core import (
 )
 from agent_core.llm import LLMProvider
 from agent_core.image_generation import ImageGenerator
+from agent_core.tools.config import ToolSettings
 
 from .computer import DesktopComputer
 
@@ -46,6 +47,7 @@ class ExecutionPlane:
     computer_tools: tuple[str, ...]
     execution_router: ExecutionRouter
     mcp: "McpClientManager"
+    tool_settings: ToolSettings = field(default_factory=ToolSettings)
     memory: MemoryManager | None = None
     agent: Agent | None = None
     jobs: JobManager | None = None

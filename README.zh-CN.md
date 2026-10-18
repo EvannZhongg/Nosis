@@ -21,7 +21,7 @@ GUI ── FastAPI ─┘
 
 - **受控本地执行**：Session 支持 `Ask for approval`、`Workspace Access` 和 `Full Access` 三种权限 preset；Shell 根据 scope 进入 Workspace 沙箱或宿主环境，文件 Tool 始终限制在当前 Workspace。
 - **桌面自动化**：主 Agent 可通过 `computer_screenshot` 与 `computer_action` 观察并操作可见桌面，覆盖截图、点击、拖拽、滚动、按键与文本输入；两项 Tool 默认开启且只对主 Agent 可见，调用时按当前权限 preset 确认。
-- **Web 检索**：`web_fetch` 读取公开网页；启用 `web_search` 后默认使用 DuckDuckGo 检索，也可切换为 Exa 或 DeepSeek。
+- **Web 检索**：`web_fetch` 直接或通过 DeepSeek 读取公开网页；启用 `web_search` 后默认使用 DuckDuckGo 检索，也可切换为 Exa 或 DeepSeek。
 - **完整 Agent Loop**：支持流式响应、Tool 批次、上下文压缩、steer、取消、计划和后台 Job。
 - **可恢复 Session**：对话和执行事件写入 append-only JSONL Journal，TUI 与 GUI 可读取同一类 Session。
 - **记忆与定时任务**：维护全局及 Workspace 长期记忆，并可创建 one-shot、interval 和 cron 任务。
@@ -92,6 +92,7 @@ GUI 默认监听 <http://127.0.0.1:8737>。
 | --- | --- |
 | `~/.nosis/provider_config.json` | Provider、模型和角色路由（含可选的 `fast_model`） |
 | `~/.nosis/agent_config.json` | Tool、上下文、记忆、Skill 路径、子 Agent、MCP、Workspace Instructions 与 scratch Workspace 设置 |
+| `~/.nosis/tool_config.json` | Web Search、Web Fetch 的 provider 选择与 API key |
 | `~/.nosis/.env` | 配置引用的密钥和环境变量 |
 | `~/.nosis/prompts/` | 主 Agent、子 Agent、压缩与记忆 Prompt |
 | `~/.nosis/skills/` | standalone Skill |

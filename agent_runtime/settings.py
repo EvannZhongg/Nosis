@@ -22,6 +22,7 @@ from agent_core.providers import (
 from agent_core.tools import ROLE_TOOL_NAMES, TOOL_NAMES
 
 from .config import (
+    DEFAULT_CONFIG_FILENAMES,
     configured_skill_sources,
     load_model_options,
     load_scratch_workspace_root,
@@ -75,7 +76,7 @@ def _update_dotenv(path: Path, name: str, value: str | None) -> None:
 
 def configuration_fingerprint(directory: Path) -> str:
     digest = sha256()
-    for filename in ("provider_config.json", "agent_config.json", ".env"):
+    for filename in (*DEFAULT_CONFIG_FILENAMES, ".env"):
         path = directory / filename
         digest.update(filename.encode())
         digest.update(b"\0")

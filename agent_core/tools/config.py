@@ -1,4 +1,36 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+
+
+WEB_SEARCH_PROVIDERS = ("duckduckgo", "exa", "deepseek")
+WEB_FETCH_PROVIDERS = ("direct", "deepseek")
+
+
+@dataclass(frozen=True)
+class WebSearchConfig:
+    provider: str = WEB_SEARCH_PROVIDERS[0]
+    api_key: str | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        if self.provider not in WEB_SEARCH_PROVIDERS:
+            raise ValueError(f"Unsupported web search provider: {self.provider}")
+
+
+@dataclass(frozen=True)
+class WebFetchConfig:
+    provider: str = WEB_FETCH_PROVIDERS[0]
+    api_key: str | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        if self.provider not in WEB_FETCH_PROVIDERS:
+            raise ValueError(f"Unsupported web fetch provider: {self.provider}")
+
+
+@dataclass(frozen=True)
+class ToolSettings:
+    """Tool options resolved by the Runtime, shared by every Agent."""
+
+    web_search: WebSearchConfig = field(default_factory=WebSearchConfig)
+    web_fetch: WebFetchConfig = field(default_factory=WebFetchConfig)
 
 
 TOOL_NAMES = (

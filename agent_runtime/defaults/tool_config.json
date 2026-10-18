@@ -1,0 +1,21 @@
+{
+  "web_search": {
+    "provider": "duckduckgo",
+    "providers": {
+      "exa": {
+        "key": "${EXA_API_KEY}"
+      },
+      "deepseek": {
+        "key": "${DEEPSEEK_API_KEY}"
+      }
+    }
+  },
+  "web_fetch": {
+    "provider": "direct",
+    "providers": {
+      "deepseek": {
+        "key": "${DEEPSEEK_API_KEY}"
+      }
+    }
+  }
+}

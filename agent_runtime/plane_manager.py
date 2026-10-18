@@ -43,6 +43,7 @@ from .config import (
     load_image_generation_config,
     load_model_options,
     load_prompt_templates,
+    load_tool_settings,
     load_vision_config,
     memory_store,
 )
@@ -97,6 +98,7 @@ class ExecutionPlaneManager:
 
         self._environment.reload()
         agent_config = load_agent_config(self._agent_config_path)
+        tool_settings = load_tool_settings(self._config_directory / "tool_config.json")
         config_fingerprint = configuration_fingerprint(
             self._config_directory
         )
@@ -238,6 +240,7 @@ class ExecutionPlaneManager:
                 workspace=workspace,
                 provider_name=session.provider_name,
                 agent_config=agent_config,
+                tool_settings=tool_settings,
                 configuration_fingerprint=config_fingerprint,
                 instructions=instructions,
                 provider=main_provider,
@@ -378,6 +381,7 @@ class ExecutionPlaneManager:
                 ),
                 scheduler=self.scheduler,
                 memory=memory,
+                tool_settings=plane.tool_settings,
                 screenshot=(
                     desktop.capture
                     if desktop is not None

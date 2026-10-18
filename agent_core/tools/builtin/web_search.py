@@ -1,11 +1,10 @@
-import os
 from typing import cast
+from urllib.parse import urlsplit
 
 import httpx
 
 from ..base import JSONValue, Tool, ToolDefinition
 from ..context import ToolExecutionContext
-from . import web_fetch
 
 
 DEFAULT_NUM_RESULTS = 5
@@ -15,13 +14,14 @@ MAX_NUM_RESULTS = 10
 MAX_HIGHLIGHT_CHARACTERS = 1000
 DEEPSEEK_MAX_QUERY_CHARACTERS = 128
 DEEPSEEK_SEARCH_URL = "https://api.deepseek.com/v1/tools/search"
+EXA_SEARCH_URL = "https://api.exa.ai/search"
 
 
 class WebSearchTool(Tool):
     name = "web_search"
 
     def definition(self, context: ToolExecutionContext) -> ToolDefinition:
-        provider = web_fetch.WEB_SEARCH_PROVIDER
+        provider = context.tool_settings.web_search.provider
         query_description = (
             "Web search query. Use site:domain to search a specific "
             "site, for example 'python site:docs.python.org'."
@@ -70,8 +70,6 @@ class WebSearchTool(Tool):
                     "'python site:docs.python.org OR site:python.org'."
                 ),
             })
-        elif provider != "duckduckgo":
-            raise ValueError(f"Unsupported web search provider: {provider}")
 
         return ToolDefinition(
             name=self.name,
@@ -115,23 +113,58 @@ class WebSearchTool(Tool):
             allowed = ", ".join(repr(name) for name in properties)
             raise ValueError(f"web_search accepts only {allowed}")
 
-        provider = web_fetch.WEB_SEARCH_PROVIDER
-        if provider == "duckduckgo":
-            results = _search_duckduckgo(query, num_results)
-        elif provider == "exa":
+        config = context.tool_settings.web_search
+        provider = config.provider
+        include_domains = exclude_domains = None
+        if provider == "exa":
             include_domains = _parse_domains(
                 arguments.get("include_domains"), "include_domains",
             )
             exclude_domains = _parse_domains(
                 arguments.get("exclude_domains"), "exclude_domains",
             )
-            results = _search_exa(
-                query, num_results, include_domains, exclude_domains,
-            )
         elif provider == "deepseek":
-            results = _search_deepseek(query, num_results)
+            if not query.strip() or len(query) > DEEPSEEK_MAX_QUERY_CHARACTERS:
+                raise ValueError(
+                    "web_search requires 'query' to be 1-128 Unicode characters "
+                    "and not all whitespace for DeepSeek"
+                )
+
+        fallback_reason = None
+        if provider != "duckduckgo" and not config.api_key:
+            fallback_reason = "missing_api_key"
         else:
-            raise ValueError(f"Unsupported web search provider: {provider}")
+            try:
+                if provider == "exa":
+                    results = _search_exa(
+                        query, num_results, include_domains, exclude_domains,
+                        cast(str, config.api_key),
+                    )
+                elif provider == "deepseek":
+                    results = _search_deepseek(
+                        query, num_results, cast(str, config.api_key),
+                    )
+                else:
+                    results = _search_duckduckgo(query, num_results)
+            except httpx.HTTPStatusError as error:
+                if (
+                    provider == "duckduckgo"
+                    or error.response.status_code != 401
+                ):
+                    raise
+                fallback_reason = "authentication_failed"
+
+        if fallback_reason is not None:
+            results = _search_duckduckgo(
+                query, num_results,
+                include_domains=include_domains, exclude_domains=exclude_domains,
+            )
+            return {
+                "query": query,
+                "results": results,
+                "provider": "duckduckgo",
+                "fallback": {"from": provider, "reason": fallback_reason},
+            }
 
         return {"query": query, "results": results}
 
@@ -139,14 +172,29 @@ class WebSearchTool(Tool):
 def _search_duckduckgo(
     query: str,
     num_results: int,
+    *,
+    include_domains: list[str] | None = None,
+    exclude_domains: list[str] | None = None,
 ) -> list[JSONValue]:
     from ddgs import DDGS
 
     response = DDGS(timeout=10).text(
         query, max_results=num_results, backend="duckduckgo",
     )
+    included = tuple(domain.lower().rstrip(".") for domain in include_domains or ())
+    excluded = tuple(domain.lower().rstrip(".") for domain in exclude_domains or ())
     results: list[JSONValue] = []
     for item in response:
+        # Keep the query's own operators intact. Structured filters restrict
+        # returned URLs independently, so they cannot broaden an existing site:.
+        if included or excluded:
+            host = (urlsplit(item.get("href", "")).hostname or "").rstrip(".")
+            if included and not any(
+                host == domain or host.endswith("." + domain) for domain in included
+            ):
+                continue
+            if any(host == domain or host.endswith("." + domain) for domain in excluded):
+                continue
         snippet = item.get("body", "")[:MAX_HIGHLIGHT_CHARACTERS]
         results.append({
             "title": item.get("title", ""),
@@ -162,43 +210,41 @@ def _search_exa(
     num_results: int,
     include_domains: list[str] | None,
     exclude_domains: list[str] | None,
+    api_key: str,
 ) -> list[JSONValue]:
-    # Clients are built per call because the tool is shared by Agents.
-    # A missing EXA_API_KEY fails this call rather than agent startup.
-    from exa_py import Exa
-
-    response = Exa().search(
-        query,
-        type="auto",
-        num_results=num_results,
-        include_domains=include_domains,
-        exclude_domains=exclude_domains,
-        contents={
-            "highlights": {"max_characters": MAX_HIGHLIGHT_CHARACTERS}
-        },
-    )
+    payload: dict[str, JSONValue] = {
+        "query": query,
+        "type": "auto",
+        "numResults": num_results,
+        "contents": {"highlights": {"maxCharacters": MAX_HIGHLIGHT_CHARACTERS}},
+    }
+    if include_domains is not None:
+        payload["includeDomains"] = include_domains
+    if exclude_domains is not None:
+        payload["excludeDomains"] = exclude_domains
+    # Use HTTP status codes for authentication fallback; the SDK flattens
+    # upstream failures into ValueError strings.
+    with httpx.Client(timeout=20.0) as client:
+        response = client.post(
+            EXA_SEARCH_URL,
+            headers={"x-api-key": api_key},
+            json=payload,
+        )
+        response.raise_for_status()
+        items = response.json()["results"]
 
     return [
         {
-            "title": result.title,
-            "url": result.url,
-            "published_date": result.published_date,
-            "highlights": result.highlights,
+            "title": item.get("title"),
+            "url": item.get("url"),
+            "published_date": item.get("publishedDate"),
+            "highlights": item.get("highlights"),
         }
-        for result in response.results
+        for item in items[:num_results]
     ]
 
 
-def _search_deepseek(query: str, num_results: int) -> list[JSONValue]:
-    if not query.strip() or len(query) > DEEPSEEK_MAX_QUERY_CHARACTERS:
-        raise ValueError(
-            "web_search requires 'query' to be 1-128 Unicode characters "
-            "and not all whitespace for DeepSeek"
-        )
-    api_key = os.environ.get("DEEPSEEK_API_KEY")
-    if not api_key:
-        raise ValueError("DeepSeek web search requires DEEPSEEK_API_KEY")
-
+def _search_deepseek(query: str, num_results: int, api_key: str) -> list[JSONValue]:
     with httpx.Client(timeout=20.0) as client:
         response = client.post(
             DEEPSEEK_SEARCH_URL,

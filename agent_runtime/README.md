@@ -67,6 +67,7 @@ RuntimeHost
 | --- | --- |
 | `provider_config.json` | Provider 定义，主 Agent、视觉、图片生成和角色路由 |
 | `agent_config.json` | Tool、上下文、记忆、Skill 路径、子 Agent、MCP、Instructions 与 scratch Workspace |
+| `tool_config.json` | Web Search、Web Fetch 的 provider 与密钥配置 |
 | `.env` | `${ENV_NAME}` 引用的密钥，由 `settings.py` 读写 |
 | `prompts/` | `Soul.md`、`SubAgent.md`、`Consolidator.md`、`GlobalMemory.md`、`WorkspaceMemory.md` |
 | `skills/` | standalone Skill |
@@ -75,6 +76,30 @@ RuntimeHost
 | `MEMORY.md` | 全局长期记忆 |
 
 仓库内的 [`defaults/`](defaults) 是首次初始化时的安装源。已有配置、Prompt、Skill 或 Plugin 目录不会被默认资源覆盖。
+
+`tool_config.json` 提供 `web_search` 和 `web_fetch` 两个配置段。搜索默认使用无需密钥的 `duckduckgo`，也可选择 `exa` 或 `deepseek`；抓取默认使用 `direct`，也可选择 `deepseek`：
+
+```json
+{
+  "web_search": {
+    "provider": "duckduckgo",
+    "providers": {
+      "exa": {"key": "${EXA_API_KEY}"},
+      "deepseek": {"key": "${DEEPSEEK_API_KEY}"}
+    }
+  },
+  "web_fetch": {
+    "provider": "direct",
+    "providers": {
+      "deepseek": {"key": "${DEEPSEEK_API_KEY}"}
+    }
+  }
+}
+```
+
+`key` 可以是明文或 `${ENV_NAME}` 引用，引用从进程环境（含 `~/.nosis/.env`）解析。只解析选中 provider 的密钥；密钥缺失、为空或请求返回 401 时，该次搜索降级到 DuckDuckGo，结果附带实际 `provider` 和 `fallback` 原因。降级时保留原始查询（包括已有的 `site:` 等操作符），Exa 的 `include_domains` / `exclude_domains` 按结果 URL 的主机名及其子域名过滤，不向查询拼接操作符。过滤后可能少于请求的结果数，不额外发起搜索。403 不视为鉴权失败，直接返回错误。其他请求错误直接返回，不重试、不切换 provider；降级本身失败也直接返回错误。配置或 `.env` 变化会在下次 Turn 重建执行面；主 Agent 和子 Agent 共用同一份解析后的 Tool 设置。工具是否启用仍由 `agent_config.json` 的 `main_agent.tools.web_search` 和对应角色开关控制。
+
+DeepSeek Fetch 使用 [Fetch API](https://api-docs.deepseek.com/zh-cn/api/fetch/)，返回标题与 Markdown 正文，URL 最长为 8192 个字符。结果中的 `url` 是请求地址；API 不提供目标网页的 HTTP 状态码或重定向后的地址，因此不会生成这些信息。公开 URL 校验、响应字节上限与工具输出预算仍生效。密钥缺失、为空或返回 401 时，该次调用降级到 `direct`，结果包含结构化的 `fallback` 原因。Fetch 的 403 表示安全策略拒绝，直接返回错误；其他错误也不会触发降级或重试。两个工具分别配置 provider 和 key，可引用同一个 `DEEPSEEK_API_KEY`。`web_fetch` 的启用开关仍位于 `agent_config.json` 的主 Agent 和角色 Tool 配置中；`tool_config.json` 必须包含两个配置段。
 
 `agent_config.json` 的 `skills.global_paths` 相对配置目录解析、`skills.workspace_paths` 相对当前 Workspace 解析。同名 Skill 保留最先注册的来源，Plugin Skill 排在配置来源之后。
 

@@ -7,6 +7,13 @@ from pathlib import Path
 
 from agent_core import AgentConfig, DirectorySkillSource
 from agent_core.memory import MemoryStore
+from agent_core.tools.config import (
+    WEB_FETCH_PROVIDERS,
+    WEB_SEARCH_PROVIDERS,
+    ToolSettings,
+    WebFetchConfig,
+    WebSearchConfig,
+)
 from agent_core.providers import (
     OPENAI_APIS,
     normalize_semantic_effort,
@@ -17,6 +24,7 @@ from agent_core.providers import (
 DEFAULT_CONFIG_FILENAMES = (
     "provider_config.json",
     "agent_config.json",
+    "tool_config.json",
 )
 PROMPT_FILENAMES = (
     "Soul.md",
@@ -59,6 +67,62 @@ class PromptTemplates:
 
 def default_config_directory() -> Path:
     return Path.home() / ".nosis"
+
+
+def load_tool_settings(path: Path) -> ToolSettings:
+    with path.open(encoding="utf-8") as file:
+        document = json.load(file)
+    if not isinstance(document, dict):
+        raise ValueError(f"configuration must be a JSON object: {path}")
+    unknown = set(document) - {"web_search", "web_fetch"}
+    if unknown:
+        raise ValueError("unknown tool setting(s): " + ", ".join(sorted(unknown)))
+    search_provider, search_key = _load_tool_provider(
+        document.get("web_search"), "web_search", WEB_SEARCH_PROVIDERS,
+    )
+    fetch_provider, fetch_key = _load_tool_provider(
+        document.get("web_fetch"), "web_fetch", WEB_FETCH_PROVIDERS,
+    )
+    return ToolSettings(
+        web_search=WebSearchConfig(provider=search_provider, api_key=search_key),
+        web_fetch=WebFetchConfig(provider=fetch_provider, api_key=fetch_key),
+    )
+
+
+def _load_tool_provider(
+    value: object, tool: str, choices: tuple[str, ...],
+) -> tuple[str, str | None]:
+    """Resolve one tool's provider and key; the first choice is keyless."""
+    if not isinstance(value, dict):
+        raise ValueError(f"config field '{tool}' must be an object")
+    unknown = set(value) - {"provider", "providers"}
+    if unknown:
+        raise ValueError(f"unknown {tool} setting(s): " + ", ".join(sorted(unknown)))
+    provider = value.get("provider")
+    if not isinstance(provider, str) or provider not in choices:
+        raise ValueError(f"{tool}.provider must be one of: " + ", ".join(choices))
+    providers = value.get("providers", {})
+    if not isinstance(providers, dict):
+        raise ValueError(f"config field '{tool}.providers' must be an object")
+    for name, settings in providers.items():
+        if name not in choices[1:]:
+            raise ValueError(f"unknown {tool} provider settings: {name}")
+        if not isinstance(settings, dict) or set(settings) - {"key"}:
+            raise ValueError(
+                f"{tool}.providers.{name} must be an object containing only 'key'"
+            )
+        key = settings.get("key")
+        if key is not None and not isinstance(key, str):
+            raise ValueError(f"{tool}.providers.{name}.key must be a string")
+    key = providers.get(provider, {}).get("key")
+    if key:
+        key = key.strip()
+        if key.startswith("${") and key.endswith("}"):
+            variable = key[2:-1]
+            if not variable:
+                raise ValueError(f"{tool} key has an empty environment variable reference")
+            key = os.environ.get(variable)
+    return provider, (key.strip() or None) if key else None
 
 
 def load_scratch_workspace_root(path: Path) -> Path:

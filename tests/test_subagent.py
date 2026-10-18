@@ -33,6 +33,7 @@ from agent_core import (
 from agent_core.llm import LLMRequest
 from agent_core.execution.process import CancellationSignal
 from agent_core.session_paths import session_directory, workspace_key
+from agent_core.tools.config import ToolSettings, WebFetchConfig, WebSearchConfig
 
 
 SUBAGENT_CONFIG = AgentConfig(
@@ -454,6 +455,26 @@ class SubagentToolTest(unittest.TestCase):
 
 
 class SubagentRuntimeTest(unittest.TestCase):
+    def test_inherits_tool_settings_from_parent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            provider = StaticProvider()
+            settings = ToolSettings(
+                web_search=WebSearchConfig(provider="exa", api_key="key"),
+                web_fetch=WebFetchConfig(provider="deepseek", api_key="key"),
+            )
+            parent = replace(
+                context(Path(directory), (
+                    role("researcher", "Search", ("web_search", "web_fetch"), provider=provider),
+                )),
+                tool_settings=settings,
+            )
+            parent.subagents.run("researcher", "search", parent)
+            definition, fetch = provider.requests[0].tools
+            self.assertEqual(definition.name, "web_search")
+            self.assertIn("include_domains", definition.parameters["properties"])
+            self.assertEqual(fetch.name, "web_fetch")
+            self.assertEqual(fetch.parameters["properties"]["url"]["maxLength"], 8192)
+
     def test_inherits_workspace_instructions_in_system_prompt(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

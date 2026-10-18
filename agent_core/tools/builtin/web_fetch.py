@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import html
+import json
 import re
 from collections.abc import Iterable
 from urllib.parse import urljoin
@@ -15,14 +16,12 @@ from ..context import ToolExecutionContext
 from ...public_url import require_public_url
 
 
-WEB_SEARCH_PROVIDER = "duckduckgo"
-# WEB_SEARCH_PROVIDER = "exa"
-# WEB_SEARCH_PROVIDER = "deepseek"
-
 MAX_REDIRECTS = 5
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 REQUEST_TIMEOUT_SECONDS = 20.0
 USER_AGENT = "Nosis/1.0 web_fetch"
+DEEPSEEK_FETCH_URL = "https://api.deepseek.com/v1/tools/fetch"
+DEEPSEEK_MAX_URL_CHARACTERS = 8192
 _RESULT_RESERVE_CHARS = 200
 _CHUNK_SIZE = 64 * 1024
 
@@ -32,9 +31,19 @@ class WebFetchTool(Tool):
     concurrent = True
 
     def definition(self, context: ToolExecutionContext) -> ToolDefinition:
+        provider = context.tool_settings.web_fetch.provider
+        url_schema: dict[str, JSONValue] = {
+            "type": "string",
+            "description": "Public http(s) URL to read.",
+        }
+        if provider == "deepseek":
+            url_schema.update({"minLength": 1, "maxLength": DEEPSEEK_MAX_URL_CHARACTERS})
         return ToolDefinition(
             name=self.name,
             description=(
+                "Fetch a public HTTP(S) URL via DeepSeek and return its title "
+                "and bounded Markdown content."
+            ) if provider == "deepseek" else (
                 "Fetch a public HTTP(S) URL and return its status, final URL, "
                 "content type, and bounded text content. Redirects and DNS "
                 "targets are checked to prevent access to private networks."
@@ -42,10 +51,7 @@ class WebFetchTool(Tool):
             parameters={
                 "type": "object",
                 "properties": {
-                    "url": {
-                        "type": "string",
-                        "description": "Public http(s) URL to read.",
-                    },
+                    "url": url_schema,
                 },
                 "required": ["url"],
                 "additionalProperties": False,
@@ -63,18 +69,77 @@ class WebFetchTool(Tool):
         if set(arguments) != {"url"}:
             raise ValueError("web_fetch accepts only 'url'")
 
-        status, content_type, body, final_url, response_truncated = _fetch(url)
-        text = _decode_body(body, content_type)
-        if "html" in content_type.lower():
-            text = _html_to_text(text)
-        output = {
-            "url": final_url,
-            "status_code": status,
-            "content_type": content_type,
-            "content": text,
-            "truncated": response_truncated,
-        }
+        config = context.tool_settings.web_fetch
+        fallback_reason = None
+        output = None
+        if config.provider == "deepseek":
+            if len(url) > DEEPSEEK_MAX_URL_CHARACTERS:
+                raise ValueError(
+                    "DeepSeek web_fetch requires 'url' to be at most "
+                    f"{DEEPSEEK_MAX_URL_CHARACTERS} characters"
+                )
+            if not config.api_key:
+                fallback_reason = "missing_api_key"
+            else:
+                try:
+                    output = _fetch_deepseek(url, config.api_key)
+                except httpx.HTTPStatusError as error:
+                    # Fetch uses 403 for a security-policy rejection, not an
+                    # invalid key. Only authentication failures use direct fetch.
+                    if error.response.status_code != 401:
+                        raise
+                    fallback_reason = "authentication_failed"
+
+        if output is None:
+            status, content_type, body, final_url, response_truncated = _fetch(url)
+            text = _decode_body(body, content_type)
+            if "html" in content_type.lower():
+                text = _html_to_text(text)
+            output = {
+                "url": final_url,
+                "status_code": status,
+                "content_type": content_type,
+                "content": text,
+                "truncated": response_truncated,
+            }
+            if fallback_reason is not None:
+                output.update({
+                    "provider": "direct",
+                    "fallback": {"from": "deepseek", "reason": fallback_reason},
+                })
         return _fit_to_budget(output)
+
+
+def _fetch_deepseek(url: str, api_key: str) -> dict[str, JSONValue]:
+    require_public_url(url)
+    with httpx.Client(
+        follow_redirects=False,
+        timeout=httpx.Timeout(REQUEST_TIMEOUT_SECONDS),
+    ) as client:
+        with client.stream(
+            "POST", DEEPSEEK_FETCH_URL,
+            headers={"Authorization": f"Bearer {api_key}"},
+            json={"url": url},
+        ) as response:
+            response.raise_for_status()
+            body, truncated = _read_bounded(response)
+    if truncated:
+        raise ValueError("DeepSeek web_fetch response exceeds the response byte limit")
+    page = json.loads(body)
+    if (
+        not isinstance(page, dict)
+        or not isinstance(page.get("title"), str)
+        or not isinstance(page.get("content"), str)
+    ):
+        raise ValueError("DeepSeek web_fetch response requires string 'title' and 'content'")
+    return {
+        "url": url,
+        "title": page["title"],
+        "content_type": "text/markdown",
+        "content": page["content"],
+        "truncated": False,
+        "provider": "deepseek",
+    }
 
 
 def _fetch(

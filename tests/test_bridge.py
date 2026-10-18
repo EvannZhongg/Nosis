@@ -1301,6 +1301,12 @@ def open_session_message(
         ),
         encoding="utf-8",
     )
+    (directory / "tool_config.json").write_text(
+        json.dumps({
+            "web_search": {"provider": "duckduckgo"},
+            "web_fetch": {"provider": "direct"},
+        }), encoding="utf-8",
+    )
     resolved_agent_config = {
         "provider": {
             "request_timeout_seconds": 300,
@@ -3104,6 +3110,43 @@ class BridgeSessionOpenTest(BridgeTestCase):
             second_plane.agent._provider._model,
             "openai/updated",
         )
+
+    def test_tool_settings_rebuild_plane_and_survive_session_rebinding(self) -> None:
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        bridge, _ = self.make_bridge([], root)
+        opening = open_session_message(root)
+        bridge.open_session(opening)
+        first_plane = bridge.host.planes.ensure(bridge.host.sessions)
+        config_path = root / "tool_config.json"
+        config_path.write_text(json.dumps({
+            "web_search": {
+                "provider": "exa", "providers": {"exa": {"key": "${SEARCH_KEY}"}},
+            },
+            "web_fetch": {
+                "provider": "deepseek", "providers": {"deepseek": {"key": "${SEARCH_KEY}"}},
+            },
+        }), encoding="utf-8")
+        (root / ".env").write_text("SEARCH_KEY=first-key\n", encoding="utf-8")
+
+        second_plane = bridge.host.planes.ensure(bridge.host.sessions)
+        self.assertIsNot(second_plane, first_plane)
+        settings = second_plane.agent._execution_context.tool_settings
+        self.assertIs(settings, second_plane.tool_settings)
+        self.assertEqual(settings.web_search.provider, "exa")
+        self.assertEqual(settings.web_search.api_key, "first-key")
+        self.assertEqual(settings.web_fetch.provider, "deepseek")
+        self.assertEqual(settings.web_fetch.api_key, "first-key")
+
+        bridge.open_session(opening)
+        rebound = bridge.host.planes.ensure(bridge.host.sessions)
+        self.assertIs(rebound, second_plane)
+        self.assertIs(rebound.agent._execution_context.tool_settings, settings)
+
+        (root / ".env").write_text("SEARCH_KEY=second-key\n", encoding="utf-8")
+        third_plane = bridge.host.planes.ensure(bridge.host.sessions)
+        self.assertIsNot(third_plane, second_plane)
+        self.assertEqual(third_plane.tool_settings.web_search.api_key, "second-key")
+        self.assertEqual(third_plane.tool_settings.web_fetch.api_key, "second-key")
 
     def test_rebuilds_the_execution_plane_when_dotenv_changes(self) -> None:
         directory = self.enterContext(tempfile.TemporaryDirectory())

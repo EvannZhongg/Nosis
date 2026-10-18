@@ -39,6 +39,7 @@ from agent_core import (
     WriteFileTool,
     builtin_catalog,
 )
+from agent_core.tools.config import ToolSettings, WebSearchConfig
 from agent_core.permissions import PermissionPreset
 from agent_core.turn_control import AgentCancelled, TurnControl
 from agent_core.scheduler import CronTrigger, IntervalTrigger, SchedulerService
@@ -1085,169 +1086,202 @@ class UnusedExecutor:
         raise AssertionError("executor should not be called")
 
 
-class FakeExa:
-    def __init__(self) -> None:
-        self.calls = []
-        self.results = [
-            SimpleNamespace(
-                title="Exa API",
-                url="https://docs.exa.ai/reference/search",
-                published_date="2025-01-02",
-                highlights=["Search the web", "Returns ranked results"],
-            ),
-            SimpleNamespace(
-                title="Exa",
-                url="https://exa.ai",
-                published_date=None,
-                highlights=None,
-            ),
-        ]
-
-    def search(self, query, **options):
-        self.calls.append({"query": query, **options})
-        return SimpleNamespace(results=self.results)
-
-
 class WebSearchToolTest(unittest.TestCase):
     def setUp(self) -> None:
-        self.enterContext(patch(
-            "agent_core.tools.builtin.web_fetch.WEB_SEARCH_PROVIDER", "exa",
+        self.tool = _Bound(WebSearchTool(), _TMP_WORKSPACE, tool_settings=ToolSettings(
+            web_search=WebSearchConfig(provider="exa", api_key="exa-key"),
+        ))
+        self.request = Mock(return_value=httpx.Response(200, json={"results": []}))
+        client_type = httpx.Client
+        self.client = self.enterContext(patch(
+            "agent_core.tools.builtin.web_search.httpx.Client",
+            side_effect=lambda **options: client_type(
+                transport=httpx.MockTransport(self.request), **options,
+            ),
         ))
 
     def test_returns_ranked_results_with_highlights(self) -> None:
-        client = FakeExa()
-        tool = _Bound(WebSearchTool(), _TMP_WORKSPACE)
-
-        with patch(
-            "exa_py.Exa",
-            return_value=client,
-        ) as exa:
-            result = tool.execute({"query": "exa search api"})
-
-        exa.assert_called_once_with()
-        self.assertEqual(
-            client.calls,
-            [
-                {
-                    "query": "exa search api",
-                    "type": "auto",
-                    "num_results": 5,
-                    "include_domains": None,
-                    "exclude_domains": None,
-                    "contents": {
-                        "highlights": {"max_characters": 1000}
-                    },
-                }
+        self.request.return_value = httpx.Response(200, json={"results": [
+            {"title": "Exa API", "url": "https://docs.exa.ai/reference/search",
+             "publishedDate": "2025-01-02", "highlights": ["Search the web"]},
+            {"title": "Exa", "url": "https://exa.ai"},
+        ]})
+        result = self.tool.execute({"query": "exa search api"})
+        self.client.assert_called_once_with(timeout=20.0)
+        request = self.request.call_args.args[0]
+        self.assertEqual(str(request.url), "https://api.exa.ai/search")
+        self.assertEqual(request.headers["x-api-key"], "exa-key")
+        self.assertEqual(json.loads(request.content), {
+            "query": "exa search api", "type": "auto", "numResults": 5,
+            "contents": {"highlights": {"maxCharacters": 1000}},
+        })
+        self.assertEqual(result, {
+            "query": "exa search api", "results": [
+                {"title": "Exa API", "url": "https://docs.exa.ai/reference/search",
+                 "published_date": "2025-01-02", "highlights": ["Search the web"]},
+                {"title": "Exa", "url": "https://exa.ai",
+                 "published_date": None, "highlights": None},
             ],
-        )
-        self.assertEqual(
-            result,
-            {
-                "query": "exa search api",
-                "results": [
-                    {
-                        "title": "Exa API",
-                        "url": "https://docs.exa.ai/reference/search",
-                        "published_date": "2025-01-02",
-                        "highlights": [
-                            "Search the web",
-                            "Returns ranked results",
-                        ],
-                    },
-                    {
-                        "title": "Exa",
-                        "url": "https://exa.ai",
-                        "published_date": None,
-                        "highlights": None,
-                    },
-                ],
-            },
-        )
+        })
 
     def test_passes_result_limit_and_domain_filters(self) -> None:
-        client = FakeExa()
-        tool = _Bound(WebSearchTool(), _TMP_WORKSPACE)
+        self.tool.execute({
+            "query": "pytest fixtures", "num_results": 3,
+            "include_domains": ["docs.pytest.org"], "exclude_domains": ["medium.com"],
+        })
+        self.assertEqual(json.loads(self.request.call_args.args[0].content), {
+            "query": "pytest fixtures", "type": "auto", "numResults": 3,
+            "includeDomains": ["docs.pytest.org"], "excludeDomains": ["medium.com"],
+            "contents": {"highlights": {"maxCharacters": 1000}},
+        })
 
-        with patch(
-            "exa_py.Exa",
-            return_value=client,
-        ):
-            tool.execute(
-                {
-                    "query": "pytest fixtures",
-                    "num_results": 3,
-                    "include_domains": ["docs.pytest.org"],
+    def test_rejects_invalid_arguments_before_request(self) -> None:
+        for arguments in ({}, {"query": ""}, *(
+            {"query": "exa", "num_results": count} for count in (0, 11, True, "3")
+        ), {"query": "exa", "include_domains": []},
+           {"query": "exa", "exclude_domains": [""]},
+           {"query": "exa", "extra": True}):
+            with self.subTest(arguments=arguments), self.assertRaises(ValueError):
+                self.tool.execute(arguments)
+        self.request.assert_not_called()
+
+    def test_key_failures_fall_back_once_for_both_providers(self) -> None:
+        with patch("ddgs.DDGS") as ddgs:
+            ddgs.return_value.text.return_value = [{"title": "Python", "href": "https://python.org"}]
+            for provider in ("exa", "deepseek"):
+                for key, status, reason in (
+                    (None, None, "missing_api_key"),
+                    ("invalid-key", 401, "authentication_failed"),
+                ):
+                    with self.subTest(provider=provider, key=key, status=status):
+                        self.request.reset_mock()
+                        ddgs.reset_mock()
+                        if status:
+                            self.request.return_value = httpx.Response(status, json={"error": "invalid-key"})
+                        tool = _Bound(WebSearchTool(), _TMP_WORKSPACE, tool_settings=ToolSettings(
+                            web_search=WebSearchConfig(provider=provider, api_key=key),
+                        ))
+                        result = tool.execute({"query": "python", "num_results": 2})
+                        self.assertEqual(self.request.call_count, int(status is not None))
+                        ddgs.return_value.text.assert_called_once_with(
+                            "python", max_results=2, backend="duckduckgo",
+                        )
+                        self.assertEqual(result["provider"], "duckduckgo")
+                        self.assertEqual(result["fallback"], {"from": provider, "reason": reason})
+                        self.assertEqual(result["results"][0]["url"], "https://python.org")
+                        self.assertNotIn("invalid-key", json.dumps(result))
+
+    def test_fallback_carries_exa_domain_constraints(self) -> None:
+        for status in (None, 401):
+            with self.subTest(status=status), patch("ddgs.DDGS") as ddgs:
+                ddgs.return_value.text.return_value = [
+                    {"href": "https://docs.python.org/3/"},
+                    {"href": "https://medium.com/python"},
+                    {"href": "https://example.com/python"},
+                ]
+                self.request.return_value = httpx.Response(401)
+                tool = _Bound(WebSearchTool(), _TMP_WORKSPACE, tool_settings=ToolSettings(
+                    web_search=WebSearchConfig(provider="exa", api_key="bad" if status else None),
+                ))
+                result = tool.execute({
+                    "query": "python", "include_domains": ["docs.python.org", "python.org"],
                     "exclude_domains": ["medium.com"],
-                }
+                })
+                ddgs.return_value.text.assert_called_once_with(
+                    "python", max_results=5, backend="duckduckgo",
+                )
+                self.assertEqual(result["query"], "python")
+                self.assertEqual([item["url"] for item in result["results"]], [
+                    "https://docs.python.org/3/",
+                ])
+
+    def test_fallback_preserves_existing_query_operators(self) -> None:
+        self.request.return_value = httpx.Response(401)
+        for query in (
+            "python site:docs.python.org",
+            "python site:outside.example OR site:docs.python.org -site:medium.com",
+            'python "site:example.com"',
+        ):
+            with self.subTest(query=query), patch("ddgs.DDGS") as ddgs:
+                ddgs.return_value.text.return_value = [{"href": "https://docs.python.org/3/"}]
+                result = self.tool.execute({
+                    "query": query, "include_domains": ["docs.python.org"],
+                    "exclude_domains": ["medium.com"],
+                })
+                ddgs.return_value.text.assert_called_once_with(
+                    query, max_results=5, backend="duckduckgo",
+                )
+                self.assertEqual(result["query"], query)
+                self.assertEqual(len(result["results"]), 1)
+
+    def test_fallback_filters_domains_at_host_boundaries(self) -> None:
+        self.request.return_value = httpx.Response(401)
+        with patch("ddgs.DDGS") as ddgs:
+            ddgs.return_value.text.return_value = [
+                {"href": f"https://{host}/"} for host in (
+                    "python.org", "www.python.org", "docs.python.org",
+                    "sub.docs.python.org", "evilpython.org", "python.org.evil.example",
+                )
+            ]
+            result = self.tool.execute({
+                "query": "python", "num_results": 10,
+                "include_domains": ["PYTHON.ORG."], "exclude_domains": ["docs.python.org"],
+            })
+            self.assertEqual([item["url"] for item in result["results"]], [
+                "https://python.org/", "https://www.python.org/",
+            ])
+
+    def test_fallback_returns_empty_when_query_results_conflict_with_filter(self) -> None:
+        self.request.return_value = httpx.Response(401)
+        with patch("ddgs.DDGS") as ddgs:
+            ddgs.return_value.text.return_value = [{"href": "https://outside.example/"}]
+            result = self.tool.execute({
+                "query": "python site:outside.example", "include_domains": ["python.org"],
+            })
+            self.assertEqual(result["results"], [])
+            ddgs.return_value.text.assert_called_once_with(
+                "python site:outside.example", max_results=5, backend="duckduckgo",
             )
 
-        self.assertEqual(
-            client.calls,
-            [
-                {
-                    "query": "pytest fixtures",
-                    "type": "auto",
-                    "num_results": 3,
-                    "include_domains": ["docs.pytest.org"],
-                    "exclude_domains": ["medium.com"],
-                    "contents": {
-                        "highlights": {"max_characters": 1000}
-                    },
-                }
-            ],
-        )
+    def test_fallback_honors_excluded_domains_without_an_include_filter(self) -> None:
+        self.request.return_value = httpx.Response(401)
+        with patch("ddgs.DDGS") as ddgs:
+            ddgs.return_value.text.return_value = [
+                {"href": "https://medium.com/python"},
+                {"href": "https://blog.medium.com/python"},
+                {"href": "https://python.org/"},
+            ]
+            result = self.tool.execute({"query": "python", "exclude_domains": ["medium.com"]})
+            self.assertEqual([item["url"] for item in result["results"]], ["https://python.org/"])
 
-    def test_missing_api_key_fails_the_call_not_the_tool(self) -> None:
-        # Only the key is removed: clearing the environment would also
-        # take USERPROFILE, which session paths resolve through
-        # Path.home() on Windows.
-        with patch.dict("os.environ"):
-            os.environ.pop("EXA_API_KEY", None)
-            tool = _Bound(WebSearchTool(), _TMP_WORKSPACE)
+    def test_other_errors_propagate_without_retry_or_fallback(self) -> None:
+        with patch("ddgs.DDGS") as ddgs:
+            for status in (400, 402, 403, 429, 500, 504):
+                with self.subTest(status=status):
+                    self.request.reset_mock()
+                    self.request.return_value = httpx.Response(status)
+                    with self.assertRaises(httpx.HTTPStatusError):
+                        self.tool.execute({"query": "python"})
+                    self.request.assert_called_once()
+            self.request.side_effect = httpx.ReadTimeout("search timed out")
+            with self.assertRaises(httpx.ReadTimeout):
+                self.tool.execute({"query": "python"})
+            ddgs.assert_not_called()
 
-            with self.assertRaisesRegex(ValueError, "EXA_API_KEY"):
-                tool.execute({"query": "exa"})
-
-    def test_rejects_invalid_arguments(self) -> None:
-        tool = _Bound(WebSearchTool(), _TMP_WORKSPACE)
-
-        with patch(
-            "exa_py.Exa",
-            return_value=FakeExa(),
-        ):
-            with self.assertRaisesRegex(
-                ValueError,
-                "non-empty string 'query'",
-            ):
-                tool.execute({})
-            with self.assertRaisesRegex(
-                ValueError,
-                "non-empty string 'query'",
-            ):
-                tool.execute({"query": ""})
-            for num_results in (0, 11, True, "3"):
-                with self.subTest(num_results=num_results):
-                    with self.assertRaisesRegex(
-                        ValueError,
-                        "between 1 and 10",
-                    ):
-                        tool.execute(
-                            {"query": "exa", "num_results": num_results}
-                        )
-            with self.assertRaisesRegex(ValueError, "non-empty array"):
-                tool.execute({"query": "exa", "include_domains": []})
-            with self.assertRaisesRegex(ValueError, "non-empty strings"):
-                tool.execute({"query": "exa", "exclude_domains": [""]})
-            with self.assertRaisesRegex(ValueError, "accepts only"):
-                tool.execute({"query": "exa", "extra": True})
+    def test_failed_fallback_propagates_without_looping(self) -> None:
+        self.request.return_value = httpx.Response(401)
+        with patch("ddgs.DDGS") as ddgs:
+            ddgs.return_value.text.side_effect = TimeoutError("fallback timed out")
+            with self.assertRaisesRegex(TimeoutError, "fallback timed out"):
+                self.tool.execute({"query": "python"})
+            ddgs.return_value.text.assert_called_once()
+            self.request.assert_called_once()
 
 
 class DuckDuckGoSearchToolTest(unittest.TestCase):
     def test_default_provider_returns_shared_result_format_without_api_key(self) -> None:
         tool = _Bound(WebSearchTool(), _TMP_WORKSPACE)
-        with patch.dict("os.environ"), patch("ddgs.DDGS") as ddgs, patch(
-            "exa_py.Exa",
-        ) as exa:
+        with patch.dict("os.environ"), patch("ddgs.DDGS") as ddgs:
             os.environ.pop("EXA_API_KEY", None)
             ddgs.return_value.text.return_value = [
                 {"title": "Python", "href": "https://python.org", "body": "x" * 1200},
@@ -1259,7 +1293,6 @@ class DuckDuckGoSearchToolTest(unittest.TestCase):
         ddgs.return_value.text.assert_called_once_with(
             "python", max_results=5, backend="duckduckgo",
         )
-        exa.assert_not_called()
         self.assertEqual(result, {
             "query": "python",
             "results": [
@@ -1274,42 +1307,25 @@ class DuckDuckGoSearchToolTest(unittest.TestCase):
             ],
         })
 
-    def test_schema_follows_provider_for_shared_tool(self) -> None:
-        tool = _Bound(WebSearchTool(), _TMP_WORKSPACE)
-        duckduckgo = tool.definition
-        self.assertEqual(
-            set(duckduckgo.parameters["properties"]), {"query", "num_results"},
-        )
-        self.assertIn(
-            "site:", duckduckgo.parameters["properties"]["query"]["description"],
-        )
-
-        with patch(
-            "agent_core.tools.builtin.web_fetch.WEB_SEARCH_PROVIDER", "exa",
-        ):
-            exa = tool.definition
-            self.assertEqual(set(exa.parameters["properties"]), {
-                "query", "num_results", "include_domains", "exclude_domains",
-            })
-
-        with patch(
-            "agent_core.tools.builtin.web_fetch.WEB_SEARCH_PROVIDER", "deepseek",
-        ):
-            deepseek = tool.definition
-            self.assertEqual(
-                set(deepseek.parameters["properties"]), {"query", "num_results"},
-            )
-            query = deepseek.parameters["properties"]["query"]
-            self.assertEqual(query["minLength"], 1)
-            self.assertEqual(query["maxLength"], 128)
-            for syntax in ("site:", "-site:", "lang:", "after:", "before:", "OR"):
-                self.assertIn(syntax, query["description"])
-
-        self.assertEqual(tool.definition, duckduckgo)
-        for definition in (duckduckgo, exa, deepseek):
-            self.assertEqual(definition.name, "web_search")
-            self.assertEqual(definition.parameters["required"], ["query"])
-            self.assertFalse(definition.parameters["additionalProperties"])
+    def test_schema_follows_context_for_shared_tool(self) -> None:
+        shared = WebSearchTool()
+        for provider in ("duckduckgo", "exa", "deepseek"):
+            with self.subTest(provider=provider):
+                tool = _Bound(shared, _TMP_WORKSPACE, tool_settings=ToolSettings(
+                    web_search=WebSearchConfig(provider=provider),
+                ))
+                definition = tool.definition
+                properties = definition.parameters["properties"]
+                self.assertEqual(set(properties), {"query", "num_results"} | (
+                    {"include_domains", "exclude_domains"} if provider == "exa" else set()
+                ))
+                self.assertEqual(definition.parameters["required"], ["query"])
+                self.assertFalse(definition.parameters["additionalProperties"])
+                if provider == "deepseek":
+                    self.assertEqual(properties["query"]["maxLength"], 128)
+                    for syntax in ("site:", "-site:", "lang:", "after:", "before:", "OR"):
+                        self.assertIn(syntax, properties["query"]["description"])
+        self.assertIn("site:", _Bound(shared, _TMP_WORKSPACE).definition.parameters["properties"]["query"]["description"])
 
     def test_passes_site_query_and_result_limit_without_filtering_results(self) -> None:
         tool = _Bound(WebSearchTool(), _TMP_WORKSPACE)
@@ -1355,30 +1371,21 @@ class DuckDuckGoSearchToolTest(unittest.TestCase):
 
     def test_search_failure_propagates_without_switching_provider(self) -> None:
         tool = _Bound(WebSearchTool(), _TMP_WORKSPACE)
-        with patch("ddgs.DDGS") as ddgs, patch("exa_py.Exa") as exa:
+        with patch("ddgs.DDGS") as ddgs:
             ddgs.return_value.text.side_effect = TimeoutError("search timed out")
             with self.assertRaisesRegex(TimeoutError, "search timed out"):
                 tool.execute({"query": "python"})
-        exa.assert_not_called()
 
     def test_rejects_unknown_provider(self) -> None:
-        tool = _Bound(WebSearchTool(), _TMP_WORKSPACE)
-        with patch(
-            "agent_core.tools.builtin.web_fetch.WEB_SEARCH_PROVIDER", "unknown",
-        ):
-            with self.assertRaisesRegex(ValueError, "Unsupported web search provider"):
-                tool.definition
-            with self.assertRaisesRegex(ValueError, "Unsupported web search provider"):
-                tool.execute({"query": "python"})
+        with self.assertRaisesRegex(ValueError, "Unsupported web search provider"):
+            WebSearchConfig(provider="unknown")
 
 
 class DeepSeekSearchToolTest(unittest.TestCase):
     def setUp(self) -> None:
-        self.enterContext(patch(
-            "agent_core.tools.builtin.web_fetch.WEB_SEARCH_PROVIDER", "deepseek",
+        self.tool = _Bound(WebSearchTool(), _TMP_WORKSPACE, tool_settings=ToolSettings(
+            web_search=WebSearchConfig(provider="deepseek", api_key="test-key"),
         ))
-        self.enterContext(patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}))
-        self.tool = _Bound(WebSearchTool(), _TMP_WORKSPACE)
         self.request = Mock(return_value=httpx.Response(200, json={"results": []}))
         client_type = httpx.Client
         self.client = self.enterContext(patch(
@@ -1472,25 +1479,9 @@ class DeepSeekSearchToolTest(unittest.TestCase):
                 self.tool.execute({"query": "python", argument: True})
         self.client.assert_not_called()
 
-    def test_missing_key_fails_call_without_preventing_tool_definition(self) -> None:
-        os.environ.pop("DEEPSEEK_API_KEY")
-        self.assertEqual(self.tool.definition.name, "web_search")
-        with self.assertRaisesRegex(ValueError, "DEEPSEEK_API_KEY"):
-            self.tool.execute({"query": "python"})
-        self.client.assert_not_called()
-
-    def test_reads_key_for_each_call(self) -> None:
-        for key in ("first-key", "second-key"):
-            os.environ["DEEPSEEK_API_KEY"] = key
-            self.tool.execute({"query": "python"})
-            self.assertEqual(
-                self.request.call_args.args[0].headers["Authorization"],
-                f"Bearer {key}",
-            )
-
     def test_http_errors_propagate_without_retry_or_provider_switch(self) -> None:
-        with patch("ddgs.DDGS") as ddgs, patch("exa_py.Exa") as exa:
-            for status in (400, 401, 402, 429, 500, 504):
+        with patch("ddgs.DDGS") as ddgs:
+            for status in (400, 402, 403, 429, 500, 504):
                 with self.subTest(status=status):
                     self.request.reset_mock()
                     self.request.return_value = httpx.Response(
@@ -1500,7 +1491,6 @@ class DeepSeekSearchToolTest(unittest.TestCase):
                         self.tool.execute({"query": "python"})
                     self.request.assert_called_once()
         ddgs.assert_not_called()
-        exa.assert_not_called()
 
     def test_network_timeout_propagates(self) -> None:
         self.request.side_effect = httpx.ReadTimeout("search timed out")
