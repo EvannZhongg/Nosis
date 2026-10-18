@@ -182,16 +182,21 @@ class ContextManager:
         check_cancelled: Callable[[], None] = lambda: None,
         on_call: Callable[[AuxiliaryModelCall], None] | None = None,
     ) -> int:
-        """Compress the unarchived transcript into the session checkpoint."""
+        """Compress a fresh build_request() result into the session checkpoint."""
         units = self._archivable_units()
         if not units:
             return self._session.archived_item_cursor
         archive_end = units[-1].end
         last_archived = _unit_messages(units)[-1]
-        prefix_end = next(
-            index + 1 for index, message in enumerate(request.messages)
-            if message is last_archived
-        )
+        for prefix_end, message in enumerate(request.messages, 1):
+            if message is last_archived:
+                break
+        else:
+            raise ValueError(
+                "cannot compress context: the current archive boundary is "
+                "missing from the supplied request; pass a fresh "
+                "build_request() result from this ContextManager"
+            )
         # Slice the built request itself so every cached message stays intact.
         request = with_generation_limit(
             replace(request, messages=(

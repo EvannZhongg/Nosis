@@ -62,28 +62,21 @@ describe("process folding", () => {
     }).cacheUsage).toBeUndefined();
   });
 
-  it.each(["completed", "invalid_response", "failed", "cancelled"] as const)(
-    "uses compression totals for %s attempts without changing the transcript or ending the turn",
-    (status) => {
-      const items: TranscriptItem[] = [{ role: "user", content: "work" }];
-      const message: Incoming = {
-        type: "compression_completed", turn_id: "t1", attempt: 2, status,
-        usage: status === "failed" || status === "cancelled" ? null : {
-          input_tokens: 1000, output_tokens: 20, total_tokens: 1020,
-          cache_read_tokens: 800, cache_write_tokens: null,
-        },
-        cache_usage: { input_tokens: 2000, cache_read_tokens: 1600 },
-      };
-      const applied = applyMessage(items, message);
-      expect(applied.cacheUsage).toEqual(message.cache_usage);
-      expect(applyMessage(items, { ...message, replayed: true }).cacheUsage).toEqual(applied.cacheUsage);
-      expect(applied.items).toBe(items);
-      expect(applied.finished).toBeUndefined();
-      expect(applied.approval).toBeUndefined();
-      expect(applied.question).toBeUndefined();
-      expect(isTurnActivity(message)).toBe(true);
-    },
-  );
+  it("uses compression totals without changing the transcript or ending the turn", () => {
+    const items: TranscriptItem[] = [{ role: "user", content: "work" }];
+    const message: Incoming = {
+      type: "compression_completed", turn_id: "t1",
+      cache_usage: { input_tokens: 2000, cache_read_tokens: 1600 },
+    };
+    const applied = applyMessage(items, message);
+    expect(applied.cacheUsage).toEqual(message.cache_usage);
+    expect(applyMessage(items, { ...message, replayed: true }).cacheUsage).toEqual(applied.cacheUsage);
+    expect(applied.items).toBe(items);
+    expect(applied.finished).toBeUndefined();
+    expect(applied.approval).toBeUndefined();
+    expect(applied.question).toBeUndefined();
+    expect(isTurnActivity(message)).toBe(true);
+  });
 
   it.each([
     { types: [], expected: [] },

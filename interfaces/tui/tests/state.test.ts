@@ -495,34 +495,27 @@ describe('reducer', () => {
     expect(state.turnId).toBe('t1');
   });
 
-  it.each(['completed', 'invalid_response', 'failed', 'cancelled'] as const)(
-    'applies authoritative compression cache totals for %s attempts without replacing main usage',
-    (status) => {
-      let state = reducer(ready(), { type: 'submit', turnId: 't1', text: 'work' });
-      state = reducer(state, { type: 'message', message: {
-        type: 'model_completed', turn_id: 't1', model_call_index: 1,
-        usage: { input_tokens: 100, output_tokens: 20, total_tokens: 120,
-          cache_read_tokens: 50, cache_write_tokens: null },
-        cache_usage: { input_tokens: 100, cache_read_tokens: 50 },
-      } });
-      const message: Incoming = {
-        type: 'compression_completed', turn_id: 't1', attempt: 1, status,
-        usage: status === 'failed' || status === 'cancelled' ? null : {
-          input_tokens: 1000, output_tokens: 20, total_tokens: 1020,
-          cache_read_tokens: 800, cache_write_tokens: null,
-        },
-        cache_usage: { input_tokens: 1100, cache_read_tokens: 850 },
-      };
-      const updated = reducer(state, { type: 'message', message });
-      expect(updated.cacheUsage).toEqual(message.cache_usage);
-      expect(updated.usage).toBe(state.usage);
-      expect(updated.entries).toBe(state.entries);
-      expect(updated.status).toBe(state.status);
-      expect(updated.turnId).toBe('t1');
-      expect(reducer(updated, { type: 'message', message: { ...message, replayed: true } }).cacheUsage)
-        .toEqual(updated.cacheUsage);
-    },
-  );
+  it('applies authoritative compression cache totals without replacing main usage', () => {
+    let state = reducer(ready(), { type: 'submit', turnId: 't1', text: 'work' });
+    state = reducer(state, { type: 'message', message: {
+      type: 'model_completed', turn_id: 't1', model_call_index: 1,
+      usage: { input_tokens: 100, output_tokens: 20, total_tokens: 120,
+        cache_read_tokens: 50, cache_write_tokens: null },
+      cache_usage: { input_tokens: 100, cache_read_tokens: 50 },
+    } });
+    const message: Incoming = {
+      type: 'compression_completed', turn_id: 't1',
+      cache_usage: { input_tokens: 1100, cache_read_tokens: 850 },
+    };
+    const updated = reducer(state, { type: 'message', message });
+    expect(updated.cacheUsage).toEqual(message.cache_usage);
+    expect(updated.usage).toBe(state.usage);
+    expect(updated.entries).toBe(state.entries);
+    expect(updated.status).toBe(state.status);
+    expect(updated.turnId).toBe('t1');
+    expect(reducer(updated, { type: 'message', message: { ...message, replayed: true } }).cacheUsage)
+      .toEqual(updated.cacheUsage);
+  });
 
   it('records the current context window', () => {
     const state = reducer(ready(), {

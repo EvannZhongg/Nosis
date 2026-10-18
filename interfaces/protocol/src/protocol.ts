@@ -256,7 +256,7 @@ export type Incoming = (
   | { type: 'assistant_delta'; turn_id: string; text: string; model_call_index: number }
   | { type: 'reasoning_delta'; turn_id: string; text: string; model_call_index: number }
   | { type: 'model_completed'; turn_id: string; model_call_index: number; usage: Usage | null; cache_usage: CacheUsage | null }
-  | { type: 'compression_completed'; turn_id: string; attempt: number; status: 'completed' | 'invalid_response' | 'failed' | 'cancelled'; usage: Usage | null; cache_usage: CacheUsage | null }
+  | { type: 'compression_completed'; turn_id: string; cache_usage: CacheUsage | null }
   | ({ type: 'context_window'; turn_id: string | null } & ContextWindow)
   | {
       type: 'assistant_message';

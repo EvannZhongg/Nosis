@@ -602,6 +602,35 @@ class AgentTest(unittest.TestCase):
         self.assertEqual(provider.requests, [])
         self.assertEqual(session.archived_item_cursor, 0)
 
+    def test_archive_rejects_a_missing_or_copied_boundary_without_mutating_history(self) -> None:
+        for copied in (False, True):
+            with self.subTest(copied=copied):
+                session = Session(items=[
+                    Message("user", "already archived"), Message("assistant", "old answer"),
+                    Message("user", "next request"), Message("assistant", "next answer"),
+                    Message("user", "retained"),
+                ])
+                session.set_archived_summary("- [durable] Existing checkpoint.", 2)
+                provider = MockProvider([])
+                context = ContextManager(
+                    provider, session, "System", CONSOLIDATOR_PROMPT,
+                    replace(AGENT_CONFIG, context=ContextCompressionConfig(keep_recent_units=1)),
+                )
+                request = context.build_request()
+                invalid = replace(request, messages=(
+                    tuple(replace(message) for message in request.messages) if copied else ()
+                ))
+                items, journal = tuple(session.items), tuple(session.journal)
+                with self.assertRaisesRegex(ValueError, "archive boundary.*supplied request"):
+                    context.archive(invalid)
+                self.assertEqual(provider.requests, [])
+                self.assertEqual(tuple(session.items), items)
+                self.assertEqual(tuple(session.journal), journal)
+                self.assertEqual(session.archived_summary, "- [durable] Existing checkpoint.")
+                self.assertEqual(session.archived_item_cursor, 2)
+                self.assertEqual(session.compression_count, 1)
+                self.assertIsNone(session.cache_usage)
+
     def test_archive_checks_main_window_again_for_a_repair(self) -> None:
         session = Session(items=[Message("user", "old"), Message("assistant", "retained")])
         provider = MockProvider(["invalid checkpoint"], input_tokens=[899, 901])
@@ -679,14 +708,14 @@ class AgentTest(unittest.TestCase):
         def on_event(event):
             if isinstance(event, CompressionCompletedEvent):
                 self.assertEqual(session.journal[-1].event_type, "compression_completed")
-                self.assertEqual(session.journal[-1].payload["status"], event.call.status)
                 self.assertEqual(event.cache_usage, session.cache_usage)
             events.append(event)
 
         result = agent.run("new request", on_event)
 
         completions = [event for event in events if isinstance(event, CompressionCompletedEvent)]
-        self.assertEqual([(event.call.attempt, event.call.status) for event in completions],
+        calls = [event.payload for event in session.journal if event.event_type == "compression_completed"]
+        self.assertEqual([(call["attempt"], call["status"]) for call in calls],
                          [(1, "invalid_response"), (2, "completed")])
         self.assertEqual([event.cache_usage for event in completions],
                          [CacheUsage(800, 600), CacheUsage(1600, 1300)])

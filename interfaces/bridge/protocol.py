@@ -241,9 +241,6 @@ def event_to_message(
         return {
             "type": "compression_completed",
             "turn_id": turn_id,
-            "attempt": event.call.attempt,
-            "status": event.call.status,
-            "usage": usage_to_dict(event.call.usage),
             "cache_usage": cache_usage_to_dict(event.cache_usage),
         }
     if isinstance(event, ModelCompletedEvent):

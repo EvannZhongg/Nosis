@@ -61,7 +61,6 @@ class ModelCompletedEvent:
 
 @dataclass(frozen=True)
 class CompressionCompletedEvent:
-    call: AuxiliaryModelCall
     cache_usage: CacheUsage | None
 
 
@@ -250,9 +249,9 @@ class Agent:
         )
         request_timestamp_utc = self._now().astimezone(timezone.utc)
 
-        def on_compression_call(call: AuxiliaryModelCall) -> None:
+        def on_compression_call(_call: AuxiliaryModelCall) -> None:
             if on_event is not None:
-                on_event(CompressionCompletedEvent(call, self._session.cache_usage))
+                on_event(CompressionCompletedEvent(self._session.cache_usage))
 
         self._session.add_item(
             "user",

@@ -60,7 +60,6 @@ from agent_core.scheduler import (
     SchedulerService,
 )
 from agent_core.usage import usage_to_dict
-from agent_core.llm import AuxiliaryModelCall
 from agent_core.session_paths import session_directory
 from agent_core.projection import project_context_units
 from agent_core.providers import ModelProvider
@@ -158,22 +157,12 @@ class AttachmentParsingTest(unittest.TestCase):
 
 
 class ProtocolTest(unittest.TestCase):
-    def test_encodes_compression_usage_without_a_main_model_call_index(self):
-        for status, usage in (
-            ("completed", TokenUsage(1000, 20, 1020, 800, None)),
-            ("invalid_response", TokenUsage(1000, 20, 1020, 0, 800)),
-            ("failed", None),
-            ("cancelled", None),
-        ):
-            with self.subTest(status=status):
-                call = AuxiliaryModelCall(
-                    task="compression", scope=None, attempt=2, status=status,
-                    started_at_utc=EVENT_TIME, duration_ms=100, usage=usage,
-                )
-                self.assertEqual(event_to_message(CompressionCompletedEvent(call, CacheUsage(2000, 800)), "t"), {
-                    "type": "compression_completed", "turn_id": "t", "attempt": 2,
-                    "status": status, "usage": usage_to_dict(usage),
-                    "cache_usage": {"input_tokens": 2000, "cache_read_tokens": 800},
+    def test_encodes_only_compression_cache_totals(self):
+        for totals in (CacheUsage(2000, 800), None):
+            with self.subTest(totals=totals):
+                self.assertEqual(event_to_message(CompressionCompletedEvent(totals), "t"), {
+                    "type": "compression_completed", "turn_id": "t",
+                    "cache_usage": {"input_tokens": 2000, "cache_read_tokens": 800} if totals else None,
                 })
 
     def test_invalid_tool_arguments_and_error_are_transmitted_with_the_call(self):
@@ -1570,7 +1559,9 @@ class InterruptedTurnTest(BridgeTestCase):
                 self.assertEqual(self.session.turns["t1"].status, "running")
                 stored = self.store.load(self.session_id, recover=False)
                 self.assertEqual(stored.journal[-1].event_type, "compression_completed")
-                self.assertEqual(stored.journal[-1].payload["usage"], fields["usage"])
+                self.assertEqual(stored.journal[-1].payload["attempt"], len([
+                    message for message in emitted(self.stdout) if message["type"] == "compression_completed"
+                ]) + 1)
                 self.assertEqual(stored.journal[-1].payload["model"], "openai/first")
                 self.assertFalse(any(message["type"] == "model_completed" for message in emitted(self.stdout)))
             emit(type, **fields)
@@ -1588,8 +1579,7 @@ class InterruptedTurnTest(BridgeTestCase):
             self.bridge.run_turn({"turn_id": "t1", "text": "continue"})
 
         attempts = [message for message in emitted(self.stdout) if message["type"] == "compression_completed"]
-        self.assertEqual([(message["attempt"], message["status"]) for message in attempts],
-                         [(1, "invalid_response"), (2, "completed")])
+        self.assertEqual(len(attempts), 2)
         for message, totals in zip(attempts, (
             {"input_tokens": 800, "cache_read_tokens": 600},
             {"input_tokens": 1600, "cache_read_tokens": 1300},
@@ -1598,6 +1588,9 @@ class InterruptedTurnTest(BridgeTestCase):
             self.assertEqual(message["runtime"]["cache_usage"], totals)
             self.assertNotIn("model_call_index", message)
         stored = self.store.load(self.session_id)
+        calls = [event.payload for event in stored.journal if event.event_type == "compression_completed"]
+        self.assertEqual([(call["attempt"], call["status"]) for call in calls],
+                         [(1, "invalid_response"), (2, "completed")])
         self.assertEqual(stored.cache_usage, CacheUsage(1700, 1350))
         completed = emitted(self.stdout)[-1]
         self.assertEqual(completed["type"], "turn_completed")
