@@ -4,6 +4,10 @@ import unittest
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
+
+from agent_core.memory import MemoryContext, MemoryDocument
+from agent_core.plan import PlanSnapshot, PlanStep
 
 from agent_core import (
     Agent,
@@ -14,6 +18,7 @@ from agent_core import (
     AssistantMessageDeltaEvent,
     AssistantMessageEvent,
     ModelCompletedEvent,
+    CompressionCompletedEvent,
     ContextManager,
     ContextCompressionConfig,
     ContextWindowEvent,
@@ -264,7 +269,7 @@ class AgentTest(unittest.TestCase):
              LLMResponse(content="done")],
             control, {2: "try once more"},
         )
-        provider._input_tokens = iter([1, 800, 1, 1])
+        provider._input_tokens = iter([1, 800, 1, 1, 1])
         session = Session("compression-steer")
         agent = Agent(
             provider, session, "system", CONSOLIDATOR_PROMPT,
@@ -479,14 +484,14 @@ class AgentTest(unittest.TestCase):
         )
 
         session.add_item("user", "second")
-        context.archive()
+        context.archive(context.build_request())
         self.assertEqual(
             provider.requests[0].system_prompt,
-            CONSOLIDATOR_PROMPT,
+            "You are helpful.",
         )
         session.add_item("assistant", "two")
         session.add_item("user", "third")
-        context.archive()
+        context.archive(context.build_request())
 
         self.assertEqual(session.archived_item_cursor, 4)
         self.assertEqual(
@@ -494,13 +499,13 @@ class AgentTest(unittest.TestCase):
             "- [durable] Second summary.",
         )
         self.assertEqual(session.compression_count, 2)
-        self.assertEqual(provider.requests[1].system_prompt, CONSOLIDATOR_PROMPT)
+        self.assertEqual(provider.requests[1].system_prompt, "You are helpful.")
         self.assertIn(
             "[Archived Context Summary]\n- [durable] First summary.",
             provider.requests[1].messages[0].content,
         )
-        compression_record = provider.requests[1].messages[-1].content or ""
-        self.assertIn("second", compression_record)
+        self.assertIn(Message("user", "second"), provider.requests[1].messages[:-1])
+        self.assertEqual(provider.requests[1].messages[-1].content, CONSOLIDATOR_PROMPT)
         request = context.build_request()
         self.assertEqual(request.system_prompt, "You are helpful.")
         self.assertIn(
@@ -514,85 +519,130 @@ class AgentTest(unittest.TestCase):
             ["third"],
         )
 
-    def test_archive_uses_separate_consolidator_provider(self) -> None:
-        session = Session(
-            "session-1",
-            items=[Message("user", "first"), Message("assistant", "one")],
+    def test_archive_preserves_the_original_request_prefix_and_tools(self) -> None:
+        call = ToolCall("original-call", "echo", {"text": "result"})
+        session = Session("prefix")
+        session.begin_turn("past")
+        session.add_item("user", "original constraint", REQUEST_TIME)
+        session.add_item("assistant", "prior answer")
+        session.finish_turn("completed")
+        session.set_archived_summary("- [durable] Earlier checkpoint.", 2)
+        session.begin_turn("current")
+        session.add_item("user", "complete the task", TOOL_CALL_TIME)
+        session.add_item(
+            "assistant", None, tool_calls=(call,), reasoning="original reasoning",
+            provider_data={"openai_responses": [{"type": "reasoning", "encrypted_content": "opaque"}]},
         )
-        main = MockProvider([])
-        fast = MockProvider(["- [durable] First summary."])
+        session.add_item("tool", "original result", tool_call_id=call.id)
+        session.add_item("assistant", "retained answer")
+        session.add_item("user", "retained user instruction", RESPONSE_TIME)
+        session.plan = PlanSnapshot(
+            "plan", "Retained dynamic plan", 1,
+            (PlanStep("later", "Pending work", "pending"),),
+        )
+        provider = MockProvider(["- [ephemeral] Checkpoint."])
         context = ContextManager(
-            main, session, "System", CONSOLIDATOR_PROMPT, AGENT_CONFIG,
-            consolidator_provider=fast,
+            provider, session, "Original system", CONSOLIDATOR_PROMPT,
+            replace(AGENT_CONFIG, context=ContextCompressionConfig(keep_recent_units=2)),
+            media_root=TEST_WORKSPACE.path,
+            memory_context=MemoryContext(
+                MemoryDocument(facts=("Persistent memory fact.",)), MemoryDocument(),
+            ),
         )
-        context.archive()
-        self.assertEqual(len(fast.requests), 1)
-        self.assertEqual(main.requests, [])
-        self.assertEqual(session.archived_summary, "- [durable] First summary.")
-
-    def test_small_fast_window_archives_complete_prefixes_until_progress_stops(self) -> None:
-        class CountingProvider(MockProvider):
-            def count_input_tokens(self, request):
-                return len(request.system_prompt.split()) + sum(
-                    len(str(message.content).split()) for message in request.messages
-                )
-
-            def stream(self, request, on_text_delta, on_reasoning_delta=None):
-                if self.count_input_tokens(request) > self.max_context_tokens - 5:
-                    raise RuntimeError("fast model input exceeds its window")
-                return super().stream(request, on_text_delta, on_reasoning_delta)
-
-        session = Session("small-fast-window")
-        for index in range(12):
-            session.add_item("user", f"request {index} " + "word " * 8)
-            session.add_item("assistant", f"answer {index} " + "word " * 8)
-        main = CountingProvider(["done"], max_context_tokens=1000)
-        fast = CountingProvider(
-            ["- [durable] Progress recorded."] * 30,
-            max_context_tokens=60,
+        tools = (
+            ToolDefinition("echo", "Echo text", {"type": "object"}),
+            ToolDefinition("other", "Another tool", {"type": "object"}),
         )
-        config = replace(
-            AGENT_CONFIG, output_reserve_tokens=5,
-            context=ContextCompressionConfig(keep_recent_units=1),
-        )
-        agent = Agent(
-            main, session, "System", CONSOLIDATOR_PROMPT, config,
-            tool_set(session=session),
-            ToolExecutionContext(workspace=TEST_WORKSPACE, session=session),
-            consolidator_provider=fast,
-        )
-        self.assertEqual(agent._context.limits.compression_threshold, 41)
-        result = agent.run("new request")
-        self.assertEqual(result.response.content, "done")
-        self.assertGreater(session.compression_count, 1)
-        self.assertGreater(session.archived_item_cursor, 0)
-        self.assertTrue(all(
-            fast.count_input_tokens(request) <= 55 for request in fast.requests
-        ))
-        self.assertEqual(len(main.requests), 1)
+        original = context.build_request(tools)
+        context.archive(original)
+        compressed = provider.requests[0]
+        self.assertEqual(compressed.system_prompt, original.system_prompt)
+        self.assertIs(compressed.tools, original.tools)
+        self.assertEqual(compressed.media_root, original.media_root)
+        self.assertEqual(compressed.messages[:-1], original.messages[:6])
+        self.assertTrue(all(a is b for a, b in zip(compressed.messages[:-1], original.messages)))
+        self.assertEqual(compressed.messages[-1], Message("user", CONSOLIDATOR_PROMPT))
+        self.assertIs(compressed.messages[-3], session.items[3])
+        self.assertIs(compressed.messages[-2], session.items[4])
+        self.assertIn("[Archived Context Summary]", compressed.messages[0].content)
+        self.assertIn("Persistent memory fact.", compressed.messages[0].content)
+        self.assertIn("[Lossless User Anchors]", compressed.messages[1].content)
+        self.assertIn("[Current Plan]", original.messages[-1].content)
+        self.assertNotIn("[Current Plan]", str(compressed.messages))
+        self.assertNotIn("retained user instruction", str(compressed.messages))
+        self.assertEqual(session.archived_item_cursor, 5)
+        self.assertEqual(session.items[3].reasoning, "original reasoning")
+        from agent_core.providers.base import _request_messages, _request_tools
+        self.assertEqual(_request_messages(compressed)[:-1], _request_messages(original)[:7])
+        self.assertEqual(_request_tools(compressed), _request_tools(original))
 
-    def test_fast_window_reports_when_one_context_unit_cannot_fit(self) -> None:
-        class CountingProvider(MockProvider):
-            def count_input_tokens(self, request):
-                return len(request.system_prompt.split()) + sum(
-                    len(str(message.content).split()) for message in request.messages
-                )
-
-        session = Session("oversized-unit")
-        session.add_item("user", "word " * 100)
-        session.add_item("assistant", "done")
-        main = CountingProvider([], max_context_tokens=1000)
-        fast = CountingProvider([], max_context_tokens=40)
+    def test_archive_does_not_cut_at_an_earlier_equal_message(self) -> None:
+        session = Session(items=[
+            Message("user", "goal"), Message("assistant", "same"),
+            Message("assistant", "same"), Message("user", "retained"),
+        ])
+        provider = MockProvider(["- [ephemeral] Checkpoint."])
         context = ContextManager(
-            main, session, "System", CONSOLIDATOR_PROMPT,
-            replace(AGENT_CONFIG, output_reserve_tokens=5,
-                    context=ContextCompressionConfig(keep_recent_units=1)),
-            consolidator_provider=fast,
+            provider, session, "System", CONSOLIDATOR_PROMPT,
+            replace(AGENT_CONFIG, context=ContextCompressionConfig(keep_recent_units=1)),
         )
-        with self.assertRaisesRegex(ValueError, "fast model window"):
-            context.archive()
-        self.assertEqual(fast.requests, [])
+        context.archive(context.build_request())
+        self.assertEqual(provider.requests[0].messages[:-1], tuple(session.items[:3]))
+        self.assertEqual(session.archived_item_cursor, 3)
+
+    def test_archive_checks_main_window_including_the_compression_instruction(self) -> None:
+        session = Session(items=[Message("user", "old"), Message("assistant", "retained")])
+        provider = MockProvider([], input_tokens=901)
+        context = ContextManager(
+            provider, session, "System", CONSOLIDATOR_PROMPT,
+            replace(AGENT_CONFIG, context=ContextCompressionConfig(keep_recent_units=1)),
+        )
+        with self.assertRaises(ContextWindowExceededError):
+            context.archive(context.build_request())
+        self.assertEqual(provider.requests, [])
         self.assertEqual(session.archived_item_cursor, 0)
+
+    def test_archive_checks_main_window_again_for_a_repair(self) -> None:
+        session = Session(items=[Message("user", "old"), Message("assistant", "retained")])
+        provider = MockProvider(["invalid checkpoint"], input_tokens=[899, 901])
+        context = ContextManager(
+            provider, session, "System", CONSOLIDATOR_PROMPT,
+            replace(AGENT_CONFIG, context=ContextCompressionConfig(keep_recent_units=1)),
+        )
+        with self.assertRaises(ContextWindowExceededError):
+            context.archive(context.build_request())
+        self.assertEqual(len(provider.requests), 1)
+        self.assertIsNone(session.archived_summary)
+        self.assertEqual(session.archived_item_cursor, 0)
+
+    def test_archive_does_nothing_without_archivable_units(self) -> None:
+        session = Session(items=[Message("user", "retained")])
+        provider = MockProvider([])
+        context = ContextManager(provider, session, "System", CONSOLIDATOR_PROMPT, AGENT_CONFIG)
+        context.archive(context.build_request())
+        self.assertEqual(provider.requests, [])
+        self.assertEqual(session.compression_count, 0)
+
+    def test_compression_never_executes_returned_tool_calls(self) -> None:
+        session = Session(items=[Message("user", "old"), Message("assistant", "answer")])
+        provider = MockProvider([
+            LLMResponse(content=None, tool_calls=(ToolCall("forbidden", "echo", {"text": "bad"}),)),
+            "- [ephemeral] Checkpoint.", "done",
+        ], input_tokens=800)
+        tools = tool_set(EchoTool(), session=session)
+        agent = Agent(
+            provider, session, "System", CONSOLIDATOR_PROMPT,
+            replace(AGENT_CONFIG, context=ContextCompressionConfig(keep_recent_units=1)),
+            tools, ToolExecutionContext(workspace=TEST_WORKSPACE, session=session),
+        )
+        with patch.object(tools, "execute") as execute:
+            result = agent.run("new request")
+        execute.assert_not_called()
+        self.assertEqual(result.response.content, "done")
+        self.assertEqual(session.compression_count, 1)
+        self.assertEqual(len(provider.requests[0].tools), 1)
+        self.assertEqual(provider.requests[0].messages, provider.requests[1].messages[:-1])
+        self.assertIn("must not contain tool calls", provider.requests[1].messages[-1].content)
 
     def test_empty_compression_error_is_recorded_as_null(self) -> None:
         class FailingProvider(MockProvider):
@@ -605,12 +655,65 @@ class AgentTest(unittest.TestCase):
         session.add_item("assistant", "answer")
         context = ContextManager(
             FailingProvider([]), session, "System", CONSOLIDATOR_PROMPT,
-            AGENT_CONFIG, on_auxiliary_call=calls.append,
+            replace(AGENT_CONFIG, context=ContextCompressionConfig(keep_recent_units=1)),
         )
         with self.assertRaises(RuntimeError):
-            context.archive()
+            context.archive(context.build_request(), on_call=calls.append)
         self.assertEqual(calls[0].status, "failed")
         self.assertIsNone(calls[0].error)
+
+    def test_compression_reports_each_attempt_after_journaling_usage(self) -> None:
+        session = Session(items=[Message("user", "old"), Message("assistant", "answer")])
+        provider = MockProvider([
+            LLMResponse(content="invalid checkpoint", usage=TokenUsage(800, 10, 810, 600, None)),
+            LLMResponse(content="- [durable] Checkpoint.", usage=TokenUsage(800, 20, 820, 700, 10)),
+            LLMResponse(content="done", usage=TokenUsage(200, 30, 230, 50, None)),
+        ], input_tokens=800)
+        events = []
+        agent = Agent(
+            provider, session, "System", CONSOLIDATOR_PROMPT,
+            replace(AGENT_CONFIG, context=ContextCompressionConfig(keep_recent_units=1)),
+            tool_set(session=session), ToolExecutionContext(workspace=TEST_WORKSPACE, session=session),
+        )
+
+        def on_event(event):
+            if isinstance(event, CompressionCompletedEvent):
+                self.assertEqual(session.journal[-1].event_type, "compression_completed")
+                self.assertEqual(session.journal[-1].payload["status"], event.call.status)
+                self.assertEqual(event.cache_usage, session.cache_usage)
+            events.append(event)
+
+        result = agent.run("new request", on_event)
+
+        completions = [event for event in events if isinstance(event, CompressionCompletedEvent)]
+        self.assertEqual([(event.call.attempt, event.call.status) for event in completions],
+                         [(1, "invalid_response"), (2, "completed")])
+        self.assertEqual([event.cache_usage for event in completions],
+                         [CacheUsage(800, 600), CacheUsage(1600, 1300)])
+        self.assertEqual(session.cache_usage, CacheUsage(1800, 1350))
+        self.assertEqual([event.model_call_index for event in events if isinstance(event, ModelCompletedEvent)], [1])
+        self.assertEqual(result.response.usage, TokenUsage(200, 30, 230, 50, None))
+        self.assertEqual(session.compression_count, 1)
+
+    def test_exhausted_compression_still_reports_and_retains_billed_usage(self) -> None:
+        session = Session(items=[Message("user", "old"), Message("assistant", "answer")])
+        provider = MockProvider([
+            LLMResponse(content="invalid checkpoint", usage=TokenUsage(800, 10, 810, 600, None)),
+        ] * (ARCHIVE_RETRY_COUNT + 1), input_tokens=800)
+        events = []
+        agent = Agent(
+            provider, session, "System", CONSOLIDATOR_PROMPT,
+            replace(AGENT_CONFIG, context=ContextCompressionConfig(keep_recent_units=1)),
+            tool_set(session=session), ToolExecutionContext(workspace=TEST_WORKSPACE, session=session),
+        )
+        with self.assertRaisesRegex(ValueError, "invalid checkpoint after"):
+            agent.run("new request", events.append)
+        completions = [event for event in events if isinstance(event, CompressionCompletedEvent)]
+        self.assertEqual(len(completions), ARCHIVE_RETRY_COUNT + 1)
+        self.assertEqual(completions[-1].cache_usage, CacheUsage(4800, 3600))
+        self.assertEqual(session.cache_usage, CacheUsage(4800, 3600))
+        self.assertEqual(session.compression_count, 0)
+        self.assertEqual(session.journal[-1].event_type, "turn_failed")
 
     def test_compression_does_not_retry_provider_validation_errors(self) -> None:
         class FailingProvider(MockProvider):
@@ -623,10 +726,10 @@ class AgentTest(unittest.TestCase):
         session.add_item("assistant", "answer")
         context = ContextManager(
             FailingProvider([]), session, "System", CONSOLIDATOR_PROMPT,
-            AGENT_CONFIG, on_auxiliary_call=calls.append,
+            replace(AGENT_CONFIG, context=ContextCompressionConfig(keep_recent_units=1)),
         )
         with self.assertRaisesRegex(ValueError, "invalid provider configuration"):
-            context.archive()
+            context.archive(context.build_request(), on_call=calls.append)
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0].status, "failed")
         self.assertEqual(session.archived_item_cursor, 0)
@@ -658,11 +761,10 @@ class AgentTest(unittest.TestCase):
                 workspace_instruction_files=(),
                 context=ContextCompressionConfig(keep_recent_units=1),
             ),
-            on_auxiliary_call=auxiliary_calls.append,
         )
         session.add_item("user", "second")
 
-        context.archive()
+        context.archive(context.build_request(), on_call=auxiliary_calls.append)
 
         self.assertEqual(len(provider.requests), 2)
         self.assertEqual(
@@ -671,19 +773,19 @@ class AgentTest(unittest.TestCase):
         )
         self.assertEqual(
             provider.requests[0].messages,
-            provider.requests[1].messages[1:],
+            provider.requests[1].messages[:-1],
         )
         self.assertEqual(
             provider.requests[0].system_prompt,
-            CONSOLIDATOR_PROMPT,
+            "You are helpful.",
         )
         self.assertIn(
             "The previous checkpoint was rejected:",
-            provider.requests[1].messages[0].content,
+            provider.requests[1].messages[-1].content,
         )
         self.assertIn(
             "checkpoint lines must use '- [mark] fact'",
-            provider.requests[1].messages[0].content,
+            provider.requests[1].messages[-1].content,
         )
         self.assertEqual(
             session.archived_summary,
@@ -724,7 +826,7 @@ class AgentTest(unittest.TestCase):
             ValueError,
             rf"invalid checkpoint after {ARCHIVE_RETRY_COUNT + 1} attempts",
         ):
-            context.archive()
+            context.archive(context.build_request())
 
         self.assertEqual(len(provider.requests), ARCHIVE_RETRY_COUNT + 1)
         self.assertIsNone(session.archived_summary)
@@ -778,12 +880,12 @@ class AgentTest(unittest.TestCase):
         )
         session.add_item("user", "second")
 
-        context.archive()
+        context.archive(context.build_request())
 
         self.assertEqual(session.archived_summary, "(nothing)")
         self.assertEqual(len(provider.requests), 1)
 
-    def test_archive_excludes_reasoning_from_compression_input(self) -> None:
+    def test_archive_preserves_reasoning_in_original_messages(self) -> None:
         session = Session(
             "session-1",
             items=[
@@ -811,17 +913,13 @@ class AgentTest(unittest.TestCase):
             ),
         )
 
-        context.archive()
+        context.archive(context.build_request())
 
         archived = provider.requests[0].messages
-        self.assertEqual(len(archived), 1)
-        self.assertEqual(archived[0].role, "user")
-        self.assertIsNone(archived[0].reasoning)
-        record = archived[0].content or ""
-        self.assertIn("USER\nfirst", record)
-        self.assertIn("ASSISTANT\nanswer", record)
-        self.assertNotIn("private reasoning", record)
-        self.assertEqual(session.items[1].reasoning, "private reasoning")
+        self.assertEqual(archived[:-1], tuple(session.items[:2]))
+        self.assertIs(archived[1], session.items[1])
+        self.assertEqual(archived[1].reasoning, "private reasoning")
+        self.assertEqual(archived[-1], Message("user", CONSOLIDATOR_PROMPT))
 
     def test_context_keeps_current_and_previous_turn_user_anchors(self) -> None:
         session = Session("session-1")
@@ -1022,18 +1120,17 @@ class AgentTest(unittest.TestCase):
             ),
         )
 
-        context.archive()
+        context.archive(context.build_request())
         session.add_item("assistant", None, tool_calls=(second_call,))
         session.add_item("tool", "second result", tool_call_id=second_call.id)
         session.add_item("assistant", "almost done")
-        context.archive()
+        context.archive(context.build_request())
 
-        second_record = provider.requests[1].messages[-1].content or ""
-        self.assertIn("[Lossless User Anchors]", second_record)
-        self.assertIn("complete the migration", second_record)
-        self.assertIn("[Conversation Record]", second_record)
-        self.assertIn("second result", second_record)
-        self.assertNotIn("USER\ncomplete the migration", second_record)
+        second_messages = provider.requests[1].messages
+        self.assertIs(second_messages[1], session.items[0])
+        self.assertEqual(sum(message is session.items[0] for message in second_messages), 1)
+        self.assertIn(Message("tool", "second result", tool_call_id=second_call.id), second_messages)
+        self.assertEqual(second_messages[-1], Message("user", CONSOLIDATOR_PROMPT))
 
     def test_projection_repairs_a_tool_chain_after_the_archive_cursor(self) -> None:
         call = ToolCall("call-old", "echo", {"text": "old"})
@@ -1101,7 +1198,7 @@ class AgentTest(unittest.TestCase):
             ),
         )
 
-        context.archive()
+        context.archive(context.build_request())
 
         self.assertEqual(session.archived_item_cursor, 2)
         retained = [
@@ -1172,41 +1269,20 @@ class AgentTest(unittest.TestCase):
             ),
         )
 
-        context.archive()
+        context.archive(context.build_request())
 
         self.assertEqual(session.archived_item_cursor, 5)
         archived = provider.requests[0].messages
-        self.assertEqual(len(archived), 1)
-        self.assertEqual(archived[0].role, "user")
-        record = archived[0].content or ""
-        self.assertIn("USER\ngoal", record)
-        self.assertIn(
-            "ASSISTANT "
-            + TOOL_CALL_TIME.astimezone().isoformat(timespec="seconds"),
-            record,
-        )
-        self.assertIn("id: call-a\nname: read", record)
-        self.assertIn("id: call-b\nname: read", record)
-        self.assertIn(
-            "TOOL RESULT "
-            + TOOL_RESULT_TIME.astimezone().isoformat(timespec="seconds")
-            + "\ntool_call_id: call-a",
-            record,
-        )
-        self.assertIn(
-            "TOOL RESULT "
-            + datetime(
-                2026, 9, 9, 8, 0, 12, tzinfo=timezone.utc
-            ).astimezone().isoformat(timespec="seconds")
-            + "\ntool_call_id: call-b",
-            record,
-        )
-        self.assertLess(
-            record.index("tool_call_id: call-a"),
-            record.index("tool_call_id: call-b"),
-        )
-        self.assertIn("[Image attachment omitted from historical context]", record)
-        self.assertNotIn("private tool planning", record)
+        self.assertEqual([message.role for message in archived], ["user", "assistant", "tool", "tool", "user", "user"])
+        self.assertIs(archived[0], session.items[0])
+        self.assertIs(archived[1], session.items[1])
+        self.assertEqual(archived[1].tool_calls, calls)
+        self.assertEqual(archived[1].timestamp_utc, TOOL_CALL_TIME)
+        self.assertEqual(archived[1].reasoning, "private tool planning")
+        self.assertIs(archived[2], session.items[3])
+        self.assertIs(archived[3], session.items[2])
+        self.assertIs(archived[4], session.items[4])
+        self.assertEqual(archived[-1], Message("user", CONSOLIDATOR_PROMPT))
         self.assertEqual(
             [message.content for message in context.build_request().messages
              if message.role != "system"],
@@ -1913,7 +1989,7 @@ class AgentTest(unittest.TestCase):
                 "- [ephemeral] Active turn checkpoint.",
                 "done",
             ],
-            input_tokens=[100, 100, 100, 800, 100, 120],
+            input_tokens=[100, 100, 100, 800, 100, 100, 120],
         )
         session = Session(session_id="session-1")
         agent = Agent(
@@ -1953,12 +2029,16 @@ class AgentTest(unittest.TestCase):
             "- [ephemeral] Active turn checkpoint.",
         )
         consolidation = provider.requests[3]
-        self.assertEqual(len(consolidation.messages), 1)
-        consolidation_record = consolidation.messages[0].content or ""
-        self.assertNotIn("[Lossless User Anchors]", consolidation_record)
-        self.assertIn("finish the task", consolidation_record)
-        self.assertIn('{"ok": true, "output": {"text": "A"}}', consolidation_record)
-        self.assertIn('{"ok": true, "output": {"text": "B"}}', consolidation_record)
+        self.assertEqual(
+            [message.role for message in consolidation.messages],
+            ["system", "user", "assistant", "tool", "assistant", "tool", "user"],
+        )
+        self.assertEqual(consolidation.messages[1].content, "finish the task")
+        self.assertEqual(consolidation.messages[2].tool_calls, (calls[0],))
+        self.assertEqual(consolidation.messages[4].tool_calls, (calls[1],))
+        self.assertEqual(consolidation.messages[3].content, '{"ok": true, "output": {"text": "A"}}')
+        self.assertEqual(consolidation.messages[5].content, '{"ok": true, "output": {"text": "B"}}')
+        self.assertEqual(consolidation.messages[-1], Message("user", CONSOLIDATOR_PROMPT))
         resumed = provider.requests[4]
         self.assertEqual(resumed.system_prompt, "You are helpful.")
         self.assertIn(
@@ -2372,11 +2452,11 @@ class CooperativeCancellationTest(unittest.TestCase):
         session.add_item("user", "old question")
         session.add_item("assistant", "old answer")
         context = ContextManager(
-            CancellingProvider([]), session, "system", CONSOLIDATOR_PROMPT, AGENT_CONFIG,
-            on_auxiliary_call=auxiliary_calls.append,
+            CancellingProvider([]), session, "system", CONSOLIDATOR_PROMPT,
+            replace(AGENT_CONFIG, context=ContextCompressionConfig(keep_recent_units=1)),
         )
         with self.assertRaises(AgentCancelled):
-            context.archive(control.raise_if_cancelled)
+            context.archive(context.build_request(), control.raise_if_cancelled, auxiliary_calls.append)
         self.assertEqual(session.archived_item_cursor, 0)
         self.assertIsNone(session.archived_summary)
         self.assertEqual(

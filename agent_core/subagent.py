@@ -6,12 +6,11 @@ Runtime's Tool Catalog, so adding one costs configuration rather than a new
 Tool implementation.
 """
 from dataclasses import dataclass, replace
-from functools import partial
 from typing import TYPE_CHECKING, Callable, Iterable
 
 from .config import AgentConfig
 from .content import AttachmentPart, ImagePart
-from .llm import AuxiliaryModelCall, LLMProvider
+from .llm import LLMProvider
 from .memory import MemoryManager
 from .prompting import render_subagent_prompt
 from .session import Session
@@ -128,11 +127,7 @@ class SubagentRuntime:
         workspace_instructions: WorkspaceInstructions,
         *,
         tool_policy: ToolPolicy | None = None,
-        consolidator_provider: LLMProvider | None = None,
-        on_auxiliary_call: Callable[[str, str, AuxiliaryModelCall], None] | None = None,
-        memory_factory: (
-            Callable[[Callable[[AuxiliaryModelCall], None] | None], MemoryManager] | None
-        ) = None,
+        memory_factory: Callable[[Session], MemoryManager] | None = None,
     ) -> None:
         self._config = config
         self._catalog = catalog
@@ -141,8 +136,6 @@ class SubagentRuntime:
         self._consolidator_prompt = consolidator_prompt
         self._workspace_instructions = workspace_instructions
         self._tool_policy = tool_policy
-        self._consolidator_provider = consolidator_provider
-        self._on_auxiliary_call = on_auxiliary_call
         self._memory_factory = memory_factory
 
     @property
@@ -162,12 +155,8 @@ class SubagentRuntime:
 
         role = self._roles.get(role_name)
         session = Session()
-        on_auxiliary_call = (
-            partial(self._on_auxiliary_call, role_name, session.session_id)
-            if self._on_auxiliary_call is not None else None
-        )
         memory = (
-            self._memory_factory(on_auxiliary_call)
+            self._memory_factory(session)
             if self._memory_factory is not None else None
         )
         store = self._store(parent)
@@ -200,11 +189,9 @@ class SubagentRuntime:
                 instructions=self._workspace_instructions,
             ),
             consolidator_prompt=self._consolidator_prompt,
-            consolidator_provider=self._consolidator_provider,
             memory_context=(
                 memory.store.load(parent.workspace.path) if memory is not None else None
             ),
-            on_auxiliary_call=on_auxiliary_call,
             config=self._config,
             tools=self._catalog.select(
                 (

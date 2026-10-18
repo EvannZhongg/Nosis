@@ -38,7 +38,7 @@ Bridge 路由的输入包括：
 - 设置读取及 Provider、Agent、路由更新
 - `shutdown`
 
-Bridge 把 Core 的 `AgentEvent`、Runtime phase、计划、MCP 状态和结束结果转换为协议消息。每次模型调用结束时立即推送 `model_completed`（本次用量与会话累计缓存快照），不等待 Tool 执行或 Turn 结束。实时 Tool 事件只包含执行状态；会话检查点包含 Core 已规范化的对话内容与 Artifact 引用，大输出仍由 Core 落盘。
+Bridge 把 Core 的 `AgentEvent`、Runtime phase、计划、MCP 状态和结束结果转换为协议消息。普通模型调用和每次压缩尝试结束时分别立即推送 `model_completed`、`compression_completed`（本次用量与会话累计缓存快照），不等待 Tool 执行、压缩重试或 Turn 结束。实时 Tool 事件只包含执行状态；会话检查点包含 Core 已规范化的对话内容与 Artifact 引用，大输出仍由 Core 落盘。
 
 ## 执行状态与交互
 

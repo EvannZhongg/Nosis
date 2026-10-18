@@ -203,7 +203,7 @@ class UserAnchorWindowTest(unittest.TestCase):
 
         for _ in range(2):
             session.add_item("assistant", "more work")
-            context.archive()
+            context.archive(context.build_request())
             rendered = self.rendered(context.build_request())
             record = self.rendered(provider.requests[-1])
             for content in inputs:

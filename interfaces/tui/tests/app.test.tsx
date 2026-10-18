@@ -204,6 +204,20 @@ describe('App', () => {
     emit({ type: 'model_completed', turn_id: 't1', model_call_index: 3, usage: null,
       cache_usage: { input_tokens: 1100, cache_read_tokens: 995 } });
     await waitFor(() => expect(lastFrame()).toContain('Cache hit: 90.5%'));
+    emit({
+      type: 'compression_completed', turn_id: 't1', attempt: 1, status: 'invalid_response',
+      usage: { input_tokens: 1000, output_tokens: 20, total_tokens: 1020,
+        cache_read_tokens: 995, cache_write_tokens: null },
+      cache_usage: { input_tokens: 2100, cache_read_tokens: 1990 },
+    });
+    await waitFor(() => expect(lastFrame()).toContain('Cache hit: 94.8%'));
+    emit({
+      type: 'compression_completed', turn_id: 't1', attempt: 2, status: 'completed',
+      usage: { input_tokens: 1000, output_tokens: 20, total_tokens: 1020,
+        cache_read_tokens: 995, cache_write_tokens: null },
+      cache_usage: { input_tokens: 3100, cache_read_tokens: 2985 },
+    });
+    await waitFor(() => expect(lastFrame()).toContain('Cache hit: 96.3%'));
     unmount();
   });
 

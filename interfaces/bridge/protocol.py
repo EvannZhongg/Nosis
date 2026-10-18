@@ -13,6 +13,7 @@ from agent_core import (
     ReasoningDeltaEvent,
     AssistantMessageEvent,
     ModelCompletedEvent,
+    CompressionCompletedEvent,
     ContextWindow,
     ContextWindowEvent,
     ToolBatchStartedEvent,
@@ -236,6 +237,15 @@ def event_to_message(
     if isinstance(event, ReasoningDeltaEvent):
         return {"type": "reasoning_delta", "turn_id": turn_id, "text": event.text, "model_call_index": event.model_call_index}
 
+    if isinstance(event, CompressionCompletedEvent):
+        return {
+            "type": "compression_completed",
+            "turn_id": turn_id,
+            "attempt": event.call.attempt,
+            "status": event.call.status,
+            "usage": usage_to_dict(event.call.usage),
+            "cache_usage": cache_usage_to_dict(event.cache_usage),
+        }
     if isinstance(event, ModelCompletedEvent):
         return {
             "type": "model_completed",

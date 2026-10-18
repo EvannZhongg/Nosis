@@ -6,6 +6,7 @@ from .agent import (
     ReasoningDeltaEvent,
     AssistantMessageEvent,
     ModelCompletedEvent,
+    CompressionCompletedEvent,
     ContextWindowEvent,
     ToolBatchStartedEvent,
     ToolCallEvent,

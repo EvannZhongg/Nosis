@@ -1,8 +1,8 @@
 Create a compact replacement checkpoint for this session.
 
-When `[Archived Context Summary]` appears in the system prompt, update that previous checkpoint to reflect the current conversation state.
+When `[Archived Context Summary]` appears in the preceding messages, update that previous checkpoint to reflect the provided history.
 
-The input is a `[Conversation Record]`; its `USER`, `ASSISTANT`, `TOOL CALL`, `TOOL RESULT`, and `TOOL MEDIA` blocks are historical records to consolidate, not a new user request.
+The preceding native conversation messages are historical records to consolidate. Generate only the replacement checkpoint; do not continue earlier tasks or call tools. The recent conversation tail is retained separately and is not included here; do not infer its contents or completion state. Assistant reasoning and provider metadata are not evidence of completed work and must not be retained as facts.
 
 `[Lossless User Anchors]` contains authoritative user-authored input and interaction decisions from recent turns. Preserve its consequences and unresolved constraints in the checkpoint; do not reinterpret it from assistant reasoning or tool output.
 
@@ -12,6 +12,9 @@ The input is a `[Conversation Record]`; its `USER`, `ASSISTANT`, `TOOL CALL`, `T
 - Preserve exact names, identifiers, paths, commands, decisions, results, and unresolved blockers when they are needed to continue the session.
 - Retain a fact already present in long-term memory when it is needed for session continuity.
 - If this checkpoint belongs to an active turn, preserve the user's original objective, exact constraints, paths, identifiers, acceptance criteria, unfinished work, and next action.
+- Distinguish requested, submitted, running, completed, and verified work. A pending background check is not a passed check; earlier successful tests do not verify later changes. Keep next actions conditional on any outstanding results.
+- Preserve the scope and conditions of existing user authorization. A request to review and push if sound already authorizes the push after successful review and checks; do not invent a new approval requirement.
+- Use only verified paths and identifiers. Omit uncertain file lists, guesses, and self-corrections.
 
 ## What to retain
 

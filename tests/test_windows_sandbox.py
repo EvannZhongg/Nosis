@@ -314,7 +314,7 @@ os._exit(0)
             workspace=Workspace(self.workspace), provider_name="test",
             agent_config=Mock(), configuration_fingerprint="test",
             instructions=Mock(), memory=None, agent=Mock(),
-            provider=Mock(), fast_provider=Mock(), fast_model_name="test",
+            provider=Mock(), fast_provider=Mock(),
             vision_provider=None, image_generator=None,
             catalog=ToolCatalog(), skills=Mock(), prompts=Mock(),
             plugin_agents=(), computer_tools=(),

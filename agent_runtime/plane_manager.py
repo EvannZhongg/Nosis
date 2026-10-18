@@ -29,10 +29,10 @@ from agent_core import (
     skill_aware_tool_names,
     platform_workspace_sandbox_backend,
     SchedulerService,
+    Session,
 )
 from agent_core.prompting import render_system_prompt
-from agent_core.llm import AuxiliaryModelCall, LLMProvider
-from agent_core.session_paths import session_directory
+from agent_core.llm import LLMProvider
 from agent_core.tools import ROLE_TOOL_NAMES
 
 from .config import (
@@ -51,7 +51,6 @@ from .instructions import load_workspace_instructions
 from .plugins import PluginAgent, PluginManager
 from .settings import EnvironmentReloader, configuration_fingerprint
 from .callbacks import RuntimeCallbacks
-from .auxiliary_usage import AuxiliaryUsageLog
 from .computer import DesktopComputer
 from .session_controller import SessionRuntimeController
 
@@ -166,7 +165,9 @@ class ExecutionPlaneManager:
             prompts = load_prompt_templates(self._config_directory / "prompts")
 
             main_provider = self._provider_for(config, workspace, agent_config)
-            fast_config = load_fast_config(config_path)
+            fast_config = (
+                load_fast_config(config_path) if agent_config.memory.enabled else None
+            )
             fast_provider = (
                 self._provider_for(fast_config, workspace, agent_config)
                 if fast_config is not None else main_provider
@@ -241,9 +242,6 @@ class ExecutionPlaneManager:
                 instructions=instructions,
                 provider=main_provider,
                 fast_provider=fast_provider,
-                fast_model_name=(
-                    fast_config.model if fast_config is not None else config.model
-                ),
                 vision_provider=vision_provider,
                 image_generator=image_generator,
                 catalog=catalog,
@@ -292,15 +290,6 @@ class ExecutionPlaneManager:
                 raise RuntimeError("session permissions are not initialized")
             main_provider = plane.provider
             fast_provider = plane.fast_provider
-            usage_path = session_directory(
-                session.sessions_directory,
-                workspace.path,
-                session.session.session_id,
-            ) / "auxiliary_model_usage.jsonl"
-            usage_log = AuxiliaryUsageLog(usage_path)
-            on_auxiliary_call = partial(
-                usage_log.append, plane.fast_model_name, "main_agent", None, None,
-            )
             vision_provider = plane.vision_provider
             image_generator = plane.image_generator
             catalog = plane.catalog
@@ -322,7 +311,7 @@ class ExecutionPlaneManager:
             memory = None
 
             def create_memory(
-                on_call: Callable[[AuxiliaryModelCall], None] | None,
+                owner: Session,
             ) -> MemoryManager:
                 assert store is not None
                 return MemoryManager(
@@ -334,12 +323,14 @@ class ExecutionPlaneManager:
                         workspace_prompt=prompts.workspace_memory,
                         global_max_tokens=agent_config.memory.global_max_tokens,
                         workspace_max_tokens=agent_config.memory.workspace_max_tokens,
-                        on_auxiliary_call=on_call,
+                        on_auxiliary_call=partial(
+                            owner.auxiliary_model_completed, model=fast_provider.model_name,
+                        ),
                     ),
                 )
 
             if memory_context is not None:
-                memory = create_memory(on_auxiliary_call)
+                memory = create_memory(session.session)
 
             jobs = JobManager(session.session)
             plane.jobs = jobs
@@ -364,8 +355,6 @@ class ExecutionPlaneManager:
                 prompts.consolidator,
                 instructions,
                 plugin_agents,
-                fast_provider,
-                partial(usage_log.append, plane.fast_model_name, "subagent"),
                 create_memory if store is not None else None,
             )
             context = ToolExecutionContext(
@@ -403,8 +392,6 @@ class ExecutionPlaneManager:
             )
             agent = Agent(
                 provider=main_provider,
-                consolidator_provider=fast_provider,
-                on_auxiliary_call=on_auxiliary_call,
                 session=session.session,
                 system_prompt=render_system_prompt(
                     prompts.system,
@@ -492,11 +479,7 @@ class ExecutionPlaneManager:
         consolidator_prompt: str,
         workspace_instructions: WorkspaceInstructions,
         plugin_agents: tuple[PluginAgent, ...],
-        fast_provider: LLMProvider,
-        on_auxiliary_call: Callable[[str, str, AuxiliaryModelCall], None],
-        memory_factory: (
-            Callable[[Callable[[AuxiliaryModelCall], None] | None], MemoryManager] | None
-        ),
+        memory_factory: Callable[[Session], MemoryManager] | None,
     ) -> SubagentRuntime | None:
         """Build the sub-agent runtime, or None when no role is configured."""
         if not agent_config.tools.is_enabled("subagent"):
@@ -567,6 +550,7 @@ class ExecutionPlaneManager:
         registry = SubagentRoleRegistry(roles)
         if not registry:
             return None
+
         return SubagentRuntime(
             config=agent_config,
             catalog=catalog,
@@ -575,8 +559,6 @@ class ExecutionPlaneManager:
             consolidator_prompt=consolidator_prompt,
             workspace_instructions=workspace_instructions,
             tool_policy=permission_controller,
-            consolidator_provider=fast_provider,
-            on_auxiliary_call=on_auxiliary_call,
             memory_factory=memory_factory,
         )
 

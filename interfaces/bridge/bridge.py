@@ -93,7 +93,7 @@ class Bridge:
                 state = message
             elif type in {
                 "permission_changed", "provider_changed", "workspace_changed",
-                "plan_updated", "context_window", "model_completed", "job_status", "fatal",
+                "plan_updated", "context_window", "model_completed", "compression_completed", "job_status", "fatal",
                 "turn_completed", "turn_cancelled", "turn_failed",
             }:
                 state = self._runtime_snapshot()

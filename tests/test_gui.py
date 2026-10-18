@@ -23,6 +23,7 @@ from agent_core import (
     Workspace,
 )
 from agent_core.scheduler import IntervalTrigger, OneShotTrigger, SchedulerService
+from agent_core.llm import AuxiliaryModelCall
 from interfaces.bridge.managed_workspaces import create_scratch_workspace
 from agent_runtime.settings import SettingsStore
 
@@ -1796,6 +1797,11 @@ class GuiTest(unittest.TestCase):
         session.add_item("user", "TUI 对话")
         session.model_completed(1, usage=TokenUsage(1000, 20, 1020, 750, None),
                                 has_tool_calls=False)
+        session.auxiliary_model_completed(AuxiliaryModelCall(
+            task="compression", scope=None, attempt=1, status="completed",
+            started_at_utc=datetime.now(timezone.utc), duration_ms=100,
+            usage=TokenUsage(500, 10, 510, 450, None),
+        ), model="test/main")
         session.add_item("assistant", "你好", provider_data={
             "openai_responses": [{"type": "reasoning", "encrypted_content": "native-state"}],
         })
@@ -1817,7 +1823,7 @@ class GuiTest(unittest.TestCase):
 
         self.assertEqual(data["items"][0]["content"], "TUI 对话")
         self.assertEqual(data["permission_preset"], "ask_for_approval")
-        self.assertEqual(data["cache_usage"], {"input_tokens": 1000, "cache_read_tokens": 750})
+        self.assertEqual(data["cache_usage"], {"input_tokens": 1500, "cache_read_tokens": 1200})
         self.assertNotIn("provider_data", data["items"][1])
         self.assertNotIn("native-state", json.dumps(data))
         self.assertEqual(

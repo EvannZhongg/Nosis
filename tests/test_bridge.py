@@ -21,6 +21,7 @@ from agent_core import (
     ProviderCapabilities,
     AssistantMessageEvent,
     ModelCompletedEvent,
+    CompressionCompletedEvent,
     ContextWindow,
     ContextWindowEvent,
     ExecutionScope,
@@ -59,6 +60,7 @@ from agent_core.scheduler import (
     SchedulerService,
 )
 from agent_core.usage import usage_to_dict
+from agent_core.llm import AuxiliaryModelCall
 from agent_core.session_paths import session_directory
 from agent_core.projection import project_context_units
 from agent_core.providers import ModelProvider
@@ -156,6 +158,24 @@ class AttachmentParsingTest(unittest.TestCase):
 
 
 class ProtocolTest(unittest.TestCase):
+    def test_encodes_compression_usage_without_a_main_model_call_index(self):
+        for status, usage in (
+            ("completed", TokenUsage(1000, 20, 1020, 800, None)),
+            ("invalid_response", TokenUsage(1000, 20, 1020, 0, 800)),
+            ("failed", None),
+            ("cancelled", None),
+        ):
+            with self.subTest(status=status):
+                call = AuxiliaryModelCall(
+                    task="compression", scope=None, attempt=2, status=status,
+                    started_at_utc=EVENT_TIME, duration_ms=100, usage=usage,
+                )
+                self.assertEqual(event_to_message(CompressionCompletedEvent(call, CacheUsage(2000, 800)), "t"), {
+                    "type": "compression_completed", "turn_id": "t", "attempt": 2,
+                    "status": status, "usage": usage_to_dict(usage),
+                    "cache_usage": {"input_tokens": 2000, "cache_read_tokens": 800},
+                })
+
     def test_invalid_tool_arguments_and_error_are_transmitted_with_the_call(self):
         raw = '{"command" "bad"}'
         call = ToolCall.from_raw_arguments("bad-call", "shell", raw)
@@ -1537,6 +1557,55 @@ class InterruptedTurnTest(BridgeTestCase):
         self.assertNotIn("transcript", delta)
         self.assertGreater(delta["event_sequence"], context["event_sequence"])
 
+    def test_compression_cache_usage_is_persisted_pushed_and_restored(self) -> None:
+        plane = self.bridge.host.planes.ensure(self.bridge.host.sessions)
+        plane.memory = MemorySpy()
+        for index in range(8):
+            self.session.add_item("user", f"request {index}")
+            self.session.add_item("assistant", f"answer {index}")
+        emit = self.bridge.emit
+
+        def check_completion(type, **fields):
+            if type == "compression_completed":
+                self.assertEqual(self.session.turns["t1"].status, "running")
+                stored = self.store.load(self.session_id, recover=False)
+                self.assertEqual(stored.journal[-1].event_type, "compression_completed")
+                self.assertEqual(stored.journal[-1].payload["usage"], fields["usage"])
+                self.assertEqual(stored.journal[-1].payload["model"], "openai/first")
+                self.assertFalse(any(message["type"] == "model_completed" for message in emitted(self.stdout)))
+            emit(type, **fields)
+
+        with (
+            patch.object(self.bridge, "emit", side_effect=check_completion),
+            patch.object(plane.provider, "count_input_tokens", side_effect=lambda _request:
+                         800 if self.session.archived_summary is None else 1),
+            patch.object(plane.provider, "stream_cancellable", side_effect=[
+                LLMResponse(content="invalid checkpoint", usage=TokenUsage(800, 20, 820, 600, None)),
+                LLMResponse(content="- [durable] Prior work.", usage=TokenUsage(800, 30, 830, 700, None)),
+                LLMResponse(content="done", usage=TokenUsage(100, 10, 110, 50, None)),
+            ]),
+        ):
+            self.bridge.run_turn({"turn_id": "t1", "text": "continue"})
+
+        attempts = [message for message in emitted(self.stdout) if message["type"] == "compression_completed"]
+        self.assertEqual([(message["attempt"], message["status"]) for message in attempts],
+                         [(1, "invalid_response"), (2, "completed")])
+        for message, totals in zip(attempts, (
+            {"input_tokens": 800, "cache_read_tokens": 600},
+            {"input_tokens": 1600, "cache_read_tokens": 1300},
+        )):
+            self.assertEqual(message["cache_usage"], totals)
+            self.assertEqual(message["runtime"]["cache_usage"], totals)
+            self.assertNotIn("model_call_index", message)
+        stored = self.store.load(self.session_id)
+        self.assertEqual(stored.cache_usage, CacheUsage(1700, 1350))
+        completed = emitted(self.stdout)[-1]
+        self.assertEqual(completed["type"], "turn_completed")
+        self.assertEqual(completed["usage"]["input_tokens"], 100)
+        self.bridge.open_session({"workspace": str(self.root), "session_id": self.session_id})
+        self.assertEqual(emitted(self.stdout)[-1]["cache_usage"],
+                         {"input_tokens": 1700, "cache_read_tokens": 1350})
+
     def test_stores_a_cancelled_turn(self) -> None:
         plane = self.bridge.host.planes.ensure(self.bridge.host.sessions)
         memory = MemorySpy()
@@ -2133,7 +2202,7 @@ class BridgeSessionOpenTest(BridgeTestCase):
         )
         self.assertEqual(emitted(stdout)[-1]["phase"], "inactive")
 
-    def test_fast_model_is_shared_by_memory_and_compression(self) -> None:
+    def test_compression_uses_main_model_and_fast_model_only_serves_memory(self) -> None:
         directory = self.enterContext(tempfile.TemporaryDirectory())
         root = Path(directory)
         bridge, _ = self.make_bridge([], root)
@@ -2144,13 +2213,14 @@ class BridgeSessionOpenTest(BridgeTestCase):
                 "fast_model": {"provider": "second"},
                 "providers": {
                     "first": {"model": "openai/first", "max_context_tokens": 1000},
-                    "second": {"model": "openai/second", "max_context_tokens": 1000},
+                    "second": {"model": "openai/second", "max_context_tokens": 200},
                 },
             },
         ))
         plane = bridge.host.planes.ensure(bridge.host.sessions)
         self.assertIs(plane.agent._provider, plane.provider)
-        self.assertIs(plane.agent._context._consolidator_provider, plane.fast_provider)
+        self.assertIs(plane.agent._context._provider, plane.provider)
+        self.assertEqual(plane.agent._context.limits.compression_threshold, 675)
         self.assertIs(plane.memory.reconciler._provider, plane.fast_provider)
         self.assertIsNot(plane.provider, plane.fast_provider)
 
@@ -2161,12 +2231,12 @@ class BridgeSessionOpenTest(BridgeTestCase):
             session.add_item("user", f"request {index}")
             session.add_item("assistant", f"answer {index}")
         with patch.object(
-            plane.fast_provider, "stream_cancellable",
+            plane.provider, "stream_cancellable",
             return_value=LLMResponse(
                 content="- [durable] Prior work.", usage=TokenUsage(50, 8, 58, 30, 10),
             ),
         ):
-            plane.agent._context.archive()
+            plane.agent._context.archive(plane.agent._context.build_request(plane.agent._tools.definitions))
         plane.memory.remember(MemoryCandidate("fact", "global", "A fact."))
         with patch.object(
             plane.fast_provider, "stream",
@@ -2176,21 +2246,16 @@ class BridgeSessionOpenTest(BridgeTestCase):
             ),
         ):
             plane.memory.reconcile_pending()
-        usage_path = session_directory(
-            root / "sessions", root, session.session_id,
-        ) / "auxiliary_model_usage.jsonl"
-        self.assertTrue(usage_path.is_file())
-        records = [json.loads(line) for line in usage_path.read_text().splitlines()]
-        self.assertEqual([(r["task"], r["scope"], r["model"], r["status"]) for r in records], [
-            ("compression", None, "openai/second", "completed"),
-            ("memory", "global", "openai/second", "completed"),
+        stored = bridge.host.sessions.store.load(session.session_id)
+        calls = [event for event in stored.journal
+                 if event.event_type in {"compression_completed", "memory_completed"}]
+        records = [event.payload for event in calls]
+        self.assertEqual([(event.event_type, r["scope"], r["model"], r["status"])
+                          for event, r in zip(calls, records)], [
+            ("compression_completed", None, "openai/first", "completed"),
+            ("memory_completed", "global", "openai/second", "completed"),
         ])
-        self.assertTrue(all(
-            record["source"] == "main_agent"
-            and record["role"] is None
-            and record["subagent_session_id"] is None
-            for record in records
-        ))
+        self.assertEqual(list((root / "sessions").rglob("auxiliary_model_usage.jsonl")), [])
         self.assertEqual(records[0]["usage"], {
             "input_tokens": 50, "output_tokens": 8, "total_tokens": 58,
             "cache_read_tokens": 30, "cache_write_tokens": 10,
@@ -2199,8 +2264,40 @@ class BridgeSessionOpenTest(BridgeTestCase):
             "input_tokens": 12, "output_tokens": 6, "total_tokens": 18,
             "cache_read_tokens": 0, "cache_write_tokens": None,
         })
+        self.assertEqual(session.cache_usage, CacheUsage(50, 30))
+        self.assertEqual(stored.cache_usage, CacheUsage(50, 30))
+        compression = [event for event in stored.journal if event.event_type == "compression_completed"]
+        self.assertEqual(len(compression), 1)
+        self.assertEqual(compression[0].payload["usage"], records[0]["usage"])
 
-    def test_subagent_compression_and_memory_are_logged_in_parent_session(self) -> None:
+    def test_disabled_memory_does_not_load_the_fast_model(self) -> None:
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        root = Path(directory)
+        bridge, _ = self.make_bridge([], root)
+        bridge.open_session(open_session_message(
+            root,
+            agent_config={
+                "max_same_tool_calls": 5,
+                "output_reserve_tokens": 100,
+                "workspace_instruction_files": [],
+                "main_agent": {"tools": {}},
+                "memory": {"enabled": False},
+            },
+            provider_config={
+                "main_agent": {"provider": "first"},
+                "fast_model": {"provider": "unused"},
+                "providers": {
+                    "first": {"model": "openai/first", "max_context_tokens": 1000},
+                    "unused": {"model": "openai/unused", "key": "${NOSIS_TEST_UNUSED_FAST_MODEL_KEY}"},
+                },
+            },
+        ))
+        plane = bridge.host.planes.ensure(bridge.host.sessions)
+        self.assertIs(plane.agent._context._provider, plane.provider)
+        self.assertIs(plane.fast_provider, plane.provider)
+        self.assertIsNone(plane.memory)
+
+    def test_subagent_compression_and_memory_are_logged_in_own_session(self) -> None:
         directory = self.enterContext(tempfile.TemporaryDirectory())
         root = Path(directory)
         bridge, _ = self.make_bridge([], root)
@@ -2239,7 +2336,10 @@ class BridgeSessionOpenTest(BridgeTestCase):
                     "kind": "fact", "scope": "global", "content": "A durable fact.",
                 }),
             )),
-            LLMResponse(content="Finished inspection."),
+            LLMResponse(content="- [durable] Inspected the directory.",
+                        usage=TokenUsage(500, 10, 510, 450, None)),
+            LLMResponse(content="Finished inspection.",
+                        usage=TokenUsage(100, 10, 110, 50, None)),
         ]
         with (
             patch.object(
@@ -2251,41 +2351,39 @@ class BridgeSessionOpenTest(BridgeTestCase):
             ),
             patch.object(provider, "stream_cancellable", side_effect=responses),
             patch.object(
-                plane.fast_provider, "stream_cancellable",
-                return_value=LLMResponse(
-                    content="- [durable] Inspected the directory.",
-                ),
-            ),
-            patch.object(
                 plane.fast_provider, "stream",
                 return_value=LLMResponse(content=json.dumps({"entries": [
                     {"kind": "fact", "content": "A durable fact."},
-                ]})),
+                ]}), usage=TokenUsage(1000, 10, 1010, 0, None)),
             ),
         ):
             answer = subagents.run("researcher", "inspect", context)
 
         self.assertEqual(answer, "Finished inspection.")
         parent_session = bridge.host.sessions.session
-        usage_path = session_directory(
+        parent_directory = session_directory(
             root / "sessions", root, parent_session.session_id,
-        ) / "auxiliary_model_usage.jsonl"
-        records = [json.loads(line) for line in usage_path.read_text().splitlines()]
+        )
+        child_path, = (parent_directory / "subagents").glob("*/*.jsonl")
+        child_store = JsonlSessionStore(parent_directory / "subagents", group_by_workspace=False)
+        child = child_store.load(child_path.stem)
+        calls = [event for event in child.journal
+                 if event.event_type in {"compression_completed", "memory_completed"}]
+        records = [event.payload for event in calls]
         self.assertEqual(len(records), 2)
         self.assertEqual(
-            (records[0]["source"], records[0]["role"], records[0]["task"],
-             records[0]["model"], records[0]["status"]),
-            ("subagent", "researcher", "compression", "openai/first", "completed"),
+            (calls[0].event_type, records[0]["model"], records[0]["status"]),
+            ("compression_completed", "openai/second", "completed"),
         )
         self.assertEqual(
-            (records[1]["source"], records[1]["role"], records[1]["task"],
-             records[1]["scope"], records[1]["model"], records[1]["status"]),
-            ("subagent", "researcher", "memory", "global", "openai/first", "completed"),
+            (calls[1].event_type, records[1]["scope"], records[1]["model"], records[1]["status"]),
+            ("memory_completed", "global", "openai/first", "completed"),
         )
-        child_id = records[0]["subagent_session_id"]
-        self.assertTrue(child_id)
-        self.assertEqual(records[1]["subagent_session_id"], child_id)
-        self.assertTrue((usage_path.parent / "subagents" / child_id / f"{child_id}.jsonl").is_file())
+        self.assertEqual(list((root / "sessions").rglob("auxiliary_model_usage.jsonl")), [])
+        self.assertFalse(any(event.event_type in {"compression_completed", "memory_completed"}
+                             for event in parent_session.journal))
+        self.assertEqual(child.cache_usage, CacheUsage(600, 500))
+        self.assertIsNone(parent_session.cache_usage)
         self.assertEqual(
             plane.memory.store.load(root).global_memory.facts,
             ("A durable fact.",),

@@ -1,7 +1,7 @@
 """Runtime session state and append-only journal semantics."""
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Callable, Literal
+from typing import TYPE_CHECKING, Callable, Literal
 from threading import Lock
 from uuid import uuid4
 
@@ -16,6 +16,9 @@ from .tools import ToolCall
 from .usage import CacheUsage, TokenUsage, usage_to_dict
 from .tools.base import JSONValue
 from .time_utils import format_utc as _format_utc, parse_utc as _parse_utc
+
+if TYPE_CHECKING:
+    from .llm import AuxiliaryModelCall
 
 MessageRole = Literal["system", "user", "assistant", "tool"]
 MessageOrigin = Literal[
@@ -182,7 +185,7 @@ class Session:
                         item_index=item_index,
                     )
                 )
-        elif event.event_type == "model_completed":
+        elif event.event_type in {"model_completed", "compression_completed"}:
             usage = payload["usage"]
             if usage is not None:
                 input_tokens = usage["input_tokens"]
@@ -452,6 +455,22 @@ class Session:
                 "model_call_index": model_call_index,
                 "has_tool_calls": has_tool_calls,
                 "usage": usage_to_dict(usage),
+            },
+        )
+
+    def auxiliary_model_completed(self, call: "AuxiliaryModelCall", *, model: str | None) -> None:
+        self._event(
+            f"{call.task}_completed",
+            self._current_turn_id,
+            {
+                "model": model,
+                "scope": call.scope,
+                "attempt": call.attempt,
+                "status": call.status,
+                "started_at_utc": _format_utc(call.started_at_utc),
+                "duration_ms": call.duration_ms,
+                "usage": usage_to_dict(call.usage),
+                "error": call.error,
             },
         )
 

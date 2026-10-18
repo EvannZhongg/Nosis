@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -17,9 +18,51 @@ from agent_core import (
 from agent_core.projection import project_context_units
 from agent_core.content import historical_content
 from agent_core.session import message_from_dict
+from agent_core.llm import AuxiliaryModelCall
 
 
 class SessionJournalTest(unittest.TestCase):
+    def test_compression_attempts_contribute_to_durable_session_cache_totals(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = JsonlSessionStore(root / "sessions")
+            store.bind_workspace("s", root)
+            session = Session("s")
+            session.begin_turn("t")
+            session.model_completed(1, usage=TokenUsage(100, 10, 110, 50, None),
+                                    has_tool_calls=False)
+            for attempt, (status, usage) in enumerate((
+                ("invalid_response", TokenUsage(900, 10, 910, 800, None)),
+                ("completed", TokenUsage(1000, 20, 1020, 0, 100)),
+                ("completed", TokenUsage(10000, 10, 10010, None, None)),
+                ("completed", TokenUsage(None, 10, None, 1000, None)),
+                ("failed", None),
+                ("cancelled", None),
+            ), 1):
+                session.auxiliary_model_completed(AuxiliaryModelCall(
+                    task="compression", scope=None, attempt=attempt, status=status,
+                    started_at_utc=datetime(2026, 10, 18, tzinfo=timezone.utc),
+                    duration_ms=100, usage=usage,
+                    error="invalid checkpoint" if attempt == 1 else None,
+                ), model="test/main")
+            session.finish_turn("failed")
+            store.append_events("s", session.journal, workspace=root)
+            restored = store.load("s")
+
+        self.assertEqual(restored.cache_usage, CacheUsage(2000, 850))
+        self.assertEqual(restored.cache_usage, session.cache_usage)
+        calls = [event for event in restored.journal if event.event_type == "compression_completed"]
+        self.assertEqual(len(calls), 6)
+        self.assertEqual([event.turn_id for event in calls], ["t"] * 6)
+        self.assertEqual(calls[0].payload, {
+            "model": "test/main", "scope": None,
+            "attempt": 1, "status": "invalid_response", "duration_ms": 100,
+            "started_at_utc": "2026-10-18T00:00:00Z", "error": "invalid checkpoint",
+            "usage": {"input_tokens": 900, "output_tokens": 10, "total_tokens": 910,
+                      "cache_read_tokens": 800, "cache_write_tokens": None},
+        })
+        self.assertEqual(restored.compression_count, 0)
+
     def test_session_cache_totals_weight_tokens_across_turns_and_reload(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)

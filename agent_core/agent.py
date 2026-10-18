@@ -60,6 +60,12 @@ class ModelCompletedEvent:
 
 
 @dataclass(frozen=True)
+class CompressionCompletedEvent:
+    call: AuxiliaryModelCall
+    cache_usage: CacheUsage | None
+
+
+@dataclass(frozen=True)
 class ToolBatchStartedEvent:
     model_call_index: int
     tool_calls: tuple[ToolCall, ...]
@@ -111,6 +117,7 @@ AgentEvent: TypeAlias = (
     | ReasoningDeltaEvent
     | AssistantMessageEvent
     | ModelCompletedEvent
+    | CompressionCompletedEvent
     | ToolBatchStartedEvent
     | ToolCallEvent
     | ToolResultEvent
@@ -141,8 +148,6 @@ class Agent:
         now: Callable[[], datetime] | None = None,
         tool_result_normalizer: ToolResultNormalizer | None = None,
         memory_context: MemoryContext | None = None,
-        consolidator_provider: LLMProvider | None = None,
-        on_auxiliary_call: Callable[[AuxiliaryModelCall], None] | None = None,
     ) -> None:
         self._provider = provider
         self._session = session
@@ -172,8 +177,6 @@ class Agent:
             system_prompt=system_prompt,
             consolidator_prompt=consolidator_prompt,
             memory_context=memory_context,
-            consolidator_provider=consolidator_provider,
-            on_auxiliary_call=on_auxiliary_call,
             jobs=context.jobs,
             config=config,
             media_root=context.workspace.path,
@@ -247,6 +250,10 @@ class Agent:
         )
         request_timestamp_utc = self._now().astimezone(timezone.utc)
 
+        def on_compression_call(call: AuxiliaryModelCall) -> None:
+            if on_event is not None:
+                on_event(CompressionCompletedEvent(call, self._session.cache_usage))
+
         self._session.add_item(
             "user",
             user_input,
@@ -261,7 +268,7 @@ class Agent:
             if on_event is not None:
                 on_event(ContextWindowEvent(self._context.window(input_tokens)))
             if self._context.should_archive(input_tokens):
-                self._context.archive(continuation.raise_if_cancelled)
+                self._context.archive(request, continuation.raise_if_cancelled, on_compression_call)
                 continuation.apply_steering()
                 continue
             if input_tokens > self._context.hard_limit:

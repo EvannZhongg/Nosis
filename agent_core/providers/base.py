@@ -35,6 +35,10 @@ from .reasoning import normalize_semantic_effort, validate_reasoning_parameters
 class ModelProvider(LLMProvider):
     _CANCEL_POLL_SECONDS = 0.1
 
+    @property
+    def model_name(self) -> str:
+        return self._model
+
     def __init__(
         self,
         model: str,

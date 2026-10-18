@@ -40,6 +40,7 @@ export function isTurnActivity(message: Incoming): boolean {
     || message.type === "tool_media"
     || message.type === "assistant_message"
     || message.type === "model_completed"
+    || message.type === "compression_completed"
     || message.type === "job_status";
 }
 
@@ -234,6 +235,7 @@ export function applyMessage(
       return { items, approval: null, question: message };
 
     case "model_completed":
+    case "compression_completed":
       return { items, cacheUsage: message.cache_usage };
 
     case "turn_completed":

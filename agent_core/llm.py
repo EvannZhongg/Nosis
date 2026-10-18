@@ -48,6 +48,11 @@ class ProviderCapabilities:
 
 class LLMProvider(ABC):
     @property
+    def model_name(self) -> str | None:
+        """Model identifier, when supplied by the provider."""
+        return None
+
+    @property
     def capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities()
     @property

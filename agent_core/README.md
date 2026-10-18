@@ -43,7 +43,7 @@ interfaces → agent_runtime → agent_core
 
 消息内容统一表示为文本、图片和文件 part。图片可以进入支持视觉的 Provider；普通附件以 Workspace 文件引用进入上下文。
 
-`ContextManager` 按完整语义单元投影 Session 历史，计算窗口占用，并在达到阈值时压缩较早上下文、保留近期单元和用户锚点。可用输入预算为模型窗口减去 `output_reserve_tokens`；默认阈值在窗口不超过 32K 时取预算的 75%，更大窗口取 `min(预算的 80%, 256K)`，配置 `trigger_ratio` 时以它为准，并在主模型与 fast 模型之间取较小值。用户锚点先保留最近两整轮，再按 `user_anchor_token_budget` 向前扩展连续 Turn，判断时计入已选中的全部输入，压缩不会改变保留范围。压缩记录写回 Session；超过硬上限时明确失败。
+`ContextManager` 按完整语义单元投影 Session 历史，计算窗口占用，并在达到阈值时压缩较早上下文、保留近期单元和用户锚点。压缩使用当前 Agent 的模型，保留主请求的 system、工具定义和原始待归档消息前缀，在尾部追加压缩指令；近期尾部不送入压缩，格式修复指令也追加在尾部。可用输入预算为模型窗口减去 `output_reserve_tokens`；默认阈值在窗口不超过 32K 时取预算的 75%，更大窗口取 `min(预算的 80%, 256K)`，配置 `trigger_ratio` 时以它为准。用户锚点先保留最近两整轮，再按 `user_anchor_token_budget` 向前扩展连续 Turn，判断时计入已选中的全部输入，压缩不会改变保留范围。压缩结果验证后写回 Session，压缩返回的 Tool Call 不执行；超过硬上限时明确失败。
 
 | 模块 | 职责 |
 | --- | --- |
@@ -132,7 +132,7 @@ Shell 通过 `ExecutionRouter` 根据 `ExecutionScope` 和当前 `ExecutionAutho
 
 `LLMProvider` 定义模型调用接口、能力信息、流式响应和 token usage。`OpenAIProvider` 使用原生 SDK 实现 Responses 与 Chat Completions 协议，官方服务和中转使用同一实现；其他服务商路由由 `LiteLLMProvider` 承担。
 
-`usage.py` 统一定义 `TokenUsage` 和序列化：`input_tokens` 包含缓存部分，`cache_read_tokens` 与 `cache_write_tokens` 记录其读取、写入明细，未报告时为 `None`，明确报告无缓存活动时为 `0`。Session 在应用 `model_completed` Journal 事件时累计 `CacheUsage`，只计入同时报告输入和缓存读取 token 的调用；会话缓存命中率为 `Σcache_read_tokens / Σinput_tokens`，Journal 重载时恢复，跨 Turn、模型与工作区切换保持累计。每次调用落盘后，`ModelCompletedEvent` 经 Bridge 推送本次用量和会话累计快照，两个前端立即更新，无需等待工具执行或 Turn 结束。`runtime_state.cache_usage` 与 GUI 历史读取提供相同累计快照，事件重放不会重复计数。辅助调用日志和 Bridge 使用相同序列化。Bridge 的 `turn_completed.usage` 表示最后一次模型调用的用量，不是整个 Turn 的累计用量。
+`usage.py` 统一定义 `TokenUsage` 和序列化：`input_tokens` 包含缓存部分，`cache_read_tokens` 与 `cache_write_tokens` 记录其读取、写入明细，未报告时为 `None`，明确报告无缓存活动时为 `0`。普通模型、压缩尝试和记忆调用分别以 `model_completed`、`compression_completed`、`memory_completed` 事件写入所属 Session 的同一份 Journal；辅助调用记录实际模型、scope、尝试次数、状态、耗时、用量和错误，不进入对话上下文。Session 在应用普通模型和压缩事件时累计 `CacheUsage`，只计入同时报告输入和缓存读取 token 的调用，包括格式校验失败的压缩尝试；记忆调用单独记录，不计入该口径。会话缓存命中率为 `Σcache_read_tokens / Σinput_tokens`，Journal 重载时恢复，跨 Turn、模型与工作区切换保持累计。每次调用落盘后，`ModelCompletedEvent` 或 `CompressionCompletedEvent` 经 Bridge 推送本次用量和会话累计快照，两个前端立即更新，无需等待工具执行、压缩重试或 Turn 结束。`runtime_state.cache_usage` 与 GUI 历史读取提供相同累计快照，事件重放不会重复计数。Bridge 的 `turn_completed.usage` 表示最后一次普通模型调用的用量，不是整个 Turn 的累计用量。
 
 `ModelProvider` 共享媒体序列化、token 估算、模型信息和可取消的流读取。模型上下文窗口、输出限制和视觉能力仍从 LiteLLM 的模型目录取得：保留其联网更新及库内置目录，未知模型必须显式配置 `max_context_tokens`，不猜测窗口大小。
 

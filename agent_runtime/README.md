@@ -84,7 +84,7 @@ Provider 路由按以下链解析：
 具体 subagent role → subagent 默认值 → main_agent
 ```
 
-空字符串表示继续继承。`fast_model` 是独立的一路，只服务上下文压缩与长期记忆合并这类辅助模型调用，不参与上面的子 Agent 链；未配置时沿用当前选中的主模型，主 Agent 与子 Agent 的辅助调用使用同一个 fast Provider。每次辅助调用按 Session 追加到该 Session 目录下的 `auxiliary_model_usage.jsonl`，记录任务、状态、耗时和用量，不进入对话上下文。图片生成使用独立 `image_generation` 配置；模型请求超时和额外重试次数来自 `agent_config.json` 的 `provider` 字段。
+空字符串表示继续继承。`fast_model` 是独立的一路，只服务长期记忆合并，不参与上面的子 Agent 链；未配置时沿用当前选中的主模型，主 Agent 与子 Agent 的记忆合并共享这个 Provider。上下文压缩始终使用当前 Agent 自己的 LLM，复用原请求前缀。压缩和记忆调用直接写入所属 Session 的 JSONL Journal，记录实际模型、任务、状态、耗时和用量，不进入对话上下文；子 Agent 调用保存在子 Session 中。图片生成使用独立 `image_generation` 配置；模型请求超时和额外重试次数来自 `agent_config.json` 的 `provider` 字段。
 每个 `provider_config.json` 的 `providers.<name>` 条目可以配置 `api: "responses"` 或 `api: "chat_completions"`，按协议选择原生 OpenAI SDK；与中转域名无关，也不在失败后切换协议。显式选择协议时，`model` 是原样发送的服务端模型 ID，例如 `gpt-6-astra` 或 `openai/gpt-5`（后者适用于要求该 ID 的网关）。省略 `api` 时，无路由前缀或使用 `openai/` 前缀的模型默认使用 Responses，移除路由前缀 `openai/`；其他带前缀的服务商路由使用 LiteLLM。协议选择不依赖联网模型目录。主 Agent、视觉和子 Agent 共用同一装配入口。
 
 可选的 `reasoning_effort` 值为 `none`、`minimal`、`low`、`medium`、`high`、`xhigh` 或 `max`；具体模型只支持其中的子集。原生 Responses 发送 `reasoning.effort`，原生 Chat Completions 发送 `reasoning_effort`，其他路由保留其参数映射。省略该字段时使用上游默认值。`reasoning_parameters` 可以覆盖推理参数，`extra_body` 用于网关扩展字段，例如 `{"extra_body": {"enable_thinking": true}}`；原生 Chat 的额外推理字段也通过 SDK 的扩展 body 发送。
@@ -158,5 +158,4 @@ standalone Skill 与 MCP 使用同一套 Core registry / manager，不存在 Plu
 | `instructions.py` | Workspace Instructions 来源读取与 fingerprint |
 | `attachments.py` | 入站附件解析 |
 | `computer.py` | 桌面截图与输入的平台能力 |
-| `auxiliary_usage.py` | 辅助模型调用的 Session 级用量记录 |
 | `callbacks.py` | Runtime 对宿主的回调接口 |

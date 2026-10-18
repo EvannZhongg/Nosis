@@ -692,6 +692,9 @@ function applyMessage(state: State, message: Incoming): State {
     case 'model_completed':
       return { ...state, usage: message.usage, cacheUsage: message.cache_usage };
 
+    case 'compression_completed':
+      return { ...state, cacheUsage: message.cache_usage };
+
     case 'turn_completed':
       return { ...state, turnId: null, approval: null, question: null, pendingSteers: 0, usage: message.usage };
 
