@@ -18,7 +18,9 @@ class RememberTool(Tool):
                 "Mark one durable user preference, stable fact, or workspace "
                 "decision as worth retaining across sessions. This submits a "
                 "candidate only; the Runtime later reconciles it with existing "
-                "memory. Use global scope for facts or preferences that apply "
+                "memory. Proactively correct outdated global or workspace memory "
+                "when verified new information supersedes it. Use global scope "
+                "for facts or preferences that apply "
                 "across workspaces, and workspace scope for decisions or facts "
                 "specific to the current workspace."
             ),
