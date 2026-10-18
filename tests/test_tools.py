@@ -9,6 +9,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+from tests.filesystem_fixtures import symlinks_available
+
 import httpx
 
 from agent_core import (
@@ -50,22 +52,7 @@ from agent_core.tools.builtin.read_file import (
 )
 
 
-def _symlinks_available() -> bool:
-    """Report whether this account may create symlinks.
-
-    Windows needs Developer Mode or administrator rights.
-    """
-    with tempfile.TemporaryDirectory() as directory:
-        target = Path(directory, "target.txt")
-        target.write_text("x", encoding="utf-8")
-        try:
-            Path(directory, "link.txt").symlink_to(target)
-        except OSError:
-            return False
-    return True
-
-
-SYMLINKS_AVAILABLE = _symlinks_available()
+SYMLINKS_AVAILABLE = symlinks_available()
 
 # Tools that never touch the filesystem still need a workspace in their
 # context; the test package directory is a stable, existing one.
@@ -3201,7 +3188,7 @@ class ShellToolTest(unittest.TestCase):
         self.assertEqual(host_executor.commands, ["pwd"])
         self.assertEqual(workspace_executor.commands, ["pwd"])
 
-    def test_allows_explicit_timeout_below_default(self) -> None:
+    def test_passes_explicit_timeouts_below_and_above_default(self) -> None:
         class RecordingExecutor:
             def __init__(self) -> None:
                 self.timeouts = []
@@ -3223,36 +3210,11 @@ class ShellToolTest(unittest.TestCase):
             execution_router=ExecutionRouter(executor, UnusedExecutor()),
         )
 
-        tool.execute({"command": "pwd", "timeout_seconds": 10})
+        for timeout in (10, 61, 900):
+            with self.subTest(timeout=timeout):
+                tool.execute({"command": "pwd", "timeout_seconds": timeout})
 
-        self.assertEqual(executor.timeouts, [10])
-
-    def test_allows_timeout_above_the_default(self) -> None:
-        class RecordingExecutor:
-            def __init__(self) -> None:
-                self.timeouts = []
-
-            def execute(self, command, timeout_seconds=60):
-                self.timeouts.append(timeout_seconds)
-                return CommandExecutionResult(
-                    command=command,
-                    exit_code=0,
-                    stdout="",
-                    stderr="",
-                    timeout_seconds=timeout_seconds,
-                )
-
-        executor = RecordingExecutor()
-        tool = _Bound(
-            ShellTool(),
-            _TMP_WORKSPACE,
-            execution_router=ExecutionRouter(executor, UnusedExecutor()),
-        )
-
-        tool.execute({"command": "pwd", "timeout_seconds": 61})
-        tool.execute({"command": "pwd", "timeout_seconds": 900})
-
-        self.assertEqual(executor.timeouts, [61, 900])
+        self.assertEqual(executor.timeouts, [10, 61, 900])
 
     def test_advertises_the_shell_and_timeout_it_uses(self) -> None:
         class UnusedExecutor:

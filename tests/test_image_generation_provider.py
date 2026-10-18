@@ -9,7 +9,7 @@ from agent_core.providers.image_generation import (
     _read_image_url,
 )
 from agent_core.public_url import require_public_url
-from tests.test_media import png_bytes
+from tests.image_fixtures import png_bytes
 
 
 class LiteLLMImageGeneratorTest(unittest.TestCase):

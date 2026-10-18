@@ -3,7 +3,7 @@ import unittest
 from pathlib import Path
 
 from agent_core import ComputerActionTool, ImagePart, Session, ToolExecutionContext, Workspace
-from tests.test_media import png_bytes
+from tests.image_fixtures import png_bytes
 
 
 class ComputerActionToolTest(unittest.TestCase):

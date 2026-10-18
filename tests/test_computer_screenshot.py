@@ -23,7 +23,7 @@ from agent_core import (
     Workspace,
 )
 from agent_core.config import ContextCompressionConfig
-from tests.test_media import png_bytes
+from tests.image_fixtures import png_bytes
 
 
 class ComputerScreenshotToolTest(unittest.TestCase):

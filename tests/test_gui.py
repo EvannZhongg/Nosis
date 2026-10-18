@@ -11,14 +11,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
+from tests.filesystem_fixtures import symlinks_available
+
 from agent_core import (
     TokenUsage,
     JsonlSessionStore,
-    LLMRequest,
-    LLMResponse,
     MemoryDocument,
     MemoryStore,
-    Message,
     Session,
     Workspace,
 )
@@ -44,22 +43,7 @@ except ModuleNotFoundError:  # pragma: no cover - exercised without [gui]
     TestClient = None
 
 
-def _symlinks_available() -> bool:
-    """Report whether this account may create symlinks.
-
-    Windows needs Developer Mode or administrator rights.
-    """
-    with tempfile.TemporaryDirectory() as directory:
-        target = Path(directory, "target.txt")
-        target.write_text("x", encoding="utf-8")
-        try:
-            Path(directory, "link.txt").symlink_to(target)
-        except OSError:
-            return False
-    return True
-
-
-SYMLINKS_AVAILABLE = _symlinks_available()
+SYMLINKS_AVAILABLE = symlinks_available()
 
 
 class FakeBridge:
@@ -2217,7 +2201,7 @@ class GuiTest(unittest.TestCase):
             )
 
     def test_serves_a_workspace_image_through_a_signed_url(self) -> None:
-        from tests.test_media import png_bytes
+        from tests.image_fixtures import png_bytes
 
         (self.root / "src" / "diagram.png").write_bytes(png_bytes(8, 8))
         self.store.bind_workspace("image-session", self.root)
@@ -2236,7 +2220,7 @@ class GuiTest(unittest.TestCase):
             self.assertEqual(response.headers["content-type"], "image/png")
 
     def test_image_url_rejects_an_unknown_session(self) -> None:
-        from tests.test_media import png_bytes
+        from tests.image_fixtures import png_bytes
 
         (self.root / "image.png").write_bytes(png_bytes(8, 8))
         with self.client() as client:
@@ -2249,7 +2233,7 @@ class GuiTest(unittest.TestCase):
 
     def test_the_signed_image_type_comes_from_the_bytes(self) -> None:
         """A mislabelled extension must not set the served type."""
-        from tests.test_media import jpeg_bytes
+        from tests.image_fixtures import jpeg_bytes
 
         (self.root / "lying.png").write_bytes(jpeg_bytes(8, 8))
         with self.client() as client:
@@ -2290,7 +2274,7 @@ class GuiTest(unittest.TestCase):
         "on Windows",
     )
     def test_the_image_url_endpoint_rejects_external_symlinks(self) -> None:
-        from tests.test_media import png_bytes
+        from tests.image_fixtures import png_bytes
 
         outside = self.root.parent / "outside.png"
         outside.write_bytes(png_bytes(8, 8))
@@ -2306,7 +2290,7 @@ class GuiTest(unittest.TestCase):
 
     def test_the_image_url_endpoint_404s_an_unreadable_file(self) -> None:
         """An unreadable file is a missing image, not a server fault."""
-        from tests.test_media import png_bytes
+        from tests.image_fixtures import png_bytes
 
         path = self.root / "locked.png"
         path.write_bytes(png_bytes(8, 8))
@@ -2337,7 +2321,7 @@ class GuiTest(unittest.TestCase):
             self.assertEqual(client.get(signed.json()["url"]).status_code, 200)
 
     def test_signed_image_url_rejects_a_tampered_token(self) -> None:
-        from tests.test_media import png_bytes
+        from tests.image_fixtures import png_bytes
 
         (self.root / "image.png").write_bytes(png_bytes(8, 8))
         with self.client() as client:
@@ -2358,7 +2342,7 @@ class GuiTest(unittest.TestCase):
             )
 
     def test_signed_image_url_expires(self) -> None:
-        from tests.test_media import png_bytes
+        from tests.image_fixtures import png_bytes
 
         (self.root / "image.png").write_bytes(png_bytes(8, 8))
         with self.client() as client:
@@ -2376,7 +2360,7 @@ class GuiTest(unittest.TestCase):
 
     def test_upload_names_an_attachment_after_its_bytes(self) -> None:
         """A declared media type never decides what an upload is."""
-        from tests.test_media import jpeg_bytes
+        from tests.image_fixtures import jpeg_bytes
 
         with self.client() as client:
             data = client.post(

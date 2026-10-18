@@ -20,7 +20,7 @@ from agent_core.mcp.config import (
 from agent_core.mcp.tool import McpTool, qualified_tool_name
 from agent_core.mcp.manager import McpClientManager
 from agent_core.tools.policy import McpApprovalPolicy
-from tests.test_media import png_bytes
+from tests.image_fixtures import png_bytes
 
 
 class McpConfigTest(unittest.TestCase):

@@ -24,7 +24,7 @@ from agent_core import (
 from agent_core.config import ContextCompressionConfig
 from agent_core.tools import ToolConfig
 
-from tests.test_media import jpeg_bytes, png_bytes
+from tests.image_fixtures import jpeg_bytes, png_bytes
 
 
 CONSOLIDATOR_PROMPT = "Consolidate the conversation."

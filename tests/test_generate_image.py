@@ -9,7 +9,7 @@ from agent_core import (
     ToolExecutionContext,
     Workspace,
 )
-from tests.test_media import png_bytes
+from tests.image_fixtures import png_bytes
 
 
 class StubImageGenerator:

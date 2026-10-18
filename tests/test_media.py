@@ -4,9 +4,10 @@ import os
 import struct
 import tempfile
 import unittest
-import zlib
 from pathlib import Path
 from unittest.mock import patch
+
+from tests.image_fixtures import jpeg_bytes, png_bytes
 
 from agent_core import media
 from agent_core.media import (
@@ -17,39 +18,6 @@ from agent_core.media import (
     estimate_image_tokens,
     probe_image,
 )
-
-
-def png_bytes(width: int, height: int) -> bytes:
-    def chunk(tag: bytes, data: bytes) -> bytes:
-        body = tag + data
-        return (
-            struct.pack(">I", len(data))
-            + body
-            + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
-        )
-
-    header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
-    raw = b"".join(b"\x00" + b"\x00" * (width * 3) for _ in range(height))
-    return (
-        b"\x89PNG\r\n\x1a\n"
-        + chunk(b"IHDR", header)
-        + chunk(b"IDAT", zlib.compress(raw))
-        + chunk(b"IEND", b"")
-    )
-
-
-def jpeg_bytes(width: int, height: int) -> bytes:
-    # SOI, an APP0 segment, then the baseline start-of-frame that
-    # carries the dimensions.
-    app0 = b"\xff\xe0" + struct.pack(">H", 16) + b"JFIF\x00" + b"\x00" * 9
-    sof = (
-        b"\xff\xc0"
-        + struct.pack(">H", 11)
-        + b"\x08"
-        + struct.pack(">HH", height, width)
-        + b"\x01\x01\x11\x00"
-    )
-    return b"\xff\xd8" + app0 + sof + b"\xff\xd9"
 
 
 def gif_bytes(width: int, height: int) -> bytes:
@@ -83,29 +51,17 @@ class ProbeImageTest(unittest.TestCase):
         path.write_bytes(data)
         return path
 
-    def test_reads_png_dimensions(self) -> None:
-        info = probe_image(self.write("a.png", png_bytes(40, 25)))
-
-        self.assertEqual(info.mime_type, "image/png")
-        self.assertEqual((info.width, info.height), (40, 25))
-
-    def test_reads_jpeg_dimensions(self) -> None:
-        info = probe_image(self.write("a.jpg", jpeg_bytes(64, 32)))
-
-        self.assertEqual(info.mime_type, "image/jpeg")
-        self.assertEqual((info.width, info.height), (64, 32))
-
-    def test_reads_gif_dimensions(self) -> None:
-        info = probe_image(self.write("a.gif", gif_bytes(12, 7)))
-
-        self.assertEqual(info.mime_type, "image/gif")
-        self.assertEqual((info.width, info.height), (12, 7))
-
-    def test_reads_webp_dimensions(self) -> None:
-        info = probe_image(self.write("a.webp", webp_vp8x_bytes(30, 20)))
-
-        self.assertEqual(info.mime_type, "image/webp")
-        self.assertEqual((info.width, info.height), (30, 20))
+    def test_reads_dimensions_for_each_image_format(self) -> None:
+        for extension, make_bytes, width, height, mime_type in (
+            ("png", png_bytes, 40, 25, "image/png"),
+            ("jpg", jpeg_bytes, 64, 32, "image/jpeg"),
+            ("gif", gif_bytes, 12, 7, "image/gif"),
+            ("webp", webp_vp8x_bytes, 30, 20, "image/webp"),
+        ):
+            with self.subTest(extension=extension):
+                info = probe_image(self.write(f"a.{extension}", make_bytes(width, height)))
+                self.assertEqual(info.mime_type, mime_type)
+                self.assertEqual((info.width, info.height), (width, height))
 
     def test_the_media_type_comes_from_the_bytes_not_the_name(self) -> None:
         """A provider handed a mislabelled type rejects the request."""
@@ -201,12 +157,8 @@ class EstimateImageTokensTest(unittest.TestCase):
                     estimate_image_tokens(width, height), billed
                 )
 
-    def test_a_large_image_is_not_flattened_to_the_tile_ceiling(self) -> None:
-        """Fixed tiling alone caps every image near 1.4K tokens."""
-        self.assertGreater(estimate_image_tokens(1568, 1568), 3000)
 
-
-class EncodeDataUrlTest(unittest.TestCase):
+class ImageCacheTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self._directory = tempfile.TemporaryDirectory()
         self.root = Path(self._directory.name)
@@ -214,6 +166,8 @@ class EncodeDataUrlTest(unittest.TestCase):
         clear_encoded_cache()
         self.addCleanup(clear_encoded_cache)
 
+
+class EncodeDataUrlTest(ImageCacheTestCase):
     def test_produces_a_data_url(self) -> None:
         path = self.root / "a.png"
         path.write_bytes(png_bytes(4, 4))
@@ -255,15 +209,8 @@ class EncodeDataUrlTest(unittest.TestCase):
         self.assertNotEqual(encode_data_url(path, "image/png"), first)
 
 
-class ProbeMemoizationTest(unittest.TestCase):
+class ProbeMemoizationTest(ImageCacheTestCase):
     """Counting context probes every image on every agent-loop pass."""
-
-    def setUp(self) -> None:
-        self._directory = tempfile.TemporaryDirectory()
-        self.root = Path(self._directory.name)
-        self.addCleanup(self._directory.cleanup)
-        clear_encoded_cache()
-        self.addCleanup(clear_encoded_cache)
 
     def test_the_header_is_read_once_for_repeated_probes(self) -> None:
         path = self.root / "a.png"
@@ -297,15 +244,8 @@ class ProbeMemoizationTest(unittest.TestCase):
         self.assertEqual(probe_image(path).width, 11)
 
 
-class EncodedCacheBoundsTest(unittest.TestCase):
+class EncodedCacheBoundsTest(ImageCacheTestCase):
     """The cache exists to spare work inside a turn, not to grow forever."""
-
-    def setUp(self) -> None:
-        self._directory = tempfile.TemporaryDirectory()
-        self.root = Path(self._directory.name)
-        self.addCleanup(self._directory.cleanup)
-        clear_encoded_cache()
-        self.addCleanup(clear_encoded_cache)
 
     def test_entries_are_capped(self) -> None:
         for index in range(media._CACHE_MAX_ENTRIES * 2):

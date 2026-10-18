@@ -80,6 +80,29 @@ def tool_set(*tools, session=None, workspace=TEST_WORKSPACE, policy=None, **cont
     return catalog.select(catalog.names, context, policy=policy)
 
 
+def make_agent(
+    provider,
+    session,
+    *,
+    tools=(),
+    config=AGENT_CONFIG,
+    now=None,
+    system_prompt="You are helpful.",
+) -> Agent:
+    context = ToolExecutionContext(workspace=TEST_WORKSPACE, session=session)
+    catalog = ToolCatalog(tools)
+    return Agent(
+        provider=provider,
+        session=session,
+        system_prompt=system_prompt,
+        consolidator_prompt=CONSOLIDATOR_PROMPT,
+        config=config,
+        tools=catalog.select(catalog.names, context),
+        context=context,
+        now=now,
+    )
+
+
 class MockProvider(LLMProvider):
     def __init__(
         self,
@@ -1349,16 +1372,9 @@ class AgentTest(unittest.TestCase):
     def test_calls_provider_and_writes_user_and_assistant_items(self) -> None:
         provider = MockProvider(["hello back"])
         session = Session(session_id="session-1")
-        agent = Agent(
+        agent = make_agent(
             provider=provider,
             session=session,
-            system_prompt="You are helpful.",
-            consolidator_prompt=CONSOLIDATOR_PROMPT,
-            config=AGENT_CONFIG,
-            tools=tool_set(session=session),
-            context=ToolExecutionContext(
-                workspace=TEST_WORKSPACE, session=session
-            ),
             now=clock(REQUEST_TIME, RESPONSE_TIME),
         )
 
@@ -1396,16 +1412,9 @@ class AgentTest(unittest.TestCase):
     def test_persists_structured_provider_error_with_model_call_index(self) -> None:
         provider = ProtocolFailingProvider([])
         session = Session(session_id="session-1")
-        agent = Agent(
+        agent = make_agent(
             provider=provider,
             session=session,
-            system_prompt="You are helpful.",
-            consolidator_prompt=CONSOLIDATOR_PROMPT,
-            config=AGENT_CONFIG,
-            tools=tool_set(session=session),
-            context=ToolExecutionContext(
-                workspace=TEST_WORKSPACE, session=session
-            ),
             now=clock(REQUEST_TIME),
         )
 
@@ -1422,16 +1431,9 @@ class AgentTest(unittest.TestCase):
     def test_persists_stream_error_with_model_call_index(self) -> None:
         provider = StreamFailingProvider([])
         session = Session(session_id="session-1")
-        agent = Agent(
+        agent = make_agent(
             provider=provider,
             session=session,
-            system_prompt="You are helpful.",
-            consolidator_prompt=CONSOLIDATOR_PROMPT,
-            config=AGENT_CONFIG,
-            tools=tool_set(session=session),
-            context=ToolExecutionContext(
-                workspace=TEST_WORKSPACE, session=session
-            ),
             now=clock(REQUEST_TIME),
         )
 
@@ -1449,16 +1451,9 @@ class AgentTest(unittest.TestCase):
     def test_rejects_context_before_calling_provider(self) -> None:
         provider = MockProvider(["unused"], input_tokens=901)
         session = Session(session_id="session-1")
-        agent = Agent(
+        agent = make_agent(
             provider=provider,
             session=session,
-            system_prompt="You are helpful.",
-            consolidator_prompt=CONSOLIDATOR_PROMPT,
-            config=AGENT_CONFIG,
-            tools=tool_set(session=session),
-            context=ToolExecutionContext(
-                workspace=TEST_WORKSPACE, session=session
-            ),
             now=clock(REQUEST_TIME),
         )
 
@@ -1477,16 +1472,9 @@ class AgentTest(unittest.TestCase):
         session = Session(session_id="session-1")
 
         with self.assertRaises(ValueError):
-            Agent(
+            make_agent(
                 provider=provider,
                 session=session,
-                system_prompt="You are helpful.",
-                consolidator_prompt=CONSOLIDATOR_PROMPT,
-                config=AGENT_CONFIG,
-                tools=tool_set(session=session),
-                context=ToolExecutionContext(
-                    workspace=TEST_WORKSPACE, session=session
-                ),
             )
 
     def test_provider_output_limit_is_not_sent_without_policy(self) -> None:
@@ -1497,16 +1485,9 @@ class AgentTest(unittest.TestCase):
             max_output_tokens=500,
         )
         session = Session(session_id="session-1")
-        agent = Agent(
+        agent = make_agent(
             provider=provider,
             session=session,
-            system_prompt="You are helpful.",
-            consolidator_prompt=CONSOLIDATOR_PROMPT,
-            config=AGENT_CONFIG,
-            tools=tool_set(session=session),
-            context=ToolExecutionContext(
-                workspace=TEST_WORKSPACE, session=session
-            ),
             now=clock(REQUEST_TIME, RESPONSE_TIME),
         )
 
@@ -1522,21 +1503,15 @@ class AgentTest(unittest.TestCase):
             max_output_tokens=500,
         )
         session = Session(session_id="session-1")
-        agent = Agent(
+        agent = make_agent(
             provider=provider,
             session=session,
-            system_prompt="You are helpful.",
-            consolidator_prompt=CONSOLIDATOR_PROMPT,
             config=AgentConfig(
                 max_same_tool_calls=5,
                 output_reserve_tokens=100,
                 max_generation_tokens=300,
                 tools=ToolConfig(enabled=()),
                 workspace_instruction_files=(),
-            ),
-            tools=tool_set(session=session),
-            context=ToolExecutionContext(
-                workspace=TEST_WORKSPACE, session=session
             ),
             now=clock(REQUEST_TIME, RESPONSE_TIME),
         )
@@ -1563,16 +1538,10 @@ class AgentTest(unittest.TestCase):
             tools=ToolConfig(enabled=()),
             workspace_instruction_files=(),
         )
-        agent = Agent(
+        agent = make_agent(
             provider=provider,
             session=session,
-            system_prompt="You are helpful.",
-            consolidator_prompt=CONSOLIDATOR_PROMPT,
             config=config,
-            tools=tool_set(session=session),
-            context=ToolExecutionContext(
-                workspace=TEST_WORKSPACE, session=session
-            ),
             now=clock(REQUEST_TIME, RESPONSE_TIME),
         )
 
@@ -1586,16 +1555,9 @@ class AgentTest(unittest.TestCase):
     def test_mock_provider_receives_complete_multi_turn_context(self) -> None:
         provider = MockProvider(["first answer", "second answer"])
         session = Session(session_id="session-1")
-        agent = Agent(
+        agent = make_agent(
             provider=provider,
             session=session,
-            system_prompt="You are helpful.",
-            consolidator_prompt=CONSOLIDATOR_PROMPT,
-            config=AGENT_CONFIG,
-            tools=tool_set(session=session),
-            context=ToolExecutionContext(
-                workspace=TEST_WORKSPACE, session=session
-            ),
             now=clock(
                 datetime(2026, 9, 9, 8, 0, tzinfo=timezone.utc),
                 datetime(2026, 9, 9, 8, 1, tzinfo=timezone.utc),
@@ -1690,22 +1652,16 @@ class AgentTest(unittest.TestCase):
             ]
         )
         session = Session(session_id="session-1")
-        agent = Agent(
+        agent = make_agent(
             provider=provider,
             session=session,
-            system_prompt="You are helpful.",
-            consolidator_prompt=CONSOLIDATOR_PROMPT,
-            config=AGENT_CONFIG,
             now=clock(
                 REQUEST_TIME,
                 TOOL_CALL_TIME,
                 TOOL_RESULT_TIME,
                 RESPONSE_TIME,
             ),
-            tools=tool_set(EchoTool(), session=session),
-            context=ToolExecutionContext(
-                workspace=TEST_WORKSPACE, session=session
-            ),
+            tools=(EchoTool(),),
         )
         events = []
 
@@ -1903,16 +1859,10 @@ class AgentTest(unittest.TestCase):
             ]
         )
         session = Session(session_id="session-1")
-        agent = Agent(
+        agent = make_agent(
             provider=provider,
             session=session,
-            system_prompt="You are helpful.",
-            consolidator_prompt=CONSOLIDATOR_PROMPT,
-            config=AGENT_CONFIG,
-            tools=tool_set(EchoTool(), session=session),
-            context=ToolExecutionContext(
-                workspace=TEST_WORKSPACE, session=session
-            ),
+            tools=(EchoTool(),),
             now=clock(
                 REQUEST_TIME,
                 TOOL_CALL_TIME,
@@ -1974,16 +1924,10 @@ class AgentTest(unittest.TestCase):
             ),
         )
         provider = MockProvider(["ok"])
-        agent = Agent(
+        agent = make_agent(
             provider=provider,
             session=session,
             system_prompt="Be helpful.",
-            consolidator_prompt=CONSOLIDATOR_PROMPT,
-            config=AGENT_CONFIG,
-            tools=tool_set(session=session),
-            context=ToolExecutionContext(
-                workspace=TEST_WORKSPACE, session=session
-            ),
         )
         agent.run("follow up")
 
@@ -2019,11 +1963,9 @@ class AgentTest(unittest.TestCase):
             input_tokens=[100, 100, 100, 800, 100, 100, 120],
         )
         session = Session(session_id="session-1")
-        agent = Agent(
+        agent = make_agent(
             provider=provider,
             session=session,
-            system_prompt="You are helpful.",
-            consolidator_prompt=CONSOLIDATOR_PROMPT,
             config=AgentConfig(
                 max_same_tool_calls=5,
                 output_reserve_tokens=100,
@@ -2031,11 +1973,7 @@ class AgentTest(unittest.TestCase):
                 workspace_instruction_files=(),
                 context=ContextCompressionConfig(keep_recent_units=1),
             ),
-            tools=tool_set(EchoTool(), session=session),
-            context=ToolExecutionContext(
-                workspace=TEST_WORKSPACE,
-                session=session,
-            ),
+            tools=(EchoTool(),),
             now=clock(
                 REQUEST_TIME,
                 TOOL_CALL_TIME,
@@ -2115,16 +2053,10 @@ class AgentTest(unittest.TestCase):
             datetime(2026, 9, 9, 8, 0, index, tzinfo=timezone.utc)
             for index in range(11)
         ]
-        agent = Agent(
+        agent = make_agent(
             provider=provider,
             session=session,
-            system_prompt="You are helpful.",
-            consolidator_prompt=CONSOLIDATOR_PROMPT,
-            config=AGENT_CONFIG,
-            tools=tool_set(EchoTool(), session=session),
-            context=ToolExecutionContext(
-                workspace=TEST_WORKSPACE, session=session
-            ),
+            tools=(EchoTool(),),
             now=clock(*timestamps),
         )
 
@@ -2184,16 +2116,10 @@ class AgentTest(unittest.TestCase):
             + [LLMResponse(content="done")]
         )
         session = Session(session_id="session-1")
-        agent = Agent(
+        agent = make_agent(
             provider=provider,
             session=session,
-            system_prompt="You are helpful.",
-            consolidator_prompt=CONSOLIDATOR_PROMPT,
-            config=AGENT_CONFIG,
-            tools=tool_set(EchoTool(), session=session),
-            context=ToolExecutionContext(
-                workspace=TEST_WORKSPACE, session=session
-            ),
+            tools=(EchoTool(),),
             now=lambda: REQUEST_TIME,
         )
 
@@ -2231,16 +2157,10 @@ class AgentTest(unittest.TestCase):
             ]
         )
         session = Session(session_id="session-1")
-        agent = Agent(
+        agent = make_agent(
             provider=provider,
             session=session,
-            system_prompt="You are helpful.",
-            consolidator_prompt=CONSOLIDATOR_PROMPT,
-            config=AGENT_CONFIG,
-            tools=tool_set(EchoTool(), session=session),
-            context=ToolExecutionContext(
-                workspace=TEST_WORKSPACE, session=session
-            ),
+            tools=(EchoTool(),),
             now=lambda: REQUEST_TIME,
         )
 
@@ -2269,16 +2189,10 @@ class ConcurrentToolBatchTest(unittest.TestCase):
                 LLMResponse(content="done"),
             ]
         )
-        agent = Agent(
+        agent = make_agent(
             provider=provider,
             session=session,
-            system_prompt="You are helpful.",
-            consolidator_prompt=CONSOLIDATOR_PROMPT,
-            config=AGENT_CONFIG,
-            tools=tool_set(tool, session=session),
-            context=ToolExecutionContext(
-                workspace=TEST_WORKSPACE, session=session
-            ),
+            tools=(tool,),
             now=lambda: REQUEST_TIME,
         )
 
@@ -2369,16 +2283,10 @@ class ConcurrentToolBatchTest(unittest.TestCase):
                 LLMResponse(content="done"),
             ]
         )
-        agent = Agent(
+        agent = make_agent(
             provider=provider,
             session=session,
-            system_prompt="You are helpful.",
-            consolidator_prompt=CONSOLIDATOR_PROMPT,
-            config=AGENT_CONFIG,
-            tools=tool_set(blocking, EchoTool(), session=session),
-            context=ToolExecutionContext(
-                workspace=TEST_WORKSPACE, session=session
-            ),
+            tools=(blocking, EchoTool()),
             now=lambda: REQUEST_TIME,
         )
 

@@ -17,7 +17,7 @@ from agent_core import (
 )
 from agent_core.providers import OpenAIProvider
 from agent_core.session import message_to_dict
-from tests.test_media import png_bytes
+from tests.image_fixtures import png_bytes
 
 
 TOOL = ToolDefinition(

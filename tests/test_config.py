@@ -5,7 +5,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from agent_core import DirectorySkillSource, ProviderCapabilities, SkillLoader
+from tests.provider_fixtures import capabilities_stub, TEXT_MODEL, VISION_MODEL
+
+from agent_core import DirectorySkillSource, SkillLoader
 from agent_core.providers import ModelProvider
 from agent_runtime.config import (
     DEFAULT_CONFIG_FILENAMES,
@@ -744,24 +746,6 @@ class ConfigTest(unittest.TestCase):
                     load_config(path)
 
 
-VISION_MODEL = "vision/model"
-TEXT_MODEL = "text/model"
-
-
-def _capabilities(model: str, base_url: str | None = None):
-    """Report only VISION_MODEL as image-capable, without touching LiteLLM."""
-    modalities = {"text"}
-    if model == VISION_MODEL:
-        modalities.add("image")
-    return ProviderCapabilities(frozenset(modalities))
-
-
-# capabilities_for_model is a classmethod, so the patch must absorb `cls`.
-_CAPABILITIES_PATCH = classmethod(
-    lambda cls, model, base_url=None: _capabilities(model, base_url)
-)
-
-
 class ProviderResolutionTest(unittest.TestCase):
     """`provider` and `vision_provider` both walk role → subagent → main."""
 
@@ -826,7 +810,7 @@ class ProviderResolutionTest(unittest.TestCase):
             )
 
             with patch.object(
-                ModelProvider, "capabilities_for_model", _CAPABILITIES_PATCH
+                ModelProvider, "capabilities_for_model", capabilities_stub(VISION_MODEL)
             ):
                 self.assertEqual(
                     load_config(path, role="coder").model, "openai/shared"
@@ -847,7 +831,7 @@ class ProviderResolutionTest(unittest.TestCase):
             )
 
             with patch.object(
-                ModelProvider, "capabilities_for_model", _CAPABILITIES_PATCH
+                ModelProvider, "capabilities_for_model", capabilities_stub(VISION_MODEL)
             ):
                 self.assertEqual(
                     load_config(path, role="coder").model, "openai/special"
@@ -862,7 +846,7 @@ class ProviderResolutionTest(unittest.TestCase):
             path = self.write(directory)
 
             with patch.object(
-                ModelProvider, "capabilities_for_model", _CAPABILITIES_PATCH
+                ModelProvider, "capabilities_for_model", capabilities_stub(VISION_MODEL)
             ):
                 self.assertIsNone(load_vision_config(path))
                 self.assertIsNone(load_vision_config(path, role="coder"))
@@ -875,7 +859,7 @@ class ProviderResolutionTest(unittest.TestCase):
             )
 
             with patch.object(
-                ModelProvider, "capabilities_for_model", _CAPABILITIES_PATCH
+                ModelProvider, "capabilities_for_model", capabilities_stub(VISION_MODEL)
             ):
                 with self.assertRaisesRegex(
                     ValueError, "does not support image input"

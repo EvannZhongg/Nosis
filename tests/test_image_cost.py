@@ -16,28 +16,15 @@ from agent_core.providers import LiteLLMProvider
 from agent_core.providers.base import _request_messages
 from agent_core.session import Message
 
-from tests.test_media import png_bytes
+from tests.image_fixtures import png_bytes
+from tests.provider_fixtures import capabilities_stub
 
 
 VISION_MODEL = "openai/gpt-4o"
 TEXT_MODEL = "openai/text-only"
 
 
-def capabilities(model, base_url=None):
-    from agent_core.llm import ProviderCapabilities
-
-    modalities = {"text"}
-    if model == VISION_MODEL:
-        modalities.add("image")
-    return ProviderCapabilities(frozenset(modalities))
-
-
-_CAPABILITIES_PATCH = classmethod(
-    lambda cls, model, base_url=None: capabilities(model, base_url)
-)
-
-
-class ImageTokenCountingTest(unittest.TestCase):
+class ImageRequestTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self._directory = tempfile.TemporaryDirectory()
         self.root = Path(self._directory.name)
@@ -45,7 +32,7 @@ class ImageTokenCountingTest(unittest.TestCase):
         clear_encoded_cache()
         self.addCleanup(clear_encoded_cache)
         self.patcher = patch.object(
-            LiteLLMProvider, "capabilities_for_model", _CAPABILITIES_PATCH
+            LiteLLMProvider, "capabilities_for_model", capabilities_stub(VISION_MODEL)
         )
         self.patcher.start()
         self.addCleanup(self.patcher.stop)
@@ -64,6 +51,8 @@ class ImageTokenCountingTest(unittest.TestCase):
             media_root=self.root,
         )
 
+
+class ImageTokenCountingTest(ImageRequestTestCase):
     def write(self, name: str, width: int, height: int) -> ImagePart:
         (self.root / name).write_bytes(png_bytes(width, height))
         return ImagePart(path=name, mime_type="image/png")
@@ -131,33 +120,7 @@ class ImageTokenCountingTest(unittest.TestCase):
         self.assertLess(count, 200)
 
 
-class ImageEncodingTest(unittest.TestCase):
-    def setUp(self) -> None:
-        self._directory = tempfile.TemporaryDirectory()
-        self.root = Path(self._directory.name)
-        self.addCleanup(self._directory.cleanup)
-        clear_encoded_cache()
-        self.addCleanup(clear_encoded_cache)
-        self.patcher = patch.object(
-            LiteLLMProvider, "capabilities_for_model", _CAPABILITIES_PATCH
-        )
-        self.patcher.start()
-        self.addCleanup(self.patcher.stop)
-
-    def provider(self) -> LiteLLMProvider:
-        return LiteLLMProvider(
-            model=VISION_MODEL,
-            max_context_tokens=100_000,
-            media_root=self.root,
-        )
-
-    def request(self, image: ImagePart) -> LLMRequest:
-        return LLMRequest(
-            system_prompt="S",
-            messages=(Message(role="user", content=(image,)),),
-            media_root=self.root,
-        )
-
+class ImageEncodingTest(ImageRequestTestCase):
     def test_sending_produces_a_data_url(self) -> None:
         (self.root / "a.png").write_bytes(png_bytes(8, 8))
         image = ImagePart(path="a.png", mime_type="image/png")

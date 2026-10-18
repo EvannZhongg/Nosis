@@ -72,45 +72,13 @@ class StaticProvider(LLMProvider):
 
 
 class ToolCallingProvider(StaticProvider):
-    def __init__(self) -> None:
+    def __init__(self, call: ToolCall) -> None:
         super().__init__()
         self._responses = iter(
             (
                 LLMResponse(
                     content=None,
-                    tool_calls=(
-                        ToolCall(
-                            "call-child",
-                            "list_directory",
-                            {"path": "."},
-                        ),
-                    ),
-                ),
-                LLMResponse(content=self.answer),
-            )
-        )
-
-    def stream(
-        self,
-        request: LLMRequest,
-        on_text_delta,
-        on_reasoning_delta=None,
-    ) -> LLMResponse:
-        self.requests.append(request)
-        response = next(self._responses)
-        if response.content:
-            on_text_delta(response.content)
-        return response
-
-
-class LargeOutputProvider(StaticProvider):
-    def __init__(self) -> None:
-        super().__init__()
-        self._responses = iter(
-            (
-                LLMResponse(
-                    content=None,
-                    tool_calls=(ToolCall("call-child", "large_output", {}),),
+                    tool_calls=(call,),
                 ),
                 LLMResponse(content=self.answer),
             )
@@ -561,7 +529,9 @@ class SubagentRuntimeTest(unittest.TestCase):
                     "x", encoding="utf-8"
                 )
             parent = Session("parent")
-            provider = ToolCallingProvider()
+            provider = ToolCallingProvider(
+                ToolCall("call-child", "list_directory", {"path": "."}),
+            )
             child_role = role(
                 "researcher",
                 "Reads.",
@@ -603,7 +573,7 @@ class SubagentRuntimeTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             parent = Session("parent")
-            provider = LargeOutputProvider()
+            provider = ToolCallingProvider(ToolCall("call-child", "large_output", {}))
             child_role = role(
                 "researcher",
                 "Reads.",

@@ -11,8 +11,9 @@ import weakref
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Callable
 from unittest.mock import patch
+
+from tests.provider_fixtures import capabilities_stub, TEXT_MODEL, VISION_MODEL
 
 from agent_core import (
     AgentRunResult,
@@ -130,7 +131,7 @@ class AttachmentParsingTest(unittest.TestCase):
 
     def test_image_bytes_override_a_file_type_claim(self) -> None:
         from agent_core import ImagePart
-        from tests.test_media import png_bytes
+        from tests.image_fixtures import png_bytes
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -3482,24 +3483,6 @@ class PluginAgentStartTest(BridgeTestCase):
         self.assertEqual(overridden.provider._model, "openai/second")
 
 
-VISION_MODEL = "vision/model"
-TEXT_MODEL = "text/model"
-
-
-def _capabilities(model: str, base_url: str | None = None):
-    """Report only VISION_MODEL as image-capable, without touching LiteLLM."""
-    modalities = {"text"}
-    if model == VISION_MODEL:
-        modalities.add("image")
-    return ProviderCapabilities(frozenset(modalities))
-
-
-# capabilities_for_model is a classmethod, so the patch must absorb `cls`.
-_CAPABILITIES_PATCH = classmethod(
-    lambda cls, model, base_url=None: _capabilities(model, base_url)
-)
-
-
 class AnalyzeImageDerivationTest(BridgeTestCase):
     """The image tools are derived from capability, never configured.
 
@@ -3522,7 +3505,7 @@ class AnalyzeImageDerivationTest(BridgeTestCase):
         directory = self.enterContext(tempfile.TemporaryDirectory())
         bridge, _ = self.make_bridge([], Path(directory))
         with patch.object(
-            ModelProvider, "capabilities_for_model", _CAPABILITIES_PATCH
+            ModelProvider, "capabilities_for_model", capabilities_stub(VISION_MODEL)
         ):
             bridge.open_session(
                 open_session_message(
