@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { COMMANDS, findCommand, matchCommands, parseCommand } from '../src/commands.js';
+import { COMMANDS, matchCommands, parseCommand } from '../src/commands.js';
 
 const names = (value: string): string[] =>
   matchCommands(value, COMMANDS).map((command) => command.name);
@@ -30,12 +30,5 @@ describe('parseCommand', () => {
       command: expect.objectContaining({ name: '/model' }),
       argument: 'openai-main',
     });
-  });
-});
-
-describe('findCommand', () => {
-  it('resolves the exact name a submission dispatches on', () => {
-    expect(findCommand('/permissions')?.name).toBe('/permissions');
-    expect(findCommand('/permission')).toBeUndefined();
   });
 });

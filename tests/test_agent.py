@@ -222,7 +222,7 @@ class AgentTest(unittest.TestCase):
 
         result = agent.run("finish", on_event=events.append, turn_id="turn-1")
 
-        self.assertEqual(result.response.content, "done")
+        self.assertEqual(result.content, "done")
         self.assertEqual(session.turns["turn-1"].status, "completed")
         self.assertEqual(session.plan.revision, 1)
         self.assertEqual(session.plan.steps[0].status, "completed")
@@ -281,7 +281,7 @@ class AgentTest(unittest.TestCase):
 
         result = agent.run("work", turn_control=control)
 
-        self.assertEqual(result.response.content, "done")
+        self.assertEqual(result.content, "done")
         self.assertEqual(session.compression_count, 1)
         self.assertEqual(len([item for item in session.items if item.role == "tool"]), 2)
         self.assertTrue(any(item.content == "try once more" for item in session.items))
@@ -398,7 +398,7 @@ class AgentTest(unittest.TestCase):
 
         result = agent.run("answer", turn_control=control)
 
-        self.assertEqual(result.response.content, "revised answer")
+        self.assertEqual(result.content, "revised answer")
         self.assertEqual(
             [message.content for message in session.items],
             [
@@ -667,7 +667,7 @@ class AgentTest(unittest.TestCase):
         with patch.object(tools, "execute") as execute:
             result = agent.run("new request")
         execute.assert_not_called()
-        self.assertEqual(result.response.content, "done")
+        self.assertEqual(result.content, "done")
         self.assertEqual(session.compression_count, 1)
         self.assertEqual(len(provider.requests[0].tools), 1)
         self.assertEqual(provider.requests[0].messages, provider.requests[1].messages[:-1])
@@ -721,7 +721,7 @@ class AgentTest(unittest.TestCase):
                          [CacheUsage(800, 600), CacheUsage(1600, 1300)])
         self.assertEqual(session.cache_usage, CacheUsage(1800, 1350))
         self.assertEqual([event.model_call_index for event in events if isinstance(event, ModelCompletedEvent)], [1])
-        self.assertEqual(result.response.usage, TokenUsage(200, 30, 230, 50, None))
+        self.assertEqual(result.usage, TokenUsage(200, 30, 230, 50, None))
         self.assertEqual(session.compression_count, 1)
 
     def test_exhausted_compression_still_reports_and_retains_billed_usage(self) -> None:
@@ -1363,10 +1363,7 @@ class AgentTest(unittest.TestCase):
 
         result = agent.run("hello")
 
-        self.assertEqual(result.response.content, "hello back")
-        self.assertEqual(result.request_timestamp_utc, REQUEST_TIME)
-        self.assertEqual(result.response_timestamp_utc, RESPONSE_TIME)
-        self.assertEqual(result.request, provider.requests[0])
+        self.assertEqual(result.content, "hello back")
         request_messages = provider.requests[0].messages
         self.assertNotIn("[Turn Context]", provider.requests[0].system_prompt)
         self.assertIsNone(provider.requests[0].max_generation_tokens)
@@ -1609,8 +1606,7 @@ class AgentTest(unittest.TestCase):
         agent.run("first question")
         result = agent.run("second question")
 
-        self.assertEqual(result.response.content, "second answer")
-        self.assertEqual(result.request, provider.requests[1])
+        self.assertEqual(result.content, "second answer")
         self.assertNotIn("[Turn Context]", provider.requests[1].system_prompt)
         history = provider.requests[1].messages
         self.assertEqual(
@@ -1714,7 +1710,7 @@ class AgentTest(unittest.TestCase):
 
         result = agent.run("use the echo tool", on_event=events.append)
 
-        self.assertEqual(result.response.content, "tool completed")
+        self.assertEqual(result.content, "tool completed")
         completed = [event for event in events if isinstance(event, ModelCompletedEvent)]
         self.assertEqual(completed, [
             ModelCompletedEvent(1, TokenUsage(1000, 20, 1020, 800, 100), CacheUsage(1000, 800)),
@@ -1735,7 +1731,6 @@ class AgentTest(unittest.TestCase):
             }},
         ])
         self.assertEqual(len(provider.requests), 2)
-        self.assertEqual(result.request, provider.requests[1])
         self.assertEqual(
             provider.requests[0].tools,
             (
@@ -1814,7 +1809,6 @@ class AgentTest(unittest.TestCase):
                 ),
             ],
         )
-        self.assertEqual(result.items, tuple(session.items))
         self.assertEqual(
             [
                 event
@@ -2201,7 +2195,7 @@ class AgentTest(unittest.TestCase):
 
         result = agent.run("repeat echo with different arguments in between")
 
-        self.assertEqual(result.response.content, "done")
+        self.assertEqual(result.content, "done")
         self.assertEqual(len(provider.requests), 12)
 
     def test_argument_object_key_order_does_not_reset_repeat_count(

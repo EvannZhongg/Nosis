@@ -565,7 +565,7 @@ class PermissionProtocolTest(BridgeTestCase):
             PermissionPreset.FULL_ACCESS,
         )
         self.assertEqual(
-            JsonlSessionStore(root / "sessions").permission_preset_for("s"),
+            JsonlSessionStore(root / "sessions").load("s").permission_preset,
             PermissionPreset.FULL_ACCESS,
         )
         self.assertEqual(
@@ -677,7 +677,7 @@ class PermissionProtocolTest(BridgeTestCase):
             next_workspace.resolve(),
         )
         self.assertEqual(
-            JsonlSessionStore(root / "sessions").permission_preset_for("s"),
+            JsonlSessionStore(root / "sessions").load("s").permission_preset,
             PermissionPreset.FULL_ACCESS,
         )
         self.assertEqual(
@@ -1233,9 +1233,9 @@ class BridgeServeTest(BridgeTestCase):
             ["session_ready", "runtime_state", "permission_changed"],
         )
         self.assertEqual(
-            JsonlSessionStore(root / "sessions").permission_preset_for(
+            JsonlSessionStore(root / "sessions").load(
                 "empty"
-            ),
+            ).permission_preset,
             PermissionPreset.FULL_ACCESS,
         )
         self.assertIsNone(bridge.host.planes.current)
@@ -1408,7 +1408,7 @@ class SuccessfulAgent:
         self._session.add_item("user", user_input)
         self._session.add_item("assistant", "done")
         self._session.finish_turn("completed", turn_id)
-        return SimpleNamespace(response=SimpleNamespace(usage=None))
+        return LLMResponse("done")
 
 
 class MemorySpy:
@@ -1538,7 +1538,7 @@ class InterruptedTurnTest(BridgeTestCase):
                 on_event(AssistantMessageDeltaEvent("partial", 1))
                 session.add_item("assistant", "done")
                 session.finish_turn("completed", turn_id)
-                return SimpleNamespace(response=SimpleNamespace(usage=None))
+                return LLMResponse("done")
 
         plane.agent = StreamingAgent()
         self.bridge.run_turn({"turn_id": "t2", "text": "second"})
@@ -1894,11 +1894,7 @@ class ScheduledTurnTest(unittest.TestCase):
                     self.session.add_item("user", user_input)
                     self.session.add_item("assistant", "scheduled answer")
                     self.session.finish_turn("completed")
-                    return type(
-                        "Result",
-                        (),
-                        {"response": type("Response", (), {"usage": None})()},
-                    )()
+                    return LLMResponse("scheduled answer")
 
             def execution_plane(manager, state) -> object:
                 assert state.session is not None

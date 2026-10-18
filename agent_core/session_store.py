@@ -274,16 +274,6 @@ class JsonlSessionStore:
             return None
         return workspace_from_key(current.parent.name)
 
-    def permission_preset_for(self, session_id: str) -> PermissionPreset:
-        _validate_session_id(session_id)
-        with self._locked_session(session_id):
-            current = self._find_session_directory(session_id)
-            return (
-                _permission_preset(current)
-                if current is not None
-                else PermissionPreset.ASK_FOR_APPROVAL
-            )
-
     def set_permission_preset(
         self,
         session_id: str,

@@ -9,7 +9,7 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Callable, Iterable
 
 from .config import AgentConfig
-from .content import AttachmentPart, ImagePart
+from .content import AttachmentPart
 from .llm import LLMProvider
 from .memory import MemoryManager
 from .prompting import render_subagent_prompt
@@ -236,7 +236,7 @@ class SubagentRuntime:
             finally:
                 session.attach_journal_sink(None)
         # Full report delivery is separate from the bounded progress snapshots.
-        return result.response.content or ""
+        return result.content or ""
 
     def _store(self, parent: ToolExecutionContext) -> JsonlSessionStore:
         """Nest the child transcript under the parent session.

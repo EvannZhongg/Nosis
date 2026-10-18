@@ -102,7 +102,7 @@ class TurnRunner:
                         *plane.runtime_warnings,
                         f"Long-term memory update failed: {error}",
                     )
-            return TurnResult("completed", usage=result.response.usage)
+            return TurnResult("completed", usage=result.usage)
         except (KeyboardInterrupt, AgentCancelled):
             if memory is not None:
                 memory.discard_pending()

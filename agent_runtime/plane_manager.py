@@ -69,23 +69,6 @@ class ExecutionPlaneManager:
         self._execution_authority_limit = execution_authority_limit
         self.current: ExecutionPlane | None = None
 
-    def matches(
-        self,
-        *,
-        workspace: Workspace,
-        provider_name: str,
-        agent_config,
-        configuration_fingerprint: str,
-        instructions: WorkspaceInstructions,
-    ) -> bool:
-        return self.current is not None and self.current.matches(
-            workspace=workspace,
-            provider_name=provider_name,
-            agent_config=agent_config,
-            configuration_fingerprint=configuration_fingerprint,
-            instructions=instructions,
-        )
-
     def ensure(self, session: SessionRuntimeController) -> ExecutionPlane:
         if (
             session.session is None
@@ -108,14 +91,13 @@ class ExecutionPlaneManager:
             agent_config.workspace_instruction_files,
         )
         plane = self.current
-        if self.matches(
+        if plane is not None and plane.matches(
             workspace=session.workspace,
             provider_name=session.provider_name,
             agent_config=agent_config,
             configuration_fingerprint=config_fingerprint,
             instructions=instructions,
         ):
-            assert plane is not None
             if plane.agent is None:
                 self._bind_session(plane, session)
             return plane

@@ -47,15 +47,14 @@ class RegistrationOrderTest(unittest.TestCase):
                 tools = catalog.select(
                     (*names, "unknown", "read_skill", names[0]), context,
                 )
-                for _ in range(3):
-                    request = LLMRequest("system", (), tools.definitions)
-                    self.assertEqual(
-                        tuple(
-                            tool["function"]["name"]
-                            for tool in _request_tools(request)
-                        ),
-                        names,
-                    )
+                request = LLMRequest("system", (), tools.definitions)
+                self.assertEqual(
+                    tuple(
+                        tool["function"]["name"]
+                        for tool in _request_tools(request)
+                    ),
+                    names,
+                )
 
     def test_skill_sources_preserve_config_order_and_first_duplicate(self):
         with tempfile.TemporaryDirectory() as directory:

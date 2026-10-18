@@ -419,7 +419,7 @@ class ScheduledTaskToolTest(unittest.TestCase):
                 ExecutionScope.HOST,
             )
             self.assertEqual(
-                store.permission_preset_for(result["schedule_session_id"]),
+                store.load(result["schedule_session_id"]).permission_preset,
                 PermissionPreset.FULL_ACCESS,
             )
 
@@ -788,7 +788,7 @@ class ScheduledTaskToolTest(unittest.TestCase):
 
             scheduled_session = result["schedule_session_id"]
             self.assertEqual(
-                store.permission_preset_for(scheduled_session),
+                store.load(scheduled_session).permission_preset,
                 PermissionPreset.WORKSPACE_ACCESS,
             )
             self.assertEqual(
@@ -811,7 +811,7 @@ class ScheduledTaskToolTest(unittest.TestCase):
                 context,
             )
             self.assertEqual(
-                store.permission_preset_for(second["schedule_session_id"]),
+                store.load(second["schedule_session_id"]).permission_preset,
                 PermissionPreset.WORKSPACE_ACCESS,
             )
 

@@ -248,7 +248,7 @@ class JsonlSessionStoreTest(unittest.TestCase):
             self.assertEqual(store.workspace_for("forked"), str(workspace.resolve()))
             self.assertEqual(store.provider_for("forked"), "provider-1")
             self.assertEqual(
-                store.permission_preset_for("forked"),
+                store.load("forked").permission_preset,
                 PermissionPreset.FULL_ACCESS,
             )
             summaries = {
@@ -533,7 +533,7 @@ class JsonlSessionStoreTest(unittest.TestCase):
                 str(workspace.resolve()),
             )
             self.assertEqual(
-                reopened.permission_preset_for("session-1"),
+                reopened.load("session-1").permission_preset,
                 PermissionPreset.FULL_ACCESS,
             )
             self.assertEqual(reopened.list_sessions(), [])

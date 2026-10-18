@@ -34,10 +34,6 @@ export function parseCommand(value: string): { command: Command; argument: strin
   return command ? { command, argument: rest.join(' ') } : undefined;
 }
 
-export function findCommand(name: string): Command | undefined {
-  return parseCommand(name)?.command;
-}
-
 /**
  * Commands from `commands` that the menu offers for the current draft, in
  * display order.

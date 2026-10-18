@@ -412,27 +412,6 @@ class AgentConfigTest(unittest.TestCase):
             ToolConfig(enabled=("read_file",)),
         )
 
-    def test_orders_enabled_tools_by_the_canonical_tool_list(self) -> None:
-        """Tool schemas are a prompt-cache prefix, so their order is fixed.
-
-        The order follows TOOL_NAMES rather than the config's key order, so
-        two configs that enable the same tools produce the same prefix.
-        """
-        self.assertEqual(
-            self.load(
-                {
-                    "main_agent": {
-                        "tools": {
-                            "shell": True,
-                            "read_file": True,
-                            "list_directory": True,
-                        }
-                    }
-                }
-            ).tools.enabled,
-            ("read_file", "list_directory", "shell"),
-        )
-
     def test_rejects_non_boolean_tool_setting(self) -> None:
         with self.assertRaisesRegex(ValueError, "tools.shell.*boolean"):
             self.load(

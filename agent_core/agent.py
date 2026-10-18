@@ -8,11 +8,10 @@ from .context_manager import ContextManager, ContextWindow, ContextWindowExceede
 from .llm import (
     AuxiliaryModelCall,
     LLMProvider,
-    LLMRequest,
     LLMResponse,
     with_generation_limit,
 )
-from .session import Message, Session
+from .session import Session
 from .content import AttachmentPart, ImagePart
 from .errors import ProviderError, runtime_error_info
 from .tool_result import ToolResultNormalizer
@@ -22,16 +21,6 @@ from .turn_control import AgentCancelled, TurnControl, UserSteer
 from .loop_policy import ToolCallRepetitionGuard, TurnContinuationPolicy
 from .memory import MemoryContext
 from .usage import CacheUsage, TokenUsage
-
-
-@dataclass(frozen=True)
-class AgentRunResult:
-    request: LLMRequest
-    response: LLMResponse
-    items: tuple[Message, ...]
-    user_input: str
-    request_timestamp_utc: datetime
-    response_timestamp_utc: datetime
 
 
 @dataclass(frozen=True)
@@ -192,7 +181,7 @@ class Agent:
         attachments: tuple[AttachmentPart, ...] = (),
         turn_id: str | None = None,
         turn_control: TurnControl | None = None,
-    ) -> AgentRunResult:
+    ) -> LLMResponse:
         try:
             result = self._run(
                 user_input,
@@ -233,8 +222,7 @@ class Agent:
         attachments: tuple[AttachmentPart, ...] = (),
         turn_id: str | None = None,
         turn_control: TurnControl | None = None,
-    ) -> AgentRunResult:
-        run_item_start = len(self._session.items)
+    ) -> LLMResponse:
         turn_id = self._session.begin_turn(turn_id)
         model_call_index = 0
         repetition = ToolCallRepetitionGuard(self._config.max_same_tool_calls)
@@ -431,14 +419,7 @@ class Agent:
                 lambda: jobs.wait_for_update(turn_id) if jobs is not None else False,
             ):
                 continue
-            return AgentRunResult(
-                request=request,
-                response=response,
-                items=tuple(self._session.items[run_item_start:]),
-                user_input=user_input,
-                request_timestamp_utc=request_timestamp_utc,
-                response_timestamp_utc=response_timestamp_utc,
-            )
+            return response
 
 
 def _append_steering(

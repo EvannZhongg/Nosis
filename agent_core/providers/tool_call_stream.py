@@ -11,7 +11,6 @@ from ._utils import get_field
 
 @dataclass
 class _ToolCallState:
-    order: int
     index: int | None = None
     id: str | None = None
     name: str | None = None
@@ -151,7 +150,7 @@ class ToolCallStreamAssembler:
                     tool_call_id=tool_call_id,
                 )
 
-        state = _ToolCallState(order=len(self._states))
+        state = _ToolCallState()
         self._states.append(state)
         return state
 
