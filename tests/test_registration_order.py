@@ -21,7 +21,7 @@ from agent_core.config import SkillConfig
 from agent_core.llm import LLMRequest
 from agent_core.mcp.config import load_mcp_config
 from agent_core.mcp.connection import discover_tools
-from agent_runtime.mcp_client import McpClientHandle
+from agent_runtime.mcp.client import McpClient
 from agent_core.providers.base import _request_tools
 from agent_core.tools.config import TOOL_NAMES, load_tool_config
 from agent_runtime.config import configured_skill_sources
@@ -157,7 +157,9 @@ class RegistrationOrderTest(unittest.TestCase):
             config = load_mcp_config({"enabled": True, "servers": {
                 name: {"command": "unused"} for name in server_names
             }})
-            handle = McpClientHandle(Path.cwd(), config, Path.cwd(), "session")
+            client = McpClient(Path.cwd())
+            self.addCleanup(client.close)
+            handle = client.bind(config, Path.cwd(), "session")
             handle._load_tools([{
                 "server": server, "lease": server,
                 "tools": [{"name": name, "description": "demo", "input_schema": {"type": "object"}}
@@ -171,7 +173,9 @@ class RegistrationOrderTest(unittest.TestCase):
         config = load_mcp_config({"enabled": True, "servers": {
             "demo": {"command": "unused", "tools": {"enabled": ["alpha", "zeta"]}},
         }})
-        manager = McpClientHandle(Path.cwd(), config, Path.cwd(), "session")
+        client = McpClient(Path.cwd())
+        self.addCleanup(client.close)
+        manager = client.bind(config, Path.cwd(), "session")
         snapshots = []
         for pages in (
             (("zeta", "hidden"), ("alpha",)),

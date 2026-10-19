@@ -29,7 +29,7 @@ class McpLease:
 
 
 class McpService:
-    def __init__(self, idle_seconds: float = 30) -> None:
+    def __init__(self, idle_seconds: float = 300) -> None:
         self.idle_seconds = idle_seconds
         self.resources: dict[str, _Resource] = {}
 
@@ -40,36 +40,34 @@ class McpService:
         key = hashlib.sha256(json.dumps(
             identity, sort_keys=True, separators=(",", ":"),
         ).encode()).hexdigest()
-        resource = self.resources.get(key)
-        while resource is not None and resource.connection.stop.is_set():
-            # A new owner must not race the previous subprocess's teardown.
-            await asyncio.shield(resource.task)
-            if self.resources.get(key) is resource:
-                self.resources.pop(key)
+        async with asyncio.timeout(startup_timeout):
             resource = self.resources.get(key)
-        if resource is None or resource.connection.failure is not None:
-            connection = McpConnection(
-                McpConnectionParameters(**identity["connection"]), startup_timeout,
-            )
-            resource = _Resource(key, connection, asyncio.create_task(connection.run()))
-            self.resources[key] = resource
-            resource.task.add_done_callback(lambda task: self._finished(resource, task))
-            # A client may detach before initialization reports its failure.
-            connection.ready.add_done_callback(
-                lambda future: future.exception() if not future.cancelled() else None
-            )
-        resource.references += 1
-        try:
-            async with asyncio.timeout(startup_timeout):
+            while resource is not None and resource.connection.stop.is_set():
+                # A new owner must not race the previous subprocess's teardown.
+                await asyncio.shield(asyncio.gather(resource.task, return_exceptions=True))
+                if self.resources.get(key) is resource:
+                    self.resources.pop(key)
+                resource = self.resources.get(key)
+            if resource is None or resource.connection.failure is not None:
+                connection = McpConnection(McpConnectionParameters(**identity["connection"]))
+                resource = _Resource(key, connection, asyncio.create_task(connection.run()))
+                self.resources[key] = resource
+                resource.task.add_done_callback(lambda task: self._finished(resource, task))
+                # A client may detach before initialization reports its failure.
+                connection.ready.add_done_callback(
+                    lambda future: future.exception() if not future.cancelled() else None
+                )
+            resource.references += 1
+            try:
                 tools = await asyncio.shield(resource.connection.ready)
-            if resource.connection.failure is not None:
-                raise ConnectionError("MCP connection is unavailable")
-        except BaseException:
-            self._release_reference(resource)
-            raise
-        lease = McpLease(resource, tools, on_failure)
-        resource.leases.add(lease)
-        return lease
+                if resource.connection.failure is not None:
+                    raise ConnectionError("MCP connection is unavailable")
+            except BaseException:
+                self._release_reference(resource)
+                raise
+            lease = McpLease(resource, tools, on_failure)
+            resource.leases.add(lease)
+            return lease
 
     def release(self, lease: McpLease) -> None:
         if lease.active:
@@ -81,6 +79,11 @@ class McpService:
         resource.references -= 1
         if resource.references == 0:
             resource.idle_since = time.monotonic()
+            # Only waiting owners determine the initialization lifetime. A short
+            # deadline must not cancel initialization awaited by another owner.
+            if not resource.connection.ready.done():
+                resource.connection.stop.set()
+                resource.task.cancel()
 
     def _finished(self, resource: _Resource, task: asyncio.Task[None]) -> None:
         if not task.cancelled():
@@ -118,7 +121,7 @@ class McpService:
             if not resource.connection.ready.done():
                 resource.task.cancel()
         if expired:
-            await asyncio.gather(*(item.task for item in expired))
+            await asyncio.gather(*(item.task for item in expired), return_exceptions=True)
             for resource in expired:
                 if self.resources.get(resource.key) is resource:
                     self.resources.pop(resource.key)
@@ -130,4 +133,4 @@ class McpService:
             resource.connection.stop.set()
             if not resource.connection.ready.done():
                 resource.task.cancel()
-        await asyncio.gather(*(item.task for item in resources))
+        await asyncio.gather(*(item.task for item in resources), return_exceptions=True)

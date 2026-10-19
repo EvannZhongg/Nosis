@@ -115,7 +115,11 @@ Each entry is a **file** holding a server map. Keys are server names and registe
 - Shared fields: `enabled`, `tools`, `startup_timeout_seconds`, `call_timeout_seconds`, `scope`.
 - `scope` defaults to `workspace`: matching connection settings and credentials share one
   physical connection within the same workspace, including across Bridge processes. Set
-  `scope: "session"` for connection state that must be isolated by Nosis session.
+  `scope: "session"` for connection state that must be isolated by Nosis session, or
+  `scope: "global"` to share across workspaces and sessions in the same Nosis configuration
+  directory. Credentials and effective connection settings must still match. Global stdio
+  requires a fixed absolute working directory; plugin stdio paths are resolved against the
+  plugin root before acquiring resources.
 - Tool visibility and approval are applied independently by each Runtime, even when its
   physical connection and discovery results are shared.
 

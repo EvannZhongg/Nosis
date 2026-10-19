@@ -19,10 +19,10 @@ from tests.image_fixtures import png_bytes
 
 class McpConfigTest(unittest.TestCase):
     def test_validates_resource_scope(self):
-        for scope in ("workspace", "session"):
+        for scope in ("global", "workspace", "session"):
             config = load_mcp_config({"servers": {"demo": {"command": "python", "scope": scope}}})
             self.assertEqual(config.servers[0].scope, scope)
-        for scope in (None, [], {}, "global"):
+        for scope in (None, [], {}, "unknown"):
             with self.assertRaisesRegex(ValueError, "scope"):
                 load_mcp_config({"servers": {"demo": {"command": "python", "scope": scope}}})
 
@@ -48,7 +48,7 @@ class McpConfigTest(unittest.TestCase):
         root = Path.cwd() / "plugin-root"
         servers = namespace_mcp_servers(
             load_mcp_server_map(
-                {"demo": {"type": "stdio", "command": "python"}}
+                {"demo": {"type": "stdio", "command": "python", "scope": "global"}}
             ),
             "example",
             base_directory=root,
@@ -57,6 +57,7 @@ class McpConfigTest(unittest.TestCase):
         server = servers[0]
         self.assertEqual(server.identifier, "example:demo")
         self.assertEqual(server.cwd, str(root.resolve()))
+        self.assertEqual(server.scope, "global")
 
     def test_merges_namespaced_server_collections(self) -> None:
         standalone = load_mcp_config(

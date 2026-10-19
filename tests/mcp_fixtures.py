@@ -6,7 +6,7 @@ import sys
 import time
 from contextlib import contextmanager
 from pathlib import Path
-from agent_runtime.mcp_client import _existing_connection
+from agent_runtime.mcp.transport import _existing_connection
 
 
 @contextmanager
@@ -18,7 +18,7 @@ def running_broker(config_directory: Path):
         process = subprocess.Popen(
             [sys.executable, "-c", (
                 "import asyncio, sys; from pathlib import Path; "
-                "from agent_runtime.mcp_broker import serve; "
+                "from agent_runtime.mcp.broker import serve; "
                 "asyncio.run(serve(Path(sys.argv[1]), idle_seconds=1))"
             ), str(directory)],
             stdin=subprocess.DEVNULL, stdout=log, stderr=log,

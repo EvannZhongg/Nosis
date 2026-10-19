@@ -10,12 +10,12 @@ import time
 import unittest
 from dataclasses import replace
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from agent_core import AgentCancelled, TurnControl
 from agent_core.mcp.config import load_mcp_config
-from agent_runtime.mcp_client import McpClientHandle, _describe
-from agent_runtime.mcp_service import McpService
+from agent_runtime.mcp.client import McpClient, _describe
+from agent_runtime.mcp.service import McpService
 from tests.mcp_fixtures import running_broker
 
 
@@ -27,7 +27,7 @@ from unittest.mock import patch
 from interfaces.bridge.bridge import Bridge
 with patch('interfaces.bridge.bridge.default_config_directory', return_value=Path(sys.argv[1])):
     bridge = Bridge(io.StringIO(), io.StringIO(), start_scheduler=False)
-bridge.open_session({'type': 'open_session', 'workspace': sys.argv[1], 'session_id': None})
+bridge.open_session({'type': 'open_session', 'workspace': sys.argv[2] if len(sys.argv) > 2 else sys.argv[1], 'session_id': None})
 plane = bridge.host.planes.ensure(bridge.host.sessions)
 def report():
     print(json.dumps(plane.mcp.call_tool('fake', 'identity', {})['structured_content']), flush=True)
@@ -77,6 +77,31 @@ def wait_for(predicate, timeout=10):
 
 
 class McpIdentityTest(unittest.TestCase):
+    def test_global_requires_stable_stdio_directory_and_preserves_security_identity(self):
+        root = Path.cwd()
+        settings = config(scope="global", cwd=str(root))
+        first = _describe(settings, root, "one", {"TOKEN": "one"})[0]["identity"]
+        self.assertEqual(first, _describe(settings, root / "other", "two", {"TOKEN": "one"})[0]["identity"])
+        self.assertNotEqual(first, _describe(settings, root, "one", {"TOKEN": "two"})[0]["identity"])
+        slower = replace(settings, servers=(replace(settings.servers[0], startup_timeout_seconds=90),))
+        self.assertEqual(first, _describe(slower, root, "one", {"TOKEN": "one"})[0]["identity"])
+        for cwd in (None, ".", "relative"):
+            with self.subTest(cwd=cwd), self.assertRaisesRegex(ValueError, "absolute cwd"):
+                _describe(config(scope="global", cwd=cwd), root, "one")
+
+    def test_http_identity_uses_only_effective_transport_environment(self):
+        settings = load_mcp_config({"enabled": True, "servers": {"http": {
+            "url": "https://example.test/mcp", "scope": "global",
+            "headers": {"Authorization": "Bearer first"},
+        }}})
+        root = Path.cwd()
+        first = _describe(settings, root, "one", {"UNRELATED": "one"})[0]["identity"]
+        self.assertEqual(first, _describe(settings, root / "other", "two", {"UNRELATED": "two"})[0]["identity"])
+        for environment in ({"HTTPS_PROXY": "http://localhost:1234"}, {"SSL_CERT_FILE": "another.pem"}):
+            self.assertNotEqual(first, _describe(settings, root, "one", environment)[0]["identity"])
+        credential = replace(settings, servers=(replace(settings.servers[0], headers={"Authorization": "Bearer second"}),))
+        self.assertNotEqual(first, _describe(credential, root, "one", {})[0]["identity"])
+
     def test_environment_snapshot_tracks_managed_credentials_without_library_mutations(self):
         from agent_runtime.settings import EnvironmentReloader
 
@@ -119,6 +144,111 @@ class McpIdentityTest(unittest.TestCase):
 
 
 class McpPoolTest(unittest.IsolatedAsyncioTestCase):
+    async def test_cancelled_owner_before_start_does_not_cancel_acquire_reap_or_close(self):
+        identity = _describe(config(), Path.cwd(), "one")[0]["identity"]
+
+        async def lifecycle(connection):
+            connection.ready.set_result(())
+            await connection.stop.wait()
+
+        for action in ("acquire", "reap", "close"):
+            with self.subTest(action=action), patch("agent_core.mcp.connection.McpConnection.run", lifecycle):
+                service = McpService(idle_seconds=0)
+                try:
+                    waiting = asyncio.create_task(service.acquire(identity, 1, lambda error: None))
+                    await asyncio.sleep(0)
+                    previous = next(iter(service.resources.values()))
+                    self.assertFalse(previous.connection.ready.done())
+                    previous.connection.stop.set()
+                    previous.task.cancel()
+                    waiting.cancel()
+                    with self.assertRaises(asyncio.CancelledError):
+                        await waiting
+                    self.assertTrue(previous.task.cancelled())
+                    if action == "acquire":
+                        lease = await service.acquire(identity, 1, lambda error: None)
+                        self.assertIsNot(previous, lease.resource)
+                        service.release(lease)
+                    elif action == "reap":
+                        await service.reap()
+                        self.assertFalse(service.resources)
+                    else:
+                        await service.close()
+                finally:
+                    await service.close()
+
+    async def test_short_waiter_timeout_does_not_bound_shared_initialization(self):
+        service = McpService()
+        entered, initialize = asyncio.Event(), asyncio.Event()
+        connections = []
+
+        async def lifecycle(connection):
+            connections.append(connection)
+            entered.set()
+            await initialize.wait()
+            connection.ready.set_result(())
+            await connection.stop.wait()
+
+        identity = _describe(config(), Path.cwd(), "one")[0]["identity"]
+        with patch("agent_core.mcp.connection.McpConnection.run", lifecycle):
+            try:
+                short = asyncio.create_task(service.acquire(identity, 0.05, lambda error: None))
+                await entered.wait()
+                long = asyncio.create_task(service.acquire(identity, 2, lambda error: None))
+                with self.assertRaises(TimeoutError):
+                    await short
+                self.assertFalse(connections[0].stop.is_set())
+                initialize.set()
+                lease = await long
+                self.assertEqual(len(connections), 1)
+                service.release(lease)
+            finally:
+                initialize.set()
+                await service.close()
+
+    async def test_initialization_without_waiters_is_cancelled(self):
+        service = McpService()
+        stopped = asyncio.Event()
+
+        async def lifecycle(connection):
+            try:
+                await connection.stop.wait()
+            except asyncio.CancelledError:
+                pass
+            finally:
+                stopped.set()
+
+        identity = _describe(config(), Path.cwd(), "one")[0]["identity"]
+        with patch("agent_core.mcp.connection.McpConnection.run", lifecycle):
+            try:
+                with self.assertRaises(TimeoutError):
+                    await service.acquire(identity, 0.05, lambda error: None)
+                await asyncio.wait_for(stopped.wait(), 1)
+                self.assertTrue(next(iter(service.resources.values())).connection.stop.is_set())
+            finally:
+                await service.close()
+
+    async def test_default_grace_preserves_resources_after_thirty_seconds(self):
+        service = McpService()
+
+        async def lifecycle(connection):
+            connection.ready.set_result(())
+            await connection.stop.wait()
+
+        identity = _describe(config(), Path.cwd(), "one")[0]["identity"]
+        with patch("agent_core.mcp.connection.McpConnection.run", lifecycle):
+            try:
+                lease = await service.acquire(identity, 15, lambda error: None)
+                service.release(lease)
+                lease.resource.idle_since = time.monotonic() - 31
+                await service.reap()
+                self.assertEqual(len(service.resources), 1)
+                lease.resource.idle_since = time.monotonic() - 301
+                await service.reap()
+                self.assertFalse(service.resources)
+            finally:
+                await service.close()
+
     async def test_acquisition_waits_for_idle_subprocess_teardown(self):
         service = McpService(idle_seconds=0)
         closing = asyncio.Event()
@@ -139,6 +269,9 @@ class McpPoolTest(unittest.IsolatedAsyncioTestCase):
                 service.release(first)
                 reaper = asyncio.create_task(service.reap())
                 await closing.wait()
+                with self.assertRaises(TimeoutError):
+                    await service.acquire(identity, 0.05, lambda error: None)
+                self.assertFalse(first.resource.task.done())
                 acquire = asyncio.create_task(service.acquire(identity, 15, lambda error: None))
                 await asyncio.sleep(0)
                 self.assertFalse(acquire.done())
@@ -195,13 +328,92 @@ class McpPoolTest(unittest.IsolatedAsyncioTestCase):
                 await service.close()
 
 
+class McpBindingTest(unittest.IsolatedAsyncioTestCase):
+    async def test_cancelled_binding_preserves_previous_leases_and_discards_new_ones(self):
+        from agent_runtime.mcp.broker import _Peer
+
+        service = McpService(idle_seconds=0)
+        peer = _Peer(service, Mock())
+        initializing = asyncio.Event()
+
+        async def lifecycle(connection):
+            try:
+                if connection.parameters.env.get("WAIT"):
+                    initializing.set()
+                    await asyncio.Event().wait()
+                connection.ready.set_result(())
+                await connection.stop.wait()
+            except asyncio.CancelledError:
+                pass
+
+        settings = load_mcp_config({"enabled": True, "servers": {
+            "fast": {"command": sys.executable},
+            "slow": {"command": sys.executable, "env": {"WAIT": "yes"}},
+        }})
+        descriptions = _describe(settings, Path.cwd(), "one")
+        with patch("agent_core.mcp.connection.McpConnection.run", lifecycle):
+            try:
+                first, = await peer.bind(descriptions[:1])
+                updating = asyncio.create_task(peer.bind(descriptions))
+                await initializing.wait()
+                updating.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await updating
+                self.assertEqual(list(peer.leases), [first["lease"]])
+                rebound, = await peer.bind(descriptions[:1])
+                self.assertEqual(first["lease"], rebound["lease"])
+                await peer.bind([])
+                self.assertFalse(peer.leases)
+                await service.reap()
+                self.assertFalse(service.resources)
+            finally:
+                for lease in peer.leases.values():
+                    service.release(lease)
+                await service.close()
+
+    async def test_binding_failure_releases_removed_lease_and_retains_healthy_one(self):
+        from agent_runtime.mcp.broker import _Peer
+
+        service = McpService(idle_seconds=0)
+        peer = _Peer(service, Mock())
+
+        async def lifecycle(connection):
+            if connection.parameters.env.get("FAIL"):
+                connection.failure = ConnectionError("failed to initialize")
+                connection.ready.set_exception(connection.failure)
+                return
+            connection.ready.set_result(())
+            await connection.stop.wait()
+
+        settings = load_mcp_config({"enabled": True, "servers": {
+            "first": {"command": sys.executable}, "second": {"command": sys.executable},
+        }})
+        original = _describe(settings, Path.cwd(), "one")
+        changed = replace(settings, servers=(settings.servers[0], replace(settings.servers[1], env={"FAIL": "yes"})))
+        with patch("agent_core.mcp.connection.McpConnection.run", lifecycle):
+            try:
+                first, second = await peer.bind(original)
+                removed = peer.leases[second["lease"]]
+                healthy, failed = await peer.bind(_describe(changed, Path.cwd(), "one"))
+                self.assertEqual(first["lease"], healthy["lease"])
+                self.assertIn("error", failed)
+                self.assertFalse(removed.active)
+                self.assertEqual(list(peer.leases), [first["lease"]])
+            finally:
+                for lease in peer.leases.values():
+                    service.release(lease)
+                await service.close()
+
+
 class McpBrokerTest(unittest.TestCase):
     def setUp(self):
         self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
         self.broker = self.enterContext(running_broker(self.root))
 
     def handle(self, settings=None, session="one", workspace=None):
-        handle = McpClientHandle(self.root, settings or config(), workspace or self.root, session)
+        client = McpClient(self.root)
+        self.addCleanup(client.close)
+        handle = client.bind(settings or config(), workspace or self.root, session)
         self.addCleanup(handle.release)
         handle.acquire()
         handle.wait_ready()
@@ -217,11 +429,43 @@ class McpBrokerTest(unittest.TestCase):
         self.assertTrue(second.requires_approval("mcp__fake__identity"))
         with self.assertRaisesRegex(ValueError, "not enabled"):
             first.call_tool("fake", "hidden", {})
-        first.release()
-        second.release()
+        first._client.close()
+        second._client.close()
         third = self.handle(config(env={"TEST_MCP_LOG": str(log)}))
         self.assertEqual(pid, third.call_tool("fake", "identity", {})["structured_content"]["pid"])
         self.assertEqual(len(log.read_text().splitlines()), 1)
+
+    def test_empty_binding_releases_resources_without_closing_host_transport(self):
+        first = self.handle()
+        client = first._client
+        pid = first.call_tool("fake", "identity", {})["structured_content"]["pid"]
+        thread = client._transport._thread
+        first.release()
+        empty = client.bind(load_mcp_config(None), self.root, "two")
+        empty.acquire()
+        self.assertEqual(empty.wait_ready(), ())
+        time.sleep(2.1)
+        empty.release()
+        next_view = client.bind(config(), self.root, "two")
+        next_view.acquire()
+        next_view.wait_ready()
+        self.assertIs(thread, client._transport._thread)
+        self.assertNotEqual(pid, next_view.call_tool("fake", "identity", {})["structured_content"]["pid"])
+
+    def test_explicit_binding_recovers_disconnected_host_transport(self):
+        first = self.handle()
+        client = first._client
+        old_transport = client._transport
+        old_transport._socket.shutdown(socket.SHUT_RDWR)
+        wait_for(lambda: old_transport.failed)
+        wait_for(lambda: first._leases["fake"] in first._unavailable)
+        self.assertTrue(first.matches(config(), self.root, "one"))
+        first.release()
+        second = client.bind(config(), self.root, "two")
+        second.acquire()
+        second.wait_ready()
+        self.assertIsNot(old_transport, client._transport)
+        self.assertEqual(second.call_tool("fake", "echo", {"text": "rebound"})["structured_content"], {"echo": "rebound"})
 
     def test_runtime_rebuilds_reuse_connections_and_plugin_changes_replace_only_affected_resource(self):
         import io
@@ -249,6 +493,8 @@ class McpBrokerTest(unittest.TestCase):
         bridge.host.change_provider("second")
         second = bridge.host.planes.ensure(bridge.host.sessions)
         self.assertIsNot(first, second)
+        self.assertIs(first.mcp._client, second.mcp._client)
+        self.assertEqual(first.mcp._leases, second.mcp._leases)
         before = first.mcp._descriptions[0]["identity"]["connection"]["env"]
         after = second.mcp._descriptions[0]["identity"]["connection"]["env"]
         changed_names = [name for name in before.keys() | after.keys() if before.get(name) != after.get(name)]
@@ -258,8 +504,61 @@ class McpBrokerTest(unittest.TestCase):
         path.write_text(json.dumps(plugin_config), encoding="utf-8")
         third = bridge.host.planes.ensure(bridge.host.sessions)
         self.assertIsNot(second, third)
+        self.assertEqual(second.mcp._leases["fake"], third.mcp._leases["fake"])
+        self.assertNotEqual(second.mcp._leases["example:extra"], third.mcp._leases["example:extra"])
         self.assertEqual(pid, third.mcp.call_tool("fake", "identity", {})["structured_content"]["pid"])
         self.assertNotEqual(plugin_pid, third.mcp.call_tool("example:extra", "identity", {})["structured_content"]["pid"])
+
+    def test_global_binding_survives_plane_close_and_workspace_session_switch(self):
+        import io
+        from interfaces.bridge.bridge import Bridge
+
+        bridge_configuration(self.root, self.root / "discovery.jsonl")
+        path = self.root / "agent_config.json"
+        document = json.loads(path.read_text(encoding="utf-8"))
+        document["mcp"]["servers"]["fake"].update(scope="global", cwd=str(self.root))
+        path.write_text(json.dumps(document), encoding="utf-8")
+        with patch("interfaces.bridge.bridge.default_config_directory", return_value=self.root):
+            bridge = Bridge(io.StringIO(), io.StringIO(), start_scheduler=False)
+        self.addCleanup(bridge.close)
+        bridge.open_session({"type": "open_session", "workspace": str(self.root), "session_id": None})
+        first = bridge.host.planes.ensure(bridge.host.sessions)
+        pid = first.mcp.call_tool("fake", "identity", {})["structured_content"]["pid"]
+        thread = bridge.host.mcp._transport._thread
+        bridge.host.change_provider("second")
+        time.sleep(2.1)  # Longer than this test Broker's one-second resource grace.
+        other = self.root / "other"
+        other.mkdir()
+        bridge.open_session({"type": "open_session", "workspace": str(other), "session_id": None})
+        second = bridge.host.planes.ensure(bridge.host.sessions)
+        self.assertIsNot(first, second)
+        self.assertIs(bridge.host.mcp._transport._thread, thread)
+        self.assertEqual(first.mcp._leases, second.mcp._leases)
+        self.assertEqual(pid, second.mcp.call_tool("fake", "identity", {})["structured_content"]["pid"])
+
+    def test_failed_server_does_not_rebuild_plane_or_interrupt_healthy_server(self):
+        import io
+        from interfaces.bridge.bridge import Bridge
+
+        bridge_configuration(self.root, self.root / "discovery.jsonl")
+        path = self.root / "agent_config.json"
+        document = json.loads(path.read_text(encoding="utf-8"))
+        document["mcp"]["servers"].update({
+            "bad": {"command": str(self.root / "missing-executable")},
+            "healthy": {"command": sys.executable, "args": [FAKE_SERVER]},
+        })
+        path.write_text(json.dumps(document), encoding="utf-8")
+        with patch("interfaces.bridge.bridge.default_config_directory", return_value=self.root):
+            bridge = Bridge(io.StringIO(), io.StringIO(), start_scheduler=False)
+        self.addCleanup(bridge.close)
+        bridge.open_session({"type": "open_session", "workspace": str(self.root), "session_id": None})
+        plane = bridge.host.planes.ensure(bridge.host.sessions)
+        self.assertIs(plane, bridge.host.planes.ensure(bridge.host.sessions))
+        with self.assertRaises(ConnectionError):
+            plane.mcp.call_tool("fake", "crash", {})
+        wait_for(lambda: plane.mcp._leases["fake"] in plane.mcp._unavailable)
+        self.assertIs(plane, bridge.host.planes.ensure(bridge.host.sessions))
+        self.assertEqual(plane.mcp.call_tool("healthy", "echo", {"text": "alive"})["structured_content"], {"echo": "alive"})
 
     def test_one_failed_initializer_keeps_other_servers_available(self):
         settings = load_mcp_config({"enabled": True, "servers": {
@@ -267,7 +566,9 @@ class McpBrokerTest(unittest.TestCase):
             "fake": {"command": sys.executable, "args": [FAKE_SERVER]},
         }})
         statuses = []
-        handle = McpClientHandle(self.root, settings, self.root, "one", statuses.append)
+        client = McpClient(self.root, statuses.append)
+        self.addCleanup(client.close)
+        handle = client.bind(settings, self.root, "one")
         self.addCleanup(handle.release)
         handle.acquire()
         handle.wait_ready()
@@ -338,12 +639,13 @@ class McpBrokerTest(unittest.TestCase):
         wait_for(Path(str(started) + ".stopped").exists)
         self.assertEqual(shared.call_tool("fake", "echo", {"text": "after"})["structured_content"], {"echo": "after"})
 
-    def test_closed_transport_invalidates_handle_and_new_acquire_replaces_resource(self):
+    def test_server_failure_preserves_config_match_and_new_acquire_replaces_resource(self):
         first = self.handle()
         pid = first.call_tool("fake", "identity", {})["structured_content"]["pid"]
         with self.assertRaises(ConnectionError):
             first.call_tool("fake", "crash", {})
-        wait_for(lambda: not first.matches(config(), self.root, "one"))
+        wait_for(lambda: first._leases["fake"] in first._unavailable)
+        self.assertTrue(first.matches(config(), self.root, "one"))
         second = self.handle()
         self.assertNotEqual(pid, second.call_tool("fake", "identity", {})["structured_content"]["pid"])
 
@@ -381,7 +683,14 @@ class McpBrokerTest(unittest.TestCase):
         isolated = self.handle(http(scope="session"), session="two")
         credential = self.handle(http(headers={"Authorization": "Bearer other"}))
         self.assertEqual(len(log.read_text().splitlines()), 3)
-        for handle in (first, second, isolated, credential):
+        other_workspace = self.root / "http-workspace"
+        other_workspace.mkdir()
+        global_first = self.handle(http(scope="global"))
+        global_second = self.handle(http(scope="global"), workspace=other_workspace, session="global-two")
+        global_credential = self.handle(http(scope="global", headers={"Authorization": "Bearer other"}))
+        self.assertEqual(len(log.read_text().splitlines()), 5)
+        self.assertEqual(global_second.call_tool("fake", "echo", {"text": "global"})["structured_content"], {"echo": "global"})
+        for handle in (first, second, isolated, credential, global_first, global_second, global_credential):
             handle.release()
         # The service launcher can have a CA setting absent in another caller.
         # Its process environment must not determine the latter's TLS context.
@@ -393,7 +702,9 @@ class McpBrokerTest(unittest.TestCase):
         clean_environment = dict(os.environ)
         clean_environment.pop("SSL_CERT_FILE", None)
         clean_environment.pop("SSL_CERT_DIR", None)
-        clean = McpClientHandle(other_directory, http(), self.root, "clean", environment=clean_environment)
+        client = McpClient(other_directory)
+        self.addCleanup(client.close)
+        clean = client.bind(http(), self.root, "clean", environment=clean_environment)
         self.addCleanup(clean.release)
         clean.acquire()
         clean.wait_ready()
@@ -426,14 +737,22 @@ class McpBrokerTest(unittest.TestCase):
         wait_for(Path(str(started) + ".stopped").exists)
         self.assertEqual(other.call_tool("fake", "echo", {"text": "still alive"})["structured_content"], {"echo": "still alive"})
 
-    def test_separate_client_processes_share_and_exit_without_closing_other_borrowers(self):
+    def test_separate_bridges_share_global_across_workspaces_and_survive_owner_exit(self):
         from concurrent.futures import ThreadPoolExecutor
         log = self.root / "calls.jsonl"
         bridge_configuration(self.root, log)
+        path = self.root / "agent_config.json"
+        document = json.loads(path.read_text(encoding="utf-8"))
+        document["mcp"]["servers"]["fake"].update(scope="global", cwd=str(self.root))
+        path.write_text(json.dumps(document), encoding="utf-8")
+        workspaces = [self.root / "first-workspace", self.root / "second-workspace"]
+        for workspace in workspaces:
+            workspace.mkdir()
         processes = [subprocess.Popen(
-            [sys.executable, "-c", BRIDGE_SCRIPT, str(self.root)],
+            [sys.executable, "-c", BRIDGE_SCRIPT, str(self.root), str(workspace)],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-        ) for index in range(2)]
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        ) for workspace in workspaces]
         try:
             with ThreadPoolExecutor(2) as executor:
                 states = list(executor.map(read_bridge_state, processes))
@@ -459,12 +778,12 @@ class McpBrokerTest(unittest.TestCase):
 class McpBootstrapTest(unittest.TestCase):
     @unittest.skipUnless(os.name == "nt", "Windows console creation")
     def test_broker_launch_suppresses_console_without_detached_process(self):
-        from agent_runtime.mcp_broker import launch
+        from agent_runtime.mcp.broker import launch
 
         with tempfile.TemporaryDirectory() as directory, patch(
-            "agent_runtime.mcp_broker.subprocess.Popen"
+            "agent_runtime.mcp.broker.subprocess.Popen"
         ) as spawn:
-            launch(Path(directory))
+            launch(Path(directory), 300)
         flags = spawn.call_args.kwargs["creationflags"]
         self.assertTrue(flags & subprocess.CREATE_NO_WINDOW)
         self.assertTrue(flags & subprocess.CREATE_NEW_PROCESS_GROUP)
@@ -491,7 +810,11 @@ class McpBootstrapTest(unittest.TestCase):
             log = root / "discovery.jsonl"
             bridge_configuration(root, log)
             processes = [subprocess.Popen(
-                [sys.executable, "-c", BRIDGE_SCRIPT, str(root)],
+                [sys.executable, "-c", (
+                    "from functools import partial; from agent_runtime.mcp import transport; "
+                    "transport._connect = partial(transport._connect, idle_seconds=1)\n"
+                    + BRIDGE_SCRIPT
+                ), str(root)],
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
             ) for _ in range(2)]
@@ -515,10 +838,8 @@ class McpBootstrapTest(unittest.TestCase):
                         process.communicate("quit\n", timeout=15)
                     else:
                         process.communicate(timeout=15)
-                wait_for(lambda: not (root / "mcp" / "broker.json").exists(), timeout=45)
-                # The endpoint disappears just before the process exits; on
-                # Windows its inherited log handle has to close before the
-                # temporary directory can be removed.
+                wait_for(lambda: not (root / "mcp" / "broker.json").exists(), timeout=15)
+                # Wait for the detached process to close its log handle.
                 def log_closed() -> bool:
                     try:
                         (root / "mcp" / "broker.log").unlink()

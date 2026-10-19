@@ -41,7 +41,7 @@ class McpServerConfig:
     startup_timeout_seconds: int = 15
     call_timeout_seconds: int = 60
     namespace: str | None = None
-    scope: Literal["workspace", "session"] = "workspace"
+    scope: Literal["global", "workspace", "session"] = "workspace"
 
     @property
     def identifier(self) -> str:
@@ -162,8 +162,8 @@ def _load_server(name: object, value: object) -> McpServerConfig:
         value, "call_timeout_seconds", path, 60
     )
     scope = value.get("scope", "workspace")
-    if scope not in ("workspace", "session"):
-        raise ValueError(f"config field '{path}.scope' must be 'workspace' or 'session'")
+    if scope not in ("global", "workspace", "session"):
+        raise ValueError(f"config field '{path}.scope' must be 'global', 'workspace' or 'session'")
 
     if transport == "stdio":
         command = _required_string(value, "command", path)

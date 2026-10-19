@@ -54,13 +54,13 @@ from .settings import EnvironmentReloader, configuration_fingerprint
 from .callbacks import RuntimeCallbacks
 from .computer import DesktopComputer
 from .session_controller import SessionRuntimeController
-from .mcp_client import McpClientHandle
+from .mcp.client import McpClient
 
 
 class ExecutionPlaneManager:
     def __init__(self, config_directory: Path, environment: EnvironmentReloader,
                  scheduler: SchedulerService, callbacks: RuntimeCallbacks,
-                 execution_authority_limit: ExecutionAuthority) -> None:
+                 execution_authority_limit: ExecutionAuthority, mcp: McpClient) -> None:
         self._config_directory = config_directory
         self._config_path = config_directory / "provider_config.json"
         self._agent_config_path = config_directory / "agent_config.json"
@@ -68,6 +68,7 @@ class ExecutionPlaneManager:
         self.scheduler = scheduler
         self.callbacks = callbacks
         self._execution_authority_limit = execution_authority_limit
+        self._mcp = mcp
         self.current: ExecutionPlane | None = None
 
     def ensure(self, session: SessionRuntimeController) -> ExecutionPlane:
@@ -121,10 +122,9 @@ class ExecutionPlaneManager:
         workspace = session.workspace
         _, config = load_config_with_name(config_path, session.provider_name)
         plugin_agents, agent_warnings = plugins.load_agents()
-        mcp = McpClientHandle(
-            self._config_directory, mcp_config, workspace.path,
+        mcp = self._mcp.bind(
+            mcp_config, workspace.path,
             session.session.session_id,
-            on_status=self.callbacks.on_mcp_status,
             environment=self._environment.snapshot(),
         )
         workspace_executor: SandboxedCommandExecutor | None = None

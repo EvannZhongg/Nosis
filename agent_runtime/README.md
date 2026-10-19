@@ -43,21 +43,25 @@ RuntimeHost
 同一配置目录下的 Bridge 与定时 Runtime 使用一个按需启动的独立 MCP Broker。前端仍只通过 Bridge 驱动执行，不连接 Broker。Core 的 `mcp/connection.py` 提供单个物理连接机制；Runtime 的 `McpService` 持有连接、stdio 子进程、ClientSession 和未过滤的工具发现结果。
 
 ```text
-Bridge A → RuntimeHost → ExecutionPlane → McpClientHandle ─┐
-                                                        ├→ MCP Broker → McpService → MCP Servers
-Bridge B → RuntimeHost → ExecutionPlane → McpClientHandle ─┘
+Bridge A → RuntimeHost → McpClient ─┐
+                  ↑               ├→ MCP Broker → McpService → MCP Servers
+       ExecutionPlane / Handle    │
+Bridge B → RuntimeHost → McpClient ─┘
 ```
 
-资源身份包含 Server namespace、规范化的 Workspace、有效连接参数、凭据和作用域。stdio 使用已解析的命令、参数、绝对 cwd 与调用方环境快照；未配置 cwd 时使用当前 Workspace。HTTP 使用 URL、headers 及调用方的环境快照，代理与 CA 设置不继承第一个启动 Broker 的 Bridge。
+每个 RuntimeHost 持有一个按需连接的 IPC Client，ExecutionPlane 只持有本地工具视图。Broker 为每个 Host 保留当前 MCP 绑定，重建 Plane 时复用身份未变的租约；移除或更换绑定才释放对应租约，Host 关闭则释放全部绑定。Provider、Instructions 与工具策略变化不会中断身份未变的连接。
+
+资源身份包含 Server namespace、有效连接参数、凭据和作用域对应的隔离标识。stdio 使用已解析的命令、参数、绝对 cwd 与调用方完整环境快照。HTTP 只使用 URL、headers、代理与 CA 环境设置，不因无关环境变量重复连接，也不继承第一个启动 Broker 的 Bridge 的代理或 CA 设置。
 
 Server 配置的 `scope` 支持：
 
+- `global`：同一配置目录下，相同有效配置和凭据跨 Workspace、Session 共享连接。stdio 必须提供固定的绝对 cwd；Plugin 的 cwd 在装配时解析到 Plugin 根目录，可以直接使用。连接自身的可变状态也会共享。
 - `workspace`（默认）：相同有效配置的调用方在同一 Workspace 共享物理连接和工具发现结果。
 - `session`：资源身份额外包含 Nosis Session ID，适用于具有连接级可变状态、需要会话隔离的服务。切换 Session 会重新获取相应句柄。
 
-工具 `enabled`、`approval` 和调用超时由每个句柄独立应用，不参与物理连接共享。ToolCatalog、McpTool、执行权限与审批仍位于调用方 Runtime，服务不保存权限 preset 或聊天状态。不同调用具有独立请求 ID、超时和取消；关闭某个 Bridge 只取消该连接的请求并释放其引用，不影响其他 Bridge。
+`workspace` 和 `session` 的 stdio 未配置 cwd 时使用当前 Workspace。工具 `enabled`、`approval`、启动等待超时和调用超时不参与物理连接身份。ToolCatalog、McpTool、执行权限与审批仍位于调用方 Runtime，服务不保存权限 preset 或聊天状态。不同调用具有独立请求 ID、超时和取消；关闭某个 Bridge 只取消该连接的请求并释放其引用，不影响其他 Bridge。
 
-初始化中的相同资源共用一个发现任务；某个等待者取消不会取消其他等待者。引用归零后保留 30 秒，期间再次获取可以复用；到期关闭物理连接与子进程。无客户端和资源时 Broker 也自动退出。连接故障会使相关句柄失效，下次使用重新获取资源，不自动重放失败的工具调用。
+初始化中的相同资源共用一个发现任务；各等待者独立超时或取消，最后一个等待者离开才终止未完成的初始化。已就绪资源在引用归零后保留 5 分钟，期间再次获取可以复用；到期关闭物理连接与 stdio 子进程。Broker 在无客户端、资源池为空且客户端断开宽限期已到时退出。对话停顿或 GUI 切换视图不作为回收条件。单个服务故障只标记对应租约不可用，不使整个 Plane 失配；显式重新绑定时可获取新资源，不自动重放失败的工具调用。
 
 Broker 使用仅监听 loopback 的私有 JSON 消息通道，通过 `<config>/mcp/broker.json` 中的随机令牌认证。启动文件锁合并多个 Bridge 的启动竞争，退出的中间启动器使服务脱离单个 Bridge 的进程树；`mcp/broker.log` 保存基础设施诊断。客户端断开或进程退出由 Broker 统一回收引用，生命周期不进入 Turn 或 JobManager。
 
@@ -197,10 +201,11 @@ standalone Skill 与 MCP 使用同一套 Core registry / manager，不存在 Plu
 | `host.py` | RuntimeHost 公共入口和控制器协调 |
 | `execution_plane.py` | 一次原子装配的资源容器 |
 | `plane_manager.py` | Execution Plane 创建、复用、失效与关闭 |
-| `mcp_client.py` | 轻量 MCP 句柄、有效配置解析及调用方工具策略 |
-| `mcp_service.py` | MCP 连接与发现结果共享、引用和空闲回收 |
-| `mcp_broker.py` | 跨进程 MCP 服务启动、认证和请求路由 |
-| `mcp_wire.py` | 私有 MCP 服务消息通道的 JSON framing |
+| `mcp/client.py` | Host MCP Client、轻量工具视图、有效配置解析及调用方工具策略 |
+| `mcp/transport.py` | Host 级 IPC 连接、请求复用、取消和 Broker 启动 |
+| `mcp/service.py` | MCP 连接与发现结果共享、引用和空闲回收 |
+| `mcp/broker.py` | 跨进程 MCP 服务启动、认证和请求路由 |
+| `mcp/wire.py` | 私有 MCP 服务消息通道的 JSON framing |
 | `session_controller.py` | Session、Workspace、Provider、权限与计划绑定 |
 | `turn_runner.py` | Turn、steer、cancel 和结果 |
 | `scheduled_runner.py` | 无人值守定时 Turn 入口 |

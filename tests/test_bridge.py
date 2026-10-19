@@ -3192,7 +3192,7 @@ class BridgeSessionOpenTest(BridgeTestCase):
                 autospec=True,
             ) as close_jobs,
             patch(
-                "agent_runtime.mcp_client.McpClientHandle.release",
+                "agent_runtime.mcp.client.McpClientHandle.release",
                 autospec=True,
             ) as close_mcp,
         ):

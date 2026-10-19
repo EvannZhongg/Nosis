@@ -22,7 +22,7 @@ from agent_core.tools.config import ToolSettings
 from .computer import DesktopComputer
 
 if TYPE_CHECKING:
-    from .mcp_client import McpClientHandle
+    from .mcp.client import McpClientHandle
     from .config import PromptTemplates
     from .plugins import PluginAgent
 

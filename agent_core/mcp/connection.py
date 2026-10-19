@@ -46,9 +46,8 @@ async def discover_tools(session: ClientSession) -> tuple[dict[str, Any], ...]:
 
 
 class McpConnection:
-    def __init__(self, parameters: McpConnectionParameters, startup_timeout: float):
+    def __init__(self, parameters: McpConnectionParameters):
         self.parameters = parameters
-        self.startup_timeout = startup_timeout
         self.ready: asyncio.Future[tuple[dict[str, Any], ...]] = (
             asyncio.get_running_loop().create_future()
         )
@@ -59,42 +58,41 @@ class McpConnection:
     async def run(self) -> None:
         try:
             async with AsyncExitStack() as stack:
-                async with asyncio.timeout(self.startup_timeout):
-                    parameters = self.parameters
-                    if parameters.transport == "stdio":
-                        read, write = await stack.enter_async_context(stdio_client(
-                            StdioServerParameters(
-                                command=parameters.command,
-                                args=parameters.args,
-                                cwd=parameters.cwd,
-                                env=parameters.env,
-                            )
-                        ))
-                    else:
-                        # The Broker's environment belongs to its first launcher.
-                        # Resolve proxy and CA settings from this client's snapshot.
-                        env = {key.lower(): value for key, value in parameters.env.items()}
-                        proxies = {scheme: env[f"{scheme}_proxy"] for scheme in
-                                   ("http", "https", "all", "no") if env.get(f"{scheme}_proxy")}
-                        url = urlsplit(parameters.url)
-                        proxy = None if proxy_bypass_environment(url.netloc, proxies) else (
-                            proxies.get(url.scheme) or proxies.get("all")
+                parameters = self.parameters
+                if parameters.transport == "stdio":
+                    read, write = await stack.enter_async_context(stdio_client(
+                        StdioServerParameters(
+                            command=parameters.command,
+                            args=parameters.args,
+                            cwd=parameters.cwd,
+                            env=parameters.env,
                         )
-                        cafile = parameters.env.get("SSL_CERT_FILE")
-                        capath = parameters.env.get("SSL_CERT_DIR")
-                        verify = (
-                            ssl.create_default_context(cafile=cafile, capath=capath)
-                            if cafile or capath else httpx2.create_ssl_context(trust_env=False)
-                        )
-                        client = await stack.enter_async_context(httpx2.AsyncClient(
-                            headers=parameters.headers, trust_env=False, proxy=proxy, verify=verify,
-                        ))
-                        read, write = await stack.enter_async_context(streamable_http_client(
-                            parameters.url, http_client=client,
-                        ))
-                    self.session = await stack.enter_async_context(ClientSession(read, write))
-                    await self.session.initialize()
-                    tools = await discover_tools(self.session)
+                    ))
+                else:
+                    # The Broker's environment belongs to its first launcher.
+                    # Resolve proxy and CA settings from this client's snapshot.
+                    env = {key.lower(): value for key, value in parameters.env.items()}
+                    proxies = {scheme: env[f"{scheme}_proxy"] for scheme in
+                               ("http", "https", "all", "no") if env.get(f"{scheme}_proxy")}
+                    url = urlsplit(parameters.url)
+                    proxy = None if proxy_bypass_environment(url.netloc, proxies) else (
+                        proxies.get(url.scheme) or proxies.get("all")
+                    )
+                    cafile = parameters.env.get("SSL_CERT_FILE")
+                    capath = parameters.env.get("SSL_CERT_DIR")
+                    verify = (
+                        ssl.create_default_context(cafile=cafile, capath=capath)
+                        if cafile or capath else httpx2.create_ssl_context(trust_env=False)
+                    )
+                    client = await stack.enter_async_context(httpx2.AsyncClient(
+                        headers=parameters.headers, trust_env=False, proxy=proxy, verify=verify,
+                    ))
+                    read, write = await stack.enter_async_context(streamable_http_client(
+                        parameters.url, http_client=client,
+                    ))
+                self.session = await stack.enter_async_context(ClientSession(read, write))
+                await self.session.initialize()
+                tools = await discover_tools(self.session)
                 self.ready.set_result(tools)
                 await self.stop.wait()
         except BaseException as error:

@@ -12,10 +12,10 @@ from pathlib import Path
 from uuid import uuid4
 
 from agent_core.atomic import atomic_write_text
-from .mcp_wire import MESSAGE_LIMIT, encode
+from .wire import MESSAGE_LIMIT, encode
 
 
-SERVICE_IDLE_SECONDS = 30
+SERVICE_IDLE_SECONDS = 300
 
 
 class _Peer:
@@ -23,6 +23,8 @@ class _Peer:
         self.service = service
         self.writer = writer
         self.leases = {}
+        self.bindings = {}
+        self.binding_lock = asyncio.Lock()
         self.requests: dict[str, asyncio.Task] = {}
 
     def send(self, message: dict) -> None:
@@ -36,9 +38,7 @@ class _Peer:
         request_id = message["id"]
         try:
             if message["method"] == "acquire":
-                result = await asyncio.gather(*(
-                    self.acquire(server) for server in message["servers"]
-                ))
+                result = await self.bind(message["servers"])
             elif message["method"] == "call":
                 lease = self.leases[message["lease"]]
                 result = await self.service.call_tool(
@@ -62,17 +62,49 @@ class _Peer:
                 pass
             self.requests.pop(request_id, None)
 
-    async def acquire(self, server: dict) -> dict:
+    async def bind(self, servers: list[dict]) -> list[dict]:
+        async with self.binding_lock:
+            bindings = {}
+
+            async def acquire(server):
+                previous = self.bindings.get(server["server"])
+                if (previous is not None and previous[0] == server["identity"]
+                        and previous[2].resource.connection.failure is None):
+                    binding = previous
+                else:
+                    try:
+                        binding = await self.acquire(server)
+                    except Exception as error:
+                        return {"server": server["server"], "error": str(error) or type(error).__name__}
+                bindings[server["server"]] = binding
+                return {"server": server["server"], "lease": binding[1], "tools": binding[2].tools}
+
+            tasks = [asyncio.create_task(acquire(server)) for server in servers]
+            try:
+                results = await asyncio.gather(*tasks)
+            except BaseException:
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                for _, token, lease in bindings.values():
+                    if token not in self.leases:
+                        self.service.release(lease)
+                raise
+            retained = {binding[1]: binding[2] for binding in bindings.values()}
+            for token, lease in self.leases.items():
+                if token not in retained:
+                    self.service.release(lease)
+            self.bindings = bindings
+            self.leases = retained
+            return results
+
+    async def acquire(self, server: dict):
         token = uuid4().hex
-        try:
-            lease = await self.service.acquire(
-                server["identity"], server["startup_timeout"],
-                lambda error: self.send({"event": "unavailable", "lease": token, "error": error}),
-            )
-        except Exception as error:
-            return {"server": server["server"], "error": str(error) or type(error).__name__}
-        self.leases[token] = lease
-        return {"server": server["server"], "lease": token, "tools": lease.tools}
+        lease = await self.service.acquire(
+            server["identity"], server["startup_timeout"],
+            lambda error: self.send({"event": "unavailable", "lease": token, "error": error}),
+        )
+        return server["identity"], token, lease
 
     async def close(self) -> None:
         requests = tuple(self.requests.values())
@@ -82,6 +114,7 @@ class _Peer:
         for lease in self.leases.values():
             self.service.release(lease)
         self.leases.clear()
+        self.bindings.clear()
         self.writer.close()
         try:
             await self.writer.wait_closed()
@@ -90,7 +123,7 @@ class _Peer:
 
 
 async def serve(directory: Path, *, idle_seconds: float = SERVICE_IDLE_SECONDS) -> None:
-    from .mcp_service import McpService
+    from .service import McpService
 
     service = McpService(idle_seconds)
     token = secrets.token_hex(32)
@@ -154,12 +187,12 @@ async def serve(directory: Path, *, idle_seconds: float = SERVICE_IDLE_SECONDS) 
             endpoint.unlink()
 
 
-def launch(directory: Path) -> None:
+def launch(directory: Path, idle_seconds: float) -> None:
     # The launcher exits before any Bridge owns a connection. In particular,
     # Windows taskkill /T on that Bridge must not include the shared service.
     with (directory / "broker.log").open("ab") as log:
         subprocess.Popen(
-            [sys.executable, "-m", "agent_runtime.mcp_broker", str(directory)],
+            [sys.executable, "-m", "agent_runtime.mcp.broker", str(directory), str(idle_seconds)],
             stdin=subprocess.DEVNULL, stdout=log, stderr=log,
             creationflags=(subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
                            if os.name == "nt" else 0),
@@ -169,6 +202,6 @@ def launch(directory: Path) -> None:
 
 if __name__ == "__main__":
     if sys.argv[1] == "--launch":
-        launch(Path(sys.argv[2]))
+        launch(Path(sys.argv[2]), float(sys.argv[3]))
     else:
-        asyncio.run(serve(Path(sys.argv[1])))
+        asyncio.run(serve(Path(sys.argv[1]), idle_seconds=float(sys.argv[2])))
