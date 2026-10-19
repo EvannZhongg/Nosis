@@ -1,16 +1,11 @@
-import asyncio
 import base64
 import tempfile
 import os
-import sys
-import time
-import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
 
-from agent_core import AgentCancelled, ImagePart, Session, ToolCall, ToolExecutionContext, ToolOutput, TurnControl, Workspace
+from agent_core import ImagePart, Session, ToolCall, ToolExecutionContext, ToolOutput, TurnControl, Workspace
 from agent_core.mcp.config import (
     load_mcp_config,
     load_mcp_server_map,
@@ -18,12 +13,19 @@ from agent_core.mcp.config import (
     namespace_mcp_servers,
 )
 from agent_core.mcp.tool import McpTool, qualified_tool_name
-from agent_core.mcp.manager import McpClientManager
 from agent_core.tools.policy import McpApprovalPolicy
 from tests.image_fixtures import png_bytes
 
 
 class McpConfigTest(unittest.TestCase):
+    def test_validates_resource_scope(self):
+        for scope in ("workspace", "session"):
+            config = load_mcp_config({"servers": {"demo": {"command": "python", "scope": scope}}})
+            self.assertEqual(config.servers[0].scope, scope)
+        for scope in (None, [], {}, "global"):
+            with self.assertRaisesRegex(ValueError, "scope"):
+                load_mcp_config({"servers": {"demo": {"command": "python", "scope": scope}}})
+
     def test_loads_standard_server_map_transport_names(self) -> None:
         servers = load_mcp_server_map(
             {
@@ -358,228 +360,6 @@ class McpToolTest(unittest.TestCase):
             policy.authorize(ToolCall("1", "mcp__demo__echo", {}), context)
         policy.authorize(ToolCall("2", "mcp__other__echo", {}), context)
         self.assertEqual(prompts, ["mcp__demo__echo"])
-
-
-class McpClientManagerTest(unittest.TestCase):
-    def test_background_start_allows_independent_work_before_discovery_finishes(self) -> None:
-        config = load_mcp_config({"enabled": True, "servers": {
-            "fake": {"transport": "stdio", "command": sys.executable},
-        }})
-        manager = McpClientManager(config, Path.cwd())
-        entered = threading.Event()
-        release = threading.Event()
-
-        async def start_server(stack, server):
-            entered.set()
-            await asyncio.to_thread(release.wait)
-            return object(), ()
-
-        with patch.object(manager, "_start_server", start_server):
-            try:
-                manager.start()
-                self.assertTrue(entered.wait(2))
-                self.assertFalse(manager._ready.is_set())
-                release.set()
-                self.assertEqual(manager.wait_ready(), ())
-                self.assertTrue(manager._ready.is_set())
-            finally:
-                release.set()
-                manager.close()
-
-    def test_cancel_stops_only_the_active_request_and_keeps_the_manager_usable(self) -> None:
-        entered = threading.Event()
-        stopped = threading.Event()
-        calls = []
-
-        class RemoteSession:
-            async def call_tool(self, name, arguments):
-                calls.append(name)
-                if name == "slow":
-                    entered.set()
-                    try:
-                        await asyncio.Event().wait()
-                    finally:
-                        stopped.set()
-                return SimpleNamespace(is_error=False, model_dump=lambda **kw: {"ok": True})
-
-        async def start_server(stack, config):
-            return RemoteSession(), ()
-
-        config = load_mcp_config({"enabled": True, "servers": {
-            "fake": {"transport": "stdio", "command": sys.executable, "call_timeout_seconds": 2},
-        }})
-        manager = McpClientManager(config, Path.cwd())
-        control = TurnControl()
-        errors = []
-
-        def call():
-            try:
-                manager.call_tool("fake", "slow", {}, cancellation=control)
-            except BaseException as error:
-                errors.append(error)
-
-        with patch.object(manager, "_start_server", start_server):
-            manager.start()
-            manager.wait_ready()
-        thread = threading.Thread(target=call, daemon=True)
-        thread.start()
-        try:
-            self.assertTrue(entered.wait(3))
-            control.cancel()
-            thread.join(3)
-            self.assertFalse(thread.is_alive())
-            self.assertTrue(stopped.is_set())
-            self.assertEqual(len(errors), 1)
-            self.assertIsInstance(errors[0], AgentCancelled)
-            with self.assertRaises(AgentCancelled):
-                manager.call_tool("fake", "never-start", {}, cancellation=control)
-            self.assertEqual(manager.call_tool("fake", "echo", {}), {"ok": True})
-            self.assertEqual(calls, ["slow", "echo"])
-        finally:
-            control.cancel()
-            thread.join(3)
-            manager.close()
-
-    def test_discovers_calls_and_closes_fake_stdio_server(self) -> None:
-        config = load_mcp_config(
-            {
-                "enabled": True,
-                "servers": {
-                    "fake": {
-                        "transport": "stdio",
-                        "command": sys.executable,
-                        "args": [str(Path(__file__).with_name("fake_mcp_server.py"))],
-                        "tools": {
-                            "enabled": ["echo"],
-                            "approval": "never",
-                        },
-                    }
-                },
-            }
-        )
-        statuses = []
-        manager = McpClientManager(config, Path.cwd(), statuses.append)
-        try:
-            manager.start()
-            tools = manager.wait_ready()
-            self.assertEqual(
-                [tool.name for tool in tools],
-                ["mcp__fake__echo"],
-            )
-            self.assertEqual(
-                manager.tool_identity("mcp__fake__echo"),
-                ("fake", "echo"),
-            )
-            self.assertFalse(manager.requires_approval("mcp__fake__echo"))
-            result = tools[0].execute(
-                {"text": "hello"},
-                ToolExecutionContext(
-                    workspace=Workspace(Path.cwd()),
-                    session=Session(),
-                    mcp=manager,
-                ),
-            )
-            self.assertFalse(result["is_error"])
-            self.assertEqual(result["structured_content"], {"echo": "hello"})
-        finally:
-            manager.close()
-        self.assertEqual(statuses[0].status, "connecting")
-        self.assertEqual(statuses[-1].status, "closed")
-
-    def test_overall_wait_covers_the_slowest_server_budget(self) -> None:
-        """The overall wait must leave one server budget room to act.
-
-        Each server budget turns a slow server into an "unavailable"
-        status. If the overall wait ended first — the manager thread can
-        start late while the main thread imports the provider stack — the
-        whole agent would fail instead, which is what this guards.
-        """
-        budgets = (3, 7, 2)
-        config = load_mcp_config(
-            {
-                "enabled": True,
-                "servers": {
-                    f"server{index}": {
-                        "transport": "stdio",
-                        "command": sys.executable,
-                        "args": [str(Path(__file__).with_name("fake_mcp_server.py"))],
-                        "startup_timeout_seconds": budget,
-                    }
-                    for index, budget in enumerate(budgets)
-                },
-            }
-        )
-
-        waited: list[float] = []
-        manager = McpClientManager(config, Path.cwd())
-        original_wait = manager._ready.wait
-
-        def record_wait(timeout: float | None = None) -> bool:
-            waited.append(timeout if timeout is not None else -1)
-            return original_wait(timeout)
-
-        with patch.object(manager._ready, "wait", record_wait):
-            try:
-                manager.start()
-                manager.wait_ready()
-            finally:
-                manager.close()
-
-        self.assertEqual(len(waited), 1)
-        self.assertGreater(waited[0], max(budgets))
-        self.assertGreaterEqual(waited[0] - max(budgets), 5)
-
-    def test_starts_servers_concurrently(self) -> None:
-        """Startup costs the slowest server, not the sum of the servers.
-
-        The stdio helpers charge themselves a startup delay, so starting
-        them one after another would need both delays before the first
-        turn could run. The delay is far above the interpreter and
-        handshake cost the two servers pay at the same time, so the sum
-        stays separable from the slowest server.
-
-        The delay is also far above the fixed cost of a start (interpreter,
-        mcp import and handshake: roughly a second, and noisy). With a delay
-        near that fixed cost the budget sat on top of the concurrent startup
-        time and the test failed on a slow machine: 2.9s of a 3.0s budget.
-        A start that serialized the servers still costs the fixed work plus
-        both delays, well past this budget.
-        """
-        delay = 3.0
-        config = load_mcp_config(
-            {
-                "enabled": True,
-                "servers": {
-                    "first": {
-                        "transport": "stdio",
-                        "command": sys.executable,
-                        "args": [str(Path(__file__).with_name("fake_mcp_server.py"))],
-                        "env": {"TEST_MCP_DELAY_SECONDS": str(delay)},
-                    },
-                    "second": {
-                        "transport": "stdio",
-                        "command": sys.executable,
-                        "args": [str(Path(__file__).with_name("fake_mcp_server.py"))],
-                        "env": {"TEST_MCP_DELAY_SECONDS": str(delay)},
-                    },
-                },
-            }
-        )
-
-        manager = McpClientManager(config, Path.cwd())
-        started = time.monotonic()
-        try:
-            manager.start()
-            tools = manager.wait_ready()
-        finally:
-            manager.close()
-
-        self.assertEqual(
-            sorted(tool.name for tool in tools),
-            ["mcp__first__echo", "mcp__first__hidden",
-             "mcp__second__echo", "mcp__second__hidden"],
-        )
-        self.assertLess(time.monotonic() - started, 2 * delay)
 
 
 if __name__ == "__main__":

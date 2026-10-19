@@ -112,7 +112,12 @@ Each entry is a **file** holding a server map. Keys are server names and registe
 - stdio fields: `command` (required), `args`, `cwd`, `env`.
 - http fields: `url` (required), `headers`.
 - `env` and `headers` values written as `${NAME}` are resolved from the environment.
-- Shared fields: `enabled`, `tools`, `startup_timeout_seconds`, `call_timeout_seconds`.
+- Shared fields: `enabled`, `tools`, `startup_timeout_seconds`, `call_timeout_seconds`, `scope`.
+- `scope` defaults to `workspace`: matching connection settings and credentials share one
+  physical connection within the same workspace, including across Bridge processes. Set
+  `scope: "session"` for connection state that must be isolated by Nosis session.
+- Tool visibility and approval are applied independently by each Runtime, even when its
+  physical connection and discovery results are shared.
 
 MCP components are only loaded when `"mcp": {"enabled": true}` is set in `agent_config.json`.
 

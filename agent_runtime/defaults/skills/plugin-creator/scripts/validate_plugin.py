@@ -43,6 +43,7 @@ FRONT_MATTER = re.compile(
 )
 MCP_SERVER_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
 MCP_SHARED_FIELDS = {
+    "scope",
     "enabled",
     "transport",
     "tools",
@@ -300,6 +301,8 @@ def validate_mcp_server(server: Any, label: str, errors: list[str]) -> None:
     )
     if not isinstance(server.get(required), str) or not server[required].strip():
         errors.append(f"{label} field `{required}` must be a non-empty string")
+    if server.get("scope", "workspace") not in ("workspace", "session"):
+        errors.append(f"{label} scope must be 'workspace' or 'session'")
 
 
 def load_json_object(

@@ -91,11 +91,14 @@ class EnvironmentReloader:
 
     def __init__(self, path: Path) -> None:
         self.path = path
+        self._inherited = dict(os.environ)
+        self._values: dict[str, str] = {}
         self._original: dict[str, str | None] = {}
         self._loaded: set[str] = set()
 
     def reload(self) -> None:
         values = _dotenv_values(self.path)
+        self._values = values
         for name in self._loaded - set(values):
             original = self._original[name]
             if original is None:
@@ -112,6 +115,10 @@ class EnvironmentReloader:
     def loaded_names(self) -> frozenset[str]:
         """Names currently injected from the managed dotenv file."""
         return frozenset(self._loaded)
+
+    def snapshot(self) -> dict[str, str]:
+        """Launch environment plus managed values, without model-library mutations."""
+        return {**self._inherited, **self._values}
 
 
 class SettingsStore:
@@ -289,6 +296,7 @@ class SettingsStore:
             "source": source,
             "enabled": server.enabled,
             "transport": server.transport,
+            "scope": server.scope,
             "command": server.command,
             "args": list(server.args),
             "cwd": server.cwd,

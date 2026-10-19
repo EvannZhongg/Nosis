@@ -54,6 +54,7 @@ from .settings import EnvironmentReloader, configuration_fingerprint
 from .callbacks import RuntimeCallbacks
 from .computer import DesktopComputer
 from .session_controller import SessionRuntimeController
+from .mcp_client import McpClientHandle
 
 
 class ExecutionPlaneManager:
@@ -90,8 +91,19 @@ class ExecutionPlaneManager:
             session.workspace,
             agent_config.workspace_instruction_files,
         )
+        plugins = PluginManager.discover(self._config_directory / "plugins")
+        plugin_mcp_servers, mcp_warnings = (
+            plugins.load_mcp_servers() if agent_config.mcp.enabled else ((), ())
+        )
+        mcp_config = McpConfig(
+            enabled=agent_config.mcp.enabled,
+            servers=merge_mcp_servers((agent_config.mcp.servers, plugin_mcp_servers)),
+        )
         plane = self.current
-        if plane is not None and plane.matches(
+        if plane is not None and plane.mcp.matches(
+            mcp_config, session.workspace.path, session.session.session_id,
+            self._environment.snapshot(),
+        ) and plane.matches(
             workspace=session.workspace,
             provider_name=session.provider_name,
             agent_config=agent_config,
@@ -108,34 +120,19 @@ class ExecutionPlaneManager:
         config_path = self._config_path
         workspace = session.workspace
         _, config = load_config_with_name(config_path, session.provider_name)
-        plugins = PluginManager.discover(
-            self._config_directory / "plugins"
-        )
-        plugin_mcp_servers, mcp_warnings = (
-            plugins.load_mcp_servers()
-            if agent_config.mcp.enabled
-            else ((), ())
-        )
         plugin_agents, agent_warnings = plugins.load_agents()
-        mcp_config = McpConfig(
-            enabled=agent_config.mcp.enabled,
-            servers=merge_mcp_servers(
-                (agent_config.mcp.servers, plugin_mcp_servers)
-            ),
-        )
-        from agent_core.mcp.manager import McpClientManager
-
-        mcp = McpClientManager(
-            mcp_config,
-            workspace.path,
+        mcp = McpClientHandle(
+            self._config_directory, mcp_config, workspace.path,
+            session.session.session_id,
             on_status=self.callbacks.on_mcp_status,
+            environment=self._environment.snapshot(),
         )
         workspace_executor: SandboxedCommandExecutor | None = None
         host_executor: HostCommandExecutor | None = None
         execution_router: ExecutionRouter | None = None
         desktop: DesktopComputer | None = None
         try:
-            mcp.start()
+            mcp.acquire()
             skills = SkillLoader().load(
                 (
                     *configured_skill_sources(
@@ -251,7 +248,7 @@ class ExecutionPlaneManager:
                     desktop.close()
             finally:
                 try:
-                    mcp.close()
+                    mcp.release()
                 finally:
                     if execution_router is not None:
                         execution_router.close()

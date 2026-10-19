@@ -5,7 +5,7 @@ from typing import Callable, TYPE_CHECKING
 
 from agent_core import AgentEvent, PlanSnapshot
 if TYPE_CHECKING:
-    from agent_core.mcp.manager import McpServerStatus
+    from .mcp_client import McpServerStatus
 
 
 @dataclass(frozen=True)

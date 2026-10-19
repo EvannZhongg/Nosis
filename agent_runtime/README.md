@@ -9,7 +9,7 @@
 ```text
 RuntimeHost
 ├── SessionRuntimeController   Session、Workspace、Provider、权限与计划
-├── ExecutionPlaneManager     Agent、Tool、MCP、Memory、Job 等原子装配
+├── ExecutionPlaneManager     Agent、Tool、MCP 句柄、Memory、Job 等原子装配
 └── TurnRunner                turn、steer、cancel 与结束结果
 ```
 
@@ -23,9 +23,9 @@ RuntimeHost
 - 已解析的 Agent 配置及配置 fingerprint
 - Workspace Instructions 及其 fingerprint
 - 已装配的 Agent（含其 Tool）与执行路由
-- Memory、MCP Client、桌面能力、后台 Job 和上下文窗口
+- Memory、轻量 MCP Client Handle、桌面能力、后台 Job 和上下文窗口
 
-`ExecutionPlaneManager.ensure()` 在首个 `user_turn` 到来时延迟装配。复用条件是 Workspace、Provider 名称、解析后的 Agent 配置、配置 fingerprint 与 Instructions fingerprint 全部一致；任一变化时旧 plane 整体关闭并在下一次使用时重新创建，避免部分组件仍使用旧状态。
+`ExecutionPlaneManager.ensure()` 在首个 `user_turn` 到来时延迟装配。复用条件是 Workspace、Provider 名称、解析后的 Agent 配置、配置 fingerprint、Instructions fingerprint 与有效 MCP 配置全部一致，且 MCP 句柄可用；任一变化时旧 plane 整体关闭并在下一次使用时重新创建。关闭只释放 MCP 引用，物理资源由独立服务管理。
 
 装配阶段负责：
 
@@ -36,7 +36,30 @@ RuntimeHost
 - 注入 Session、Plan、Memory、Scheduler、权限、图片和用户交互能力
 - 加载 standalone Skill、Plugin Skill、Plugin Agent 与 MCP Server
 - 构造子 Agent 角色注册表和后台 Job Manager
-- 启动 MCP 并汇总非致命 Runtime warning
+- 获取 MCP 句柄并汇总非致命 Runtime warning
+
+## 共享 MCP 资源
+
+同一配置目录下的 Bridge 与定时 Runtime 使用一个按需启动的独立 MCP Broker。前端仍只通过 Bridge 驱动执行，不连接 Broker。Core 的 `mcp/connection.py` 提供单个物理连接机制；Runtime 的 `McpService` 持有连接、stdio 子进程、ClientSession 和未过滤的工具发现结果。
+
+```text
+Bridge A → RuntimeHost → ExecutionPlane → McpClientHandle ─┐
+                                                        ├→ MCP Broker → McpService → MCP Servers
+Bridge B → RuntimeHost → ExecutionPlane → McpClientHandle ─┘
+```
+
+资源身份包含 Server namespace、规范化的 Workspace、有效连接参数、凭据和作用域。stdio 使用已解析的命令、参数、绝对 cwd 与调用方环境快照；未配置 cwd 时使用当前 Workspace。HTTP 使用 URL、headers 及调用方的环境快照，代理与 CA 设置不继承第一个启动 Broker 的 Bridge。
+
+Server 配置的 `scope` 支持：
+
+- `workspace`（默认）：相同有效配置的调用方在同一 Workspace 共享物理连接和工具发现结果。
+- `session`：资源身份额外包含 Nosis Session ID，适用于具有连接级可变状态、需要会话隔离的服务。切换 Session 会重新获取相应句柄。
+
+工具 `enabled`、`approval` 和调用超时由每个句柄独立应用，不参与物理连接共享。ToolCatalog、McpTool、执行权限与审批仍位于调用方 Runtime，服务不保存权限 preset 或聊天状态。不同调用具有独立请求 ID、超时和取消；关闭某个 Bridge 只取消该连接的请求并释放其引用，不影响其他 Bridge。
+
+初始化中的相同资源共用一个发现任务；某个等待者取消不会取消其他等待者。引用归零后保留 30 秒，期间再次获取可以复用；到期关闭物理连接与子进程。无客户端和资源时 Broker 也自动退出。连接故障会使相关句柄失效，下次使用重新获取资源，不自动重放失败的工具调用。
+
+Broker 使用仅监听 loopback 的私有 JSON 消息通道，通过 `<config>/mcp/broker.json` 中的随机令牌认证。启动文件锁合并多个 Bridge 的启动竞争，退出的中间启动器使服务脱离单个 Bridge 的进程树；`mcp/broker.log` 保存基础设施诊断。客户端断开或进程退出由 Broker 统一回收引用，生命周期不进入 Turn 或 JobManager。
 
 ## Session 与 Turn 生命周期
 
@@ -174,6 +197,10 @@ standalone Skill 与 MCP 使用同一套 Core registry / manager，不存在 Plu
 | `host.py` | RuntimeHost 公共入口和控制器协调 |
 | `execution_plane.py` | 一次原子装配的资源容器 |
 | `plane_manager.py` | Execution Plane 创建、复用、失效与关闭 |
+| `mcp_client.py` | 轻量 MCP 句柄、有效配置解析及调用方工具策略 |
+| `mcp_service.py` | MCP 连接与发现结果共享、引用和空闲回收 |
+| `mcp_broker.py` | 跨进程 MCP 服务启动、认证和请求路由 |
+| `mcp_wire.py` | 私有 MCP 服务消息通道的 JSON framing |
 | `session_controller.py` | Session、Workspace、Provider、权限与计划绑定 |
 | `turn_runner.py` | Turn、steer、cancel 和结果 |
 | `scheduled_runner.py` | 无人值守定时 Turn 入口 |

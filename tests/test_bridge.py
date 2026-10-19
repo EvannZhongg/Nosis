@@ -708,8 +708,8 @@ class PermissionProtocolTest(BridgeTestCase):
             ) as close_jobs,
             patch.object(
                 plane.mcp,
-                "close",
-                wraps=plane.mcp.close,
+                "release",
+                wraps=plane.mcp.release,
             ) as close_mcp,
             patch.object(
                 plane.execution_router,
@@ -743,8 +743,8 @@ class PermissionProtocolTest(BridgeTestCase):
             ) as close_jobs,
             patch.object(
                 plane.mcp,
-                "close",
-                wraps=plane.mcp.close,
+                "release",
+                wraps=plane.mcp.release,
             ) as close_mcp,
             patch.object(
                 plane.execution_router,
@@ -1978,8 +1978,8 @@ class BridgeSessionOpenTest(BridgeTestCase):
         plane = bridge.host.planes.ensure(bridge.host.sessions)
         first_agent, first_jobs = plane.agent, plane.jobs
         with (
-            patch.object(plane.mcp, "start") as start_mcp,
-            patch.object(plane.mcp, "close") as close_mcp,
+            patch.object(plane.mcp, "acquire") as start_mcp,
+            patch.object(plane.mcp, "release") as close_mcp,
             patch.object(first_jobs, "close", wraps=first_jobs.close) as close_jobs,
         ):
             bridge.open_session(opening)
@@ -2019,7 +2019,7 @@ class BridgeSessionOpenTest(BridgeTestCase):
                 other.mkdir()
                 opening[change] = str(other) if change == "workspace" else "second"
                 bridge.open_session(opening)
-                with patch.object(first.mcp, "close", wraps=first.mcp.close) as close:
+                with patch.object(first.mcp, "release", wraps=first.mcp.release) as close:
                     second = bridge.host.planes.ensure(bridge.host.sessions)
                 self.assertIsNot(first, second)
                 close.assert_called_once()
@@ -2047,7 +2047,7 @@ class BridgeSessionOpenTest(BridgeTestCase):
         bridge.open_session(opening)
         with (
             patch("agent_runtime.plane_manager.Agent", side_effect=ValueError("binding failed")),
-            patch.object(plane.mcp, "close", wraps=plane.mcp.close) as close,
+            patch.object(plane.mcp, "release", wraps=plane.mcp.release) as close,
         ):
             with self.assertRaisesRegex(ValueError, "binding failed"):
                 bridge.host.planes.ensure(bridge.host.sessions)
@@ -2725,6 +2725,8 @@ class BridgeSessionOpenTest(BridgeTestCase):
     ) -> None:
         directory = self.enterContext(tempfile.TemporaryDirectory())
         root = Path(directory)
+        from tests.mcp_fixtures import running_broker
+        self.enterContext(running_broker(root))
         plugin = root / "plugins" / "example"
         plugin.mkdir(parents=True)
         (plugin / "plugin.json").write_text(
@@ -3071,8 +3073,8 @@ class BridgeSessionOpenTest(BridgeTestCase):
             ) as close_jobs,
             patch.object(
                 first_plane.mcp,
-                "close",
-                wraps=first_plane.mcp.close,
+                "release",
+                wraps=first_plane.mcp.release,
             ) as close_mcp,
         ):
             second_plane = bridge.host.planes.ensure(bridge.host.sessions)
@@ -3190,7 +3192,7 @@ class BridgeSessionOpenTest(BridgeTestCase):
                 autospec=True,
             ) as close_jobs,
             patch(
-                "agent_core.mcp.manager.McpClientManager.close",
+                "agent_runtime.mcp_client.McpClientHandle.release",
                 autospec=True,
             ) as close_mcp,
         ):
