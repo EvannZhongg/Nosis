@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from agent_core import (
     CommandExecutionResult, ExecutionRouter, JobContext, JobControlTool, JobManager, JobResult,
-    JsonlSessionStore, Session, ShellTool, ToolCall, ToolExecutionContext,
+    JsonlSessionStore, ListDirectoryTool, Session, ShellTool, ToolCall, ToolExecutionContext,
     ToolResultNormalizer, Workspace, builtin_catalog,
 )
 
@@ -62,6 +62,44 @@ class JobControlTest(unittest.TestCase):
             self.assertEqual(self.call("cancel", job.job_id), {"job": snapshot})
             self.assertIsNone(snapshot["error"])
             self.assertEqual(set(snapshot), set(listed[0]))
+
+    def test_cancel_stops_running_directory_listing(self):
+        entered = threading.Event()
+        release = threading.Event()
+        finished = threading.Event()
+        self.addCleanup(release.set)
+
+        def paused_match(_path, _glob):
+            entered.set()
+            release.wait(2)
+            return False
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+            (workspace.path / "a.txt").write_text("a", encoding="utf-8")
+
+            def run(job):
+                try:
+                    return ListDirectoryTool().execute(
+                        {"path": ".", "recursive": True, "glob": "*.py"},
+                        replace(self.context, workspace=workspace, cancellation=job.cancellation),
+                    )
+                finally:
+                    finished.set()
+
+            with patch(
+                "agent_core.tools.builtin.list_directory.matches_path_glob",
+                side_effect=paused_match,
+            ):
+                handle = self.jobs.submit("subagent", "turn", run, details={})
+                try:
+                    self.assertTrue(entered.wait(2))
+                    self.assertTrue(self.call("cancel", handle.job_id)["job"]["cancel_requested"])
+                finally:
+                    release.set()
+                self.assertTrue(finished.wait(2), "directory listing ignored cancellation")
+                self.jobs.wait_for_turn("turn")
+                self.assertEqual(self.call("get", handle.job_id)["job"]["status"], "cancelled")
 
     def test_elapsed_excludes_queue_time_and_freezes_on_completion(self):
         first_entered = threading.Event()

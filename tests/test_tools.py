@@ -2237,6 +2237,143 @@ class ApplyPatchToolTest(unittest.TestCase):
 
 
 class ListDirectoryToolTest(unittest.TestCase):
+    def test_rejects_cancelled_call_before_accessing_workspace(self) -> None:
+        control = TurnControl()
+        control.cancel()
+        tool = _Bound(ListDirectoryTool(), _TMP_WORKSPACE, cancellation=control)
+        with patch.object(Workspace, "resolve_path") as resolve:
+            with self.assertRaises(AgentCancelled):
+                tool.execute({"path": "."})
+        resolve.assert_not_called()
+
+    def test_cancels_during_enumeration_without_matching_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+            (workspace.path / "a.txt").write_text("a", encoding="utf-8")
+            control = TurnControl()
+            tool = _Bound(ListDirectoryTool(), workspace, cancellation=control)
+            with os.scandir(workspace.path) as iterator:
+                entries = list(iterator)
+
+            def cancelling_entries():
+                control.cancel()
+                yield from entries
+
+            with patch("agent_core.tools.builtin.list_directory.os.scandir") as scandir:
+                scandir.return_value.__enter__.return_value = cancelling_entries()
+                with self.assertRaises(AgentCancelled):
+                    tool.execute({"path": ".", "glob": "*.py", "recursive": True})
+                scandir.return_value.__exit__.assert_called_once()
+
+    def test_times_out_during_enumeration_without_matching_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+            (workspace.path / "a.txt").write_text("a", encoding="utf-8")
+            tool = _Bound(ListDirectoryTool(), workspace)
+            schema = tool.definition.parameters["properties"]["timeout_seconds"]
+            self.assertEqual(schema["default"], 60)
+            self.assertEqual(schema["minimum"], 1)
+            with os.scandir(workspace.path) as iterator:
+                entries = list(iterator)
+            for timeout in (None, 2):
+                with self.subTest(timeout=timeout):
+                    clock = SimpleNamespace(now=0.0)
+
+                    def slow_entries():
+                        clock.now = 60.0 if timeout is None else float(timeout)
+                        yield from entries
+
+                    arguments = {"path": ".", "glob": "*.py", "recursive": True}
+                    if timeout is not None:
+                        arguments["timeout_seconds"] = timeout
+                    with (
+                        patch("agent_core.tools.builtin.list_directory.os.scandir") as scandir,
+                        patch(
+                            "agent_core.tools.builtin.list_directory.time.monotonic",
+                            side_effect=lambda: clock.now,
+                        ),
+                    ):
+                        scandir.return_value.__enter__.return_value = slow_entries()
+                        with self.assertRaisesRegex(TimeoutError, f"after {timeout or 60} seconds"):
+                            tool.execute(arguments)
+
+    def test_checks_budget_after_empty_enumeration_and_result_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+            tool = _Bound(ListDirectoryTool(), workspace)
+            clock = SimpleNamespace(now=0.0)
+
+            def slow_empty_entries():
+                clock.now = 60.0
+                return iter(())
+
+            with (
+                patch("agent_core.tools.builtin.list_directory.os.scandir") as scandir,
+                patch(
+                    "agent_core.tools.builtin.list_directory.time.monotonic",
+                    side_effect=lambda: clock.now,
+                ),
+            ):
+                scandir.return_value.__enter__.side_effect = slow_empty_entries
+                with self.assertRaises(TimeoutError):
+                    tool.execute({"path": "."})
+
+            (workspace.path / "a.txt").write_text("a", encoding="utf-8")
+            clock.now = 0.0
+
+            def slow_type(_entry):
+                clock.now = 60.0
+                return "file"
+
+            with (
+                patch("agent_core.tools.builtin.list_directory._entry_type", side_effect=slow_type),
+                patch(
+                    "agent_core.tools.builtin.list_directory.time.monotonic",
+                    side_effect=lambda: clock.now,
+                ),
+            ):
+                with self.assertRaises(TimeoutError):
+                    tool.execute({"path": "."})
+
+    def test_rejects_invalid_timeouts(self) -> None:
+        tool = _Bound(ListDirectoryTool(), _TMP_WORKSPACE)
+        for timeout in (0, -1, True, 1.5, "1", None):
+            with self.subTest(timeout=timeout):
+                with self.assertRaisesRegex(ValueError, "timeout_seconds"):
+                    tool.execute({"path": ".", "timeout_seconds": timeout})
+
+    @unittest.skipUnless(os.name == "nt", "directory junctions are a Windows feature")
+    def test_lists_junctions_without_traversing_cycles_or_external_targets(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            tempfile.TemporaryDirectory() as outside,
+        ):
+            workspace = Workspace(Path(directory))
+            nested = workspace.path / "nested"
+            nested.mkdir()
+            (nested / "a.txt").write_text("a", encoding="utf-8")
+            (Path(outside) / "outside.txt").write_text("outside", encoding="utf-8")
+            links = [workspace.path / "alias", nested / "ancestor", workspace.path / "external"]
+            created = []
+            try:
+                for link, target in zip(links, (nested, workspace.path, Path(outside))):
+                    subprocess.run(
+                        ["cmd", "/c", "mklink", "/J", str(link), str(target)],
+                        check=True, capture_output=True,
+                    )
+                    created.append(link)
+                result = _Bound(ListDirectoryTool(), workspace).execute(
+                    {"path": ".", "glob": "**/*", "recursive": True, "timeout_seconds": 2}
+                )
+                self.assertEqual(
+                    [entry["name"] for entry in result["entries"]],
+                    ["alias", "external", "nested", "nested/a.txt", "nested/ancestor"],
+                )
+                self.assertFalse(result["has_more"])
+            finally:
+                for link in created:
+                    link.rmdir()
+
     def test_lists_immediate_entries(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Workspace(Path(directory))

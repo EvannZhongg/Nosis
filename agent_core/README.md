@@ -97,7 +97,7 @@ Runtime 通过 `JsonlSessionStore.open_journal()` 持有当前 Session 的写入
 
 后端同时决定 Tool schema 暴露的参数，例如 Exa 的 `include_domains`。DeepSeek 使用 [Search API](https://api-docs.deepseek.com/zh-cn/api/search/)（`POST https://api.deepseek.com/v1/tools/search`），将 `num_results` 映射为 `count`，沿用工具的 1～10 条结果上限；查询限制为 1～128 个 Unicode 字符且不能全为空白，支持 `site:`、`-site:`、引号、`lang:`、`after:`、`before:` 等语法。结果保持统一的 `title`、`url`、`published_date`、`highlights` 格式，其中 `summary` 用作摘要，不请求网页正文。Exa 和 DeepSeek 使用 HTTP 状态码识别鉴权错误；密钥缺失或返回 401 时仅该次调用降级到 DuckDuckGo，并返回结构化的降级原因；其他错误通过现有 Tool 错误路径返回。
 
-`search_files` 默认 60 秒超时并响应取消，跳过符号链接、junction 以及常见依赖、缓存和构建目录。
+`search_files` 与 `list_directory` 默认 60 秒超时并响应取消。`search_files` 跳过符号链接、junction 以及常见依赖、缓存和构建目录；`list_directory` 可传 `timeout_seconds`，递归只进入真实目录，符号链接与 junction 只列出、不展开目标。
 
 `tools/` 内的主要分工：
 
