@@ -1,8 +1,18 @@
 {
   "name": "@nosis/protocol",
-  "private": true,
+  "version": "0.1.0",
   "type": "module",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit && tsc --noEmit --strict --skipLibCheck --target ES2022 --module NodeNext --moduleResolution NodeNext tests/public-types.ts",
+    "prepack": "npm run build"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  },
   "exports": {
-    ".": "./src/protocol.ts"
+    ".": { "types": "./dist/protocol.d.ts", "import": "./dist/protocol.js" },
+    "./internal": { "types": "./dist/internal.d.ts", "import": "./dist/internal.js" }
   }
 }

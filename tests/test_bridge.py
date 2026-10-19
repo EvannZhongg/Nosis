@@ -395,6 +395,7 @@ class ProtocolTest(unittest.TestCase):
             ),
             {
                 "type": "session_ready",
+                "protocol_version": 1,
                 "session_id": "s1",
                 "workspace": "/tmp/work",
                 "provider": "test",

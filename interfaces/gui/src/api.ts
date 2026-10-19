@@ -1,5 +1,5 @@
 import type { CacheUsage, ContextWindow, PermissionPreset, PlanSnapshot, SessionItem, SessionSummary, UserAttachment } from "@nosis/protocol";
-import type { SettingsSnapshot } from "@nosis/protocol";
+import type { SettingsSnapshot } from "@nosis/protocol/internal";
 
 export type { SessionItem, SessionSummary };
 

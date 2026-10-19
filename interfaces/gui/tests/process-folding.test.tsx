@@ -5,7 +5,7 @@ import { AssistantRuntimeProvider, ThreadPrimitive, useExternalStoreRuntime } fr
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Transcript } from "../src/chat/Transcript";
 import { applyMessage, toMessages, type TranscriptItem } from "../src/transcript";
-import type { Incoming } from "@nosis/protocol";
+import type { Incoming } from "@nosis/protocol/internal";
 
 function TestTranscript({ items, running }: { items: TranscriptItem[]; running: boolean }) {
   const viewportRef = useRef<HTMLDivElement>(null);

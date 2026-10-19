@@ -1,7 +1,7 @@
 import React, { useEffect, useReducer, useRef, useState } from 'react';
 import { Box, Text, useApp, useInput, useWindowSize } from 'ink';
-import type { PermissionPreset, SessionSummary } from '@nosis/protocol';
-import { BridgeClient } from './bridge.js';
+import type { Incoming, Outgoing, PermissionPreset, SessionSummary } from '@nosis/protocol/internal';
+import { BridgeClient } from '@nosis/client';
 import { COMMANDS, parseCommand } from './commands.js';
 import { Prompt } from './input.js';
 import {
@@ -54,7 +54,7 @@ export function App(props: AppProps): React.ReactElement {
   const [settingsMode, setSettingsMode] = useState<'model' | 'provider' | null>(null);
   const [modelChoice, setModelChoice] = useState(0);
   const [elapsed, setElapsed] = useState(0);
-  const bridgeRef = useRef<BridgeClient | null>(null);
+  const bridgeRef = useRef<BridgeClient<Incoming, Outgoing> | null>(null);
   const turnCounter = useRef(0);
   const steerCounter = useRef(0);
   const startedAt = useRef<number | null>(null);
@@ -63,8 +63,9 @@ export function App(props: AppProps): React.ReactElement {
    * The TUI owns one Bridge process; open_session changes its Session binding.
    */
   useEffect(() => {
-    const client = new BridgeClient({
-      python: props.python,
+    const client = new BridgeClient<Incoming, Outgoing>({
+      command: props.python,
+      args: ['-m', 'interfaces.bridge'],
       cwd: props.workspace,
       onMessage: (message) => {
         if (bridgeRef.current !== client) return;
@@ -85,6 +86,13 @@ export function App(props: AppProps): React.ReactElement {
             type: 'fatal',
             error: { type: 'ProtocolError', message: error.message, details: {} },
           },
+        });
+      },
+      onProcessError: (error) => {
+        if (bridgeRef.current !== client) return;
+        dispatch({
+          type: 'message',
+          message: { type: 'fatal', error: { type: 'ProcessError', message: error.message, details: {} } },
         });
       },
     });

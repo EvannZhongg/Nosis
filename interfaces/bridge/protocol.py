@@ -29,6 +29,16 @@ from agent_core import (
 from agent_core.usage import cache_usage_to_dict, usage_to_dict
 
 
+PROTOCOL_VERSION = 1
+
+COMMAND_TYPES = frozenset({
+    "open_session", "user_turn", "user_steer", "cancel", "approval_response",
+    "user_question_response", "permission_set", "provider_set", "workspace_set",
+    "list_sessions", "load_session", "shutdown", "settings_get",
+    "settings_provider_save", "settings_agent_save", "settings_routing_save",
+})
+
+
 def encode(message: dict[str, object]) -> str:
     return json.dumps(message, ensure_ascii=False)
 
@@ -39,6 +49,8 @@ def decode(line: str) -> dict[str, object]:
         raise ValueError("protocol message must be a JSON object")
     if not isinstance(message.get("type"), str):
         raise ValueError("protocol message must have a string 'type'")
+    if message["type"] not in COMMAND_TYPES:
+        raise ValueError(f"unknown command type: {message['type']!r}")
     return message
 
 
@@ -92,6 +104,7 @@ def session_ready_message(
 ) -> dict[str, object]:
     return {
         "type": "session_ready",
+        "protocol_version": PROTOCOL_VERSION,
         "session_id": session_id,
         "workspace": workspace,
         "provider": provider,

@@ -35,6 +35,9 @@ def main() -> None:
     protocol_out = _claim_stdout()
     bridge = None
     try:
+        from agent_runtime.config import default_config_directory, initialize_config_directory
+
+        initialize_config_directory(default_config_directory().resolve())
         from .bridge import Bridge
 
         bridge = Bridge(sys.stdin, protocol_out)

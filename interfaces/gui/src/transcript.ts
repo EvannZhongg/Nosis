@@ -1,5 +1,5 @@
 import type { ThreadMessageLike } from "@assistant-ui/react";
-import type { CacheUsage, ContextWindow, Incoming, PermissionPreset, UserQuestion } from "@nosis/protocol";
+import type { CacheUsage, ContextWindow, Incoming, PermissionPreset, UserQuestion } from "@nosis/protocol/internal";
 import { attachmentDownloadUrl, type SessionItem } from "./api";
 
 /** A transcript item, plus the streaming state the live turn needs. */
@@ -190,8 +190,8 @@ export function applyMessage(
           requestId: message.request_id,
           command: message.command,
           kind: message.kind,
-          server: message.server,
-          toolName: message.tool_name,
+          server: message.server ?? undefined,
+          toolName: message.tool_name ?? undefined,
         },
       };
 

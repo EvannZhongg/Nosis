@@ -75,12 +75,18 @@ GUI 默认监听 <http://127.0.0.1:8737>。
 
 ## 模块文档
 
+第三方前端可通过已安装的 `nosis-bridge` 命令使用
+[公开 stdio 协议](docs/bridge-protocol.md)，或使用轻量的
+[`@nosis/client` TypeScript SDK](interfaces/client/README.md)。公共契约与内部实现的边界见
+[协议审查与设计](docs/bridge-api-design.md)。
+
 | 文档 | 负责范围 |
 | --- | --- |
 | [`agent_core`](agent_core/README.md) | Agent Loop、上下文、Session、Tool、执行、权限、记忆、计划、Job、Scheduler、Provider、Skill 与 MCP 机制 |
 | [`agent_runtime`](agent_runtime/README.md) | 配置、Prompt、Plugin 发现、Runtime 装配、Execution Plane、Session 绑定和 Turn 入口 |
 | [`interfaces/bridge`](interfaces/bridge/README.md) | 独立 Bridge 进程、协议路由、事件转换和前端交互转发 |
 | [`interfaces/protocol`](interfaces/protocol/README.md) | TUI 与 GUI 共用的 TypeScript 协议类型和连接状态约定 |
+| [`interfaces/client`](interfaces/client/README.md) | 公开 Node/TypeScript stdio 客户端、进程生命周期及集成示例 |
 | [`interfaces/tui`](interfaces/tui/README.md) | Ink 终端界面、命令、输入状态和 Bridge 子进程接入 |
 | [`interfaces/gui`](interfaces/gui/README.md) | FastAPI 服务、React 界面、多会话连接、HTTP / WebSocket API 与媒体访问 |
 

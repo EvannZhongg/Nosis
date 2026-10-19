@@ -1,4 +1,4 @@
-import { runtimeIsActive, type Incoming, type Outgoing, type RuntimePhase } from "@nosis/protocol";
+import { runtimeIsActive, type Incoming, type Outgoing, type RuntimePhase } from "@nosis/protocol/internal";
 
 export type SessionSocketOptions = {
   sessionId: string | null;

@@ -30,6 +30,7 @@ gui = ["fastapi>=0.115", "uvicorn>=0.30", "websockets>=13", "python-multipart>=0
 
 [project.scripts]
 nosis = "interfaces.launch:main"
+nosis-bridge = "interfaces.bridge.__main__:main"
 nosis-gui = "interfaces.gui.__main__:main"
 
 [tool.setuptools.packages.find]

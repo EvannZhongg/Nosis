@@ -58,7 +58,7 @@ TUI 只在已知支持的终端环境启用 kitty keyboard protocol，不进行�
 | --- | --- |
 | `src/cli.tsx` | Node CLI 参数和 Ink 根节点 |
 | `src/app.tsx` | Bridge 生命周期、界面组合和用户操作路由 |
-| `src/bridge.ts` | Bridge 子进程与 NDJSON 收发 |
+| [`@nosis/client`](../client/README.md) | Bridge 子进程与 NDJSON 收发 |
 | `src/state.ts` | 协议消息驱动的 TUI 状态归约 |
 | `src/input.tsx` | 多行输入、光标和键盘行为 |
 | `src/commands.ts` | slash command 定义与匹配 |
@@ -68,6 +68,9 @@ TUI 只在已知支持的终端环境启用 kitty keyboard protocol，不进行�
 共享协议来自 [`interfaces/protocol`](../protocol/README.md)，Bridge 行为见 [`interfaces/bridge`](../bridge/README.md)。
 
 ## 开发
+
+先在仓库根目录执行 `npm run build --workspace @nosis/protocol` 与
+`npm run build --workspace @nosis/client`，或直接使用根目录的 `npm run build`。
 
 ```bash
 npm run build --workspace interfaces/tui

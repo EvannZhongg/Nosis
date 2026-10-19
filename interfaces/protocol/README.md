@@ -1,4 +1,18 @@
-# Protocol
+# @nosis/protocol
+
+公开契约见 [Bridge Public Client API, major 1](../../docs/bridge-protocol.md)，
+现状审查与设计见 [设计文档](../../docs/bridge-api-design.md)。
+
+`@nosis/protocol` 导出稳定的 Incoming / Outgoing、PROTOCOL_VERSION、数据类型、
+辅助函数与 MessageDecoder；`@nosis/protocol/internal` 包含一方前端使用的设置编辑、
+GUI 附着和回放扩展，不承诺公共稳定性。以下涉及 GUI Host 的说明属于内部实现。
+
+包提供 ESM JavaScript 和类型声明，使用 `npm run build --workspace @nosis/protocol`
+构建，`npm pack --workspace @nosis/protocol` 会先构建再打包。Node 进程通信使用
+[`@nosis/client`](../client/README.md)。
+
+MessageDecoder 接收已经按 UTF-8 流式解码的字符串，校验 JSON 对象及 type 字段，
+不校验业务状态；EOF 时调用 finish() 检查最后一行是否被截断。
 
 `interfaces/protocol` 提供 TUI 与 GUI 共用的 TypeScript 协议类型、状态辅助函数和 newline-delimited JSON 解码器，不包含网络连接、进程管理或 Agent 执行逻辑。
 
@@ -31,7 +45,7 @@ open_session
 
 ## 消息类型
 
-`Outgoing` 按用途分为：
+内部入口的 `Outgoing` 按用途分为：
 
 - Session 打开、历史加载和关闭
 - Turn 提交、steer 与取消
@@ -40,7 +54,7 @@ open_session
 - 设置读取和保存
 - GUI 附着、事件续传与 takeover 参数
 
-`Incoming` 按用途分为：
+内部入口的 `Incoming` 按用途分为：
 
 - `session_ready` 和权威 `runtime_state`
 - assistant / reasoning 流式内容和完整消息
@@ -51,7 +65,7 @@ open_session
 - Session 历史、设置快照和状态变更确认
 - Turn 完成、取消、失败和进程级 fatal
 
-公共数据类型还包括附件、Tool Call、token usage、权限 preset、计划、Context Window、Session Item、设置快照与结构化 Runtime error。
+公共数据类型还包括附件、Tool Call、token usage、权限 preset、计划、Context Window、Session Item 与结构化 Runtime error；设置快照属于内部入口。
 
 `model_completed.cache_usage` 和 `runtime_state.cache_usage` 是 Core 维护的会话累计快照，包含累计输入与缓存读取 token；仅统计同时报告两项数据的调用。前端使用 `Σread / Σinput` 显示命中率，直接替换快照，不在本地累加。`turn_completed.usage` 仍是最后一次调用的用量，不参与二次累计。
 
@@ -90,4 +104,4 @@ Provider 协议错误可在 `details` 中提供阶段、模型、Tool Call 身�
 3. TUI 与 GUI 的消息处理。
 4. Python 与前端协议测试。
 
-`MessageDecoder` 只负责把任意 byte chunk 边界重新组合成逐行 JSON 消息，不校验业务状态机。
+`MessageDecoder` 只负责把任意字符串 chunk 边界重新组合成逐行 JSON 消息，不校验业务状态机。

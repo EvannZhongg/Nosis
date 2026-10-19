@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { MessageDecoder, formatArguments } from '@nosis/protocol';
-import type { Incoming } from '@nosis/protocol';
+import type { Incoming } from '@nosis/protocol/internal';
 import { initialState, reducer, type State } from '../src/state.js';
 
 const READY = {
   type: 'session_ready' as const,
+  protocol_version: 1 as const,
   session_id: 'abc12345-0000',
   workspace: '/tmp/work',
   provider: 'deepseek',

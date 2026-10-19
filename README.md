@@ -75,12 +75,18 @@ The GUI listens on <http://127.0.0.1:8737> by default.
 
 ## Module documentation
 
+Third-party frontends can launch the installed `nosis-bridge` command and use the
+[public stdio protocol](docs/bridge-protocol.md) or the lightweight
+[`@nosis/client` TypeScript SDK](interfaces/client/README.md). See the
+[protocol review and design](docs/bridge-api-design.md) for the public/internal boundary.
+
 | Document | Scope |
 | --- | --- |
 | [`agent_core`](agent_core/README.md) | Agent loop, context, session, tools, execution, permissions, memory, plans, jobs, scheduler, providers, skills, and MCP mechanisms |
 | [`agent_runtime`](agent_runtime/README.md) | Configuration, prompts, plugin discovery, runtime assembly, execution plane, session binding, and turn entry |
 | [`interfaces/bridge`](interfaces/bridge/README.md) | The standalone Bridge process, protocol routing, event translation, and frontend interaction forwarding |
 | [`interfaces/protocol`](interfaces/protocol/README.md) | The TypeScript protocol types and connection-state conventions shared by the TUI and GUI |
+| [`interfaces/client`](interfaces/client/README.md) | Public Node/TypeScript stdio client, process lifecycle and integration example |
 | [`interfaces/tui`](interfaces/tui/README.md) | The Ink terminal interface, commands, input state, and Bridge subprocess attachment |
 | [`interfaces/gui`](interfaces/gui/README.md) | The FastAPI service, React interface, multi-session connections, HTTP / WebSocket API, and media access |
 

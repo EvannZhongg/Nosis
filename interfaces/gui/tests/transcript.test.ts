@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Incoming } from "@nosis/protocol";
+import type { Incoming } from "@nosis/protocol/internal";
 import { applyMessage, isTurnActivity, toMessages, turnProcessPartIndexes, type TranscriptItem } from "../src/transcript";
 
 const TOOL_CALL = { id: "call-1", name: "shell", arguments: { command: "ls" } };
@@ -315,7 +315,7 @@ describe("applyMessage", () => {
 
   it("reports permission state from session readiness and later changes", () => {
     const ready = applyMessage([], {
-      type: "session_ready",
+      type: "session_ready", protocol_version: 1,
       session_id: "s1",
       workspace: "/tmp/work",
       provider: "test",
@@ -722,6 +722,7 @@ describe("applyMessage", () => {
     for (const message of [
       {
         type: "session_ready" as const,
+        protocol_version: 1 as const,
         session_id: "s1",
         workspace: "/tmp",
         provider: "test",

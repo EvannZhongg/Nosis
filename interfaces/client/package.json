@@ -1,0 +1,22 @@
+{
+  "name": "@nosis/client",
+  "version": "0.1.0",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "files": ["dist", "examples"],
+  "exports": {
+    ".": { "types": "./dist/client.d.ts", "import": "./dist/client.js" }
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "prepack": "npm run build"
+  },
+  "dependencies": { "@nosis/protocol": "0.1.0" },
+  "devDependencies": {
+    "@types/node": "^22.20.2",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  }
+}

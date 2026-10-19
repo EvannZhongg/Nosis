@@ -7,10 +7,13 @@
   },
   "workspaces": [
     "interfaces/protocol",
+    "interfaces/client",
     "interfaces/tui",
     "interfaces/gui"
   ],
   "scripts": {
+    "pretypecheck": "npm run build --workspace @nosis/protocol && npm run build --workspace @nosis/client",
+    "pretest": "npm run build --workspace @nosis/protocol && npm run build --workspace @nosis/client",
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm test --workspaces --if-present"

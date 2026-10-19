@@ -12,6 +12,11 @@ Bridge 作为独立 Python 进程运行，通过 stdin/stdout 交换每行一个
 
 ## 进程入口
 
+安装 `nosis-agent` 后，第三方客户端使用 `nosis-bridge` 启动同一个 stdio
+Bridge，无需了解内部模块路径。入口在保留协议 stdout 后调用 Runtime 的首次
+配置初始化，再进入协议循环。公开契约见 [Bridge Public Client API](../../docs/bridge-protocol.md)，
+现状审查与边界设计见 [设计文档](../../docs/bridge-api-design.md)。
+
 `__main__.py` 在 import Provider 相关模块前保留专用 stdout 协议通道，并把普通 `print()` 和第三方库输出重定向到 stderr，防止日志破坏 JSON 消息流。它也统一处理 UTF-8 stdin、启动期中断和无法进入协议循环时的 `fatal` 错误。
 
 TUI 和 GUI 各自负责启动与附着 Bridge 子进程。`process.py` 提供启动期或失联时的进程组取消辅助，确保 Bridge 的子进程一并退出。

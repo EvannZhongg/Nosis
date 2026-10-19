@@ -301,8 +301,8 @@ export function useSessionRuntime({
             requestId: message.approval.request_id,
             command: message.approval.command,
             kind: message.approval.kind,
-            server: message.approval.server,
-            toolName: message.approval.tool_name,
+            server: message.approval.server ?? undefined,
+            toolName: message.approval.tool_name ?? undefined,
           } : null);
           setQuestion(message.question);
           setJobs(Object.fromEntries(message.jobs.map((job) => [job.job_id, job])));

@@ -3,7 +3,7 @@ import { Box, Static, Text, useBoxMetrics } from 'ink';
 import type { DOMElement } from 'ink';
 import Spinner from 'ink-spinner';
 import { cacheHitPercent, formatArguments } from '@nosis/protocol';
-import type { PermissionPreset, PlanSnapshot, SessionSummary, SettingsSnapshot } from '@nosis/protocol';
+import type { PermissionPreset, PlanSnapshot, SessionSummary, SettingsSnapshot } from '@nosis/protocol/internal';
 import type { ApprovalChoice, Entry, State, UserQuestionState } from './state.js';
 
 function EntryView({ entry }: { entry: Entry }): React.ReactElement {

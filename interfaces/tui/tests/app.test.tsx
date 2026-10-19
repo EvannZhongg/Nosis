@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import React from 'react';
 import { render } from 'ink-testing-library';
-import type { Incoming } from '@nosis/protocol';
+import type { Incoming } from '@nosis/protocol/internal';
 
 const sent: any[] = [];
 let emit: (message: Incoming) => void = () => {};
@@ -9,7 +9,7 @@ let autoReady = true;
 let bridgeCount = 0;
 let shutdownCount = 0;
 
-vi.mock('../src/bridge.js', () => ({
+vi.mock('@nosis/client', () => ({
   BridgeClient: class {
     constructor(options: any) {
       emit = options.onMessage;
@@ -20,7 +20,7 @@ vi.mock('../src/bridge.js', () => ({
       if (autoReady && message.type === 'open_session') {
         setTimeout(() => {
             emit({
-              type: 'session_ready',
+              type: 'session_ready', protocol_version: 1,
               session_id: 'sess-1234',
               workspace: '/w',
               provider: 'test',
@@ -274,7 +274,7 @@ describe('App', () => {
     expect(lastFrame()).toContain('wait for sync');
 
     emit({
-      type: 'session_ready',
+      type: 'session_ready', protocol_version: 1,
       session_id: 'sess-1234',
       workspace: '/w',
       provider: 'test',
@@ -767,7 +767,7 @@ describe('App', () => {
     ).toBe(2);
 
     emit({
-      type: 'session_ready',
+      type: 'session_ready', protocol_version: 1,
       session_id: 'sess-1234',
       workspace: '/w',
       provider: 'test',

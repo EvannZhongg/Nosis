@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Incoming, Outgoing } from "@nosis/protocol";
+import type { Incoming, Outgoing } from "@nosis/protocol/internal";
 import { SessionSocket } from "../src/session";
 
 class FakeWebSocket {
@@ -105,7 +105,7 @@ describe("SessionSocket synchronization", () => {
     }]);
 
     FakeWebSocket.latest.receive({
-      type: "session_ready",
+      type: "session_ready", protocol_version: 1,
       session_id: "session-1",
       workspace: "/workspace",
       provider: "default",

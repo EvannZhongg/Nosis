@@ -1,5 +1,6 @@
-// Wire protocol shared with interfaces/bridge. Keep in sync with
-// interfaces/bridge/protocol.py.
+// Public stdio Bridge protocol, major 1. Keep Python senders and the reference in sync.
+
+export const PROTOCOL_VERSION = 1;
 
 export type JSONValue =
   | string
@@ -90,53 +91,6 @@ export type PlanSnapshot = {
 
 export type PermissionPreset = 'ask_for_approval' | 'workspace_access' | 'full_access';
 
-export type ProviderSetting = {
-  id: string;
-  model: string;
-  url: string | null;
-  max_context_tokens: number | null;
-  reasoning_effort?: string | null;
-  reasoning_parameters?: { readonly [key: string]: JSONValue };
-  api?: 'responses' | 'chat_completions' | null;
-  credential: {
-    source: 'env' | 'inline' | 'none';
-    env_name: string | null;
-    configured: boolean;
-  };
-};
-
-export type AgentSettings = {
-  max_same_tool_calls: number;
-  output_reserve_tokens: number;
-  max_generation_tokens: number | null;
-  workspace_instruction_files: string[];
-  tools: Record<string, boolean>;
-  context: { compression: { enabled: boolean; trigger_ratio: number | null; keep_recent_units: number; user_anchor_token_budget: number } };
-  memory: { enabled: boolean; global_max_tokens: number; workspace_max_tokens: number };
-  subagent_roles: Record<string, { enabled: boolean; description: string; tools: Record<string, boolean> }>;
-  mcp_enabled: boolean;
-};
-
-export type SettingsSnapshot = {
-  revision: string;
-  config_directory: string;
-  default_provider: string;
-  providers: ProviderSetting[];
-  routing: {
-    main_agent: string;
-    fast_model: string | null;
-    vision_provider: string | null;
-    subagent: string | null;
-    subagent_vision_provider: string | null;
-    roles: Record<string, { provider?: string; vision_provider?: string }>;
-  };
-  agent: AgentSettings;
-  skills: { id: string; name: string; description: string; source: string; path: string; content: string }[];
-  plugins: { name: string; version: string | null; description: string | null; enabled: boolean; capabilities: string[]; path: string; components: { skills: string[]; mcp: string[]; agents: string[] } }[];
-  mcp_servers: { id: string; source: string; enabled: boolean; transport: string; scope: 'global' | 'workspace' | 'session'; command: string | null; args: string[]; cwd: string | null; url: string | null; env_names: string[]; header_names: string[]; startup_timeout_seconds: number; call_timeout_seconds: number }[];
-  plugin_agents: { name: string; description: string; model: string | null; source: string }[];
-  warnings: string[];
-};
 export type RuntimePhase =
   | 'inactive'
   | 'starting'
@@ -165,7 +119,7 @@ export type SessionContentPart =
   | FileAttachment;
 
 /**
- * One stored conversation item, as the Session journal holds it.
+ * One normalized conversation item in a transcript checkpoint or history response.
  *
  * A turn is several items: the user's message, an assistant step per model
  * call, and one item per Tool result answering that step's calls.
@@ -227,8 +181,8 @@ export type RuntimeState = {
     request_id: string;
     command: string;
     kind?: 'shell' | 'computer' | 'mcp';
-    server?: string;
-    tool_name?: string;
+    server?: string | null;
+    tool_name?: string | null;
   } | null;
   question: UserQuestion | null;
   runtime_warnings?: string[];
@@ -242,9 +196,9 @@ export type TranscriptCheckpoint = {
 
 export type Incoming = (
   | RuntimeState
-  | { type: 'attachment_replaced'; phase: RuntimePhase }
   | {
       type: 'session_ready';
+      protocol_version: 1;
       session_id: string;
       workspace: string;
       provider: string;
@@ -313,13 +267,11 @@ export type Incoming = (
       request_id: string;
       command: string;
       kind?: 'shell' | 'computer' | 'mcp';
-      server?: string;
-      tool_name?: string;
+      server?: string | null;
+      tool_name?: string | null;
     }
   | { type: 'permission_changed'; preset: PermissionPreset }
   | { type: 'provider_changed'; provider: string; model: string }
-  | { type: 'settings_snapshot'; request_id?: string; settings: SettingsSnapshot }
-  | { type: 'settings_update_failed'; request_id?: string; error: ProtocolError }
   | { type: 'workspace_changed'; workspace: string }
   | { type: 'sessions_listed'; sessions: SessionSummary[] }
   | { type: 'session_items'; items: SessionItem[] }
@@ -332,13 +284,10 @@ export type Incoming = (
   | { type: 'fatal'; error: RuntimeFailure }
   | { type: 'session_open_failed'; session_id: string; error: { type: 'SessionInUseError'; message: string } }
 ) & {
-  event_sequence?: number;
-  /** Cursor used before replaying an undelivered opening or fatal error. */
-  resume_after?: number;
+  event_sequence: number;
   runtime?: RuntimeState;
   /** Replaces the transcript through event_sequence, independent of phase. */
   transcript?: TranscriptCheckpoint;
-  replayed?: boolean;
 };
 
 export type Outgoing =
@@ -347,10 +296,6 @@ export type Outgoing =
       type: 'open_session';
       workspace: string;
       session_id: string | null;
-      attach_only?: boolean;
-      after_event?: number;
-      attachment_id?: string;
-      takeover?: boolean;
       // Omitted to use the provider selected in the configuration file.
       provider?: string;
     }
@@ -359,41 +304,15 @@ export type Outgoing =
   | { type: 'approval_response'; request_id: string; approved: boolean }
   | { type: 'permission_set'; preset: PermissionPreset }
   | { type: 'provider_set'; provider: string }
-  | { type: 'settings_get'; request_id?: string }
-  | { type: 'settings_provider_save'; request_id?: string; expected_revision?: string; provider: string; settings: JSONValue }
-  | { type: 'settings_agent_save'; request_id?: string; expected_revision?: string; settings: JSONValue }
-  | { type: 'settings_routing_save'; request_id?: string; expected_revision?: string; settings: JSONValue }
   | { type: 'workspace_set'; workspace: string }
   | { type: 'cancel'; turn_id: string }
   | { type: 'user_question_response'; request_id: string; option_id?: string; text?: string }
-  // Ask for the Workspace's stored Sessions, and for the one just started.
+  // List stored conversations; control-plane-only Sessions can be absent.
   | { type: 'list_sessions' }
   | { type: 'load_session' }
   | { type: 'shutdown' };
 
-/**
- * Splits a byte stream into protocol messages.
- *
- * Chunk boundaries do not respect line boundaries, so a partial line is
- * held back until its newline arrives.
- */
-export class MessageDecoder {
-  private buffer = '';
-
-  push(chunk: string): Incoming[] {
-    this.buffer += chunk;
-    const lines = this.buffer.split('\n');
-    this.buffer = lines.pop() ?? '';
-
-    const messages: Incoming[] = [];
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (trimmed === '') continue;
-      messages.push(JSON.parse(trimmed) as Incoming);
-    }
-    return messages;
-  }
-}
+export { MessageDecoder } from './decoder.js';
 
 export function formatArguments(value: unknown): string {
   if (value === null || value === undefined) return '';

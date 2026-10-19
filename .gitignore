@@ -10,6 +10,8 @@ build/
 tmp/
 node_modules/
 interfaces/tui/dist/
+interfaces/protocol/dist/
+interfaces/client/dist/
 interfaces/gui/static/
 CubeSandbox/
 nanobot/

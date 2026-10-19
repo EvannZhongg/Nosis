@@ -11,7 +11,7 @@ import type {
   Usage,
   UserQuestion,
   UserQuestionOption,
-} from '@nosis/protocol';
+} from '@nosis/protocol/internal';
 
 export type Status =
   | 'opening'
@@ -629,8 +629,8 @@ function applyMessage(state: State, message: Incoming): State {
           requestId: message.request_id,
           command: message.command,
           kind: message.kind,
-          server: message.server,
-          toolName: message.tool_name,
+          server: message.server ?? undefined,
+          toolName: message.tool_name ?? undefined,
           choice: 'allow',
         },
       };
