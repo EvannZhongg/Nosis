@@ -1,32 +1,26 @@
 ---
 name: plugin-creator
-description: Create and validate Nosis Plugin packages — one directory with a `plugin.json` manifest declaring the skills, sub-agent roles, and MCP servers it contributes. Use when a Nosis Plugin must be scaffolded, when components are added to an existing plugin, or when a `plugin.json` needs to be checked against the manifest contract the Runtime accepts.
+description: Create and validate Nosis Plugin packages containing Skills, Agent roles and MCP servers. Use when scaffolding a plugin, adding components or checking its manifest.
 ---
 
 # Plugin Creator
 
-A Nosis Plugin is a directory whose `plugin.json` declares the components it contributes. Bridge
-discovers plugins under `~/.nosis/plugins/` while assembling the Runtime and routes every enabled
-component into the matching subsystem, so a manifest must satisfy the contract implemented by
-`agent_runtime/plugins.py`.
+A Nosis Plugin contains a `plugin.json` declaring its Skills, Agent roles and MCP servers.
+Install the package under `~/.nosis/plugins/<plugin-name>/`.
 
 ## Quick Start
 
 1. Scaffold the package:
 
 ```bash
-# Run from the skill root (the directory containing this `SKILL.md`).
-# Names are normalized to lower-case hyphen-case and must match
-# [A-Za-z0-9][A-Za-z0-9._-]* and be <= 64 chars.
+# Run from this skill's directory.
 python3 scripts/create_basic_plugin.py <plugin-name> --with-skills --with-agents --with-mcp
 ```
 
-The default target is `~/.nosis/plugins/<plugin-name>`; pass `--path <parent-directory>` only when
-the package belongs somewhere else, such as a source tree that is later copied into
-`~/.nosis/plugins/`.
+The default target is `~/.nosis/plugins/<plugin-name>`; use `--path <parent-directory>` to create
+it elsewhere. New names are normalized to lower-case hyphen-case, up to 64 characters.
 
-2. Replace the scaffold's placeholder metadata in `<plugin-path>/plugin.json` with the real
-   `description` and `version`. The scaffold is valid JSON, not finished content.
+2. Fill in `description` and `version` in `plugin.json`.
 
 3. Fill the declared components. Every component entry is a path relative to the plugin root:
 
@@ -36,7 +30,7 @@ the package belongs somewhere else, such as a source tree that is later copied i
 | `agents` | A Markdown file whose front matter declares the role | `<plugin>:<agent>` sub-agent role |
 | `mcp` | A JSON file mapping server names to server configs | `<plugin>:<server>` |
 
-Read `references/plugin-json-spec.md` for the exact manifest, agent, MCP, and skill shapes.
+See [the component contract](references/plugin-json-spec.md) for supported fields and examples.
 
 4. Validate before handing the plugin back:
 
@@ -44,41 +38,22 @@ Read `references/plugin-json-spec.md` for the exact manifest, agent, MCP, and sk
 python3 scripts/validate_plugin.py <plugin-path>
 ```
 
+Then verify the plugin in Nosis. Static validation cannot confirm MCP tool availability or approval.
+
 ## Required Behavior
 
 - Keep the manifest at `<plugin-root>/plugin.json` with exactly that name.
-- The manifest `name` is the namespace prefix of every component, so it must stay unique across
-  `~/.nosis/plugins/`; a duplicate plugin name is skipped at discovery with a warning.
-- Declare only components that exist and stay inside the plugin root. Absolute paths and `../`
-  escapes are rejected, and a missing component makes the plugin silently contribute nothing.
-- Do not add fields the loader rejects. `author`, `license`, `homepage`, `interface`, `mcpServers`,
-  `keywords`, and other marketplace-style keys are not part of this contract.
-- Keep `capabilities` in agreement with `components`. `capabilities` states what the plugin
-  provides; it enables nothing by itself.
-- Author skill content with the `skill-creator` skill instead of inventing a competing layout.
-- Treat discovery warnings as failures. A malformed plugin does not stop Nosis: it is skipped, so
-  the user sees no error until the plugin does nothing.
-- After adding or editing a plugin, tell the user to restart Nosis. Plugins are bound when the
-  Runtime assembles an execution plane, and plugin files are not part of the configuration
-  fingerprint that triggers reassembly.
+- Use a unique manifest `name`; it prefixes every component's registered name.
+- Declare existing components using paths relative to and inside the plugin root.
+- Use only supported manifest fields. `capabilities` describes components; it enables nothing.
+- Author Skill content with the `skill-creator` skill.
+- Reference roles as `<plugin>:<agent>` and MCP tools as `mcp__<plugin>_<server>__<tool>`.
+  Agent `tools` must explicitly select MCP tools; omitting it grants only built-in role defaults.
+- Resolve validation and Nosis startup warnings before delivery.
+- Restart Nosis after installing or changing a plugin. See the installation reference for
+  updating running MCP server code.
 
 ## References
 
-- `references/plugin-json-spec.md`: manifest fields, component path rules, agent front matter, MCP
-  server map, and the canonical sample.
-- `references/installing-and-updating.md`: where plugins live, how the built-in plugins are
-  installed, and how edits take effect.
-
-## Validation
-
-After editing `SKILL.md`, run:
-
-```bash
-python3 ../skill-creator/scripts/quick_validate.py .
-```
-
-Before handing back a generated plugin, run:
-
-```bash
-python3 scripts/validate_plugin.py <plugin-path>
-```
+- [Manifest and component contract](references/plugin-json-spec.md)
+- [Installation, updates and troubleshooting](references/installing-and-updating.md)

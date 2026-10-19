@@ -19,6 +19,7 @@ from agent_core.tools import ROLE_TOOL_NAMES
 
 
 _PLUGIN_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+_MCP_TOOL_REFERENCE = re.compile(r"^mcp__[A-Za-z0-9_-]+__[A-Za-z0-9_-]+$")
 _COMPONENT_KINDS = ("skills", "mcp", "agents")
 _AGENT_FRONTMATTER = re.compile(
     r"\A---[ \t]*\r?\n(?P<metadata>.*?)\r?\n---[ \t]*(?:\r?\n|\Z)",
@@ -202,7 +203,8 @@ class PluginManager:
         self,
     ) -> tuple[tuple[McpServerConfig, ...], tuple[str, ...]]:
         """Load enabled MCP component references through the MCP subsystem."""
-        servers = []
+        servers: dict[str, McpServerConfig] = {}
+        sources: dict[str, Path] = {}
         warnings = []
         for plugin in self.enabled_plugins:
             for path in plugin.components.mcp:
@@ -216,14 +218,19 @@ class PluginManager:
                         f"at '{path}': {error}"
                     )
                     continue
-                servers.extend(
-                    namespace_mcp_servers(
-                        loaded,
-                        plugin.name,
-                        base_directory=plugin.root,
-                    )
-                )
-        return tuple(servers), tuple(warnings)
+                for server in namespace_mcp_servers(
+                    loaded, plugin.name, base_directory=plugin.root,
+                ):
+                    if server.identifier in servers:
+                        warnings.append(
+                            f"Skipping duplicate MCP server '{server.identifier}' "
+                            f"at '{path}'; already loaded from "
+                            f"'{sources[server.identifier]}'"
+                        )
+                        continue
+                    servers[server.identifier] = server
+                    sources[server.identifier] = path
+        return tuple(servers.values()), tuple(warnings)
 
     def load_agents(
         self,
@@ -306,11 +313,18 @@ def _agent_tools(
     requested = tuple(item.strip() for item in value)
     if len(set(requested)) != len(requested):
         raise ValueError("agent field 'tools' cannot contain duplicates")
-    unknown = set(requested) - set(ROLE_TOOL_NAMES)
+    unknown = {
+        name for name in requested
+        if name not in ROLE_TOOL_NAMES and not _MCP_TOOL_REFERENCE.fullmatch(name)
+    }
     if unknown:
         names = ", ".join(sorted(unknown))
         raise ValueError(f"unknown agent tool(s): {names}")
-    return tuple(name for name in ROLE_TOOL_NAMES if name in requested)
+    # MCP existence is known only after Runtime discovery and allowlist filtering.
+    return (
+        *(name for name in ROLE_TOOL_NAMES if name in requested),
+        *(name for name in requested if name not in ROLE_TOOL_NAMES),
+    )
 
 
 def _component_paths(

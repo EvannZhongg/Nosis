@@ -66,6 +66,7 @@ description: Review changed files and report concrete findings.
 tools:
   - read_file
   - search_files
+  - mcp__example-plugin_analyzer__analyze_code
 model: inherit
 ---
 
@@ -75,16 +76,22 @@ Read the requested files, then report findings ordered by severity.
 - `name` (required), `description` (required): Non-empty strings; `name` must match
   `[A-Za-z0-9][A-Za-z0-9._-]*`. `description` is the text the parent model reads when it chooses
   a role, so state when the role applies, not only what it does.
-- `tools` (optional): Array of tool names, without duplicates. Omitted means every role tool.
-  Allowed values: `read_file`, `apply_patch`, `edit_file`, `write_file`, `search_files`, `list_directory`,
+- `tools` (optional): Array of tool names, without duplicates. Omitted means every built-in role
+  tool, without implicitly granting MCP tools; `[]` selects no declared tools. Image and Skill
+  tools remain derived from Runtime capabilities. Allowed built-in values: `read_file`,
+  `apply_patch`, `edit_file`, `write_file`, `search_files`, `list_directory`,
   `shell`, `web_search`, `web_fetch`, `scheduled_task`.
-  `subagent` is never allowed: a role cannot delegate further.
+  Explicit MCP references use the full model-facing name, for example
+  `mcp__example-plugin_analyzer__analyze_code`. Each character outside `[A-Za-z0-9_-]`
+  in `<plugin>:<server>` and the remote tool name is replaced with `_`.
+  References may name tools from another enabled plugin or standalone MCP server.
+  Referenced tools must be available after MCP discovery and `tools.enabled` filtering;
+  unavailable references prevent that role from loading.
+  `subagent` and other main-agent-only tools remain disallowed.
 - `model` (optional, string): `inherit`, or a provider name from `provider_config.json`. A name that
   is not a configured provider falls back to the role's configured provider.
 
-Plugin roles only exist when the `subagent` tool is enabled in `agent_config.json`. The Runtime
-rejects a `provider_config.json` that configures an unknown role name, so a role must be added to
-the plugin before it is configured there.
+Enable `main_agent.tools.subagent` in `agent_config.json` to use Plugin roles.
 
 ### `mcp`
 
@@ -93,10 +100,10 @@ Each entry is a **file** holding a server map. Keys are server names and registe
 
 ```json
 {
-  "docs": {
+  "analyzer": {
     "type": "stdio",
     "command": "python",
-    "args": ["server.py"]
+    "args": ["mcp/server.py"]
   },
   "remote": {
     "type": "http",
@@ -113,15 +120,15 @@ Each entry is a **file** holding a server map. Keys are server names and registe
 - http fields: `url` (required), `headers`.
 - `env` and `headers` values written as `${NAME}` are resolved from the environment.
 - Shared fields: `enabled`, `tools`, `startup_timeout_seconds`, `call_timeout_seconds`, `scope`.
-- `scope` defaults to `workspace`: matching connection settings and credentials share one
-  physical connection within the same workspace, including across Bridge processes. Set
-  `scope: "session"` for connection state that must be isolated by Nosis session, or
-  `scope: "global"` to share across workspaces and sessions in the same Nosis configuration
-  directory. Credentials and effective connection settings must still match. Global stdio
-  requires a fixed absolute working directory; plugin stdio paths are resolved against the
-  plugin root before acquiring resources.
-- Tool visibility and approval are applied independently by each Runtime, even when its
-  physical connection and discovery results are shared.
+- `scope` defaults to `workspace`. Use `session` to isolate connection state per Session, or
+  `global` to share across workspaces. Sharing requires matching connection settings and credentials.
+  Global stdio requires an absolute working directory; plugin-relative `cwd` is resolved first.
+- `tools.enabled` is an optional array of remote tool names (omitted exposes all; `[]`
+  exposes none). `tools.approval` is `always` by default, `never`, or
+  `{"always": ["analyze_code"]}`. Approval names must be included in `tools.enabled`
+  when that allowlist is present. Selecting an MCP tool in an Agent does not bypass approval.
+- Timeouts are positive integers; `enabled` is a boolean. `args` is an array of strings;
+  `env` and `headers` are maps of strings.
 
 MCP components are only loaded when `"mcp": {"enabled": true}` is set in `agent_config.json`.
 
@@ -130,13 +137,6 @@ MCP components are only loaded when `"mcp": {"enabled": true}` is set in `agent_
 - Paths are relative to the plugin root and must resolve inside it. Absolute paths and `../` escapes
   are rejected when the manifest is parsed.
 - Duplicate entries inside one component array are rejected.
-- Keep component directories at the plugin root; a directory that is not listed in `components` is
-  never loaded, and kebab-case directory and file names keep packages consistent.
+- Components must be listed in `components` to load.
 - The plugin's own directory name is not part of the manifest contract; keeping it equal to `name`
   is a convention that makes installed plugins easy to identify.
-
-## Canonical shape accepted by the loader
-
-`agent_runtime/plugins.py` is authoritative. It parses the manifest above into
-`PluginDescriptor` and routes `components` as follows: `skills` through the Skill registry,
-`agents` into sub-agent roles, `mcp` through the MCP subsystem.

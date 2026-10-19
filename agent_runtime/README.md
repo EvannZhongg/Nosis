@@ -185,8 +185,12 @@ GUI HTTP API 和 Bridge 设置消息都复用该服务。
 - Skill 注册为 `<plugin>:<skill>`，每个直接子目录使用标准 `SKILL.md`。
 - MCP Server 保存为 `<plugin>:<server>`；是否加载仍受 `agent_config.json.mcp.enabled` 总开关控制。
 - Agent component 使用 YAML frontmatter 声明 `name`、`description`，可选 `tools` 和 `model`；注册为 `<plugin>:<agent>`。
+- Agent 的 `tools` 保留内置角色工具，并可显式选择完整 MCP 工具名（例如
+  `mcp__example_analyzer__analyze_code`）；省略时仍只使用原有内置角色工具。
+  Runtime 在 MCP 发现与 allowlist 过滤后校验引用，缺失工具仅跳过受影响角色并报告来源。
 
 standalone Skill 与 MCP 使用同一套 Core registry / manager，不存在 Plugin 专用执行路径。
+装配、静态校验、错误隔离与文件变更的完整边界见 [Plugin 组件互通](../docs/plugin-interop.md)。
 
 ## 附件与定时任务
 

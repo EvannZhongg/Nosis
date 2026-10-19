@@ -1,8 +1,5 @@
 # Installing and updating plugins
 
-Use this reference when a plugin already exists on disk, or when the user asks where a plugin lives
-and how Nosis picks it up.
-
 ## Where plugins live
 
 ```text
@@ -14,38 +11,37 @@ and how Nosis picks it up.
     `-- mcp/
 ```
 
-Bridge discovers **direct child directories** of `~/.nosis/plugins/` that contain a `plugin.json`.
-Nosis ships no plugins of its own and never overwrites a directory that already exists, so an
-installed plugin keeps its local edits.
-
-A plugin that lives elsewhere (for example a repository checkout) is installed by copying it to
-`~/.nosis/plugins/<plugin-name>/`.
+Copy the package into `~/.nosis/plugins/<plugin-name>/`. Nosis discovers direct child directories
+containing `plugin.json`. Existing plugin directories are not overwritten by bundled plugins.
 
 ## When changes take effect
 
-The Runtime binds plugins while assembling an execution plane, together with skills and prompts.
-Configuration changes to `provider_config.json`, `agent_config.json`, or `.env` trigger a
-reassembly automatically; plugin, skill, and prompt files do not. After adding, editing, moving, or
-removing a plugin, tell the user to restart Nosis rather than implying the change is already live.
+Restart Nosis after adding, editing, disabling or removing a plugin. Plugin files are not watched,
+and opening another Session does not guarantee a reload.
+
+MCP connections can be shared. When updating server code, close all Nosis instances using that
+server and wait for its process to exit before restarting. Reassembling component declarations
+alone does not restart an unchanged MCP connection.
 
 ## Discovery failures
 
-Discovery never blocks startup. Each of these produces a warning and skips the affected package:
+If the plugin is missing, check discovery warnings for:
 
 - a `plugin.json` that is unreadable or not a JSON object
 - an unknown manifest field, a missing `name`, a bad name, or a wrong field type
 - a component path that is absolute or escapes the plugin root
 - a second plugin with a name already discovered in the same directory
 
-The failure mode to communicate is silence: the plugin loads nothing and Nosis reports success.
+An invalid Agent or MCP file skips that component. Duplicate Agent or MCP server names keep the
+first declaration. If a role's MCP tool is unavailable, check its full tool name, MCP enablement,
+server status and `tools.enabled` allowlist. Other components can still load.
 
 ## Disabling and removing
 
 - `"enabled": false` keeps the package discovered but routes no component, including its MCP
   servers and agent roles.
-- Removing a plugin means deleting `~/.nosis/plugins/<plugin-name>/` and restarting Nosis. If the
-  plugin's agent roles are named in `provider_config.json`, remove those entries in the same change:
-  an unknown configured role is a hard error at Runtime assembly.
+- To remove a plugin, delete `~/.nosis/plugins/<plugin-name>/` and restart Nosis. When disabling
+  or removing it, also remove any role routes for that plugin from `provider_config.json`.
 
 ## Verifying an installed plugin
 
@@ -55,5 +51,5 @@ Run the skill's validator against the installed directory before restarting:
 python3 scripts/validate_plugin.py ~/.nosis/plugins/<plugin-name>
 ```
 
-The validator mirrors the loader's contract; it does not import Nosis, so it works anywhere the
-manifest can be read.
+The validator checks package files and declarations, including disabled packages. Verify MCP
+startup, environment values, tool availability and approval in Nosis separately.

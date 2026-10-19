@@ -1,0 +1,11 @@
+{
+  "analyzer": {
+    "type": "stdio",
+    "command": "python",
+    "args": ["mcp/server.py"],
+    "tools": {
+      "enabled": ["analyze_code", "fail_review"],
+      "approval": "always"
+    }
+  }
+}

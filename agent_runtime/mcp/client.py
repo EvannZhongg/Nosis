@@ -185,14 +185,23 @@ class McpClientHandle:
             self._leases[server] = result["lease"]
             enabled = self._servers[server].tools.enabled
             selected = []
-            for remote in result["tools"]:
-                if enabled is not None and remote["name"] not in enabled:
-                    continue
-                tool = McpTool(server, remote["name"], remote["description"], remote["input_schema"])
-                if tool.name in self._origins:
-                    raise ValueError(f"duplicate MCP tool name '{tool.name}'")
-                self._origins[tool.name] = (server, remote["name"])
-                selected.append(tool)
+            origins = {}
+            try:
+                for remote in result["tools"]:
+                    if enabled is not None and remote["name"] not in enabled:
+                        continue
+                    tool = McpTool(server, remote["name"], remote["description"], remote["input_schema"])
+                    if tool.name in self._origins or tool.name in origins:
+                        raise ValueError(
+                            f"MCP server '{server}' produced duplicate qualified "
+                            f"tool name '{tool.name}'"
+                        )
+                    origins[tool.name] = (server, remote["name"])
+                    selected.append(tool)
+            except ValueError as error:
+                self._emit(server, "unavailable", error=str(error))
+                continue
+            self._origins.update(origins)
             tools.extend(selected)
             error = self._unavailable.get(result["lease"])
             self._emit(server, "unavailable" if error else "ready", len(selected), error)

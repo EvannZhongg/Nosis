@@ -122,6 +122,16 @@ class ExecutionPlaneManager:
         workspace = session.workspace
         _, config = load_config_with_name(config_path, session.provider_name)
         plugin_agents, agent_warnings = plugins.load_agents()
+        if agent_config.tools.is_enabled("subagent"):
+            known_roles = set(agent_config.subagent_roles)
+            known_roles.update(agent.name for agent in plugin_agents)
+            unknown = configured_role_names(config_path) - known_roles
+            if unknown:
+                names = ", ".join(sorted(unknown))
+                raise ValueError(
+                    "provider_config.json configures unknown subagent role(s): "
+                    f"{names}"
+                )
         mcp = self._mcp.bind(
             mcp_config, workspace.path,
             session.session.session_id,
@@ -200,6 +210,19 @@ class ExecutionPlaneManager:
             # Agent and by every sub-agent role.
             catalog = builtin_catalog()
             catalog = catalog.extend(mcp.wait_ready())
+            resolved_agents = []
+            tool_warnings = []
+            for agent in plugin_agents:
+                missing = set(agent.tools or ()) - set(catalog.names)
+                if missing:
+                    tool_warnings.append(
+                        f"Skipping Agent '{agent.name}' at '{agent.source}': "
+                        f"tool(s) unavailable after Tool Catalog assembly: "
+                        f"{', '.join(sorted(missing))}. Check MCP enablement, "
+                        "server status, tools.enabled and the qualified tool name."
+                    )
+                    continue
+                resolved_agents.append(agent)
 
             workspace_executor = SandboxedCommandExecutor(
                 workspace.path,
@@ -229,7 +252,7 @@ class ExecutionPlaneManager:
                 catalog=catalog,
                 skills=skills,
                 prompts=prompts,
-                plugin_agents=plugin_agents,
+                plugin_agents=tuple(resolved_agents),
                 computer_tools=computer_tools,
                 execution_router=execution_router,
                 mcp=mcp,
@@ -238,6 +261,7 @@ class ExecutionPlaneManager:
                     *plugins.warnings,
                     *mcp_warnings,
                     *agent_warnings,
+                    *tool_warnings,
                     *skills.warnings,
                     *computer_tool_warnings,
                 ),
@@ -467,17 +491,6 @@ class ExecutionPlaneManager:
         """Build the sub-agent runtime, or None when no role is configured."""
         if not agent_config.tools.is_enabled("subagent"):
             return None
-        # A provider override for a role that does not exist is a typo, not
-        # a silent no-op: the two config files must name the same roles.
-        known_roles = set(agent_config.subagent_roles)
-        known_roles.update(agent.name for agent in plugin_agents)
-        unknown = configured_role_names(config_path) - known_roles
-        if unknown:
-            names = ", ".join(sorted(unknown))
-            raise ValueError(
-                "provider_config.json configures unknown subagent role(s): "
-                f"{names}"
-            )
         roles = [
             SubagentRole(
                 name=name,

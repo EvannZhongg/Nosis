@@ -42,6 +42,7 @@ FRONT_MATTER = re.compile(
     re.DOTALL,
 )
 MCP_SERVER_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
+MCP_TOOL_REFERENCE = re.compile(r"^mcp__[A-Za-z0-9_-]+__[A-Za-z0-9_-]+$")
 MCP_SHARED_FIELDS = {
     "scope",
     "enabled",
@@ -71,6 +72,7 @@ def main() -> None:
     print(f"Plugin validation passed: {plugin_root}")
     for entry in registered:
         print(f"  {entry}")
+    print("Static validation only. Verify MCP tools in Nosis.")
 
 
 def validate_plugin(plugin_root: Path) -> tuple[list[str], list[str]]:
@@ -106,12 +108,18 @@ def validate_plugin(plugin_root: Path) -> tuple[list[str], list[str]]:
     )
 
     namespace = plugin_name or ""
-    for path in component_paths(components, "skills", plugin_root, errors):
-        validate_skill_directory(path, namespace, errors, registered)
-    for path in component_paths(components, "agents", plugin_root, errors):
-        validate_agent(path, namespace, errors, registered)
-    for path in component_paths(components, "mcp", plugin_root, errors):
-        validate_mcp_servers(path, namespace, errors, registered)
+    for kind, validate in (
+        ("skills", validate_skill_directory),
+        ("agents", validate_agent),
+        ("mcp", validate_mcp_servers),
+    ):
+        entries: list[str] = []
+        for path in component_paths(components, kind, plugin_root, errors):
+            validate(path, namespace, errors, entries)
+        duplicates = sorted({entry for entry in entries if entries.count(entry) > 1})
+        for entry in duplicates:
+            errors.append(f"duplicate {kind} registration: {entry}")
+        registered.extend(entries)
     return errors, registered
 
 
@@ -121,9 +129,9 @@ def component_paths(
     plugin_root: Path,
     errors: list[str],
 ) -> list[Path]:
-    value = components.get(kind)
-    if value is None:
+    if kind not in components:
         return []
+    value = components[kind]
     if not isinstance(value, list) or any(
         not isinstance(item, str) or not item.strip() for item in value
     ):
@@ -174,7 +182,22 @@ def validate_skill_directory(
             continue
         name = require_string(front_matter, "name", label, errors)
         require_string(front_matter, "description", label, errors)
-        if name is not None:
+        metadata = front_matter.get("metadata")
+        enabled = True
+        if metadata is not None:
+            if not isinstance(metadata, dict):
+                errors.append(f"{label} field `metadata` must be an object")
+                continue
+            nosis = metadata.get("nosis")
+            if nosis is not None:
+                if not isinstance(nosis, dict):
+                    errors.append(f"{label} field `metadata.nosis` must be an object")
+                    continue
+                enabled = nosis.get("register", True)
+                if not isinstance(enabled, bool):
+                    errors.append(f"{label} field `metadata.nosis.register` must be a boolean")
+                    continue
+        if name is not None and enabled:
             registered.append(f"{namespace}:{name}")
 
 
@@ -236,7 +259,10 @@ def validate_agent_tools(
     if len(set(tools)) != len(tools):
         errors.append(f"{label} field `tools` cannot contain duplicates")
         return
-    unknown = sorted(set(tools) - set(ROLE_TOOL_NAMES))
+    unknown = sorted(
+        name for name in tools
+        if name not in ROLE_TOOL_NAMES and not MCP_TOOL_REFERENCE.fullmatch(name)
+    )
     if unknown:
         errors.append(
             f"{label} field `tools` uses unknown tool(s): {', '.join(unknown)}"
@@ -271,18 +297,28 @@ def validate_mcp_server(server: Any, label: str, errors: list[str]) -> None:
     if not isinstance(server, dict):
         errors.append(f"{label} must be an object")
         return
-    if "type" in server and "transport" in server:
+    server = dict(server)
+    server_type = server.pop("type", None)
+    if server_type is not None and "transport" in server:
         errors.append(f"{label} cannot set both `type` and `transport`")
         return
-    transport = server.get("type", server.get("transport"))
-    if transport is None:
+    if server_type is not None:
+        if server_type not in ("stdio", "http"):
+            errors.append(f"{label} type must be 'stdio' or 'http'")
+            return
+        server["transport"] = "stdio" if server_type == "stdio" else "streamable_http"
+    if "transport" not in server:
         if "command" in server and "url" in server:
             errors.append(
                 f"{label} cannot infer transport from both `command` and `url`"
             )
             return
-        transport = "stdio" if "command" in server else "http"
-    if transport in ("http", "streamable_http"):
+        if "command" not in server and "url" not in server:
+            errors.append(f"{label} must specify transport, command, or url")
+            return
+        server["transport"] = "stdio" if "command" in server else "streamable_http"
+    transport = server["transport"]
+    if transport == "streamable_http":
         allowed = MCP_HTTP_FIELDS
         required = "url"
     elif transport == "stdio":
@@ -293,16 +329,59 @@ def validate_mcp_server(server: Any, label: str, errors: list[str]) -> None:
             f"{label} transport must be 'stdio', 'http' or 'streamable_http'"
         )
         return
-    reject_unknown(
-        {key: value for key, value in server.items() if key != "type"},
-        allowed | ({"type"} if "type" in server else set()),
-        label,
-        errors,
-    )
+    reject_unknown(server, allowed, label, errors)
     if not isinstance(server.get(required), str) or not server[required].strip():
         errors.append(f"{label} field `{required}` must be a non-empty string")
     if server.get("scope", "workspace") not in ("global", "workspace", "session"):
         errors.append(f"{label} scope must be 'global', 'workspace' or 'session'")
+    if "enabled" in server and not isinstance(server["enabled"], bool):
+        errors.append(f"{label} field `enabled` must be a boolean")
+    for field in ("startup_timeout_seconds", "call_timeout_seconds"):
+        value = server.get(field, 1)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+            errors.append(f"{label} field `{field}` must be a positive integer")
+    if transport == "stdio":
+        optional_string(server, "cwd", label, errors)
+        args = server.get("args", [])
+        if not isinstance(args, list) or any(not isinstance(arg, str) for arg in args):
+            errors.append(f"{label} field `args` must be an array of strings")
+    map_field = "env" if transport == "stdio" else "headers"
+    mapping = server.get(map_field, {})
+    if not isinstance(mapping, dict) or any(
+        not isinstance(key, str) or not isinstance(value, str)
+        for key, value in mapping.items()
+    ):
+        errors.append(f"{label} field `{map_field}` must be an object of strings")
+    elif any(value == "${}" for value in mapping.values()):
+        errors.append(f"{label} field `{map_field}` has an empty environment reference")
+    tools = server.get("tools")
+    if tools is None:
+        return
+    if not isinstance(tools, dict):
+        errors.append(f"{label} field `tools` must be an object")
+        return
+    tool_label = f"{label} field `tools`"
+    reject_unknown(tools, {"enabled", "approval"}, tool_label, errors)
+    enabled = None
+    if "enabled" in tools:
+        enabled = mcp_tool_array(tools["enabled"], f"{tool_label}.enabled", errors)
+    approval = tools.get("approval", "always")
+    if isinstance(approval, dict):
+        reject_unknown(approval, {"always"}, f"{tool_label}.approval", errors)
+        required = mcp_tool_array(approval.get("always"), f"{tool_label}.approval.always", errors)
+        if enabled is not None and required is not None and not required <= enabled:
+            errors.append(f"{tool_label}.approval.always contains tools not listed in tools.enabled")
+    elif approval not in ("always", "never"):
+        errors.append(f"{tool_label}.approval must be 'always', 'never', or an object with an 'always' array")
+
+
+def mcp_tool_array(value: Any, label: str, errors: list[str]) -> set[str] | None:
+    if not isinstance(value, list) or any(not isinstance(item, str) or not item for item in value):
+        errors.append(f"{label} must be an array of non-empty strings")
+        return None
+    if len(set(value)) != len(value):
+        errors.append(f"{label} cannot contain duplicates")
+    return set(value)
 
 
 def load_json_object(
@@ -333,12 +412,13 @@ def read_front_matter(
     except (OSError, UnicodeDecodeError) as error:
         errors.append(f"{label} is not readable as UTF-8: {error}")
         return None
-    match = FRONT_MATTER.match(content)
-    if match is None:
+    lines = content.splitlines()
+    end = next((index for index in range(1, len(lines)) if lines[index].strip() == "---"), None)
+    if not lines or lines[0].strip() != "---" or end is None:
         errors.append(f"{label} must start with YAML front matter")
         return None
     try:
-        metadata = yaml.safe_load(match.group("metadata"))
+        metadata = yaml.safe_load("\n".join(lines[1:end]))
     except yaml.YAMLError as error:
         errors.append(f"{label} front matter is not valid YAML: {error}")
         return None
@@ -351,7 +431,7 @@ def read_front_matter(
 def reject_unknown(
     payload: dict[Any, Any], allowed: set[str], label: str, errors: list[str]
 ) -> None:
-    for key in sorted(set(payload) - allowed):
+    for key in sorted(set(payload) - allowed, key=str):
         errors.append(f"{label} field `{key}` is not accepted")
 
 
@@ -368,7 +448,7 @@ def require_string(
 def optional_string(
     payload: dict[Any, Any], field: str, label: str, errors: list[str]
 ) -> None:
-    if field in payload and (
+    if payload.get(field) is not None and (
         not isinstance(payload[field], str) or not payload[field].strip()
     ):
         errors.append(f"{label} field `{field}` must be a non-empty string")
