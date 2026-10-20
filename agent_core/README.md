@@ -63,7 +63,7 @@ Runtime 通过 `JsonlSessionStore.open_journal()` 持有当前 Session 的写入
 
 `PlanManager` 从最新 `plan_updated` 事件恢复当前计划。计划可跨 Turn 延续，每个步骤记录状态以及不超过 500 字符的结果或阻塞原因。
 
-较大的 Tool 输出由 `ToolResultNormalizer` 保存为 Session Artifact，只把可控大小的预览和 Artifact 引用送回模型。
+较大的 Tool 输出由 `ToolResultNormalizer` 保存为 Session Artifact，只把可控大小的预览和 Artifact 引用送回模型。Artifact 是按行读取的文本阅读视图：结构化结果按字段路径展开，字符串保留正文换行，超长行分段写入；Shell spool 也经过同一落盘处理。该视图不作为原始 JSON 解析。
 
 | 模块 | 职责 |
 | --- | --- |

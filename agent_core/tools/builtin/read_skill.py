@@ -5,12 +5,7 @@ from pathlib import Path
 from ..base import JSONValue, Tool, ToolDefinition
 from ..context import ToolExecutionContext
 from ...path_utils import relative_to_root
-from .read_file import (
-    DEFAULT_READ_LIMIT,
-    MAX_FILE_SIZE_BYTES,
-    content_budget,
-    read_text_range,
-)
+from ..text import DEFAULT_READ_LIMIT, read_text_file
 
 
 class ReadSkillTool(Tool):
@@ -74,41 +69,13 @@ class ReadSkillTool(Tool):
             raise ValueError("this runtime has no registered skills")
         skill = context.skills.get(name)
         file_path = _resolve_skill_path(skill.directory, path)
-        file_size_bytes = file_path.stat().st_size
-        if file_size_bytes > MAX_FILE_SIZE_BYTES:
-            raise ValueError(
-                "read_skill refused file because its size is "
-                f"{file_size_bytes} bytes, exceeding the maximum of "
-                f"{MAX_FILE_SIZE_BYTES} bytes"
-            )
-        try:
-            with file_path.open(
-                "r",
-                encoding="utf-8",
-                errors="strict",
-                newline=None,
-            ) as file:
-                content = read_text_range(
-                    file,
-                    offset,
-                    limit,
-                    content_budget(
-                        {
-                            "name": skill.identifier,
-                            "path": path,
-                            "file_size_bytes": file_size_bytes,
-                            "content": "",
-                        }
-                    ),
-                )
-        except UnicodeDecodeError as error:
-            raise ValueError("read_skill requires a UTF-8 text file") from error
-        return {
-            "name": skill.identifier,
-            "path": path,
-            "file_size_bytes": file_size_bytes,
-            "content": content,
-        }
+        return read_text_file(
+            file_path,
+            {"name": skill.identifier, "path": path},
+            offset,
+            limit,
+            tool_name=self.name,
+        )
 
 
 def _parse_arguments(

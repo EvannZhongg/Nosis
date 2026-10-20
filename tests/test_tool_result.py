@@ -21,7 +21,9 @@ from agent_core import (
 )
 from agent_core.execution.process import _read_spooled_output
 from agent_core.session_paths import workspace_key
+from agent_core.tools.base import ToolError
 from agent_core.tools.budget import MAX_TOOL_RESULT_CHARS
+from agent_core.tools.text import MAX_ARTIFACT_LINE_CHARS
 
 
 class ToolResultNormalizerTest(unittest.TestCase):
@@ -97,7 +99,7 @@ class ToolResultNormalizerTest(unittest.TestCase):
                 f".nosis/sessions/{workspace_key(workspace.path)}"
                 "/session-1/call%2F1.txt"
             )
-            body = json.dumps(result.output, ensure_ascii=False, indent=2)
+            body = '--- $["text"] (text) ---\nabcdefghijklmnopqrstuvwxyz'
             self.assertEqual(
                 (workspace.path / artifact_path).read_text(
                     encoding="utf-8"
@@ -113,9 +115,8 @@ class ToolResultNormalizerTest(unittest.TestCase):
                     "read_instruction": (
                         "Use read_file with path "
                         f"'{artifact_path}' to read the complete tool "
-                        "result. It holds the raw result text, so page "
-                        "through it with 'offset' when one read does not "
-                        "reach the end."
+                        "result. It is a reading view with long lines split; page "
+                        "through it with 'offset' when one read does not reach the end."
                     ),
                 },
             )
@@ -168,8 +169,8 @@ class ToolResultNormalizerTest(unittest.TestCase):
                 name="shell",
                 output={"stdout": complete[:100]},
                 artifact_writer=lambda path: path.write_text(
-                    json.dumps({"stdout": complete}), encoding="utf-8"
-                ) or len(complete),
+                    complete, encoding="utf-8"
+                ),
                 artifact_cleanup=handle.cleanup,
             )
             normalizer = ToolResultNormalizer(
@@ -183,9 +184,10 @@ class ToolResultNormalizerTest(unittest.TestCase):
 
             artifact = next((root / "sessions").rglob("call-1.txt"))
             self.assertEqual(
-                json.loads(artifact.read_text(encoding="utf-8"))["stdout"],
+                artifact.read_text(encoding="utf-8").replace("\n", ""),
                 complete,
             )
+            self.assertFalse(list((root / "sessions").rglob("*.source")))
             self.assertFalse(spool.exists())
 
     def test_string_previews_fit_serialized_json_budget(self) -> None:
@@ -253,6 +255,27 @@ class ToolResultNormalizerTest(unittest.TestCase):
             )
             cleanup.assert_called_once()
 
+    def test_failed_spool_writer_removes_source_and_cleans_spool(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+            sessions = workspace.path / "sessions"
+            cleanup = Mock()
+
+            def write(path):
+                path.write_text("partial", encoding="utf-8")
+                raise OSError("spool failed")
+
+            result = ToolResult(
+                "failed", "shell", artifact_writer=write, artifact_cleanup=cleanup
+            )
+            normalizer = ToolResultNormalizer(
+                workspace, "session", sessions_directory=sessions
+            )
+            with self.assertRaisesRegex(OSError, "spool failed"):
+                normalizer.normalize(result)
+            self.assertFalse(list(sessions.rglob("*.source")))
+            cleanup.assert_called_once()
+
 
 class ShellArtifactTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -313,6 +336,8 @@ class ShellArtifactTest(unittest.TestCase):
         artifact = next(self.sessions.rglob(Path(summary["artifact_path"]).name))
         stored = artifact.read_text(encoding="utf-8")
         self.assertEqual(len(stored), summary["size_chars"])
+        self.assertLessEqual(max(map(len, stored.split("\n"))), MAX_ARTIFACT_LINE_CHARS)
+        self.assertFalse(list(self.sessions.rglob("*.source")))
         self.assertTrue(stored.startswith("$ "))
         for path in self.spool_paths:
             self.assertFalse(path.exists())
@@ -333,7 +358,7 @@ class ShellArtifactTest(unittest.TestCase):
         summary, stored = self._assert_summary(self.normalizer.normalize(result))
         self._assert_ends(summary["preview"]["stdout"], stdout)
         self.assertEqual(summary["preview"]["stderr"], "important error")
-        self.assertIn(stdout, stored)
+        self.assertIn(stdout.replace("\n", ""), stored.replace("\n", ""))
 
         from agent_core.tools.builtin.read_file import ReadFileTool
 
@@ -369,7 +394,7 @@ class ShellArtifactTest(unittest.TestCase):
         summary, stored = self._assert_summary(self.normalizer.normalize(result))
         self._assert_ends(summary["preview"]["stdout"], stdout)
         self.assertEqual(summary["preview"]["stderr"], "important error")
-        self.assertIn(stdout, stored)
+        self.assertIn(stdout.replace("\n", ""), stored.replace("\n", ""))
 
     def test_two_20k_streams_share_budget_and_keep_their_tails(self) -> None:
         stdout = "OUT-HEAD--" + "o" * (20 * 1024) + "--OUT-TAIL"
@@ -379,8 +404,8 @@ class ShellArtifactTest(unittest.TestCase):
         summary, stored = self._assert_summary(self.normalizer.normalize(result))
         self._assert_ends(summary["preview"]["stdout"], stdout)
         self._assert_ends(summary["preview"]["stderr"], stderr)
-        self.assertIn(stdout, stored)
-        self.assertIn(stderr, stored)
+        self.assertIn(stdout.replace("\n", ""), stored.replace("\n", ""))
+        self.assertIn(stderr.replace("\n", ""), stored.replace("\n", ""))
 
     def test_short_stdout_survives_oversized_stderr(self) -> None:
         stderr = "ERR-HEAD--" + "e" * (60 * 1024) + "--ERR-TAIL"
@@ -388,7 +413,7 @@ class ShellArtifactTest(unittest.TestCase):
         summary, stored = self._assert_summary(self.normalizer.normalize(result))
         self.assertEqual(summary["preview"]["stdout"], "short stdout")
         self._assert_ends(summary["preview"]["stderr"], stderr)
-        self.assertIn(stderr, stored)
+        self.assertIn(stderr.replace("\n", ""), stored.replace("\n", ""))
 
     def test_unicode_and_json_escaping_fit_the_final_budget(self) -> None:
         stdout = "OUT-HEAD--" + '中文"\\\n' * 9000 + "--OUT-TAIL"
@@ -399,7 +424,7 @@ class ShellArtifactTest(unittest.TestCase):
         summary, stored = self._assert_summary(normalizer.normalize(result), max_chars=2000)
         self._assert_ends(summary["preview"]["stdout"], stdout)
         self.assertEqual(summary["preview"]["stderr"], "short error")
-        self.assertIn(stdout, stored)
+        self.assertIn(stdout.replace("\n", ""), stored.replace("\n", ""))
 
     def test_long_command_does_not_crowd_out_streams_or_status(self) -> None:
         command = "CMD-HEAD--" + "c" * 40000 + "--CMD-TAIL"
@@ -409,7 +434,7 @@ class ShellArtifactTest(unittest.TestCase):
         self._assert_ends(summary["preview"]["command"], command)
         self._assert_ends(summary["preview"]["stdout"], stdout)
         self.assertEqual(summary["preview"]["stderr"], "short error")
-        self.assertIn(command, stored)
+        self.assertIn(command.replace("\n", ""), stored.replace("\n", ""))
 
     def test_background_shell_keeps_structured_preview_and_cleans_spools(self) -> None:
         stdout = "OUT-HEAD--" + "o" * (60 * 1024) + "--OUT-TAIL"
@@ -417,8 +442,8 @@ class ShellArtifactTest(unittest.TestCase):
         summary, stored = self._assert_summary(self._execute(stdout, stderr, background=True))
         self._assert_ends(summary["preview"]["stdout"], stdout)
         self._assert_ends(summary["preview"]["stderr"], stderr)
-        self.assertIn(stdout, stored)
-        self.assertIn(stderr, stored)
+        self.assertIn(stdout.replace("\n", ""), stored.replace("\n", ""))
+        self.assertIn(stderr.replace("\n", ""), stored.replace("\n", ""))
 
 
 class ArtifactRoundTripTest(unittest.TestCase):
@@ -443,6 +468,110 @@ class ArtifactRoundTripTest(unittest.TestCase):
             session=Session(),
             sessions_directory=sessions,
         )
+
+    def _read_all(self, normalizer, artifact_path, context):
+        from agent_core.tools.builtin.read_file import ReadFileTool
+
+        recovered = []
+        offset = 1
+        for _ in range(100):
+            read = ReadFileTool().execute(
+                {"path": artifact_path, "offset": offset}, context
+            )
+            normalized = normalizer.normalize(ToolResult("read", "read_file", read))
+            self.assertLessEqual(len(normalized), MAX_TOOL_RESULT_CHARS)
+            self.assertNotIn("artifact_path", json.loads(normalized))
+            self.assertNotIn("该行被截断", read["content"])
+            lines = read["content"].split("\n")
+            recovered.extend(
+                line.split("| ", 1)[1] for line in lines
+                if "| " in line and line.split("| ", 1)[0].isdigit()
+            )
+            if "End of file" in lines[-1]:
+                return recovered
+            following = int(lines[-1].split("offset=")[1].split()[0])
+            self.assertGreater(following, offset)
+            offset = following
+        self.fail("artifact paging did not finish")
+
+    def test_mcp_text_blocks_and_nested_strings_preserve_body_and_metadata(self) -> None:
+        from agent_core.mcp.tool import McpTool
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+            sessions = workspace.path / "sessions"
+            context = self._context(workspace, sessions)
+            report = "\n".join(
+                f'段落 {index}: "quoted", literal \\n, 中文。'
+                for index in range(3000)
+            ) + "\nBODY_TAIL"
+            payload = {
+                "content": [
+                    {"type": "text", "text": report},
+                    {"type": "text", "text": "SECOND_BLOCK"},
+                ],
+                "structured_content": {"body": report, "count": 3000},
+                "is_error": False,
+                "empty": [{}, [], None, ""],
+            }
+            client = Mock()
+            client.call_tool.return_value = payload
+            tool = McpTool("test", "report", None, {"type": "object"})
+            tools = ToolCatalog((tool,)).select(
+                (tool.name,), ToolExecutionContext(
+                    workspace=workspace, session=Session(),
+                    sessions_directory=sessions, mcp=client,
+                )
+            )
+            result = tools.execute(ToolCall("report", tool.name, {}))
+            self.assertIsNone(result.error)
+            normalizer = self._normalizer(workspace, sessions)
+            summary = json.loads(normalizer.normalize(result))
+            recovered = "\n".join(self._read_all(
+                normalizer, summary["artifact_path"], context
+            ))
+            stored = (sessions / Path(summary["artifact_path"]).relative_to(
+                ".nosis/sessions"
+            )).read_text(encoding="utf-8")
+            self.assertEqual(recovered, stored.removesuffix("\n"))
+            self.assertEqual(len(stored), summary["size_chars"])
+            self.assertEqual(recovered.count(report), 2)
+            self.assertLess(recovered.index("BODY_TAIL"), recovered.index("SECOND_BLOCK"))
+            self.assertIn('--- $["content"][0]["text"] (text) ---', recovered)
+            self.assertIn('--- $["structured_content"]["count"] (json) ---\n3000', recovered)
+            self.assertIn('--- $["is_error"] (json) ---\nfalse', recovered)
+            self.assertIn('--- $["empty"][0] (json) ---\n{}', recovered)
+            self.assertIn('--- $["empty"][1] (json) ---\n[]', recovered)
+            self.assertIn('--- $["empty"][2] (json) ---\nnull', recovered)
+            self.assertTrue(recovered.endswith('--- $["empty"][3] (text) ---'))
+
+    def test_single_line_results_page_without_losing_characters(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+            sessions = workspace.path / "sessions"
+            context = self._context(workspace, sessions)
+            # Control characters cost up to six characters in the JSON envelope.
+            report = "HEAD" + ('中文"\\\t\x00' * 12000) + "TAIL"
+            normalizer = self._normalizer(workspace, sessions)
+            for name, result in (
+                ("text", ToolResult("text", "subagent", report)),
+                ("nested", ToolResult("nested", "mcp", {"body": report})),
+                ("error", ToolResult(
+                    "error", "mcp", error=ToolError(type="RemoteError", message=report)
+                )),
+                ("spool", ToolResult(
+                    "spool", "shell", artifact_writer=lambda path: path.write_text(
+                        report, encoding="utf-8"
+                    )
+                )),
+            ):
+                with self.subTest(result=name):
+                    summary = json.loads(normalizer.normalize(result))
+                    lines = self._read_all(normalizer, summary["artifact_path"], context)
+                    self.assertLessEqual(max(map(len, lines)), MAX_ARTIFACT_LINE_CHARS)
+                    recovered = "".join(lines)
+                    self.assertIn(report, recovered)
+                    self.assertTrue(recovered.endswith("TAIL"))
 
     def test_reading_an_artifact_does_not_spill_again(self) -> None:
         from agent_core.tools.builtin.read_file import ReadFileTool

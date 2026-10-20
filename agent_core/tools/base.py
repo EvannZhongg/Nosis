@@ -99,8 +99,8 @@ class ToolResult:
     attachments: tuple[ImagePart, ...] = ()
     # Internal hooks used by tools that spool large results.  They are not
     # part of the serialized tool result; the Runtime consumes them when it
-    # normalizes the result into a Session artifact.
-    artifact_writer: Callable[[Path], int] | None = field(
+    # normalizes the source text into a bounded Session artifact reading view.
+    artifact_writer: Callable[[Path], None] | None = field(
         default=None, compare=False, repr=False
     )
     artifact_cleanup: Callable[[], None] | None = field(
@@ -149,7 +149,7 @@ class ToolOutput:
 
     output: JSONValue = None
     attachments: tuple[ImagePart, ...] = ()
-    artifact_writer: Callable[[Path], int] | None = field(
+    artifact_writer: Callable[[Path], None] | None = field(
         default=None, compare=False, repr=False
     )
     artifact_cleanup: Callable[[], None] | None = field(

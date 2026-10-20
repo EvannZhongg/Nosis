@@ -47,7 +47,7 @@ from agent_core.turn_control import AgentCancelled, TurnControl
 from agent_core.scheduler import CronTrigger, IntervalTrigger, SchedulerService
 from agent_core.tools.builtin.schedule import ScheduledTaskTool
 from agent_core.tools.budget import MAX_TOOL_RESULT_CHARS
-from agent_core.tools.builtin.read_file import (
+from agent_core.tools.text import (
     MAX_FILE_SIZE_BYTES as MAX_READ_FILE_SIZE_BYTES,
 )
 
@@ -1769,7 +1769,7 @@ class ReadFileToolTest(unittest.TestCase):
             file_path.write_bytes(b"x" * 11)
 
             with patch(
-                "agent_core.tools.builtin.read_file."
+                "agent_core.tools.text."
                 "MAX_FILE_SIZE_BYTES",
                 10,
             ):

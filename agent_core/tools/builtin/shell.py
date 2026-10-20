@@ -372,43 +372,20 @@ def _shell_artifact_writer(
     execution: CommandExecutionResult,
     stdout_spool: CommandOutputSpool | None,
     stderr_spool: CommandOutputSpool | None,
-) -> Callable[[Path], int]:
-    """Stream the complete shell result as plain text.
+) -> Callable[[Path], None]:
+    """Stream plain source text for the shared Artifact reading view."""
 
-    The streams are written verbatim rather than JSON-escaped: an
-    artifact is paged back through ``read_file``, and escaping would
-    fold the whole run onto a single unreadable line.
-    """
-
-    def write(path: Path) -> int:
-        size_chars = 0
+    def write(path: Path) -> None:
         with path.open("w", encoding="utf-8", newline="\n") as file:
-            size_chars += _write_text(file, f"$ {execution.command}\n")
-            size_chars += _write_text(
-                file, f"exit_code: {execution.exit_code}\n"
-            )
-            size_chars += _write_text(
-                file, f"timed_out: {str(execution.timed_out).lower()}\n"
-            )
+            file.write(f"$ {execution.command}\n")
+            file.write(f"exit_code: {execution.exit_code}\n")
+            file.write(f"timed_out: {str(execution.timed_out).lower()}\n")
             if execution.timeout_seconds is not None:
-                size_chars += _write_text(
-                    file,
-                    f"timeout_seconds: {execution.timeout_seconds}\n",
-                )
-            size_chars += _write_stream(
-                file, "stdout", stdout_spool, execution.stdout
-            )
-            size_chars += _write_stream(
-                file, "stderr", stderr_spool, execution.stderr
-            )
-        return size_chars
+                file.write(f"timeout_seconds: {execution.timeout_seconds}\n")
+            _write_stream(file, "stdout", stdout_spool, execution.stdout)
+            _write_stream(file, "stderr", stderr_spool, execution.stderr)
 
     return write
-
-
-def _write_text(file, value: str) -> int:
-    file.write(value)
-    return len(value)
 
 
 def _write_stream(
@@ -416,15 +393,15 @@ def _write_stream(
     name: str,
     spool: CommandOutputSpool | None,
     preview: str,
-) -> int:
+) -> None:
     """Write one stream verbatim, from its spool when it has one."""
-    size_chars = _write_text(file, f"\n--- {name} ---\n")
+    file.write(f"\n--- {name} ---\n")
     if spool is None:
-        return size_chars + _write_text(file, preview)
+        file.write(preview)
+        return
 
     with spool.path.open(
         "r", encoding=spool.encoding, errors="replace", newline=""
     ) as source:
         for chunk in iter(lambda: source.read(8192), ""):
-            size_chars += _write_text(file, chunk)
-    return size_chars
+            file.write(chunk)

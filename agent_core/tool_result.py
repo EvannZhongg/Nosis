@@ -1,4 +1,6 @@
 import json
+from collections.abc import Iterator
+from io import StringIO
 from pathlib import Path
 from urllib.parse import quote
 
@@ -6,6 +8,7 @@ from .path_utils import path_for_comparison
 from .session_paths import default_sessions_directory, session_directory
 from .tools import JSONValue, ToolResult
 from .tools.budget import MAX_TOOL_RESULT_CHARS
+from .tools.text import write_text_artifact
 from .workspace import Workspace
 
 
@@ -13,14 +16,7 @@ DEFAULT_TOOL_RESULT_PREVIEW_CHARS = 1200
 
 
 def artifact_body(result: ToolResult) -> str:
-    """Render *result* the way it is stored on disk.
-
-    An artifact is written to be read back by ``read_file``, line by
-    line, not to be parsed again.  So it holds the payload itself rather
-    than the ``{"ok": ...}`` envelope: wrapping it would turn a report's
-    newlines into literal ``\\n`` and collapse the whole file onto one
-    line, which no amount of paging can walk through.
-    """
+    """Render a reading view, retaining nested text without JSON escaping."""
     if result.error is not None:
         return (
             f"Tool '{result.name}' failed.\n"
@@ -30,9 +26,22 @@ def artifact_body(result: ToolResult) -> str:
     output = result.output
     if isinstance(output, str):
         return output
-    # Indented so a structured payload still has the line breaks that
-    # paging needs to advance through it.
-    return json.dumps(output, ensure_ascii=False, indent=2)
+    return "\n\n".join(_artifact_sections(output))
+
+
+def _artifact_sections(value: JSONValue, path: str = "$") -> Iterator[str]:
+    if isinstance(value, dict) and value:
+        for key, item in value.items():
+            field = json.dumps(key, ensure_ascii=False)
+            yield from _artifact_sections(item, f"{path}[{field}]")
+    elif isinstance(value, list) and value:
+        for index, item in enumerate(value):
+            yield from _artifact_sections(item, f"{path}[{index}]")
+    else:
+        is_text = isinstance(value, str)
+        kind = "text" if is_text else "json"
+        body = value if is_text else json.dumps(value, ensure_ascii=False)
+        yield f"--- {path} ({kind}) ---\n{body}"
 
 
 class ToolResultNormalizer:
@@ -100,11 +109,22 @@ class ToolResultNormalizer:
             absolute_path = self._absolute_artifact_path(artifact_path)
             absolute_path.parent.mkdir(parents=True, exist_ok=True)
             if has_writer:
-                size_chars = result.artifact_writer(absolute_path)
+                # Spool writers share the same bounded reading view as
+                # ordinary results, without loading their streams in memory.
+                source_path = absolute_path.with_suffix(".source")
+                try:
+                    result.artifact_writer(source_path)
+                    with source_path.open(
+                        "r", encoding="utf-8", newline=None
+                    ) as source:
+                        size_chars = write_text_artifact(absolute_path, source)
+                finally:
+                    source_path.unlink(missing_ok=True)
             else:
                 body = artifact_body(result)
-                size_chars = len(body)
-                absolute_path.write_text(body, encoding="utf-8")
+                size_chars = write_text_artifact(
+                    absolute_path, StringIO(body, newline=None)
+                )
 
             relative_path = artifact_path.as_posix()
             summary: dict[str, JSONValue] = {
@@ -114,8 +134,8 @@ class ToolResultNormalizer:
                 "read_instruction": (
                     "Use read_file with path "
                     f"'{relative_path}' to read the complete tool result. "
-                    "It holds the raw result text, so page through it "
-                    "with 'offset' when one read does not reach the end."
+                    "It is a reading view with long lines split; page "
+                    "through it with 'offset' when one read does not reach the end."
                 ),
             }
             if result.artifact_preview is not None:
