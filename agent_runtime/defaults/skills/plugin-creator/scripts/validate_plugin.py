@@ -44,7 +44,6 @@ FRONT_MATTER = re.compile(
 MCP_SERVER_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
 MCP_TOOL_REFERENCE = re.compile(r"^mcp__[A-Za-z0-9_-]+__[A-Za-z0-9_-]+$")
 MCP_SHARED_FIELDS = {
-    "scope",
     "enabled",
     "transport",
     "tools",
@@ -332,8 +331,6 @@ def validate_mcp_server(server: Any, label: str, errors: list[str]) -> None:
     reject_unknown(server, allowed, label, errors)
     if not isinstance(server.get(required), str) or not server[required].strip():
         errors.append(f"{label} field `{required}` must be a non-empty string")
-    if server.get("scope", "workspace") not in ("global", "workspace", "session"):
-        errors.append(f"{label} scope must be 'global', 'workspace' or 'session'")
     if "enabled" in server and not isinstance(server["enabled"], bool):
         errors.append(f"{label} field `enabled` must be a boolean")
     for field in ("startup_timeout_seconds", "call_timeout_seconds"):

@@ -301,7 +301,11 @@ class BridgeIntegrationTest(unittest.TestCase):
         self.assertFalse(any(name.startswith("mcp__repo-review-kit_") for name in names))
         self.assertNotIn("subagent", names)
         self.assertNotIn("read_skill", names)
-        self.assertFalse(any(message["type"] == "mcp_server_status" for message in bridge.messages))
+        self.assertFalse(any(
+            message["type"] == "mcp_server_status"
+            and message["server"].startswith("repo-review-kit:")
+            for message in bridge.messages
+        ))
 
     def test_invalid_role_and_failed_server_do_not_block_healthy_plugin(self):
         broken = self.config / "plugins" / "broken"

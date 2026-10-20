@@ -10,8 +10,8 @@ from unittest.mock import patch
 from agent_core import LLMResponse, McpConfig, McpServerConfig, ToolCall
 from agent_core.tools import ROLE_TOOL_NAMES
 from agent_runtime.plane_manager import ExecutionPlaneManager
-from agent_runtime.mcp.client import McpClient
-from tests.mcp_fixtures import running_broker
+from agent_core.mcp.manager import McpClientManager
+from agent_core.mcp.tool import McpTool
 from tests.test_agent import MockProvider
 from tests.test_bridge import BridgeTestCase, emitted, open_session_message
 from tests.test_plugins import write_agent, write_manifest, write_skill
@@ -28,29 +28,34 @@ class McpRegistrationIsolationTest(unittest.TestCase):
     def test_collision_discards_partial_server_registration(self) -> None:
         root = Path(self.enterContext(tempfile.TemporaryDirectory()))
         statuses = []
-        client = McpClient(root, statuses.append)
-        self.addCleanup(client.close)
-        handle = client.bind(McpConfig(enabled=True, servers=tuple(
+        manager = McpClientManager(McpConfig(enabled=True, servers=tuple(
             McpServerConfig(name=name, transport="stdio", command="python")
             for name in ("bad", "healthy")
-        )), root, "session")
-        handle._load_tools([
-            {"server": server, "lease": server, "tools": [
-                {"name": name, "description": name, "input_schema": {"type": "object"}}
+        )), root, statuses.append)
+        self.addCleanup(manager.close)
+
+        async def start_server(stack, server):
+            names = ("unique", "dup-name", "dup.name", "dup_name") if server.name == "bad" else ("echo",)
+            return object(), tuple(
+                McpTool(server.identifier, name, name, {"type": "object"})
                 for name in names
-            ]}
-            for server, names in (("bad", ("unique", "dup-name", "dup.name", "dup_name")), ("healthy", ("echo",)))
+            )
+
+        with patch.object(manager, "_start_server", start_server):
+            manager.start()
+            manager.wait_ready()
+        self.assertEqual(manager.tool_names, ("mcp__healthy__echo",))
+        self.assertIsNone(manager.tool_identity("mcp__bad__unique"))
+        self.assertEqual([(status.server, status.status) for status in statuses], [
+            ("bad", "connecting"), ("healthy", "connecting"),
+            ("bad", "unavailable"), ("healthy", "ready"),
         ])
-        self.assertEqual(handle.tool_names, ("mcp__healthy__echo",))
-        self.assertIsNone(handle.tool_identity("mcp__bad__unique"))
-        self.assertEqual([(status.server, status.status) for status in statuses], [("bad", "unavailable"), ("healthy", "ready")])
-        self.assertIn("duplicate qualified tool name", statuses[0].error)
+        self.assertIn("duplicate qualified tool name", statuses[2].error)
 
 
 class PluginInteropTest(BridgeTestCase):
     def setUp(self) -> None:
         self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
-        self.enterContext(running_broker(self.root))
         manifest = write_manifest(self.root / "plugins", "review-kit", components={
             "skills": ["skills"], "agents": ["agents/reviewer.md"], "mcp": [".mcp.json"],
         })
@@ -230,7 +235,7 @@ class PluginInteropTest(BridgeTestCase):
         result = second.agent._tools.execute(ToolCall("echo", TOOL, {"text": "after rebuild"}))
         self.assertIsNone(result.error)
         identity = second.agent._tools.execute(ToolCall("identity", identity_tool, {}))
-        self.assertEqual(identity.output["structured_content"]["pid"], first_pid)
+        self.assertNotEqual(identity.output["structured_content"]["pid"], first_pid)
         self.server_config["tools"]["enabled"] = ["identity"]
         self.write_mcp()
         write_agent(self.plugin, fields=f"tools: [{identity_tool}]\n")
@@ -253,3 +258,18 @@ class PluginInteropTest(BridgeTestCase):
         self.assertEqual(disabled.skills.names, ())
         self.assertEqual(disabled.mcp.tool_names, ())
         self.assertNotIn(identity_tool, disabled.catalog.names)
+
+    def test_runtime_hosts_own_independent_mcp_connections(self) -> None:
+        self.server_config["tools"]["enabled"].append("identity")
+        self.write_mcp()
+        first, _ = self.open()
+        second, _ = self.open()
+        planes = [bridge.host.planes.ensure(bridge.host.sessions) for bridge in (first, second)]
+        identities = [plane.mcp.call_tool("review-kit:analyzer", "identity", {})["structured_content"] for plane in planes]
+        self.assertNotEqual(identities[0]["pid"], identities[1]["pid"])
+        first.close()
+        self.assertEqual(
+            planes[1].mcp.call_tool("review-kit:analyzer", "echo", {"text": "still connected"})["structured_content"],
+            {"echo": "still connected"},
+        )
+        self.assertFalse((self.root / "mcp").exists())

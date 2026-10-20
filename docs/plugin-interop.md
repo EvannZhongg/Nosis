@@ -6,8 +6,8 @@
 装配时，`PluginLoader` 解析 `plugin.json`，`PluginManager` 发现启用的包并路由三个组件：
 
 1. `PluginSkillSource → SkillLoader → SkillRegistry`，注册 `<plugin>:<skill>`。
-2. MCP server map 经 Core 配置解析与 namespace 处理，合并进现有 `McpClient` 绑定；
-   Broker/Service 持有进程与连接，`wait_ready()` 返回过滤后的 `McpTool`。
+2. MCP server map 经 Core 配置解析与 namespace 处理，合并进执行面的 `McpClientManager`；
+   Manager 持有进程与连接，`wait_ready()` 返回过滤后的 `McpTool`。
 3. Agent Markdown 解析为 `PluginAgent`，Runtime 选 Provider 并创建 `SubagentRoleRegistry`。
 
 原阻断点是第 3 步在读取 Markdown 时，只允许静态 `ROLE_TOOL_NAMES`，因此无法选择
@@ -38,7 +38,7 @@ Provider 路由先对声明角色校验，因 MCP 暂不可用而跳过的角色
 真正不存在的配置角色仍保留原有报错行为。
 
 调用沿用 `SubagentTool → SubagentRuntime → catalog.select → ToolSet.execute → ToolPolicy → McpTool`。
-子 Agent 使用同一 Catalog、权限控制器及 MCP Handle，不获得 Runtime 内部对象，也不能再次委派。
+子 Agent 使用同一 Catalog、权限控制器及 MCP Manager，不获得 Runtime 内部对象，也不能再次委派。
 声明工具仅选择可见能力，不能绕过 MCP allowlist、审批或执行权限。
 
 ## 契约与错误隔离
@@ -61,15 +61,14 @@ Creator 的脚手架生成相同 manifest。独立校验器不 import Nosis：�
 配置变化会沿用既有机制整体重建；重建时重新发现并装配所有组件。安装、更新、禁用和
 删除插件后，重启 Nosis 是使声明完整生效的操作边界。
 
-Plane 关闭只释放本地 Handle；Broker 为 Host 保留连接身份未变的资源。因此重新装配
-并不保证重启 MCP Server。更新 Server 源码需要让持有它的所有 Runtime 释放连接并等待
-Broker 回收，或者改变实际连接配置；该要求沿用现有 MCP 生命周期，不新增插件进程管理。
+Plane 持有独立的 MCP Manager；关闭或重新装配时关闭其连接与 stdio 子进程。
+重新装配会重新启动 MCP Server 并发现工具，其他 Runtime 的连接不受影响。
 禁用或删除角色时，还需删除 `provider_config.json` 中指向该角色的显式路由。
 
 ## 验证
 
 `tests/test_plugin_contract.py` 检查独立校验器与 Runtime 契约；
-`tests/test_plugin_interop.py` 复用 unittest、MockProvider、Fake MCP Server、Broker 与 Bridge，
+`tests/test_plugin_interop.py` 复用 unittest、MockProvider、Fake MCP Server 与 Bridge，
 覆盖 Skill → Reviewer → MCP、子 Agent 工具选择与审批、禁用/过滤/启动失败、冲突隔离和重新装配。
 第三方示例包位于 `tests/nosis-plugin-testkit/`，不导入 Nosis 内部模块，也不作为默认插件安装。
 从仓库根目录运行其独立测试：

@@ -14,7 +14,6 @@ _COMMON_FIELDS = {
     "tools",
     "startup_timeout_seconds",
     "call_timeout_seconds",
-    "scope",
 }
 _STDIO_FIELDS = _COMMON_FIELDS | {"command", "args", "cwd", "env"}
 _HTTP_FIELDS = _COMMON_FIELDS | {"url", "headers"}
@@ -41,7 +40,6 @@ class McpServerConfig:
     startup_timeout_seconds: int = 15
     call_timeout_seconds: int = 60
     namespace: str | None = None
-    scope: Literal["global", "workspace", "session"] = "workspace"
 
     @property
     def identifier(self) -> str:
@@ -161,9 +159,6 @@ def _load_server(name: object, value: object) -> McpServerConfig:
     call_timeout = _positive_integer(
         value, "call_timeout_seconds", path, 60
     )
-    scope = value.get("scope", "workspace")
-    if scope not in ("global", "workspace", "session"):
-        raise ValueError(f"config field '{path}.scope' must be 'global', 'workspace' or 'session'")
 
     if transport == "stdio":
         command = _required_string(value, "command", path)
@@ -181,7 +176,6 @@ def _load_server(name: object, value: object) -> McpServerConfig:
             tools=tools,
             startup_timeout_seconds=startup_timeout,
             call_timeout_seconds=call_timeout,
-            scope=scope,
         )
 
     url = _required_string(value, "url", path)
@@ -197,7 +191,6 @@ def _load_server(name: object, value: object) -> McpServerConfig:
         tools=tools,
         startup_timeout_seconds=startup_timeout,
         call_timeout_seconds=call_timeout,
-        scope=scope,
     )
 
 

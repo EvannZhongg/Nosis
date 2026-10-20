@@ -19,9 +19,8 @@ containing `plugin.json`. Existing plugin directories are not overwritten by bun
 Restart Nosis after adding, editing, disabling or removing a plugin. Plugin files are not watched,
 and opening another Session does not guarantee a reload.
 
-MCP connections can be shared. When updating server code, close all Nosis instances using that
-server and wait for its process to exit before restarting. Reassembling component declarations
-alone does not restart an unchanged MCP connection.
+Each execution plane owns its MCP connections and stdio subprocesses. Reassembling the plane
+closes its connections and starts fresh servers, so restarting Nosis also reloads server code.
 
 ## Discovery failures
 

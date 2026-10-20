@@ -119,10 +119,9 @@ Each entry is a **file** holding a server map. Keys are server names and registe
 - stdio fields: `command` (required), `args`, `cwd`, `env`.
 - http fields: `url` (required), `headers`.
 - `env` and `headers` values written as `${NAME}` are resolved from the environment.
-- Shared fields: `enabled`, `tools`, `startup_timeout_seconds`, `call_timeout_seconds`, `scope`.
-- `scope` defaults to `workspace`. Use `session` to isolate connection state per Session, or
-  `global` to share across workspaces. Sharing requires matching connection settings and credentials.
-  Global stdio requires an absolute working directory; plugin-relative `cwd` is resolved first.
+- Common fields: `enabled`, `tools`, `startup_timeout_seconds`, `call_timeout_seconds`.
+- Each execution plane owns its MCP connections and stdio subprocesses. Rebuilding or closing
+  the plane closes them; another Runtime creates independent connections.
 - `tools.enabled` is an optional array of remote tool names (omitted exposes all; `[]`
   exposes none). `tools.approval` is `always` by default, `never`, or
   `{"always": ["analyze_code"]}`. Approval names must be included in `tools.enabled`

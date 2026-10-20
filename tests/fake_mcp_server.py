@@ -1,7 +1,6 @@
 import os
 import time
 import asyncio
-import json
 import sys
 from pathlib import Path
 
@@ -15,18 +14,7 @@ if _delay > 0:
     time.sleep(_delay)
 
 
-_log = os.environ.get("TEST_MCP_LOG")
-
-
-class TestServer(MCPServer):
-    async def list_tools(self):
-        if _log:
-            with open(_log, "a", encoding="utf-8") as output:
-                output.write(json.dumps({"event": "discover", "pid": os.getpid()}) + "\n")
-        return await super().list_tools()
-
-
-server = TestServer("nosis-test")
+server = MCPServer("nosis-test")
 
 
 @server.tool(description="Return the physical server identity")
@@ -43,11 +31,6 @@ async def wait(started: str, release: str) -> str:
         return "released"
     finally:
         Path(started + ".stopped").touch()
-
-
-@server.tool(description="Close the transport unexpectedly")
-def crash() -> str:
-    os._exit(0)
 
 
 @server.tool(description="Echo text from the fake MCP server")

@@ -54,13 +54,12 @@ from .settings import EnvironmentReloader, configuration_fingerprint
 from .callbacks import RuntimeCallbacks
 from .computer import DesktopComputer
 from .session_controller import SessionRuntimeController
-from .mcp.client import McpClient
 
 
 class ExecutionPlaneManager:
     def __init__(self, config_directory: Path, environment: EnvironmentReloader,
                  scheduler: SchedulerService, callbacks: RuntimeCallbacks,
-                 execution_authority_limit: ExecutionAuthority, mcp: McpClient) -> None:
+                 execution_authority_limit: ExecutionAuthority) -> None:
         self._config_directory = config_directory
         self._config_path = config_directory / "provider_config.json"
         self._agent_config_path = config_directory / "agent_config.json"
@@ -68,7 +67,6 @@ class ExecutionPlaneManager:
         self.scheduler = scheduler
         self.callbacks = callbacks
         self._execution_authority_limit = execution_authority_limit
-        self._mcp = mcp
         self.current: ExecutionPlane | None = None
 
     def ensure(self, session: SessionRuntimeController) -> ExecutionPlane:
@@ -101,10 +99,7 @@ class ExecutionPlaneManager:
             servers=merge_mcp_servers((agent_config.mcp.servers, plugin_mcp_servers)),
         )
         plane = self.current
-        if plane is not None and plane.mcp.matches(
-            mcp_config, session.workspace.path, session.session.session_id,
-            self._environment.snapshot(),
-        ) and plane.matches(
+        if plane is not None and plane.mcp.config == mcp_config and plane.matches(
             workspace=session.workspace,
             provider_name=session.provider_name,
             agent_config=agent_config,
@@ -132,17 +127,18 @@ class ExecutionPlaneManager:
                     "provider_config.json configures unknown subagent role(s): "
                     f"{names}"
                 )
-        mcp = self._mcp.bind(
+        from agent_core.mcp.manager import McpClientManager
+
+        mcp = McpClientManager(
             mcp_config, workspace.path,
-            session.session.session_id,
-            environment=self._environment.snapshot(),
+            on_status=self.callbacks.on_mcp_status,
         )
         workspace_executor: SandboxedCommandExecutor | None = None
         host_executor: HostCommandExecutor | None = None
         execution_router: ExecutionRouter | None = None
         desktop: DesktopComputer | None = None
         try:
-            mcp.acquire()
+            mcp.start()
             skills = SkillLoader().load(
                 (
                     *configured_skill_sources(
@@ -272,7 +268,7 @@ class ExecutionPlaneManager:
                     desktop.close()
             finally:
                 try:
-                    mcp.release()
+                    mcp.close()
                 finally:
                     if execution_router is not None:
                         execution_router.close()

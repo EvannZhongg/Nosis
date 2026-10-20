@@ -11,7 +11,7 @@ from ..tools import JSONValue, Tool, ToolDefinition, ToolOutput
 from ..tools.context import ToolExecutionContext
 
 if TYPE_CHECKING:
-    from .client import McpClient
+    from .manager import McpClientManager
 
 
 _INVALID_TOOL_NAME = re.compile(r"[^A-Za-z0-9_-]")
@@ -30,8 +30,8 @@ def qualified_tool_name(server_name: str, tool_name: str) -> str:
 class McpTool(Tool):
     """A remote MCP tool, named and described by its server.
 
-    The client is injected through the context; resource ownership and
-    each caller's tool policy remain outside this stateless definition.
+    The manager is injected through the context; the tool itself only retains
+    its discovered definition.
     """
 
     def __init__(
@@ -61,9 +61,9 @@ class McpTool(Tool):
         arguments: dict[str, JSONValue],
         context: ToolExecutionContext,
     ) -> JSONValue | ToolOutput:
-        manager: "McpClient | None" = context.mcp
+        manager: "McpClientManager | None" = context.mcp
         if manager is None:
-            raise ValueError("this runtime has no MCP client")
+            raise ValueError("this runtime has no MCP client manager")
         result = manager.call_tool(
             self.server_name,
             self.remote_name,

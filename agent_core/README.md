@@ -163,7 +163,7 @@ Responses 工具参数从 `response.completed` 的完整 output 读取，推理�
 Core 只定义扩展机制，不决定扩展从哪个目录加载：
 
 - `SkillSource` 描述可枚举的 Skill 来源，`SkillLoader` 与 `SkillRegistry` 负责元数据加载、注册及按需读取正文。
-- `McpConnection` 提供 stdio 与 streamable HTTP 的单连接、工具发现和请求机制；Runtime 的独立 MCP 服务负责跨进程共享与资源回收。`McpTool` 通过上下文中的 `McpClient` 调用远程工具，保持统一 Tool 接口。
+- `McpClientManager` 管理 stdio 与 streamable HTTP Server 生命周期，将远程 Tool 适配为统一 `McpTool`。
 - `SubagentRoleRegistry` 保存角色；`SubagentRuntime` 为每次调用创建独立 Session，并复用同一套 Agent、Tool 和上下文机制。
 
 相关模块为 `skills.py`、`mcp/` 和 `subagent.py`。

@@ -20,8 +20,8 @@ from agent_core import (
 from agent_core.config import SkillConfig
 from agent_core.llm import LLMRequest
 from agent_core.mcp.config import load_mcp_config
-from agent_core.mcp.connection import discover_tools
-from agent_runtime.mcp.client import McpClient
+from agent_core.mcp.manager import McpClientManager
+from agent_core.mcp.tool import McpTool
 from agent_core.providers.base import _request_tools
 from agent_core.tools.config import TOOL_NAMES, load_tool_config
 from agent_runtime.config import configured_skill_sources
@@ -152,30 +152,53 @@ class RegistrationOrderTest(unittest.TestCase):
                 snapshots.append((registry.prompt_section(), definition))
             self.assertEqual(*snapshots)
 
-    def test_mcp_discovery_keeps_configured_server_order(self):
+    def test_mcp_connection_completion_does_not_change_server_order(self):
         for server_names in (("z-server", "a-server"), ("a-server", "z-server")):
-            config = load_mcp_config({"enabled": True, "servers": {
-                name: {"command": "unused"} for name in server_names
-            }})
-            client = McpClient(Path.cwd())
-            self.addCleanup(client.close)
-            handle = client.bind(config, Path.cwd(), "session")
-            handle._load_tools([{
-                "server": server, "lease": server,
-                "tools": [{"name": name, "description": "demo", "input_schema": {"type": "object"}}
-                          for name in ("a-tool", "z-tool")],
-            } for server in server_names])
-            self.assertEqual(handle.tool_names, tuple(
-                f"mcp__{server}__{tool}" for server in server_names for tool in ("a-tool", "z-tool")
-            ))
+            with self.subTest(server_names=server_names):
+                config = load_mcp_config({"enabled": True, "servers": {
+                    name: {"command": "unused"} for name in server_names
+                }})
+                manager = McpClientManager(config, Path.cwd())
+                released = asyncio.Event()
+                completed = []
+
+                async def start_server(stack, server):
+                    if server.identifier == server_names[0]:
+                        await released.wait()
+                    completed.append(server.identifier)
+                    released.set()
+                    return object(), tuple(
+                        McpTool(server.identifier, name, "demo", {"type": "object"})
+                        for name in ("z-tool", "a-tool")
+                    )
+
+                with patch.object(manager, "_start_server", start_server):
+                    try:
+                        manager.start()
+                        tools = manager.wait_ready()
+                        self.assertEqual(completed, list(reversed(server_names)))
+                        expected = tuple(
+                            f"mcp__{server}__{tool}"
+                            for server in server_names for tool in ("z-tool", "a-tool")
+                        )
+                        self.assertEqual(manager.tool_names, expected)
+                        context = ToolExecutionContext(
+                            Workspace(Path.cwd()), Session(), mcp=manager,
+                        )
+                        definitions = builtin_catalog().extend(tools).select(
+                            manager.tool_names, context,
+                        ).definitions
+                        self.assertEqual(
+                            tuple(tool.name for tool in definitions), expected,
+                        )
+                    finally:
+                        manager.close()
 
     def test_mcp_remote_page_order_does_not_change_model_visible_tools(self):
         config = load_mcp_config({"enabled": True, "servers": {
             "demo": {"command": "unused", "tools": {"enabled": ["alpha", "zeta"]}},
         }})
-        client = McpClient(Path.cwd())
-        self.addCleanup(client.close)
-        manager = client.bind(config, Path.cwd(), "session")
+        manager = McpClientManager(config, Path.cwd())
         snapshots = []
         for pages in (
             (("zeta", "hidden"), ("alpha",)),
@@ -190,10 +213,7 @@ class RegistrationOrderTest(unittest.TestCase):
                 ))
                 for index, names in enumerate(pages)
             ]))
-            remote = asyncio.run(discover_tools(session))
-            manager._origins.clear()
-            manager._load_tools([{"server": "demo", "lease": "demo", "tools": remote}])
-            tools = manager._tools
+            tools = asyncio.run(manager._discover_tools(session, config.servers[0]))
             context = ToolExecutionContext(
                 Workspace(Path.cwd()), Session(), mcp=manager,
             )

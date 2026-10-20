@@ -59,5 +59,5 @@ allowlist、Plugin 禁用、无效角色与 Server 启动失败隔离，以及 T
 
 Plugin、Skill、Agent 文件不热加载；重启后重新装配声明。禁用时将 `plugin.json`
 中的 `enabled` 改为 `false` 并重启；若另行配置过该角色的 Provider 路由，也应删除该路由。
-ExecutionPlane 重建可能复用同一 MCP 服务进程。更新 Server 源码时，应关闭所有持有
-该连接的 Nosis Runtime 并等待 Broker 回收，再重新启动；只重开 Session 不保证刷新。
+每个 ExecutionPlane 独立管理 MCP 连接和 stdio 子进程，重建时关闭旧连接并重新启动
+Server。更新 Server 源码后重启 Nosis 即可生效；只重开 Session 可能复用现有执行面。

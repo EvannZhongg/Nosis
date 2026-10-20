@@ -22,7 +22,7 @@ from agent_core.tools.config import ToolSettings
 from .computer import DesktopComputer
 
 if TYPE_CHECKING:
-    from .mcp.client import McpClientHandle
+    from agent_core.mcp.manager import McpClientManager
     from .config import PromptTemplates
     from .plugins import PluginAgent
 
@@ -46,7 +46,7 @@ class ExecutionPlane:
     plugin_agents: tuple["PluginAgent", ...]
     computer_tools: tuple[str, ...]
     execution_router: ExecutionRouter
-    mcp: "McpClientHandle"
+    mcp: "McpClientManager"
     tool_settings: ToolSettings = field(default_factory=ToolSettings)
     memory: MemoryManager | None = None
     agent: Agent | None = None
@@ -91,7 +91,7 @@ class ExecutionPlane:
                 self.unbind_session()
             finally:
                 try:
-                    self.mcp.release()
+                    self.mcp.close()
                 finally:
                     self.execution_router.close()
 

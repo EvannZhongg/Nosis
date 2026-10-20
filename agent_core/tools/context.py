@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from ..execution.router import ExecutionRouter, ResolvedExecution
     from ..execution.process import CancellationSignal
     from ..llm import LLMProvider
-    from ..mcp.client import McpClient
+    from ..mcp.manager import McpClientManager
     from ..plan import PlanManager
     from ..session import Session
     from ..skills import SkillRegistry
@@ -49,7 +49,7 @@ class ToolExecutionContext:
     vision_input: bool = False
     vision_provider: "LLMProvider | None" = None
     image_generator: "ImageGenerator | None" = None
-    mcp: "McpClient | None" = None
+    mcp: "McpClientManager | None" = None
     subagents: "SubagentRuntime | None" = None
     jobs: "JobManager | None" = None
     cancellation: "CancellationSignal | None" = None

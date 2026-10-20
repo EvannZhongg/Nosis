@@ -9,7 +9,7 @@ from typing import TextIO, TYPE_CHECKING
 from agent_core import AgentCancelled as Cancelled, AgentEvent, PermissionPreset, SchedulerService, SessionInUseError, message_to_dict, runtime_error_info
 from agent_core.usage import cache_usage_to_dict, usage_to_dict
 if TYPE_CHECKING:
-    from agent_runtime.mcp.client import McpServerStatus
+    from agent_core.mcp.manager import McpServerStatus
 from agent_runtime.host import RuntimeHost
 from agent_runtime.callbacks import RuntimeCallbacks
 from agent_runtime.attachments import parse_attachments

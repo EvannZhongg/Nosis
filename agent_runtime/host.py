@@ -13,7 +13,6 @@ from agent_core import (
 
 from .callbacks import RuntimeCallbacks
 from .config import load_model_options
-from .mcp.client import McpClient
 from .plane_manager import ExecutionPlaneManager
 from .session_controller import SessionRuntimeController
 from .settings import EnvironmentReloader, SettingsStore
@@ -35,14 +34,13 @@ class RuntimeHost:
         runtime_callbacks = replace(self.callbacks, on_event=self.publish_event)
         self.environment = EnvironmentReloader(self.config_directory / ".env")
         self.settings = SettingsStore(self.config_directory, self.environment)
-        self.mcp = McpClient(self.config_directory, self.callbacks.on_mcp_status)
         self._owns_scheduler = scheduler is None
         self.scheduler = scheduler or SchedulerService(
             self.config_directory / "schedule.jsonl",
         )
         self.planes = ExecutionPlaneManager(
             self.config_directory, self.environment, self.scheduler,
-            runtime_callbacks, execution_authority_limit, self.mcp,
+            runtime_callbacks, execution_authority_limit,
         )
         self.sessions = SessionRuntimeController(
             self.config_directory, self.environment, runtime_callbacks,
@@ -134,10 +132,7 @@ class RuntimeHost:
             self.planes.close()
         finally:
             try:
-                self.mcp.close()
+                self.sessions.close()
             finally:
-                try:
-                    self.sessions.close()
-                finally:
-                    if self._owns_scheduler:
-                        self.scheduler.close()
+                if self._owns_scheduler:
+                    self.scheduler.close()
