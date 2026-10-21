@@ -74,9 +74,6 @@ def load_tool_settings(path: Path) -> ToolSettings:
         document = json.load(file)
     if not isinstance(document, dict):
         raise ValueError(f"configuration must be a JSON object: {path}")
-    unknown = set(document) - {"web_search", "web_fetch"}
-    if unknown:
-        raise ValueError("unknown tool setting(s): " + ", ".join(sorted(unknown)))
     search_provider, search_key = _load_tool_provider(
         document.get("web_search"), "web_search", WEB_SEARCH_PROVIDERS,
     )
@@ -95,9 +92,6 @@ def _load_tool_provider(
     """Resolve one tool's provider and key; the first choice is keyless."""
     if not isinstance(value, dict):
         raise ValueError(f"config field '{tool}' must be an object")
-    unknown = set(value) - {"provider", "providers"}
-    if unknown:
-        raise ValueError(f"unknown {tool} setting(s): " + ", ".join(sorted(unknown)))
     provider = value.get("provider")
     if not isinstance(provider, str) or provider not in choices:
         raise ValueError(f"{tool}.provider must be one of: " + ", ".join(choices))
@@ -107,10 +101,8 @@ def _load_tool_provider(
     for name, settings in providers.items():
         if name not in choices[1:]:
             raise ValueError(f"unknown {tool} provider settings: {name}")
-        if not isinstance(settings, dict) or set(settings) - {"key"}:
-            raise ValueError(
-                f"{tool}.providers.{name} must be an object containing only 'key'"
-            )
+        if not isinstance(settings, dict):
+            raise ValueError(f"{tool}.providers.{name} must be an object")
         key = settings.get("key")
         if key is not None and not isinstance(key, str):
             raise ValueError(f"{tool}.providers.{name}.key must be a string")
@@ -530,17 +522,6 @@ def load_image_generation_config(
         return None
     if not isinstance(value, dict):
         raise ValueError("config field 'image_generation' must be an object")
-    unknown = set(value) - {
-        "provider",
-        "model",
-        "default_aspect_ratio",
-        "default_image_size",
-    }
-    if unknown:
-        raise ValueError(
-            "unknown field(s) in 'image_generation': "
-            + ", ".join(sorted(unknown))
-        )
     provider = value.get("provider")
     model = value.get("model")
     if not isinstance(provider, str) or not provider.strip():

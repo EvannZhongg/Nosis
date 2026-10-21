@@ -115,13 +115,6 @@ def _provider_config(value: object) -> ProviderRequestConfig:
         return ProviderRequestConfig()
     if not isinstance(value, dict):
         raise ValueError("config field 'provider' must be an object")
-    unknown = set(value) - {
-        "request_timeout_seconds",
-        "max_retries",
-    }
-    if unknown:
-        fields = ", ".join(sorted(unknown))
-        raise ValueError(f"unknown field(s) in 'provider': {fields}")
     return ProviderRequestConfig(
         request_timeout_seconds=_positive_integer_with_default(
             value,
@@ -141,10 +134,6 @@ def _provider_config(value: object) -> ProviderRequestConfig:
 def _skill_config(value: object) -> SkillConfig:
     if not isinstance(value, dict):
         raise ValueError("config field 'skills' must be an object")
-    unknown = set(value) - {"global_paths", "workspace_paths"}
-    if unknown:
-        fields = ", ".join(sorted(unknown))
-        raise ValueError(f"unknown field(s) in 'skills': {fields}")
     return SkillConfig(
         global_paths=_skill_paths(value.get("global_paths"), "global_paths"),
         workspace_paths=_skill_paths(
@@ -202,10 +191,6 @@ def _workspace_instruction_files(value: object) -> tuple[str, ...]:
 def _main_agent_tools(value: object) -> ToolConfig:
     if not isinstance(value, dict):
         raise ValueError("config field 'main_agent' must be an object")
-    unknown = set(value) - {"tools"}
-    if unknown:
-        fields = ", ".join(sorted(unknown))
-        raise ValueError(f"unknown field(s) in 'main_agent': {fields}")
     return load_tool_config(value.get("tools"))
 
 
@@ -234,12 +219,6 @@ def _subagent_roles(value: object) -> dict[str, SubagentRoleConfig]:
             raise ValueError(
                 f"config field 'subagent_roles.{name}.enabled' must be "
                 "a boolean"
-            )
-        unknown = set(settings) - {"description", "enabled", "tools", "mcp"}
-        if unknown:
-            fields = ", ".join(sorted(unknown))
-            raise ValueError(
-                f"unknown field(s) in 'subagent_roles.{name}': {fields}"
             )
         roles[name] = SubagentRoleConfig(
             description=description.strip(),
@@ -291,18 +270,6 @@ def _context_config(value: object) -> ContextCompressionConfig:
         return ContextCompressionConfig()
     if not isinstance(compression, dict):
         raise ValueError("config field 'context.compression' must be an object")
-    unknown = set(compression) - {
-        "enabled",
-        "trigger_ratio",
-        "keep_recent_units",
-        "user_anchor_token_budget",
-    }
-    if unknown:
-        fields = ", ".join(sorted(unknown))
-        raise ValueError(
-            "unknown field(s) in 'context.compression': "
-            f"{fields}"
-        )
     enabled = compression.get("enabled", True)
     if not isinstance(enabled, bool):
         raise ValueError("config field 'context.compression.enabled' must be a boolean")
@@ -323,14 +290,6 @@ def _memory_config(value: object) -> MemoryConfig:
         return MemoryConfig()
     if not isinstance(value, dict):
         raise ValueError("config field 'memory' must be an object")
-    unknown = set(value) - {
-        "enabled",
-        "global_max_tokens",
-        "workspace_max_tokens",
-    }
-    if unknown:
-        fields = ", ".join(sorted(unknown))
-        raise ValueError(f"unknown field(s) in 'memory': {fields}")
     enabled = value.get("enabled", True)
     if not isinstance(enabled, bool):
         raise ValueError("config field 'memory.enabled' must be a boolean")

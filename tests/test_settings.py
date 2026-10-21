@@ -103,6 +103,63 @@ class SettingsStoreTest(unittest.TestCase):
             {"request_timeout_seconds": 300, "max_retries": 2},
         )
 
+    def test_agent_save_preserves_unknown_config_fields(self) -> None:
+        document = json.loads(self.store.agent_path.read_text(encoding="utf-8"))
+        document["extra"] = {"enabled": False}
+        document["memory"] = {"enabled": False, "extra": "metadata"}
+        document["subagent_roles"] = {
+            "researcher": {"description": "Reads.", "tools": {}, "extra": []},
+        }
+        for field in ("provider", "skills", "context", "main_agent"):
+            document[field]["extra"] = "metadata"
+        document["context"]["compression"]["extra"] = True
+        self.store.agent_path.write_text(json.dumps(document), encoding="utf-8")
+
+        snapshot = self.store.save_agent({"max_same_tool_calls": 6})
+
+        self.assertEqual(snapshot["agent"]["max_same_tool_calls"], 6)
+        self.assertFalse(snapshot["agent"]["memory"]["enabled"])
+        document["max_same_tool_calls"] = 6
+        self.assertEqual(
+            json.loads(self.store.agent_path.read_text(encoding="utf-8")), document,
+        )
+        self.store.save_agent(self.store.snapshot()["agent"])
+        updated = json.loads(self.store.agent_path.read_text(encoding="utf-8"))
+        self.assertEqual(updated["extra"], {"enabled": False})
+        self.assertEqual(updated["context"]["extra"], "metadata")
+        self.assertEqual(updated["context"]["compression"]["extra"], True)
+        self.assertEqual(updated["memory"]["extra"], "metadata")
+        self.assertEqual(updated["main_agent"]["extra"], "metadata")
+        self.assertEqual(updated["subagent_roles"]["researcher"]["extra"], [])
+
+    def test_provider_save_preserves_unknown_config_fields(self) -> None:
+        document = json.loads(self.store.provider_path.read_text(encoding="utf-8"))
+        document["extra"] = {"enabled": False}
+        document["providers"]["first"]["extra"] = "metadata"
+        for field in ("main_agent", "subagent", "fast_model"):
+            document[field]["extra"] = []
+        document["subagent_roles"] = {
+            "researcher": {"provider": "first", "extra": True},
+        }
+        document["image_generation"] = {
+            "provider": "first", "model": "image-model", "extra": {},
+        }
+        self.store.provider_path.write_text(json.dumps(document), encoding="utf-8")
+
+        snapshot = self.store.save_provider("first", {"model": "openai/updated"})
+
+        self.assertEqual(snapshot["providers"][0]["model"], "openai/updated")
+        document["providers"]["first"]["model"] = "openai/updated"
+        self.assertEqual(
+            json.loads(self.store.provider_path.read_text(encoding="utf-8")), document,
+        )
+        routing = self.store.snapshot()["routing"]
+        routing["roles"] = {"researcher": {"provider": "first"}}
+        self.store.save_routing(routing)
+        self.assertEqual(
+            json.loads(self.store.provider_path.read_text(encoding="utf-8")), document,
+        )
+
     def test_user_anchor_budget_survives_settings_round_trip(self) -> None:
         agent = self.store.snapshot()["agent"]
         self.assertEqual(agent["context"]["compression"]["user_anchor_token_budget"], 2000)

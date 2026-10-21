@@ -131,7 +131,6 @@ class AgentConfigTest(unittest.TestCase):
             {"global_paths": "skills", "workspace_paths": []},
             {"global_paths": ["skills"], "workspace_paths": [""]},
             {"global_paths": ["skills", "skills"], "workspace_paths": []},
-            {"global_paths": ["skills"], "workspace_paths": [], "extra": []},
         ):
             with self.subTest(skills=skills):
                 with self.assertRaises(ValueError):
@@ -252,7 +251,6 @@ class AgentConfigTest(unittest.TestCase):
             {"request_timeout_seconds": True, "max_retries": 2},
             {"request_timeout_seconds": 300, "max_retries": -1},
             {"request_timeout_seconds": 300, "max_retries": True},
-            {"request_timeout_seconds": 300, "max_retries": 2, "extra": 1},
         ):
             with self.subTest(provider=provider):
                 with self.assertRaises(ValueError):
@@ -294,7 +292,6 @@ class AgentConfigTest(unittest.TestCase):
             {"enabled": "yes"},
             {"global_max_tokens": 0},
             {"workspace_max_tokens": True},
-            {"unexpected": 1},
         ):
             with self.subTest(memory=memory):
                 with self.assertRaises(ValueError):
@@ -319,21 +316,22 @@ class AgentConfigTest(unittest.TestCase):
                         }
                     )
 
-    def test_rejects_unknown_compression_field(self) -> None:
-        with self.assertRaisesRegex(
-            ValueError,
-            "context.compression.*unexpected",
-        ):
-            self.load(
-                {
-                    "context": {
-                        "compression": {
-                            "unexpected": 0.5,
-                        }
-                    },
-                    "main_agent": {"tools": ENABLED_TOOLS},
-                }
-            )
+    def test_ignores_unknown_fields_in_config_objects(self) -> None:
+        expected = self.load({"main_agent": {"tools": ENABLED_TOOLS}})
+        config = self.load({
+            "extra": {"enabled": False},
+            "provider": {"extra": 1},
+            "skills": {
+                "global_paths": ["~/.nosis/skills"],
+                "workspace_paths": ["skills", ".agents/skills", ".nosis/skills"],
+                "extra": [],
+            },
+            "context": {"extra": True, "compression": {"extra": 0.5}},
+            "memory": {"extra": 1},
+            "main_agent": {"tools": ENABLED_TOOLS, "extra": "metadata"},
+        })
+
+        self.assertEqual(config, expected)
 
     def test_loads_context_unit_retention(self) -> None:
         config = self.load(
@@ -428,17 +426,6 @@ class AgentConfigTest(unittest.TestCase):
                 {
                     "main_agent": {
                         "tools": {**ENABLED_TOOLS, "unknown": True},
-                    }
-                }
-            )
-
-    def test_rejects_unknown_main_agent_field(self) -> None:
-        with self.assertRaisesRegex(ValueError, "'main_agent': provider"):
-            self.load(
-                {
-                    "main_agent": {
-                        "tools": ENABLED_TOOLS,
-                        "provider": "openai",
                     }
                 }
             )
@@ -565,19 +552,15 @@ class SubagentRoleConfigTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, f"subagent_roles.researcher.mcp.*{message}"):
                     self.load({"researcher": {"description": "Reads.", "mcp": selection}})
 
-    def test_rejects_an_unknown_role_field(self) -> None:
-        with self.assertRaisesRegex(
-            ValueError, "'subagent_roles.researcher': provider"
-        ):
-            self.load(
-                {
-                    "researcher": {
-                        "description": "Reads.",
-                        "provider": "openai",
-                        "tools": {},
-                    }
-                }
-            )
+    def test_ignores_unknown_role_fields(self) -> None:
+        expected = self.load({"researcher": {"description": "Reads.", "tools": {}}})
+        config = self.load({"researcher": {
+            "description": "Reads.",
+            "tools": {},
+            "extra": {"enabled": False},
+        }})
+
+        self.assertEqual(config, expected)
 
     def test_rejects_computer_tools_for_a_role(self) -> None:
         with self.assertRaisesRegex(ValueError, "computer_action"):

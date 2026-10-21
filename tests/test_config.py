@@ -170,6 +170,7 @@ class ConfigTest(unittest.TestCase):
                             "model": "openrouter/example/image",
                             "default_aspect_ratio": "16:9",
                             "default_image_size": "2K",
+                            "extra": {"enabled": False},
                         },
                         "providers": {
                             "main": {"model": "openai/main"},
@@ -960,17 +961,36 @@ class ToolSettingsTest(unittest.TestCase):
             [], {}, {"other_tool": {}}, {"web_search": None},
             {"web_search": {"provider": "unknown"}},
             {"web_search": {"provider": ["exa"]}},
-            {"web_search": {"provider": "exa", "extra": True}},
             {"web_search": {"provider": "exa", "providers": []}},
             {"web_search": {"provider": "exa", "providers": {"unknown": {}}}},
             {"web_search": {"provider": "exa", "providers": {"exa": []}}},
-            {"web_search": {"provider": "exa", "providers": {"exa": {"url": "x"}}}},
             {"web_search": {"provider": "exa", "providers": {"exa": {"key": True}}}},
             {"web_search": {"provider": "exa", "providers": {"exa": {"key": "${}"}}}},
         ):
             with self.subTest(document=document), self.assertRaises(ValueError):
-                self.document = document
+                self.document = (
+                    {"web_fetch": {"provider": "direct"}, **document}
+                    if isinstance(document, dict) else document
+                )
                 self.load()
+
+    def test_ignores_unknown_fields_in_tool_settings(self) -> None:
+        self.document["web_search"] = {
+            "provider": "exa", "providers": {"exa": {"key": "search-secret"}},
+        }
+        self.document["web_fetch"] = {
+            "provider": "deepseek", "providers": {"deepseek": {"key": "fetch-secret"}},
+        }
+        self.load()
+        expected = load_tool_settings(self.path)
+        self.document["extra"] = {"enabled": False}
+        for tool, provider in (("web_search", "exa"), ("web_fetch", "deepseek")):
+            self.document[tool]["extra"] = True
+            self.document[tool]["providers"][provider]["extra"] = {"key": "unused"}
+
+        self.load()
+
+        self.assertEqual(load_tool_settings(self.path), expected)
 
     def test_requires_configuration_file(self) -> None:
         self.path.unlink()
@@ -998,7 +1018,6 @@ class ToolSettingsTest(unittest.TestCase):
     def test_rejects_invalid_fetch_settings(self) -> None:
         for value in (
             None, [], {}, {"provider": "exa"}, {"provider": ["deepseek"]},
-            {"provider": "direct", "extra": True},
             {"provider": "deepseek", "providers": []},
             {"provider": "deepseek", "providers": {"exa": {}}},
             {"provider": "deepseek", "providers": {"deepseek": {"key": True}}},

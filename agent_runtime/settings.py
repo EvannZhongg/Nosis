@@ -442,14 +442,30 @@ class SettingsStore:
             if not isinstance(main, dict) or not isinstance(subagent, dict):
                 raise ValueError("provider routing blocks must be objects")
             main["provider"] = payload.get("main_agent")
-            document["fast_model"] = {"provider": payload.get("fast_model") or ""}
+            fast_model = document.get("fast_model")
+            document["fast_model"] = (
+                {**fast_model, "provider": payload.get("fast_model") or ""}
+                if isinstance(fast_model, dict)
+                else {"provider": payload.get("fast_model") or ""}
+            )
             main["vision_provider"] = payload.get("vision_provider") or ""
             subagent["provider"] = payload.get("subagent") or ""
             subagent["vision_provider"] = payload.get("subagent_vision_provider") or ""
             roles = payload.get("roles", {})
             if not isinstance(roles, dict):
                 raise ValueError("routing roles must be an object")
-            document["subagent_roles"] = roles
+            current_roles = document.get("subagent_roles")
+            current_roles = current_roles if isinstance(current_roles, dict) else {}
+            document["subagent_roles"] = {
+                name: (
+                    {**current_roles[name], **route}
+                    if name in current_roles
+                    and isinstance(current_roles[name], dict)
+                    and isinstance(route, dict)
+                    else route
+                )
+                for name, route in roles.items()
+            }
             self._validate_provider_document(document)
             _atomic_json(self.provider_path, document)
             return self._snapshot()
@@ -467,12 +483,60 @@ class SettingsStore:
         document = _read_json(self.agent_path)
         for field in (
             "max_same_tool_calls", "output_reserve_tokens", "max_generation_tokens",
-            "workspace_instruction_files", "context", "memory", "subagent_roles",
+            "workspace_instruction_files",
         ):
             if field in payload:
                 document[field] = payload[field]
+        if "context" in payload:
+            context = payload["context"]
+            if isinstance(context, dict):
+                current = document.get("context")
+                merged = {**current, **context} if isinstance(current, dict) else dict(context)
+                compression = context.get("compression")
+                if isinstance(compression, dict):
+                    current_compression = (
+                        current.get("compression") if isinstance(current, dict) else None
+                    )
+                    merged["compression"] = (
+                        {**current_compression, **compression}
+                        if isinstance(current_compression, dict)
+                        else dict(compression)
+                    )
+                document["context"] = merged
+            else:
+                document["context"] = context
+        if "memory" in payload:
+            memory = payload["memory"]
+            current = document.get("memory")
+            document["memory"] = (
+                {**current, **memory}
+                if isinstance(current, dict) and isinstance(memory, dict)
+                else memory
+            )
+        if "subagent_roles" in payload:
+            roles = payload["subagent_roles"]
+            if isinstance(roles, dict):
+                current = document.get("subagent_roles")
+                current = current if isinstance(current, dict) else {}
+                document["subagent_roles"] = {
+                    name: (
+                        {**current[name], **role}
+                        if name in current
+                        and isinstance(current[name], dict)
+                        and isinstance(role, dict)
+                        else role
+                    )
+                    for name, role in roles.items()
+                }
+            else:
+                document["subagent_roles"] = roles
         if "tools" in payload:
-            document["main_agent"] = {"tools": payload["tools"]}
+            main_agent = document.get("main_agent")
+            document["main_agent"] = (
+                {**main_agent, "tools": payload["tools"]}
+                if isinstance(main_agent, dict)
+                else {"tools": payload["tools"]}
+            )
         if "mcp_enabled" in payload:
             mcp = document.get("mcp")
             if not isinstance(mcp, dict):
@@ -488,18 +552,6 @@ class SettingsStore:
             raise ValueError("configuration changed; reload settings before saving")
 
     def _validate_provider_document(self, document: dict[str, object]) -> None:
-        unknown_top_level = set(document) - {
-            "main_agent",
-            "fast_model",
-            "subagent",
-            "subagent_roles",
-            "providers",
-            "image_generation",
-        }
-        if unknown_top_level:
-            raise ValueError(
-                f"unknown provider configuration field(s): {', '.join(sorted(unknown_top_level))}"
-            )
         descriptor, name = tempfile.mkstemp(dir=self.directory, suffix=".json")
         path = Path(name)
         try:
@@ -515,12 +567,6 @@ class SettingsStore:
                     raise ValueError(f"invalid provider id: {provider}")
                 if not isinstance(value, dict):
                     raise ValueError(f"provider '{provider}' must be an object")
-                unknown = set(value) - {
-                    "model", "url", "key", "max_context_tokens",
-                    "reasoning_effort", "reasoning_parameters", "api",
-                }
-                if unknown:
-                    raise ValueError(f"unknown field(s) for provider '{provider}': {', '.join(sorted(unknown))}")
                 url = value.get("url")
                 key = value.get("key")
                 limit = value.get("max_context_tokens")
@@ -547,10 +593,6 @@ class SettingsStore:
                 route = document.get(label, {})
                 if not isinstance(route, dict):
                     raise ValueError(f"config field '{label}' must be an object")
-                fields = {"provider"} if label == "fast_model" else {"provider", "vision_provider"}
-                unknown = set(route) - fields
-                if unknown:
-                    raise ValueError(f"unknown field(s) in '{label}': {', '.join(sorted(unknown))}")
                 self._validate_routes(route, providers, label)
             roles = document.get("subagent_roles", {})
             if not isinstance(roles, dict):
@@ -558,26 +600,12 @@ class SettingsStore:
             for role, route in roles.items():
                 if not isinstance(route, dict):
                     raise ValueError(f"config field 'subagent_roles.{role}' must be an object")
-                unknown = set(route) - {"provider", "vision_provider"}
-                if unknown:
-                    raise ValueError(f"unknown field(s) in 'subagent_roles.{role}': {', '.join(sorted(unknown))}")
                 self._validate_routes(route, providers, f"subagent_roles.{role}")
             image_generation = document.get("image_generation")
             if image_generation is not None:
                 if not isinstance(image_generation, dict):
                     raise ValueError(
                         "config field 'image_generation' must be an object"
-                    )
-                unknown = set(image_generation) - {
-                    "provider",
-                    "model",
-                    "default_aspect_ratio",
-                    "default_image_size",
-                }
-                if unknown:
-                    raise ValueError(
-                        "unknown field(s) in 'image_generation': "
-                        + ", ".join(sorted(unknown))
                     )
                 provider = image_generation.get("provider")
                 model = image_generation.get("model")
@@ -607,12 +635,6 @@ class SettingsStore:
             path.unlink(missing_ok=True)
 
     def _validate_agent_document(self, document: dict[str, object]) -> None:
-        unknown = set(document) - {
-            "max_same_tool_calls", "output_reserve_tokens", "max_generation_tokens",
-            "provider", "scratch_workspace_root", "workspace_instruction_files", "skills", "context", "memory", "main_agent", "subagent_roles", "mcp",
-        }
-        if unknown:
-            raise ValueError(f"unknown agent configuration field(s): {', '.join(sorted(unknown))}")
         descriptor, name = tempfile.mkstemp(dir=self.directory, suffix=".json")
         path = Path(name)
         try:
