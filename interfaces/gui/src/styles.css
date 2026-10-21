@@ -63,11 +63,11 @@ svg { flex-shrink: 0; }
 .breadcrumb > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #49515f; }
 .breadcrumb > svg { color: #c1c6cf; }
 .status-label { display: flex; align-items: center; gap: 7px; font-size: 10px; color: #8d95a2; margin-left: 20px; }
-.thread { display: flex; flex-direction: column; flex: 1; min-height: 0; }
-.thread-scroll-area { position: relative; display: flex; flex: 1; min-height: 0; }
+.thread { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.thread-scroll-area { display: flex; flex: 1; min-height: 0; }
 .thread-viewport { overflow-y: auto; flex: 1; min-width: 0; min-height: 0; scroll-behavior: smooth; }
-.turn-navigation { position: absolute; z-index: 2; top: 50%; right: 8px; width: 30px; max-height: 64%; transform: translateY(-50%); }
-.turn-navigation-list { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; max-height: inherit; padding: 7px 3px; overflow-y: auto; scrollbar-width: none; }
+.turn-navigation { position: absolute; z-index: 2; top: 12px; bottom: 12px; right: 16px; width: 30px; display: flex; flex-direction: column; justify-content: center; pointer-events: none; }
+.turn-navigation-list { position: relative; display: flex; flex: 0 1 auto; flex-direction: column; align-items: flex-end; gap: 4px; min-height: 0; max-height: 70%; padding: 7px 3px; overflow-y: auto; overscroll-behavior-y: contain; scrollbar-width: none; pointer-events: auto; }
 .turn-navigation-list::-webkit-scrollbar { display: none; }
 .turn-navigation-mark { display: flex; justify-content: flex-end; align-items: center; flex: none; width: 24px; height: 10px; border: 0; padding: 0; background: transparent; }
 .turn-navigation-mark::before { content: ""; width: 10px; height: 2px; border-radius: 999px; background: #aeb6c3; opacity: .38; transition: width .16s ease, opacity .16s ease, background .16s ease; }

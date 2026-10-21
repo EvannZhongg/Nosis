@@ -8,6 +8,7 @@ export function TurnNavigation({ previews, viewportRef, active }: {
   const [activeTurn, setActiveTurn] = useState(Math.max(0, previews.length - 1));
   const [preview, setPreview] = useState<{ index: number; top: number } | null>(null);
   const navigationRef = useRef<HTMLElement | null>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -43,6 +44,21 @@ export function TurnNavigation({ previews, viewportRef, active }: {
     };
   }, [active, previews.length, viewportRef]);
 
+  useEffect(() => {
+    const list = listRef.current;
+    if (!list || !active) return;
+    const centerActiveTurn = () => {
+      const mark = list.children[activeTurn] as HTMLElement | undefined;
+      if (!mark) return;
+      const target = mark.offsetTop - (list.clientHeight - mark.offsetHeight) / 2;
+      list.scrollTop = Math.max(0, Math.min(target, list.scrollHeight - list.clientHeight));
+    };
+    centerActiveTurn();
+    const observer = new ResizeObserver(centerActiveTurn);
+    observer.observe(list);
+    return () => observer.disconnect();
+  }, [active, activeTurn, previews.length]);
+
   if (previews.length === 0) return null;
   const jumpToTurn = (index: number) => {
     const turn = viewportRef.current?.querySelectorAll<HTMLElement>(".user-turn")[index];
@@ -59,7 +75,7 @@ export function TurnNavigation({ previews, viewportRef, active }: {
   };
 
   return <nav ref={navigationRef} className="turn-navigation" aria-label="对话轮次导航" onMouseLeave={() => setPreview(null)}>
-    <div className="turn-navigation-list">
+    <div ref={listRef} className="turn-navigation-list" onScroll={() => setPreview(null)}>
       {previews.map((text, index) => <button
         type="button"
         className={`turn-navigation-mark ${index === activeTurn ? "active" : ""}`}
@@ -72,7 +88,7 @@ export function TurnNavigation({ previews, viewportRef, active }: {
         onBlur={() => setPreview(null)}
       />)}
     </div>
-    {preview && <div className="turn-navigation-preview" style={{ top: preview.top }} role="tooltip">
+    {preview && <div className="turn-navigation-preview" style={{ top: `clamp(18px, ${preview.top}px, calc(100% - 18px))` }} role="tooltip">
       <span>第 {preview.index + 1} 轮</span>{previews[preview.index]}
     </div>}
   </nav>;

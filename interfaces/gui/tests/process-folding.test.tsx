@@ -195,6 +195,44 @@ describe("process folding in the live transcript", () => {
     expect(viewport.scrollTop).toBe(viewport.scrollHeight - viewport.clientHeight);
   });
 
+  it("centers the active turn after resizing and respects navigation boundaries without scrolling the conversation", async () => {
+    let resizeNavigation: (() => void) | undefined;
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(private callback: () => void) {}
+      observe(target: HTMLElement) {
+        if (target.classList.contains("turn-navigation-list")) resizeNavigation = this.callback;
+      }
+      disconnect() {}
+    });
+    items = Array.from({ length: 80 }, (_, index) => ({ role: "user" as const, content: `Turn ${index + 1}` }));
+    await render(false);
+    const viewport = container.querySelector<HTMLElement>(".thread-viewport")!;
+    const list = container.querySelector<HTMLElement>(".turn-navigation-list")!;
+    const mark = list.querySelector<HTMLElement>('[aria-current="true"]')!;
+    Object.defineProperty(list, "clientHeight", { configurable: true, value: 120 });
+    Object.defineProperty(list, "scrollHeight", { value: 1600 });
+    Object.defineProperties(mark, { offsetTop: { configurable: true, value: 1100 }, offsetHeight: { value: 10 } });
+    list.scrollTop = 0;
+    const readingPosition = viewport.scrollTop;
+    scrollIntoView.mockClear();
+
+    await act(async () => resizeNavigation!());
+    expect(list.scrollTop).toBe(1045);
+    expect(viewport.scrollTop).toBe(readingPosition);
+    expect(scrollIntoView).not.toHaveBeenCalled();
+
+    Object.defineProperty(list, "clientHeight", { value: 80 });
+    await act(async () => resizeNavigation!());
+    expect(list.scrollTop).toBe(1065);
+    Object.defineProperty(mark, "offsetTop", { value: 7 });
+    await act(async () => resizeNavigation!());
+    expect(list.scrollTop).toBe(0);
+    Object.defineProperty(mark, "offsetTop", { value: 1583 });
+    await act(async () => resizeNavigation!());
+    expect(list.scrollTop).toBe(1520);
+    expect(viewport.scrollTop).toBe(readingPosition);
+  });
+
   it("leaves the reading position alone when a historical process is toggled", async () => {
     items = [
       { role: "user", content: "earlier prompt" },
