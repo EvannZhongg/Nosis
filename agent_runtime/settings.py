@@ -265,6 +265,7 @@ class SettingsStore:
                         "enabled": role.enabled,
                         "description": role.description,
                         "tools": {tool: role.tools.is_enabled(tool) for tool in ROLE_TOOL_NAMES},
+                        "mcp": role.mcp,
                     }
                     for name, role in agent_config.subagent_roles.items()
                 },

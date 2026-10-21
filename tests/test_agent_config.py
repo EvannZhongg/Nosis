@@ -530,6 +530,41 @@ class SubagentRoleConfigTest(unittest.TestCase):
                 }
             )
 
+    def test_mcp_references_are_parsed_without_discovery(self) -> None:
+        selection = {
+            "analyzer": True,
+            "disabled": False,
+            "docs": {"search": True, "read.page": True},
+            "review-kit:writer": {"write": False},
+        }
+        config = self.load({"researcher": {"description": "Reads.", "mcp": selection}})
+        self.assertEqual(config.subagent_roles["researcher"].mcp, selection)
+        self.assertEqual(config.subagent_roles["researcher"].tools.enabled, ())
+
+    def test_missing_or_empty_mcp_selects_no_servers(self) -> None:
+        for settings in ({}, {"mcp": {}}):
+            with self.subTest(settings=settings):
+                config = self.load({"researcher": {"description": "Reads.", **settings}})
+                self.assertEqual(config.subagent_roles["researcher"].mcp, {})
+
+    def test_rejects_invalid_mcp_selection(self) -> None:
+        for selection, message in (
+            (None, "must be an object"),
+            ([], "must be an object"),
+            ({"docs": {}}, "empty tool map"),
+            ({"docs": {"search": True, "write": False}}, "mix true and false"),
+            ({"docs": {"search": 1}}, "must be a boolean"),
+            ({"docs": {"search": "true"}}, "must be a boolean"),
+            ({"docs": {"search": None}}, "must be a boolean"),
+            ({"docs": 1}, "boolean or an object"),
+            ({"docs": []}, "boolean or an object"),
+            ({"": True}, "non-empty server names"),
+            ({"docs": {" ": True}}, "non-empty tool names"),
+        ):
+            with self.subTest(selection=selection):
+                with self.assertRaisesRegex(ValueError, f"subagent_roles.researcher.mcp.*{message}"):
+                    self.load({"researcher": {"description": "Reads.", "mcp": selection}})
+
     def test_rejects_an_unknown_role_field(self) -> None:
         with self.assertRaisesRegex(
             ValueError, "'subagent_roles.researcher': provider"

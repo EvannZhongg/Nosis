@@ -140,6 +140,18 @@ class SettingsStoreTest(unittest.TestCase):
         self.assertTrue(updated["mcp"]["enabled"])
         self.assertEqual(updated["mcp"]["servers"]["demo"], server)
 
+    def test_subagent_mcp_selection_survives_settings_round_trip(self) -> None:
+        selection = {"analyzer": True, "docs": {"search": True}, "writer": {"write": False}}
+        self.store.save_agent({"subagent_roles": {
+            "researcher": {"description": "Reads.", "tools": {}, "mcp": selection},
+        }})
+        agent = self.store.snapshot()["agent"]
+        self.assertEqual(agent["subagent_roles"]["researcher"]["mcp"], selection)
+        agent["max_same_tool_calls"] = 6
+        self.store.save_agent(agent)
+        document = json.loads(self.store.agent_path.read_text(encoding="utf-8"))
+        self.assertEqual(document["subagent_roles"]["researcher"]["mcp"], selection)
+
     def test_agent_update_reports_missing_scratch_workspace_root(self) -> None:
         document = json.loads(
             (self.root / "agent_config.json").read_text(encoding="utf-8")

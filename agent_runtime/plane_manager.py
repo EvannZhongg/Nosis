@@ -50,6 +50,7 @@ from .config import (
 from .execution_plane import ExecutionPlane
 from .instructions import load_workspace_instructions
 from .plugins import PluginAgent, PluginManager
+from .role_tools import resolve_role_tools
 from .settings import EnvironmentReloader, configuration_fingerprint
 from .callbacks import RuntimeCallbacks
 from .computer import DesktopComputer
@@ -206,18 +207,32 @@ class ExecutionPlaneManager:
             # Agent and by every sub-agent role.
             catalog = builtin_catalog()
             catalog = catalog.extend(mcp.wait_ready())
+            role_tools = {}
+            if agent_config.tools.is_enabled("subagent"):
+                for name, role in agent_config.subagent_roles.items():
+                    if role.enabled:
+                        try:
+                            role_tools[name] = resolve_role_tools(
+                                role.tools.enabled, role.mcp, catalog, mcp,
+                            )
+                        except ValueError as error:
+                            raise ValueError(f"subagent role '{name}': {error}") from error
             resolved_agents = []
             tool_warnings = []
             for agent in plugin_agents:
-                missing = set(agent.tools or ()) - set(catalog.names)
-                if missing:
+                try:
+                    tools = resolve_role_tools(
+                        ROLE_TOOL_NAMES if agent.tools is None else agent.tools,
+                        {}, catalog, mcp,
+                    )
+                except ValueError as error:
                     tool_warnings.append(
                         f"Skipping Agent '{agent.name}' at '{agent.source}': "
-                        f"tool(s) unavailable after Tool Catalog assembly: "
-                        f"{', '.join(sorted(missing))}. Check MCP enablement, "
+                        f"{error}. Check MCP enablement, "
                         "server status, tools.enabled and the qualified tool name."
                     )
                     continue
+                role_tools[agent.name] = tools
                 resolved_agents.append(agent)
 
             workspace_executor = SandboxedCommandExecutor(
@@ -252,6 +267,7 @@ class ExecutionPlaneManager:
                 computer_tools=computer_tools,
                 execution_router=execution_router,
                 mcp=mcp,
+                role_tools=role_tools,
                 computer=desktop,
                 runtime_warnings=(
                     *plugins.warnings,
@@ -357,6 +373,7 @@ class ExecutionPlaneManager:
                 prompts.consolidator,
                 instructions,
                 plugin_agents,
+                plane.role_tools,
                 create_memory if store is not None else None,
             )
             context = ToolExecutionContext(
@@ -486,6 +503,7 @@ class ExecutionPlaneManager:
         consolidator_prompt: str,
         workspace_instructions: WorkspaceInstructions,
         plugin_agents: tuple[PluginAgent, ...],
+        role_tools: dict[str, tuple[str, ...]],
         memory_factory: Callable[[Session], MemoryManager] | None,
     ) -> SubagentRuntime | None:
         """Build the sub-agent runtime, or None when no role is configured."""
@@ -495,7 +513,7 @@ class ExecutionPlaneManager:
             SubagentRole(
                 name=name,
                 description=role.description,
-                tools=role.tools.enabled,
+                tools=role_tools[name],
                 provider=self._provider_for(
                     load_config_with_name(config_path, role=name)[1],
                     workspace,
@@ -528,11 +546,7 @@ class ExecutionPlaneManager:
                     name=agent.name,
                     description=agent.description,
                     instructions=agent.instructions,
-                    tools=(
-                        ROLE_TOOL_NAMES
-                        if agent.tools is None
-                        else agent.tools
-                    ),
+                    tools=role_tools[agent.name],
                     provider=self._provider_for(
                         provider_config, workspace, agent_config
                     ),

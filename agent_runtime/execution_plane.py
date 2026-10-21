@@ -47,6 +47,7 @@ class ExecutionPlane:
     computer_tools: tuple[str, ...]
     execution_router: ExecutionRouter
     mcp: "McpClientManager"
+    role_tools: dict[str, tuple[str, ...]] = field(default_factory=dict)
     tool_settings: ToolSettings = field(default_factory=ToolSettings)
     memory: MemoryManager | None = None
     agent: Agent | None = None

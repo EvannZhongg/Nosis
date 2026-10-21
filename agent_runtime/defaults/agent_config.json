@@ -56,7 +56,8 @@
         "read_file": true,
         "search_files": true,
         "list_directory": true
-      }
+      },
+      "mcp": {}
     }
   },
   "memory": {

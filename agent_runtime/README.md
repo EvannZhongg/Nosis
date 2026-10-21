@@ -50,6 +50,28 @@ Server 初始化返回的 `instructions` 由 Manager 在成功注册时保存为
 
 stdio 的相对 cwd 基于 Workspace 解析，未配置时使用当前 Workspace；Plugin Server 的 cwd 由 PluginLoader 解析到 Plugin 根目录。streamable HTTP 直接使用当前 Runtime 的环境与配置 headers。
 
+### 子 Agent 的 MCP 选择
+
+`agent_config.json` 的 `subagent_roles.<role>.tools` 声明内置工具，独立的 `mcp` 字段声明 MCP 引用，默认 `{}`，不授予任何 MCP 工具：
+
+```json
+{
+  "description": "Search documentation.",
+  "tools": {"read_file": true},
+  "mcp": {
+    "analyzer": true,
+    "docs": {"search": true},
+    "review-kit:writer": {"write": false}
+  }
+}
+```
+
+服务器键使用完整身份（Plugin Server 为 `plugin:server`），工具键使用服务器返回的原始名，不使用模型可见的 `mcp__...` 限定名。服务器值为 `true` 时允许当前全部可用工具；`false` 或未声明时不允许。工具映射全部为 `true` 时是白名单，只允许列出的工具；全部为 `false` 时是黑名单，允许除列出工具外的其他工具。单个服务器的空映射、混用 `true`/`false` 或非 boolean 值均为配置错误。
+
+配置解析只检查上述结构；Runtime 在 MCP 发现、上游 `tools.enabled` 过滤和完整 Catalog 装配后统一验证引用并展开。未知服务器、不可用的显式工具引用（含黑名单项）会报告对应角色的配置错误。配置中已知但禁用或不可用的服务器以 `true` 选择时得到空工具集；任何选择都不能绕过服务器启用状态和上游 allowlist。
+
+展开结果按内置工具固定顺序、MCP 限定名字典序保存为执行面快照，再交给 Core 生成 ToolSet。白名单不会自动授予新增工具；黑名单和 `true` 会在下一次执行面重建时纳入服务器新增且上游允许的工具。复用同一执行面时，切换 Session 或执行 Turn 不会重新展开。
+
 ## Session 与 Turn 生命周期
 
 `SessionRuntimeController` 在 `open_session` 时完成轻量控制面初始化：

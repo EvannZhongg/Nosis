@@ -46,6 +46,7 @@ class SubagentRoleConfig:
     description: str
     tools: ToolConfig
     enabled: bool = True
+    mcp: dict[str, bool | dict[str, bool]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -234,7 +235,7 @@ def _subagent_roles(value: object) -> dict[str, SubagentRoleConfig]:
                 f"config field 'subagent_roles.{name}.enabled' must be "
                 "a boolean"
             )
-        unknown = set(settings) - {"description", "enabled", "tools"}
+        unknown = set(settings) - {"description", "enabled", "tools", "mcp"}
         if unknown:
             fields = ", ".join(sorted(unknown))
             raise ValueError(
@@ -247,8 +248,37 @@ def _subagent_roles(value: object) -> dict[str, SubagentRoleConfig]:
                 settings.get("tools", {}),
                 allowed=ROLE_TOOL_NAMES,
             ),
+            mcp=_subagent_mcp(settings.get("mcp", {}), f"subagent_roles.{name}.mcp"),
         )
     return roles
+
+
+def _subagent_mcp(
+    value: object, path: str,
+) -> dict[str, bool | dict[str, bool]]:
+    if not isinstance(value, dict):
+        raise ValueError(f"config field '{path}' must be an object")
+    selection: dict[str, bool | dict[str, bool]] = {}
+    for server, tools in value.items():
+        if not isinstance(server, str) or not server.strip():
+            raise ValueError(f"config field '{path}' must use non-empty server names")
+        server_path = f"{path}.{server}"
+        if isinstance(tools, bool):
+            selection[server] = tools
+            continue
+        if not isinstance(tools, dict):
+            raise ValueError(f"config field '{server_path}' must be a boolean or an object")
+        if not tools:
+            raise ValueError(f"config field '{server_path}' must not be an empty tool map")
+        for tool, enabled in tools.items():
+            if not isinstance(tool, str) or not tool.strip():
+                raise ValueError(f"config field '{server_path}' must use non-empty tool names")
+            if not isinstance(enabled, bool):
+                raise ValueError(f"config field '{server_path}.{tool}' must be a boolean")
+        if len(set(tools.values())) != 1:
+            raise ValueError(f"config field '{server_path}' must not mix true and false")
+        selection[server] = dict(tools)
+    return selection
 
 
 def _context_config(value: object) -> ContextCompressionConfig:
