@@ -97,6 +97,8 @@ class ToolResult:
     #: tool-role message cannot carry image content on the
     #: OpenAI-compatible chat API that providers are reached through.
     attachments: tuple[ImagePart, ...] = ()
+    executed: bool = field(default=False, compare=False, repr=False)
+    hook_feedback: tuple[str, ...] = field(default=(), compare=False, repr=False)
     # Internal hooks used by tools that spool large results.  They are not
     # part of the serialized tool result; the Runtime consumes them when it
     # normalizes the source text into a bounded Session artifact reading view.

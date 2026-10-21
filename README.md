@@ -26,7 +26,7 @@ GUI ── FastAPI ─┘
 - **Resumable sessions**: conversation and execution events are written to an append-only JSONL journal, and the TUI and GUI can read the same kind of session.
 - **Memory and scheduled tasks**: global and workspace-scoped long-term memory, plus one-shot, interval, and cron tasks.
 - **Models and media**: OpenAI-compatible endpoints use the native OpenAI SDK; other routes and image generation use LiteLLM. Providers can be routed independently for the main agent, vision, image generation, auxiliary model calls, and each subagent role.
-- **Extension system**: standalone skills, skills / agents / MCP components provided by plugins, and standalone MCP servers.
+- **Extension system**: standalone skills, skills / agents / MCP / [command hooks](docs/plugin-hooks.md) provided by plugins, and standalone MCP servers.
 - **Two frontends**: the TUI suits terminal workflows; the GUI offers multi-session management, attachments, a file tree, settings, memory, and scheduled tasks.
 
 ## Quick start

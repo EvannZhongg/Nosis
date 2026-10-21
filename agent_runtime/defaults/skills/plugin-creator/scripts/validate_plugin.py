@@ -24,7 +24,7 @@ PLUGIN_FIELDS = {
     "capabilities",
     "components",
 }
-COMPONENT_KINDS = ("skills", "agents", "mcp")
+COMPONENT_KINDS = ("skills", "agents", "mcp", "hooks")
 ROLE_TOOL_NAMES = (
     "read_file",
     "apply_patch",
@@ -71,7 +71,7 @@ def main() -> None:
     print(f"Plugin validation passed: {plugin_root}")
     for entry in registered:
         print(f"  {entry}")
-    print("Static validation only. Verify MCP tools in Nosis.")
+    print("Static validation only. Verify dynamic tools and command hooks in Nosis.")
 
 
 def validate_plugin(plugin_root: Path) -> tuple[list[str], list[str]]:
@@ -111,6 +111,7 @@ def validate_plugin(plugin_root: Path) -> tuple[list[str], list[str]]:
         ("skills", validate_skill_directory),
         ("agents", validate_agent),
         ("mcp", validate_mcp_servers),
+        ("hooks", validate_hooks),
     ):
         entries: list[str] = []
         for path in component_paths(components, kind, plugin_root, errors):
@@ -120,6 +121,48 @@ def validate_plugin(plugin_root: Path) -> tuple[list[str], list[str]]:
             errors.append(f"duplicate {kind} registration: {entry}")
         registered.extend(entries)
     return errors, registered
+
+
+def validate_hooks(path: Path, namespace: str, errors: list[str], registered: list[str]) -> None:
+    label = f"hooks `{path.name}`"
+    data = load_json_object(path, label, errors)
+    if data is None:
+        return
+    reject_unknown(data, {"schema_version", "hooks"}, label, errors)
+    if type(data.get("schema_version")) is not int or data["schema_version"] != 1:
+        errors.append(f"{label} schema_version must be 1")
+    events = data.get("hooks")
+    if not isinstance(events, dict):
+        errors.append(f"{label} hooks must be an event map")
+        return
+    reject_unknown(events, {"InputSubmitted", "PreToolUse", "PostToolUse", "Stop"}, label, errors)
+    for event, entries in events.items():
+        if not isinstance(entries, list):
+            errors.append(f"{label} event {event} must be an array")
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                errors.append(f"{label} hook must be an object")
+                continue
+            reject_unknown(entry, {"name", "tools", "command", "args", "scope", "timeout_seconds"}, label, errors)
+            name = require_string(entry, "name", label, errors)
+            if name is not None:
+                if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name):
+                    errors.append(f"{label} invalid hook name {name}")
+                registered.append(f"{namespace}:{name}")
+            require_string(entry, "command", label, errors)
+            args = entry.get("args", [])
+            if not isinstance(args, list) or any(not isinstance(arg, str) for arg in args):
+                errors.append(f"{label} args must be an array of strings")
+            string_array(entry, "tools", label, errors)
+            if "tools" in entry and event not in {"PreToolUse", "PostToolUse"}:
+                errors.append(f"{label} tools matching requires a tool event")
+            scope = entry.get("scope", "workspace")
+            if not isinstance(scope, str) or scope not in {"workspace", "host"}:
+                errors.append(f"{label} invalid scope")
+            timeout = entry.get("timeout_seconds", 10)
+            if type(timeout) is not int or not 1 <= timeout <= 24 * 60 * 60:
+                errors.append(f"{label} invalid timeout_seconds")
 
 
 def component_paths(

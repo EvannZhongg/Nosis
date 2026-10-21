@@ -412,7 +412,7 @@ export function toMessages(items: TranscriptItem[], sessionId?: string): ThreadM
     }
     if (
       item.role === "user"
-      && (item.origin === "job_result" || item.origin === "user_interaction")
+      && (item.origin === "job_result" || item.origin === "user_interaction" || item.origin === "hook_feedback")
     ) return;
 
     if (item.role === "assistant" && open) {

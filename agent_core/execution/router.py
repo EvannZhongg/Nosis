@@ -49,7 +49,7 @@ class ExecutionRouter:
 
     def resolve(self, call: "ToolCall") -> ResolvedExecution:
         authority = self.authority
-        if call.name == "shell":
+        if call.name in {"shell", "_hook_command"}:
             scope = self._shell_scope(call.arguments, authority)
             return ResolvedExecution(
                 scope=scope,

@@ -60,13 +60,15 @@ class SandboxBackend(ABC):
     @abstractmethod
     def execute(
         self,
-        command: str,
+        command: str | tuple[str, ...],
         *,
         working_directory: Path,
         policy: SandboxPolicy,
         timeout_seconds: int,
         cancellation: CancellationSignal | None = None,
         excluded_environment_names: Collection[str] = (),
+        stdin: bytes | None = None,
+        read_only_paths: tuple[Path, ...] = (),
     ) -> CommandExecutionResult:
         raise NotImplementedError
 

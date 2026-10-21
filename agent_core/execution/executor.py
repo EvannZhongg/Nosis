@@ -15,9 +15,12 @@ from .sandbox.base import SandboxBackend, SandboxPolicy
 class CommandExecutor(Protocol):
     def execute(
         self,
-        command: str,
+        command: str | tuple[str, ...],
         timeout_seconds: int = DEFAULT_COMMAND_TIMEOUT_SECONDS,
         cancellation: CancellationSignal | None = None,
+        *,
+        stdin: bytes | None = None,
+        read_only_paths: tuple[Path, ...] = (),
     ) -> CommandExecutionResult:
         raise NotImplementedError
 
@@ -43,9 +46,12 @@ class HostCommandExecutor:
 
     def execute(
         self,
-        command: str,
+        command: str | tuple[str, ...],
         timeout_seconds: int = DEFAULT_COMMAND_TIMEOUT_SECONDS,
         cancellation: CancellationSignal | None = None,
+        *,
+        stdin: bytes | None = None,
+        read_only_paths: tuple[Path, ...] = (),
     ) -> CommandExecutionResult:
         environment = None
         if os.name == "nt":
@@ -53,12 +59,13 @@ class HostCommandExecutor:
                 os.environ.copy()
             )
         return command_process._execute_process(
-            self._shell_launcher(command, self._working_directory),
-            command=command,
+            list(command) if isinstance(command, tuple) else self._shell_launcher(command, self._working_directory),
+            command=command_process.command_display(command),
             working_directory=self._working_directory,
             timeout_seconds=timeout_seconds,
             cancellation=cancellation,
             environment=environment,
+            stdin=stdin,
         )
 
     def close(self) -> None:
@@ -88,9 +95,12 @@ class SandboxedCommandExecutor:
 
     def execute(
         self,
-        command: str,
+        command: str | tuple[str, ...],
         timeout_seconds: int = DEFAULT_COMMAND_TIMEOUT_SECONDS,
         cancellation: CancellationSignal | None = None,
+        *,
+        stdin: bytes | None = None,
+        read_only_paths: tuple[Path, ...] = (),
     ) -> CommandExecutionResult:
         return self._backend.execute(
             command,
@@ -99,6 +109,8 @@ class SandboxedCommandExecutor:
             timeout_seconds=timeout_seconds,
             cancellation=cancellation,
             excluded_environment_names=self._excluded_environment_names,
+            stdin=stdin,
+            read_only_paths=read_only_paths,
         )
 
     def close(self) -> None:

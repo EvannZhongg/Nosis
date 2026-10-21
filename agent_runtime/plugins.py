@@ -16,11 +16,14 @@ from agent_core import (
 )
 from agent_core.path_utils import relative_to_root
 from agent_core.tools import ROLE_TOOL_NAMES
+from agent_core.hooks import HOOK_EVENTS, HookDefinition
+from agent_core.execution.authority import ExecutionScope
+from agent_core.execution.process import MAX_COMMAND_TIMEOUT_SECONDS
 
 
 _PLUGIN_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _MCP_TOOL_REFERENCE = re.compile(r"^mcp__[A-Za-z0-9_-]+__[A-Za-z0-9_-]+$")
-_COMPONENT_KINDS = ("skills", "mcp", "agents")
+_COMPONENT_KINDS = ("skills", "mcp", "agents", "hooks")
 _AGENT_FRONTMATTER = re.compile(
     r"\A---[ \t]*\r?\n(?P<metadata>.*?)\r?\n---[ \t]*(?:\r?\n|\Z)",
     re.DOTALL,
@@ -29,11 +32,12 @@ _AGENT_FRONTMATTER = re.compile(
 
 @dataclass(frozen=True)
 class PluginComponents:
-    """Skill, MCP, and Agent references routed to Runtime subsystems."""
+    """Skill, MCP, Agent, and Hook references routed to Runtime subsystems."""
 
     skills: tuple[Path, ...] = ()
     mcp: tuple[Path, ...] = ()
     agents: tuple[Path, ...] = ()
+    hooks: tuple[Path, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -105,6 +109,7 @@ class PluginLoader:
             skills=_component_paths(component_data, "skills", root),
             mcp=_component_paths(component_data, "mcp", root),
             agents=_component_paths(component_data, "agents", root),
+            hooks=_component_paths(component_data, "hooks", root),
         )
         return PluginDescriptor(
             name=name,
@@ -232,6 +237,23 @@ class PluginManager:
                     sources[server.identifier] = path
         return tuple(servers.values()), tuple(warnings)
 
+    def load_hooks(self) -> tuple[tuple[HookDefinition, ...], tuple[str, ...]]:
+        hooks: dict[str, HookDefinition] = {}
+        warnings = []
+        for plugin in self.enabled_plugins:
+            for path in plugin.components.hooks:
+                try:
+                    loaded = _load_hooks(path, plugin)
+                except (OSError, ValueError) as error:
+                    warnings.append(f"Skipping Hook component for plugin '{plugin.name}' at '{path}': {error}")
+                    continue
+                for hook in loaded:
+                    if hook.name in hooks:
+                        warnings.append(f"Skipping duplicate Hook '{hook.name}' at '{path}'; already loaded from '{hooks[hook.name].source}'")
+                        continue
+                    hooks[hook.name] = hook
+        return tuple(hooks.values()), tuple(warnings)
+
     def load_agents(
         self,
     ) -> tuple[tuple[PluginAgent, ...], tuple[str, ...]]:
@@ -257,6 +279,51 @@ class PluginManager:
                     continue
                 agents[agent.name] = agent
         return tuple(agents.values()), tuple(warnings)
+
+
+def _load_hooks(path: Path, plugin: PluginDescriptor) -> tuple[HookDefinition, ...]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError("hook component must be an object")
+    _reject_unknown(data, {"schema_version", "hooks"}, "hooks")
+    if type(data.get("schema_version")) is not int or data["schema_version"] != 1:
+        raise ValueError("hook schema_version must be 1")
+    events = data.get("hooks")
+    if not isinstance(events, dict):
+        raise ValueError("hooks must be an event map")
+    _reject_unknown(events, set(HOOK_EVENTS), "hooks.events")
+    hooks = []
+    names = set()
+    for event, entries in events.items():
+        if not isinstance(entries, list):
+            raise ValueError(f"hook event '{event}' must be an array")
+        for entry in entries:
+            if not isinstance(entry, dict):
+                raise ValueError("hook declaration must be an object")
+            _reject_unknown(entry, {"name", "tools", "command", "args", "scope", "timeout_seconds"}, "hook")
+            name = _required_string(entry, "name", "hook")
+            if not _PLUGIN_NAME.fullmatch(name) or name in names:
+                raise ValueError(f"invalid or duplicate hook name: {name}")
+            names.add(name)
+            command = _required_string(entry, "command", "hook")
+            args = entry.get("args", [])
+            if not isinstance(args, list) or any(not isinstance(arg, str) for arg in args):
+                raise ValueError("hook args must be an array of strings")
+            tools = _string_tuple(entry, "tools", "hook") if "tools" in entry else None
+            if tools is not None and event not in {"PreToolUse", "PostToolUse"}:
+                raise ValueError("tools matching is only supported for tool events")
+            scope = entry.get("scope", "workspace")
+            if not isinstance(scope, str) or scope not in {"workspace", "host"}:
+                raise ValueError("hook scope must be workspace or host")
+            timeout = entry.get("timeout_seconds", 10)
+            if type(timeout) is not int or not 1 <= timeout <= MAX_COMMAND_TIMEOUT_SECONDS:
+                raise ValueError(f"hook timeout_seconds must be between 1 and {MAX_COMMAND_TIMEOUT_SECONDS}")
+            hooks.append(HookDefinition(
+                name=f"{plugin.name}:{name}", event=event, command=command,
+                args=tuple(args), tools=tools, root=plugin.root, source=path,
+                scope=ExecutionScope(scope), timeout_seconds=timeout,
+            ))
+    return tuple(hooks)
 
 
 def _load_plugin_agent(path: Path, plugin_name: str) -> PluginAgent:

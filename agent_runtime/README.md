@@ -175,18 +175,19 @@ GUI HTTP API 和 Bridge 设置消息都复用该服务。
 
 ## Plugin 与扩展发现
 
-`PluginManager` 从 `~/.nosis/plugins/<plugin-name>/plugin.json` 发现 Plugin。Plugin 是分发单元，不建立新的执行系统；其组件被加 namespace 后交给已有 Skill、MCP 和子 Agent 子系统。
+`PluginManager` 从 `~/.nosis/plugins/<plugin-name>/plugin.json` 发现 Plugin。Plugin 是分发单元，不建立新的执行系统；其组件被加 namespace 后交给已有 Skill、MCP、子 Agent 和 Hook 子系统。
 
 ```json
 {
   "name": "example",
   "version": "1.0.0",
   "description": "Example capability package",
-  "capabilities": ["skills", "mcp", "agents"],
+  "capabilities": ["skills", "mcp", "agents", "hooks"],
   "components": {
     "skills": ["skills"],
     "mcp": [".mcp.json"],
-    "agents": ["agents/reviewer.md"]
+    "agents": ["agents/reviewer.md"],
+    "hooks": ["hooks/hooks.json"]
   }
 }
 ```
@@ -197,6 +198,8 @@ GUI HTTP API 和 Bridge 设置消息都复用该服务。
 - Agent 的 `tools` 保留内置角色工具，并可显式选择完整 MCP 工具名（例如
   `mcp__example_analyzer__analyze_code`）；省略时仍只使用原有内置角色工具。
   Runtime 在 MCP 发现与 allowlist 过滤后校验引用，缺失工具仅跳过受影响角色并报告来源。
+- Hook component 声明命令检查点，注册为 `<plugin>:<hook>`；Runtime 只负责解析和装配，
+  检查点、决策、命令执行与 Journal 由 Core 负责。
 
 standalone Skill 与 MCP 使用同一套 Core registry / manager，不存在 Plugin 专用执行路径。
 装配、静态校验、错误隔离与文件变更的完整边界见 [Plugin 组件互通](../docs/plugin-interop.md)。
@@ -219,8 +222,12 @@ standalone Skill 与 MCP 使用同一套 Core registry / manager，不存在 Plu
 | `scheduled_runner.py` | 无人值守定时 Turn 入口 |
 | `config.py` | 配置目录初始化、Provider 与 Prompt 读取 |
 | `settings.py` | 配置快照、校验、写入和 fingerprint |
-| `plugins.py` | Plugin manifest、Skill、MCP 与 Agent component 发现 |
+| `plugins.py` | Plugin manifest、Skill、MCP、Agent 与 Hook component 发现 |
 | `instructions.py` | Workspace Instructions 来源读取与 fingerprint |
 | `attachments.py` | 入站附件解析 |
 | `computer.py` | 桌面截图与输入的平台能力 |
 | `callbacks.py` | Runtime 对宿主的回调接口 |
+
+## Plugin Hooks
+
+`components.hooks` 声明版本化的 command Hook 文件。Runtime 解析与装配，Core 在输入、工具执行前后和正常结束前应用决策，复用现有 Tool、权限和进程执行链。声明变更通过 `/refresh` 生效。公开契约和测试边界见 [Plugin Hooks](../docs/plugin-hooks.md)。

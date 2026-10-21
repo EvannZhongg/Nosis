@@ -1034,13 +1034,14 @@ class WindowsWriteRestrictedSandbox:
         environment: dict[str, str] | None,
         stdout: BinaryIO,
         stderr: BinaryIO,
+        stdin: BinaryIO | None = None,
     ) -> _WindowsProcess:
         if self._token is None:
             raise RuntimeError("the Windows sandbox is closed")
 
         import msvcrt
 
-        stdin_file = open(os.devnull, "rb")
+        stdin_file = open(os.devnull, "rb") if stdin is None else stdin
         handles = [
             msvcrt.get_osfhandle(stdin_file.fileno()),
             msvcrt.get_osfhandle(stdout.fileno()),
@@ -1125,7 +1126,8 @@ class WindowsWriteRestrictedSandbox:
                 self._api.kernel32.DeleteProcThreadAttributeList(attribute_list)
             for handle in handles:
                 os.set_handle_inheritable(handle, False)
-            stdin_file.close()
+            if stdin is None:
+                stdin_file.close()
 
     def close(self) -> None:
         failures: list[Exception] = []

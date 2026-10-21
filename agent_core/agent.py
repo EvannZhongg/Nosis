@@ -20,6 +20,9 @@ from .turn_control import AgentCancelled, TurnControl, UserSteer
 from .loop_policy import ToolCallRepetitionGuard, TurnContinuationPolicy
 from .memory import MemoryContext
 from .usage import CacheUsage, TokenUsage
+from .hooks import (
+    HookCompletedEvent, HookRejectedError, append_hook_feedback, turn_execution_summary,
+)
 
 
 @dataclass(frozen=True)
@@ -126,6 +129,7 @@ AgentEvent: TypeAlias = (
     | ContextWindowEvent
     | UserSteerAppliedEvent
     | JobStatusEvent
+    | HookCompletedEvent
 )
 
 
@@ -162,6 +166,7 @@ class Agent:
                 context.workspace,
                 session.session_id,
                 sessions_directory=context.sessions_directory,
+                artifact_directory=context.artifact_directory,
             )
         )
         if context.jobs is not None:
@@ -194,6 +199,7 @@ class Agent:
         attachments: tuple[AttachmentPart, ...] = (),
         turn_id: str | None = None,
         turn_control: TurnControl | None = None,
+        input_source: str = "user",
     ) -> AgentRunResult:
         try:
             result = self._run(
@@ -202,6 +208,7 @@ class Agent:
                 attachments,
                 turn_id,
                 turn_control,
+                input_source,
             )
         except (KeyboardInterrupt, AgentCancelled):
             self._cancel_jobs(self._session.current_turn_id)
@@ -235,9 +242,23 @@ class Agent:
         attachments: tuple[AttachmentPart, ...] = (),
         turn_id: str | None = None,
         turn_control: TurnControl | None = None,
+        input_source: str = "user",
     ) -> AgentRunResult:
         turn_id = self._session.begin_turn(turn_id)
         model_call_index = 0
+        stop_continuations = 0
+
+        def check_input(text: str, source: str) -> tuple[str, ...]:
+            hook = self._tools.run_hooks("InputSubmitted", {
+                "input": {"text": text, "source": source},
+            }, turn_control)
+            if hook.decision == "deny":
+                self._session.record_hook("input_rejected", {
+                    "input": {"text": text, "source": source}, "reason": hook.reason,
+                })
+                raise HookRejectedError(hook.reason)
+            return hook.feedback
+
         repetition = ToolCallRepetitionGuard(self._config.max_same_tool_calls)
         continuation = TurnContinuationPolicy(
             turn_control, repetition,
@@ -245,7 +266,7 @@ class Agent:
                 self._session, self._execution_context, turn_id, self._now,
             ),
             append_steers=lambda steers: _append_steering(
-                self._session, steers, self._now, on_event,
+                self._session, steers, self._now, on_event, check_input,
             ),
         )
         request_timestamp_utc = self._now().astimezone(timezone.utc)
@@ -254,12 +275,14 @@ class Agent:
             if on_event is not None:
                 on_event(CompressionCompletedEvent(self._session.cache_usage))
 
+        input_feedback = check_input(user_input, input_source)
         self._session.add_item(
             "user",
             user_input,
             timestamp_utc=request_timestamp_utc,
             attachments=attachments,
         )
+        append_hook_feedback(self._session, input_feedback)
         while True:
             continuation.raise_if_cancelled()
             continuation.apply_jobs()
@@ -428,8 +451,29 @@ class Agent:
                 )
                 on_event(ContextWindowEvent(self.context_window()))
             jobs = self._execution_context.jobs
+
+            def before_finish() -> bool:
+                nonlocal stop_continuations
+                hooks = self._execution_context.hooks
+                if not hooks or not any(hook.event == "Stop" for hook in hooks.definitions):
+                    return False
+                hook = self._tools.run_hooks("Stop", {
+                    "response": response.content,
+                    "correction_attempt": stop_continuations,
+                    "executions": turn_execution_summary(self._session),
+                }, turn_control)
+                if hook.decision == "continue":
+                    if stop_continuations >= 1:
+                        raise HookRejectedError("Completion still rejected after hook correction: " + "\n".join(hook.feedback))
+                    stop_continuations += 1
+                    append_hook_feedback(self._session, hook.feedback)
+                    return True
+                append_hook_feedback(self._session, hook.feedback)
+                return False
+
             if continuation.after_response(
                 lambda: jobs.wait_for_update(turn_id) if jobs is not None else False,
+                before_finish=before_finish,
             ):
                 continue
             return AgentRunResult(content=response.content, usage=response.usage)
@@ -440,8 +484,10 @@ def _append_steering(
     steers: tuple[UserSteer, ...],
     now: Callable[[], datetime],
     on_event: Callable[[AgentEvent], None] | None,
+    check_input: Callable[[str, str], tuple[str, ...]],
 ) -> None:
     for steer in steers:
+        feedback = check_input(steer.text, "steering")
         timestamp_utc = now().astimezone(timezone.utc)
         session.add_item(
             "user",
@@ -449,6 +495,7 @@ def _append_steering(
             timestamp_utc=timestamp_utc,
             user_source="steering",
         )
+        append_hook_feedback(session, feedback)
         if on_event is not None:
             on_event(
                 UserSteerAppliedEvent(

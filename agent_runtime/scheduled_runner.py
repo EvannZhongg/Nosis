@@ -33,7 +33,7 @@ class ScheduledTurnRunner:
                 if schedule.execution_scope is ExecutionScope.HOST
                 else PermissionPreset.WORKSPACE_ACCESS
             )
-            result = worker.run_turn(run.turn_id, schedule.action.prompt)
+            result = worker.run_turn(run.turn_id, schedule.action.prompt, input_source="scheduled")
             if result.status != "completed":
                 raise RuntimeError(
                     result.error.message if result.error is not None

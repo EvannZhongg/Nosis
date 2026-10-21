@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "hooks": {
+    "InputSubmitted": [
+      {
+        "name": "check-input",
+        "command": "python",
+        "args": [
+          "-B",
+          "${PLUGIN_ROOT}/hooks/run.py"
+        ],
+        "scope": "workspace",
+        "timeout_seconds": 10
+      }
+    ],
+    "PreToolUse": [
+      {
+        "name": "check-tools",
+        "command": "python",
+        "args": [
+          "-B",
+          "${PLUGIN_ROOT}/hooks/run.py"
+        ],
+        "scope": "workspace",
+        "timeout_seconds": 10
+      }
+    ],
+    "PostToolUse": [
+      {
+        "name": "check-results",
+        "command": "python",
+        "args": [
+          "-B",
+          "${PLUGIN_ROOT}/hooks/run.py"
+        ],
+        "scope": "workspace",
+        "timeout_seconds": 10
+      }
+    ],
+    "Stop": [
+      {
+        "name": "check-completion",
+        "command": "python",
+        "args": [
+          "-B",
+          "${PLUGIN_ROOT}/hooks/run.py"
+        ],
+        "scope": "workspace",
+        "timeout_seconds": 10
+      }
+    ]
+  }
+}

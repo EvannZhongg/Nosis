@@ -17,7 +17,6 @@ from .session import Session
 from .session_paths import session_directory
 from .session_store import JsonlSessionStore
 from .skills import SkillRegistry
-from .tool_result import ToolResultNormalizer
 from .tools.catalog import ToolCatalog
 from .tools.context import ToolExecutionContext
 from .tools.base import JSONValue, ToolPolicy
@@ -177,6 +176,9 @@ class SubagentRuntime:
             memory=memory,
             cancellation=cancellation,
             execution=None,
+            agent_role=role.name,
+            parent_session_id=parent.session.session_id,
+            artifact_directory=child_session_directory,
         )
         tools = self._catalog.select(
             (
@@ -212,12 +214,6 @@ class SubagentRuntime:
             config=self._config,
             tools=tools,
             context=context,
-            tool_result_normalizer=ToolResultNormalizer(
-                parent.workspace,
-                session.session_id,
-                sessions_directory=parent.sessions_directory,
-                artifact_directory=child_session_directory,
-            ),
         )
         # The child receives only the task text plus whatever the parent
         # was last shown, never the parent's transcript.
@@ -235,6 +231,7 @@ class SubagentRuntime:
                         if cancellation is not None
                         else None
                     ),
+                    input_source="delegation",
                 )
                 if memory is not None:
                     memory.reconcile_pending()

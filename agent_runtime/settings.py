@@ -184,6 +184,7 @@ class SettingsStore:
         )
         plugin_mcp, plugin_mcp_warnings = plugins.load_mcp_servers()
         plugin_agents, plugin_agent_warnings = plugins.load_agents()
+        _, plugin_hook_warnings = plugins.load_hooks()
 
         skill_items = []
         for skill in skills:
@@ -208,6 +209,7 @@ class SettingsStore:
                 "skills": [str(path) for path in plugin.components.skills],
                 "mcp": [str(path) for path in plugin.components.mcp],
                 "agents": [str(path) for path in plugin.components.agents],
+                "hooks": [str(path) for path in plugin.components.hooks],
             },
         } for plugin in plugins.plugins]
 
@@ -280,7 +282,7 @@ class SettingsStore:
                 "model": agent.model,
                 "source": str(agent.source),
             } for agent in plugin_agents],
-            "warnings": list(skills.warnings) + list(plugin_mcp_warnings) + list(plugin_agent_warnings),
+            "warnings": list(skills.warnings) + list(plugin_mcp_warnings) + list(plugin_agent_warnings) + list(plugin_hook_warnings),
         }
 
     @staticmethod

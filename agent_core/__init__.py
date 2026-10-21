@@ -16,6 +16,7 @@ from .agent import (
     JobStatusEvent,
 )
 from .loop_policy import ToolCallLimitExceededError
+from .hooks import HookCompletedEvent
 from .config import (
     AgentConfig,
     ContextCompressionConfig,
@@ -266,6 +267,7 @@ __all__ = [
     "JobSnapshot",
     "JobControlTool",
     "JobStatusEvent",
+    "HookCompletedEvent",
     "JobUpdate",
     "CancellationToken",
     "JSONValue",

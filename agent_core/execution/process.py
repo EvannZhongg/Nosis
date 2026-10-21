@@ -113,7 +113,10 @@ def _execute_process(
     spool_directory: Path | None = None,
     reports_sandbox_entry_failure: bool = False,
     process_launcher: ProcessLauncher | None = None,
+    stdin: bytes | None = None,
 ) -> CommandExecutionResult:
+    if cancellation is not None and cancellation.cancelled:
+        raise CommandCancelled
     if (
         isinstance(timeout_seconds, bool)
         or not isinstance(timeout_seconds, int)
@@ -157,15 +160,20 @@ def _execute_process(
         raise
 
     process = None
+    input_file = None
     timed_out = False
     try:
+        if stdin is not None:
+            input_file = tempfile.TemporaryFile()
+            input_file.write(stdin)
+            input_file.seek(0)
         if process_launcher is None:
             process = subprocess.Popen(
                 argv,
                 cwd=working_directory,
                 env=environment,
                 # Commands must never read the stream the UI protocol uses.
-                stdin=subprocess.DEVNULL,
+                stdin=input_file if input_file is not None else subprocess.DEVNULL,
                 stdout=stdout_file,
                 stderr=stderr_file,
                 start_new_session=True,
@@ -177,6 +185,7 @@ def _execute_process(
                 environment=environment,
                 stdout=stdout_file,
                 stderr=stderr_file,
+                stdin=input_file,
             )
         deadline = time.monotonic() + timeout_seconds
         while process.poll() is None:
@@ -204,6 +213,8 @@ def _execute_process(
         _unlink_best_effort(stderr_path)
         raise
     finally:
+        if input_file is not None:
+            input_file.close()
         stdout_file.close()
         stderr_file.close()
 
@@ -236,6 +247,14 @@ def _execute_process(
         stdout_spool=stdout_spool,
         stderr_spool=stderr_spool,
     )
+
+
+def command_argv(command: str | tuple[str, ...], working_directory: Path) -> list[str]:
+    return list(command) if isinstance(command, tuple) else platform_shell_launcher(command, working_directory)
+
+
+def command_display(command: str | tuple[str, ...]) -> str:
+    return subprocess.list2cmdline(command) if isinstance(command, tuple) else command
 
 
 def platform_shell_launcher(command: str, working_directory: Path) -> list[str]:

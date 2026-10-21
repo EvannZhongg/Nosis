@@ -63,6 +63,7 @@ class TurnRunner:
         text: str,
         ensure_plane: Callable[[], ExecutionPlane],
         attachments: Callable[[], tuple[AttachmentPart, ...]],
+        input_source: str = "user",
     ) -> TurnResult:
         control = TurnControl()
         with self._lock:
@@ -93,6 +94,7 @@ class TurnRunner:
                 turn_control=control,
                 attachments=attachments(),
                 on_event=lambda event: self.callbacks.on_event(event, turn_id),
+                input_source=input_source,
             )
             if memory is not None:
                 try:

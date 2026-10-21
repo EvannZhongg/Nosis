@@ -1,12 +1,13 @@
 {
   "name": "repo-review-kit",
   "version": "0.1.0",
-  "description": "Independent Skill, Reviewer Agent and local MCP composition testkit",
+  "description": "Independent Skill, Agent, MCP and Hook composition testkit",
   "enabled": true,
-  "capabilities": ["skills", "agents", "mcp"],
+  "capabilities": ["skills", "agents", "mcp", "hooks"],
   "components": {
     "skills": ["skills"],
-    "agents": ["agents/reviewer.md"],
-    "mcp": ["mcp/servers.json"]
+    "agents": ["agents/reviewer.md", "agents/conversation-analyzer.md"],
+    "mcp": ["mcp/servers.json"],
+    "hooks": ["hooks/hooks.json"]
   }
 }

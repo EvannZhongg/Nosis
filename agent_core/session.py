@@ -26,6 +26,7 @@ MessageOrigin = Literal[
     "tool_media",
     "job_result",
     "user_interaction",
+    "hook_feedback",
 ]
 UserAnchorSource = Literal[
     "user_input",
@@ -595,6 +596,11 @@ class Session:
             tool_call_id,
         )
 
+    def record_hook(
+        self, status: str, payload: dict[str, object], tool_call_id: str | None = None,
+    ) -> None:
+        self._event(f"hook_{status}", self._current_turn_id, payload, tool_call_id)
+
     def _event(
         self,
         event_type: str,
@@ -723,6 +729,7 @@ def message_from_dict(data: dict[str, object]) -> Message:
                 "tool_media",
                 "job_result",
                 "user_interaction",
+                "hook_feedback",
             }
             else "conversation"
         ),

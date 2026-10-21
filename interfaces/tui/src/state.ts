@@ -280,7 +280,7 @@ function historyEntries(items: SessionItem[]): Entry[] {
       }
       continue;
     }
-    if (item.origin === 'job_result' || item.origin === 'user_interaction') continue;
+    if (item.origin === 'job_result' || item.origin === 'user_interaction' || item.origin === 'hook_feedback') continue;
 
     if (item.reasoning) {
       entries.push({
@@ -577,6 +577,17 @@ function applyMessage(state: State, message: Incoming): State {
               .join(', ')}`,
           },
         ],
+      };
+
+    case 'hook_completed':
+      if (message.status === 'completed' && message.decision !== 'deny') return state;
+      return {
+        ...state,
+        entries: [...state.entries, {
+          kind: 'notice', id: nextId('notice'),
+          level: message.status === 'failed' ? 'error' : 'info',
+          text: message.reason ?? `Hook ${message.hook_id}: ${message.status}.`,
+        }],
       };
 
     case 'job_status':

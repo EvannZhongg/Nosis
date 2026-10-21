@@ -25,6 +25,35 @@ class PluginContractTest(unittest.TestCase):
     def setUp(self) -> None:
         self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
 
+    def test_hook_contract_matches_portable_validator(self) -> None:
+        manifest = write_manifest(self.root, "rules", components={"hooks": ["hooks.json"]})
+        entry = {"name": "check", "command": "python", "args": ["", "same", "same"]}
+        for document, valid in (
+            ({"schema_version": 1, "hooks": {}}, True),
+            ({"schema_version": 1, "hooks": {"PreToolUse": [entry]}}, True),
+            ({"schema_version": True, "hooks": {}}, False),
+            ({"schema_version": 2, "hooks": {}}, False),
+            ({"schema_version": 1, "hooks": {"Unknown": []}}, False),
+            ({"schema_version": 1, "hooks": {"Stop": {}}}, False),
+            ({"schema_version": 1, "hooks": {"Stop": [entry, entry]}}, False),
+            *[( {"schema_version": 1, "hooks": {"PreToolUse": [{**entry, **fields}]}}, accepted)
+              for fields, accepted in (
+                  ({"tools": []}, True), ({"tools": ["shell", "shell"]}, False),
+                  ({"tools": None}, False), ({"args": None}, False), ({"args": [1]}, False),
+                  ({"command": None}, False), ({"name": "bad:name"}, False),
+                  ({"scope": "host"}, True), ({"scope": []}, False),
+                  ({"timeout_seconds": 86400}, True), ({"timeout_seconds": 86401}, False),
+                  ({"timeout_seconds": True}, False), ({"extra": True}, False),
+              )],
+            ({"schema_version": 1, "hooks": {"Stop": [{**entry, "tools": ["shell"]}]}}, False),
+        ):
+            with self.subTest(document=document):
+                (manifest.parent / "hooks.json").write_text(json.dumps(document), encoding="utf-8")
+                errors, _ = validator.validate_plugin(manifest.parent)
+                _, warnings = PluginManager.discover(self.root).load_hooks()
+                self.assertEqual(not errors, valid, errors)
+                self.assertEqual(not warnings, valid, warnings)
+
     def test_role_names_and_dynamic_references_match(self) -> None:
         self.assertEqual(validator.ROLE_TOOL_NAMES, ROLE_TOOL_NAMES)
         manifest = write_manifest(self.root, "review-kit", components={"agents": ["agents/reviewer.md"]})
@@ -147,7 +176,7 @@ class PluginContractTest(unittest.TestCase):
     def test_scaffold_and_validator_run_without_nosis_imports(self) -> None:
         created = subprocess.run([
             sys.executable, "-I", str(SCRIPTS / "create_basic_plugin.py"),
-            "test-kit", "--path", str(self.root), "--with-skills", "--with-agents", "--with-mcp",
+            "test-kit", "--path", str(self.root), "--with-skills", "--with-agents", "--with-mcp", "--with-hooks",
         ], capture_output=True, text=True, encoding="utf-8", timeout=15)
         self.assertEqual(created.returncode, 0, created.stderr)
         validated = subprocess.run([
@@ -156,3 +185,4 @@ class PluginContractTest(unittest.TestCase):
         self.assertEqual(validated.returncode, 0, validated.stdout + validated.stderr)
         self.assertIn("Static validation only", validated.stdout)
         self.assertEqual(PluginManager.discover(self.root).load_agents()[1], ())
+        self.assertEqual(PluginManager.discover(self.root).load_hooks(), ((), ()))

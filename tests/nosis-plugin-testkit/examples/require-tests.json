@@ -1,0 +1,7 @@
+{
+  "name": "require-tests",
+  "event": "Stop",
+  "action": "block",
+  "conditions": [{"field": "tests_passed", "operator": "equals", "value": false}],
+  "message": "Run a test command successfully before completing this turn."
+}

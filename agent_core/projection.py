@@ -41,14 +41,14 @@ def project_context_units(
             while end < len(history) and (
                 history[end].role == "tool"
                 or history[end].is_tool_media
-                or history[end].origin == "user_interaction"
+                or history[end].origin in {"user_interaction", "hook_feedback"}
             ):
                 following = history[end]
                 if following.tool_call_id in calls:
                     found[following.tool_call_id] = following
                 elif (
                     following.is_tool_media
-                    or following.origin == "user_interaction"
+                    or following.origin in {"user_interaction", "hook_feedback"}
                 ):
                     trailing.append(following)
                 end += 1

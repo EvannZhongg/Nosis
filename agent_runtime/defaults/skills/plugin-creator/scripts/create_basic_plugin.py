@@ -19,7 +19,7 @@ from plugin_names import (
 )
 
 DEFAULT_PARENT = Path.home() / ".nosis" / "plugins"
-COMPONENT_ORDER = ("skills", "agents", "mcp")
+COMPONENT_ORDER = ("skills", "agents", "mcp", "hooks")
 
 EXAMPLE_AGENT = """---
 name: example
@@ -62,6 +62,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--force", action="store_true", help="Overwrite existing files"
     )
+    parser.add_argument("--with-hooks", action="store_true", help="Create and declare hooks/hooks.json")
     return parser.parse_args()
 
 
@@ -116,6 +117,10 @@ def create_components(plugin_root: Path, args: argparse.Namespace) -> dict[str, 
             args.force,
         )
         components["mcp"] = [".mcp.json"]
+    if args.with_hooks:
+        write_text(plugin_root / "hooks" / "hooks.json",
+                   json.dumps({"schema_version": 1, "hooks": {}}, indent=2) + "\n", args.force)
+        components["hooks"] = ["hooks/hooks.json"]
     return components
 
 

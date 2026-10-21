@@ -7,13 +7,14 @@ Everything else is referenced from `components`.
 {
   "name": "example-plugin",
   "version": "0.1.0",
-  "description": "Example capability package: one skill, one sub-agent role, one MCP server",
+  "description": "Example capability package with skills, agents, MCP and hooks",
   "enabled": true,
-  "capabilities": ["skills", "agents", "mcp"],
+  "capabilities": ["skills", "agents", "mcp", "hooks"],
   "components": {
     "skills": ["skills"],
     "agents": ["agents/reviewer.md"],
-    "mcp": ["mcp/servers.json"]
+    "mcp": ["mcp/servers.json"],
+    "hooks": ["hooks/hooks.json"]
   }
 }
 ```
@@ -29,7 +30,7 @@ Everything else is referenced from `components`.
 - `capabilities` (array of strings, optional): Declaration of what the package provides, shown in
   Plugin settings. Keep it consistent with `components`.
 - `components` (object, optional): Maps a component kind to an array of paths, relative to the
-  plugin root. Keys are limited to `skills`, `mcp`, and `agents`.
+  plugin root. Keys are limited to `skills`, `mcp`, `agents`, and `hooks`.
 
 Arrays must contain unique, non-empty strings. An unknown field anywhere in the manifest makes the
 whole plugin invalid, and the plugin is then skipped at discovery with a warning instead of
@@ -130,6 +131,12 @@ Each entry is a **file** holding a server map. Keys are server names and registe
   `env` and `headers` are maps of strings.
 
 MCP components are only loaded when `"mcp": {"enabled": true}` is set in `agent_config.json`.
+
+### `hooks`
+
+Each entry is a **file** declaring command hooks, for example `"hooks": ["hooks/hooks.json"]`.
+Names register as `<plugin>:<hook>`. Read [the Hook authoring contract](hooks.md) for the
+versioned schema, event-specific inputs, decisions, executable example and runtime checks.
 
 ## Path rules
 

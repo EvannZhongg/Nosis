@@ -1,3 +1,4 @@
+import subprocess
 from typing import Callable
 
 from .base import ToolCall, ToolPolicy
@@ -14,12 +15,14 @@ class ShellApprovalPolicy:
     def authorize(
         self, call: ToolCall, context: ToolExecutionContext
     ) -> bool:
-        if call.name != "shell":
+        if call.name not in {"shell", "_hook_command"}:
             return False
 
         command = call.arguments.get("command")
         if not isinstance(command, str) or not command:
             return False
+        if call.name == "_hook_command":
+            command = "[Hook] " + subprocess.list2cmdline([command, *call.arguments["args"]])
         if not self._request_permission(command):
             raise PermissionError("shell command was not approved")
         return True

@@ -1,0 +1,8 @@
+{
+  "name": "protect-env",
+  "event": "PreToolUse",
+  "tools": ["write_file", "edit_file"],
+  "action": "block",
+  "conditions": [{"field": "tool_call.arguments.path", "operator": "regex_match", "value": "(^|[/\\\\])\\.env$"}],
+  "message": "Do not edit the project's environment credentials."
+}

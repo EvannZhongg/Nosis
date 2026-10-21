@@ -1,0 +1,8 @@
+{
+  "name": "debug-output",
+  "event": "PreToolUse",
+  "tools": ["write_file"],
+  "action": "warn",
+  "conditions": [{"field": "tool_call.arguments.content", "operator": "contains", "value": "console.log("}],
+  "message": "Check whether this debug output belongs in the final code."
+}

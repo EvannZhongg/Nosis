@@ -133,7 +133,7 @@ export type SessionItem = {
   reasoning?: string | null;
   // Non-conversation origins mark runtime-generated context that receives
   // special transcript rendering instead of a normal user message.
-  origin?: 'conversation' | 'tool_media' | 'job_result' | 'user_interaction';
+  origin?: 'conversation' | 'tool_media' | 'job_result' | 'user_interaction' | 'hook_feedback';
 };
 
 export type UserQuestionOption = {
@@ -211,6 +211,7 @@ export type Incoming = (
   | { type: 'reasoning_delta'; turn_id: string; text: string; model_call_index: number }
   | { type: 'model_completed'; turn_id: string; model_call_index: number; usage: Usage | null; cache_usage: CacheUsage | null }
   | { type: 'compression_completed'; turn_id: string; cache_usage: CacheUsage | null }
+  | { type: 'hook_completed'; turn_id: string; session_id: string; invocation_id: string; hook_id: string; event: 'InputSubmitted' | 'PreToolUse' | 'PostToolUse' | 'Stop'; status: 'completed' | 'failed' | 'cancelled'; decision: 'pass' | 'deny' | 'continue' | null; reason: string | null; duration_ms: number; tool_call_id: string | null }
   | ({ type: 'context_window'; turn_id: string | null } & ContextWindow)
   | {
       type: 'assistant_message';

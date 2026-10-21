@@ -50,18 +50,23 @@ class MacOSSandboxBackend(SandboxBackend):
 
     def execute(
         self,
-        command: str,
+        command: str | tuple[str, ...],
         *,
         working_directory: Path,
         policy: SandboxPolicy,
         timeout_seconds: int,
         cancellation: CancellationSignal | None = None,
         excluded_environment_names: Collection[str] = (),
+        stdin: bytes | None = None,
+        read_only_paths: tuple[Path, ...] = (),
     ) -> CommandExecutionResult:
         _require_supported_policy(policy, self.default_policy)
         workspace = working_directory.resolve()
         private_tmp = self._temporary_directory.resolve()
-        profile = self._PROFILE + _ancestor_rules(workspace, private_tmp)
+        profile = self._PROFILE + _ancestor_rules(workspace, private_tmp, *read_only_paths)
+        for path in read_only_paths:
+            escaped = _escape_profile_string(str(path.resolve()))
+            profile += f'\n(allow file-read* (subpath "{escaped}"))\n'
         return command_process._execute_process(
             [
                 "/usr/bin/sandbox-exec",
@@ -71,11 +76,9 @@ class MacOSSandboxBackend(SandboxBackend):
                 f"PRIVATE_TMP={private_tmp}",
                 "-p",
                 profile,
-                "/bin/sh",
-                "-c",
-                command,
+                *command_process.command_argv(command, workspace),
             ],
-            command=command,
+            command=command_process.command_display(command),
             working_directory=workspace,
             timeout_seconds=timeout_seconds,
             cancellation=cancellation,
@@ -83,6 +86,7 @@ class MacOSSandboxBackend(SandboxBackend):
                 private_tmp, excluded_environment_names
             ),
             spool_directory=private_tmp,
+            stdin=stdin,
             reports_sandbox_entry_failure=True,
         )
 

@@ -5,6 +5,18 @@ import { applyMessage, isTurnActivity, toMessages, turnProcessPartIndexes, type 
 const TOOL_CALL = { id: "call-1", name: "shell", arguments: { command: "ls" } };
 
 describe("process folding", () => {
+  it("keeps hook feedback out of human message bubbles", () => {
+    const items: TranscriptItem[] = [
+      { role: "user", content: "work" },
+      { role: "assistant", content: "candidate" },
+      { role: "user", origin: "hook_feedback", content: "run checks" },
+      { role: "assistant", content: "done" },
+    ];
+    const messages = toMessages(items);
+    expect(messages.map((message) => message.role)).toEqual(["user", "assistant"]);
+    expect(JSON.stringify(messages)).not.toContain("run checks");
+  });
+
   it("restores Session totals from a runtime snapshot", () => {
     const applied = applyMessage([], {
       type: "runtime_state", phase: "inactive", turn_id: null,

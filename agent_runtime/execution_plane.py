@@ -18,6 +18,7 @@ from agent_core import (
 from agent_core.llm import LLMProvider
 from agent_core.image_generation import ImageGenerator
 from agent_core.tools.config import ToolSettings
+from agent_core.hooks import HookRunner
 
 from .computer import DesktopComputer
 
@@ -47,6 +48,7 @@ class ExecutionPlane:
     computer_tools: tuple[str, ...]
     execution_router: ExecutionRouter
     mcp: "McpClientManager"
+    hooks: HookRunner = field(default_factory=HookRunner)
     role_tools: dict[str, tuple[str, ...]] = field(default_factory=dict)
     tool_settings: ToolSettings = field(default_factory=ToolSettings)
     memory: MemoryManager | None = None

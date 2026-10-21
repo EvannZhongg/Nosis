@@ -34,6 +34,7 @@ from agent_core import (
 from agent_core.prompting import render_system_prompt
 from agent_core.llm import LLMProvider
 from agent_core.tools import ROLE_TOOL_NAMES
+from agent_core.hooks import HookRunner
 
 from .config import (
     configured_skill_sources,
@@ -123,6 +124,7 @@ class ExecutionPlaneManager:
         workspace = session.workspace
         _, config = load_config_with_name(config_path, session.provider_name)
         plugin_agents, agent_warnings = plugins.load_agents()
+        hook_definitions, hook_warnings = plugins.load_hooks()
         if agent_config.tools.is_enabled("subagent"):
             known_roles = set(agent_config.subagent_roles)
             known_roles.update(agent.name for agent in plugin_agents)
@@ -272,12 +274,14 @@ class ExecutionPlaneManager:
                 computer_tools=computer_tools,
                 execution_router=execution_router,
                 mcp=mcp,
+                hooks=HookRunner(hook_definitions),
                 role_tools=role_tools,
                 computer=desktop,
                 runtime_warnings=(
                     *plugins.warnings,
                     *mcp_warnings,
                     *agent_warnings,
+                    *hook_warnings,
                     *tool_warnings,
                     *skills.warnings,
                     *computer_tool_warnings,
@@ -402,6 +406,8 @@ class ExecutionPlaneManager:
                 ),
                 scheduler=self.scheduler,
                 memory=memory,
+                hooks=plane.hooks,
+                on_hook_event=lambda event: self.callbacks.on_event(event, session.session.current_turn_id),
                 tool_settings=plane.tool_settings,
                 screenshot=(
                     desktop.capture

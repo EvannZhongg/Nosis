@@ -181,3 +181,7 @@ Core 只定义扩展机制，不决定扩展从哪个目录加载：
 ## Workspace Instructions
 
 `workspace_instructions.py` 只定义 instruction 条目、合并结果和 fingerprint 数据结构。具体读取哪些文件、来源优先级以及何时触发 Runtime 重建，由 `agent_runtime` 决定。
+
+## Hooks
+
+`hooks.py` 定义与前端无关的执行检查点、不可变 Hook 声明和 command Hook 机制。Agent、ToolSet、ToolBatchExecutor 和 TurnContinuationPolicy 显式应用决策；内部命令 Tool 复用权限、执行路由、沙箱和取消。Plugin 来源解析与装配属于 Runtime。完整契约见 [Plugin Hooks](../docs/plugin-hooks.md)。

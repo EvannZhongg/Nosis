@@ -2,7 +2,7 @@
 
 Run with the Python environment in which Nosis is installed. Bridge tests use a
 Windows Job to reclaim all test processes, including independently owned servers.
-The plugin itself and its MCP test are platform independent.
+The plugin and standalone Hook/MCP tests are platform independent.
 """
 
 import asyncio
@@ -168,14 +168,14 @@ class BridgeProcess:
             self.messages.append(message)
             if message["type"] == "approval_request":
                 self.send(type="approval_response", request_id=message["request_id"], approved=approved)
-            if message["type"] in ("fatal", "turn_failed", "turn_cancelled"):
-                raise AssertionError(message)
             if message["type"] == wanted:
                 return message
+            if message["type"] in ("fatal", "turn_failed", "turn_cancelled"):
+                raise AssertionError(message)
         raise AssertionError(f"Timed out waiting for {wanted}")
 
-    def turn(self, *, approved=True):
-        self.send(type="user_turn", turn_id="review", text="Review sample.py using the code-review Skill.")
+    def turn(self, *, approved=True, text="Review sample.py using the code-review Skill."):
+        self.send(type="user_turn", turn_id="review", text=text)
         return self.until("turn_completed", approved=approved)
 
     def close(self):
@@ -190,6 +190,56 @@ class BridgeProcess:
             self.process.stdin.close()
             self.process.stdout.close()
             self.log.close()
+
+
+class HookCommandTest(unittest.TestCase):
+    def setUp(self):
+        self.workspace = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        (self.workspace / ".nosis").mkdir()
+
+    def invoke(self, payload):
+        return subprocess.run(
+            [sys.executable, "-B", str(ROOT / "hooks" / "run.py")],
+            input=json.dumps(payload), text=True, encoding="utf-8",
+            capture_output=True, cwd=self.workspace, timeout=10,
+        )
+
+    def example(self, filename):
+        shutil.copyfile(ROOT / "examples" / filename, self.workspace / ".nosis" / f"hookify.{filename}")
+
+    def test_no_rules_pass_all_checkpoints(self):
+        for event in ("InputSubmitted", "PreToolUse", "PostToolUse", "Stop"):
+            with self.subTest(event=event):
+                result = self.invoke({"event": event})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout), {"decision": "pass"})
+
+    def test_sensitive_file_rule_filters_tools_and_paths(self):
+        self.example("block-sensitive-file.json")
+        for name, path, decision in (("write_file", "config/.env", "deny"),
+                                     ("read_file", ".env", "pass"), ("write_file", "safe.txt", "pass")):
+            with self.subTest(name=name, path=path):
+                result = self.invoke({"event": "PreToolUse", "tool_call": {"name": name, "arguments": {"path": path}}})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout)["decision"], decision)
+
+    def test_require_tests_checks_execution_results(self):
+        self.example("require-tests.json")
+        for exit_code, decision in ((0, "pass"), (1, "continue")):
+            with self.subTest(exit_code=exit_code):
+                result = self.invoke({"event": "Stop", "executions": {"tools": [{
+                    "name": "shell", "status": "completed", "arguments": {"command": "python -m unittest"},
+                    "result": json.dumps({"output": {"exit_code": exit_code, "timed_out": False}}),
+                }], "jobs": []}})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout)["decision"], decision)
+
+    def test_invalid_rule_fails_command(self):
+        (self.workspace / ".nosis" / "hookify.invalid.json").write_text("{", encoding="utf-8")
+        result = self.invoke({"event": "InputSubmitted"})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertIn("JSONDecodeError", result.stderr)
 
 
 class McpServerTest(unittest.TestCase):
@@ -224,10 +274,24 @@ class BridgeIntegrationTest(unittest.TestCase):
         document = json.loads(servers.read_text(encoding="utf-8"))
         document["analyzer"]["command"] = sys.executable
         servers.write_text(json.dumps(document), encoding="utf-8")
+        hooks = self.plugin / "hooks" / "hooks.json"
+        document = json.loads(hooks.read_text(encoding="utf-8"))
+        for entries in document["hooks"].values():
+            for entry in entries:
+                entry["command"] = sys.executable
+        self.json_file(hooks, document)
+        # Temporary homes can be owned by the elevated runner; the restricted
+        # command token needs read access to the installed Plugin code.
+        user = "*" + subprocess.run(
+            ["whoami", "/user", "/fo", "csv", "/nh"], capture_output=True, check=True,
+        ).stdout.split(b",")[-1].strip(b'"\r\n ').decode("ascii")
+        subprocess.run(["icacls", str(self.plugin), "/grant", f"{user}:(OI)(CI)RX"], capture_output=True, check=True)
+        subprocess.run(["icacls", str(self.workspace), "/grant", f"{user}:(OI)(CI)F"], capture_output=True, check=True)
         self.http = ThreadingHTTPServer(("127.0.0.1", 0), LocalProvider)
         self.http.requests = []
         self.http.scripts = {
             "gpt-4": [call("read_skill", name="repo-review-kit:code-review"),
+                      call("read_skill", name="repo-review-kit:writing-rules"),
                       call("subagent", role="repo-review-kit:reviewer", task="Review sample.py"), "Review delivered."],
             "gpt-3.5-turbo": [call("read_file", path="sample.py"), call(TOOL, source=SOURCE), "Reviewer findings."],
         }
@@ -245,7 +309,7 @@ class BridgeIntegrationTest(unittest.TestCase):
             "max_same_tool_calls": 5, "output_reserve_tokens": 1000, "workspace_instruction_files": [],
             "provider": {"request_timeout_seconds": 15, "max_retries": 0},
             "skills": {"global_paths": [], "workspace_paths": []},
-            "memory": {"enabled": False}, "main_agent": {"tools": {"subagent": True}}, "mcp": {"enabled": True},
+            "memory": {"enabled": False}, "main_agent": {"tools": {"subagent": True, "write_file": True}}, "mcp": {"enabled": True},
         })
         self.json_file(self.config / "tool_config.json", {"web_search": {"provider": "duckduckgo"}, "web_fetch": {"provider": "direct"}})
         prompts = self.config / "prompts"
@@ -264,24 +328,41 @@ class BridgeIntegrationTest(unittest.TestCase):
     def bridge(self):
         bridge = BridgeProcess(self.home, self.workspace)
         self.addCleanup(bridge.close)
+        bridge.send(type="permission_set", preset="workspace_access")
+        bridge.until("permission_changed")
         return bridge
 
-    def test_skill_reviewer_mcp_and_approval(self):
+    def install_rule(self, filename):
+        directory = self.workspace / ".nosis"
+        directory.mkdir(exist_ok=True)
+        shutil.copyfile(self.plugin / "examples" / filename, directory / f"hookify.{Path(filename).stem}.json")
+
+    def test_skill_reviewer_mcp_hooks_and_approval(self):
         bridge = self.bridge()
         bridge.send(type="settings_get", request_id="components")
         snapshot = bridge.until("settings_snapshot")["settings"]
         self.assertIn("repo-review-kit:code-review", {skill["id"] for skill in snapshot["skills"]})
+        self.assertIn("repo-review-kit:writing-rules", {skill["id"] for skill in snapshot["skills"]})
         self.assertIn("repo-review-kit:reviewer", {agent["name"] for agent in snapshot["plugin_agents"]})
+        self.assertIn("repo-review-kit:conversation-analyzer", {agent["name"] for agent in snapshot["plugin_agents"]})
         self.assertIn("repo-review-kit:analyzer", {server["id"] for server in snapshot["mcp_servers"]})
+        plugin = next(plugin for plugin in snapshot["plugins"] if plugin["name"] == "repo-review-kit")
+        self.assertEqual([Path(path) for path in plugin["components"]["hooks"]], [self.plugin / "hooks" / "hooks.json"])
         bridge.turn()
         self.assertTrue(any(message["type"] == "mcp_server_status" and message["server"] == "repo-review-kit:analyzer" and message["status"] == "ready" for message in bridge.messages))
         approvals = [message for message in bridge.messages if message["type"] == "approval_request"]
         self.assertEqual(len(approvals), 1)
         self.assertEqual(approvals[0]["tool_name"], "analyze_code")
+        hooks = [message for message in bridge.messages if message["type"] == "hook_completed"]
+        self.assertEqual({message["event"] for message in hooks}, {"InputSubmitted", "PreToolUse", "PostToolUse", "Stop"})
+        self.assertEqual(len({message["session_id"] for message in hooks}), 2)
+        self.assertTrue(all(message["status"] == "completed" and message["decision"] == "pass" for message in hooks), hooks)
+        self.assertTrue(all(message["hook_id"].startswith("repo-review-kit:") for message in hooks))
         child = [request for request in self.http.requests if request["model"] == "gpt-3.5-turbo"]
         names = {tool["function"]["name"] for tool in child[0]["tools"]}
         self.assertIn(TOOL, names)
         self.assertNotIn("subagent", names)
+        self.assertNotIn("_hook_command", names)
         self.assertNotIn("mcp__repo-review-kit_analyzer__internal_probe", names)
         self.assertNotIn("mcp__repo-review-kit_analyzer__fail_review", names)
         self.assertIn('"count": 1', str(child[-1]["messages"]))
@@ -310,6 +391,55 @@ class BridgeIntegrationTest(unittest.TestCase):
             and message["server"].startswith("repo-review-kit:")
             for message in bridge.messages
         ))
+        self.assertFalse(any(message["type"] == "hook_completed" for message in bridge.messages))
+
+    def test_input_hook_rejection_does_not_call_provider(self):
+        directory = self.workspace / ".nosis"
+        directory.mkdir()
+        self.json_file(directory / "hookify.input.json", {
+            "name": "block-input", "event": "InputSubmitted", "action": "block",
+            "conditions": [{"field": "input.text", "operator": "contains", "value": "blocked"}],
+            "message": "Input rejected by project rule.",
+        })
+        bridge = self.bridge()
+        bridge.send(type="user_turn", turn_id="blocked", text="blocked")
+        failed = bridge.until("turn_failed")
+        self.assertEqual(failed["error"]["type"], "HookRejectedError", failed)
+        self.assertEqual(self.http.requests, [])
+        self.assertTrue(any(message["type"] == "hook_completed" and message["decision"] == "deny" for message in bridge.messages))
+
+    def test_pre_hook_blocks_file_write_and_rules_reload_next_turn(self):
+        self.http.scripts["gpt-4"] = [call("write_file", path=".env", content="first"), "Written."]
+        bridge = self.bridge()
+        bridge.turn(text="Write .env")
+        self.assertEqual((self.workspace / ".env").read_text(), "first")
+        self.install_rule("block-sensitive-file.json")
+        self.http.scripts["gpt-4"] = [call("write_file", path=".env", content="second", overwrite=True), "Blocked."]
+        bridge.send(type="user_turn", turn_id="protected", text="Write .env again")
+        bridge.until("turn_completed")
+        self.assertEqual((self.workspace / ".env").read_text(), "first")
+        self.assertTrue(any(message["type"] == "tool_result" and (message.get("error") or {}).get("type") == "HookDenied" for message in bridge.messages))
+
+    def test_post_feedback_and_stop_correction_reach_provider(self):
+        directory = self.workspace / ".nosis"
+        directory.mkdir()
+        self.json_file(directory / "hookify.post.json", {
+            "name": "review-result", "event": "PostToolUse", "tools": [TOOL],
+            "conditions": [{"field": "tool_result.ok", "operator": "equals", "value": True}],
+            "message": "Check analyzer findings.",
+        })
+        self.json_file(directory / "hookify.stop.json", {
+            "name": "review-completion", "event": "Stop", "action": "block",
+            "conditions": [{"field": "response", "operator": "equals", "value": "Draft."}],
+            "message": "Include the findings before finishing.",
+        })
+        self.http.scripts["gpt-4"] = [call(TOOL, source=SOURCE), "Draft.", "Final findings."]
+        bridge = self.bridge()
+        bridge.turn()
+        self.assertIn("Check analyzer findings.", str(self.http.requests[1]["messages"]))
+        self.assertIn("Include the findings before finishing.", str(self.http.requests[2]["messages"]))
+        decisions = [message["decision"] for message in bridge.messages if message["type"] == "hook_completed" and message["event"] == "Stop"]
+        self.assertEqual(decisions, ["continue", "pass"])
 
     def test_invalid_role_and_failed_server_do_not_block_healthy_plugin(self):
         broken = self.config / "plugins" / "broken"
@@ -340,8 +470,12 @@ class BridgeIntegrationTest(unittest.TestCase):
         bridge.turn()
         names = {tool["function"]["name"] for tool in self.http.requests[0]["tools"]}
         self.assertIn("read_skill", names)
-        self.assertNotIn("subagent", names)
+        self.assertIn("subagent", names)
         self.assertNotIn(TOOL, names)
+        subagent = next(tool["function"] for tool in self.http.requests[0]["tools"] if tool["function"]["name"] == "subagent")
+        roles = subagent["parameters"]["properties"]["role"]["enum"]
+        self.assertNotIn("repo-review-kit:reviewer", roles)
+        self.assertIn("repo-review-kit:conversation-analyzer", roles)
         self.assertTrue(any("after Tool Catalog assembly" in str(message.get("runtime_warnings", [])) for message in bridge.messages))
 
 

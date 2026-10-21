@@ -218,6 +218,7 @@ restarting Bridge. Nested Runtime snapshots need not have a sequence of their ow
 | `tool_media` | Image attachment descriptors. |
 | `plan_updated` | Full plan snapshot and revision. |
 | `job_status` | Background job ID, kind, status, opaque details. |
+| `hook_completed` | Hook invocation ID, Plugin-qualified hook ID, checkpoint, Session ID, outcome, decision, reason, timing and optional Tool call ID. See [Plugin Hooks](plugin-hooks.md). |
 | `mcp_server_status` | Startup/status diagnostics for a named server. |
 | `user_steer_*`, interaction requests, terminal events | Lifecycle described above. |
 

@@ -8,6 +8,7 @@ from .base import JSONValue
 from .config import ToolSettings
 
 if TYPE_CHECKING:
+    from ..hooks import HookRunner, HookInvocation, HookCompletedEvent
     from ..execution.router import ExecutionRouter, ResolvedExecution
     from ..execution.process import CancellationSignal
     from ..llm import LLMProvider
@@ -60,6 +61,12 @@ class ToolExecutionContext:
     ) = None
     scheduler: object | None = None
     memory: "MemoryManager | None" = None
+    hooks: "HookRunner | None" = None
+    hook_invocation: "HookInvocation | None" = None
+    on_hook_event: "Callable[[HookCompletedEvent], None] | None" = None
+    agent_role: str = "main"
+    parent_session_id: str | None = None
+    artifact_directory: Path | None = None
     tool_settings: ToolSettings = field(default_factory=ToolSettings)
     # Runtime-provided screenshot capture. Core owns the tool contract while
     # the Runtime chooses the platform-specific capture implementation.

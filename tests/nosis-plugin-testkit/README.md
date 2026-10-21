@@ -1,63 +1,48 @@
 # Nosis Plugin Testkit
 
-独立第三方示例包，Plugin 名为 `repo-review-kit`。插件代码不导入 Nosis，不访问 Runtime
-内部对象，仅组合标准 Skill、Agent Markdown 与 MCP Server。示例放在
-`tests/nosis-plugin-testkit/`，不作为默认插件安装。
+独立第三方测试包，Plugin 名为 `repo-review-kit`，统一验证 Skill、Agent、MCP 和 Hook。
+插件代码仅使用公开契约，不导入 Nosis；不作为默认插件安装。
 
 ## 组件
 
-- `repo-review-kit:code-review`：通过现有 `subagent` 工具委派 Reviewer。
-- `repo-review-kit:reviewer`：选择 `read_file`、`search_files` 和
-  `mcp__repo-review-kit_analyzer__analyze_code`。
-- `repo-review-kit:analyzer`：本地 stdio MCP Server，通过 AST 检查 Python 语法、
-  `eval` 与裸 `except`；另有故意报错的 `fail_review` 和被 allowlist 隐藏的 `internal_probe`。
+- `code-review` Skill → `reviewer` Agent → `analyzer` MCP：检查 Python 的 `eval` 和裸 `except`。
+- `writing-rules` Skill 与 `conversation-analyzer` Agent：编写 Hookify 项目规则。
+- `hooks/hooks.json`：声明 InputSubmitted、PreToolUse、PostToolUse、Stop 四类命令 Hook，使用 Workspace scope。
 
-该分析器用于验证组件互通，不是完整的静态分析工具。
+组件统一使用 `repo-review-kit:` 命名空间。Hookify 规则引擎仅依赖 Python 标准库，原始授权见 `LICENSE`。
 
 ## 安装与使用
 
-1. 使用已安装 Nosis 的 Python 环境，安装 `requirements.txt` 中的 MCP SDK。
-2. 将整个目录复制到 `~/.nosis/plugins/repo-review-kit/`。
-3. 确保 `mcp/servers.json` 的 `command` 指向有 MCP SDK 的 Python；激活环境后可以用
-   `python`，也可以填写该解释器的绝对路径。stdio cwd 默认是插件根目录。
-4. 在已有 `agent_config.json` 中启用 `main_agent.tools.subagent` 和 `mcp.enabled`。
-   无需修改 Nosis 源码或新增工具注册代码。
-5. 重启 Nosis，要求使用 `repo-review-kit:code-review` 检查一个 Python 文件，审批
-   `repo-review-kit:analyzer/analyze_code` 后查看结果。
+1. 在已安装 Nosis 的 Python 环境中安装 `requirements.txt`。
+2. 将本目录复制到 `~/.nosis/plugins/repo-review-kit/`。
+3. 将 `mcp/servers.json` 和 `hooks/hooks.json` 中的 `command` 指向对应 Python 解释器。
+4. 在 `agent_config.json` 中启用 `main_agent.tools.subagent` 和 `mcp.enabled`。
+5. 执行 `/refresh` 重新装配插件，再要求使用 `repo-review-kit:code-review` 检查 Python 文件。
 
-可以从 Nosis 自带的 Plugin Creator Skill 运行独立校验器：
+`/refresh` 不负责复制或安装文件。修改组件声明、代码或 `enabled` 后也用它重新加载。
+静态校验：`python <plugin-creator目录>/scripts/validate_plugin.py <本插件目录>`。
 
-```powershell
-python <plugin-creator目录>/scripts/validate_plugin.py <本插件目录>
-```
-
-静态校验不会运行服务器或确认动态工具是否可用。
+将 `examples/` 中的规则复制到 Workspace 的 `.nosis/hookify.<name>.json` 即可启用；
+每次 Hook 都重新读取规则，无需刷新。规则格式见 `skills/writing-rules/SKILL.md`。
+路径规则只检查声明的工具与参数，不覆盖 Shell、MCP 等其他写入方式。
+`require-tests` 检查当轮测试命令的实际完成结果，不代表测试覆盖率；Stop 最多请求一次纠正。
 
 ## 测试
 
-在已安装 Nosis 的 Python 环境中，从仓库根目录运行：
+在已安装 Nosis 的 Python 环境中，从仓库根目录统一运行：
 
 ```powershell
 python -m unittest discover -s tests/nosis-plugin-testkit/tests -v
 ```
 
-从其他目录运行时，将 `-s` 改为本插件 `tests` 目录的路径。
+覆盖 Hook 命令与规则、MCP 发现与错误、Skill → Agent → MCP → Hook 协同、审批、组件禁用与隔离、
+输入拒绝、文件写入拦截、规则更新、结果反馈和 Stop 纠正。
+Bridge 测试仅经公开 NDJSON 与本地 HTTP Mock Provider 驱动，不使用外部 API 或真实密钥。
+每例使用临时配置和 Workspace，不改动本机配置。
 
-`McpServerTest` 直接使用 MCP 客户端验证发现、调用、结构化结果和报错后的继续调用。
-`BridgeIntegrationTest` 启动 `python -m interfaces.bridge`，仅通过公开的 NDJSON 消息
-收发输入、设置快照、审批与结果；本地 HTTP Mock Provider 提供可重复的模型响应，
-不需要外部 API、真实密钥或额外的插件执行框架。
+Bridge 进程测试目前使用 Windows Job 回收子进程，其他平台跳过；独立 Hook 与 MCP 测试可跨平台运行。
+Core/Runtime 的机制回归测试使用从本插件裁剪出的 `tests/hookify` fixture：
 
-Bridge 测试目前在 Windows 运行，使用通用 Windows Job 在结束时回收测试进程及其
-MCP 子进程；其他平台跳过这组进程测试，MCP 独立测试仍可运行。每例测试使用临时
-HOME/USERPROFILE、配置和 Workspace，不改动真实 Nosis 安装目录或用户插件。
-
-覆盖：组件发现与注册、Skill → Reviewer → MCP、审批通过和拒绝、角色工具选择、
-allowlist、Plugin 禁用、无效角色与 Server 启动失败隔离，以及 Tool 调用错误后的继续执行。
-
-## 修改与禁用
-
-Plugin、Skill、Agent 文件不热加载；重启后重新装配声明。禁用时将 `plugin.json`
-中的 `enabled` 改为 `false` 并重启；若另行配置过该角色的 Provider 路由，也应删除该路由。
-每个 ExecutionPlane 独立管理 MCP 连接和 stdio 子进程，重建时关闭旧连接并重新启动
-Server。更新 Server 源码后重启 Nosis 即可生效；只重开 Session 可能复用现有执行面。
+```powershell
+python -m unittest tests.test_hooks tests.test_hook_interop -v
+```

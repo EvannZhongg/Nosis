@@ -346,6 +346,12 @@ export function useSessionRuntime({
             showAlert({ kind: "alert", id: `job:${message.job_id}`, level: "error", text: `${jobKindLabel(message.kind)}任务失败。` });
           }
         }
+        if (message.type === "hook_completed" && !message.replayed
+            && (message.status === "failed" || message.decision === "deny")) {
+          showAlert({ kind: "alert", id: `hook:${message.invocation_id}`,
+            level: message.status === "failed" ? "error" : "warning",
+            text: message.reason ?? `${message.hook_id}: ${message.status}` });
+        }
         if (message.type === "session_ready") {
           attachmentReplacedRef.current = false;
           setAttachmentReplaced(false);

@@ -1,8 +1,8 @@
 """Shared Tool Catalog and the per-Agent ToolSet selected from it."""
 from dataclasses import replace
-from typing import Iterable
+from typing import TYPE_CHECKING, Iterable
 
-from ..turn_control import TurnControl
+from ..turn_control import AgentCancelled, TurnControl
 
 from .base import (
     Tool,
@@ -14,6 +14,9 @@ from .base import (
     ToolResult,
 )
 from .context import ToolExecutionContext
+
+if TYPE_CHECKING:
+    from ..hooks import HookEvent, HookResult
 
 
 class ToolCatalog:
@@ -90,11 +93,25 @@ class ToolSet:
         tool = self._tools.get(name)
         return tool is not None and tool.concurrent
 
+    def run_hooks(
+        self, event: "HookEvent", payload: dict[str, object],
+        turn_control: TurnControl | None = None,
+    ) -> "HookResult":
+        from ..hooks import HookResult
+
+        context = self._context
+        if not context.hooks:
+            return HookResult()
+        if turn_control is not None:
+            context = replace(context, cancellation=turn_control)
+        return context.hooks.run(event, payload, context, self._policy)
+
     def execute(
         self, call: ToolCall, *, turn_control: TurnControl | None = None,
     ) -> ToolResult:
-        if turn_control is not None:
-            turn_control.raise_if_cancelled()
+        cancellation = turn_control or self._context.cancellation
+        if cancellation is not None and cancellation.cancelled:
+            raise AgentCancelled
         if call.argument_error is not None:
             return ToolResult(
                 tool_call_id=call.id,
@@ -112,6 +129,14 @@ class ToolSet:
                 ),
             )
 
+        from ..hooks import HookExecutionError
+
+        hook = self.run_hooks("PreToolUse", {"tool_call": call.to_dict()}, turn_control)
+        if hook.decision == "deny":
+            return ToolResult(call.id, call.name,
+                              error=ToolError("HookDenied", hook.reason),
+                              hook_feedback=hook.feedback)
+        executed = False
         try:
             context = self._context
             if turn_control is not None:
@@ -123,9 +148,12 @@ class ToolSet:
                 )
             if self._policy is not None:
                 self._policy.authorize(call, context)
-            if turn_control is not None:
-                turn_control.raise_if_cancelled()
+            if cancellation is not None and cancellation.cancelled:
+                raise AgentCancelled
+            executed = True
             output = tool.execute(call.arguments, context)
+        except HookExecutionError:
+            raise
         except Exception as error:
             return ToolResult(
                 tool_call_id=call.id,
@@ -134,6 +162,8 @@ class ToolSet:
                     type=type(error).__name__,
                     message=str(error),
                 ),
+                executed=executed,
+                hook_feedback=hook.feedback,
             )
 
         if isinstance(output, ToolOutput):
@@ -145,9 +175,13 @@ class ToolSet:
                 artifact_writer=output.artifact_writer,
                 artifact_cleanup=output.artifact_cleanup,
                 artifact_preview=output.artifact_preview,
+                executed=True,
+                hook_feedback=hook.feedback,
             )
         return ToolResult(
             tool_call_id=call.id,
             name=call.name,
             output=output,
+            executed=True,
+            hook_feedback=hook.feedback,
         )

@@ -39,13 +39,15 @@ class WindowsSandboxBackend(SandboxBackend):
 
     def execute(
         self,
-        command: str,
+        command: str | tuple[str, ...],
         *,
         working_directory: Path,
         policy: SandboxPolicy,
         timeout_seconds: int,
         cancellation: CancellationSignal | None = None,
         excluded_environment_names: Collection[str] = (),
+        stdin: bytes | None = None,
+        read_only_paths: tuple[Path, ...] = (),
     ) -> CommandExecutionResult:
         _require_supported_policy(policy, self.default_policy)
         if os.name != "nt":
@@ -71,8 +73,8 @@ class WindowsSandboxBackend(SandboxBackend):
                 "a Windows sandbox backend cannot be shared across workspaces"
             )
         return command_process._execute_process(
-            command_process.platform_shell_launcher(command, workspace),
-            command=command,
+            command_process.command_argv(command, workspace),
+            command=command_process.command_display(command),
             working_directory=workspace,
             timeout_seconds=timeout_seconds,
             cancellation=cancellation,
@@ -80,6 +82,7 @@ class WindowsSandboxBackend(SandboxBackend):
                 private_tmp, excluded_environment_names
             ),
             spool_directory=private_tmp,
+            stdin=stdin,
             process_launcher=self._sandbox.start,
         )
 

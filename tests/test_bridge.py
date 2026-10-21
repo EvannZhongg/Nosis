@@ -1361,6 +1361,7 @@ class ScriptedAgent:
         attachments: object = (),
         turn_id: str | None = None,
         turn_control: TurnControl | None = None,
+        input_source: str = "user",
     ) -> None:
         self._session.begin_turn(turn_id)
         self._session.add_item("user", user_input)
@@ -1388,6 +1389,7 @@ class FailingAgent:
         attachments: object = (),
         turn_id: str | None = None,
         turn_control: TurnControl | None = None,
+        input_source: str = "user",
     ) -> None:
         # A provider can fail only after the Runtime has durably opened a turn.
         self._session.begin_turn(turn_id)
@@ -1406,6 +1408,7 @@ class SuccessfulAgent:
         attachments: object = (),
         turn_id: str | None = None,
         turn_control: TurnControl | None = None,
+        input_source: str = "user",
     ) -> object:
         self._session.begin_turn(turn_id)
         self._session.add_item("user", user_input)

@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from typing import Callable
 
 from .content import ImagePart
+from .hooks import append_hook_feedback
 from .session import Session, ToolExecutionStatus
 from .tool_result import ToolResultNormalizer
 from .tools import ToolCall, ToolResult, ToolSet
@@ -49,12 +50,14 @@ class ToolBatchExecutor:
     ) -> None:
         indexed_calls = tuple(enumerate(calls, start=1))
         completed: dict[int, tuple[ToolCall, ToolResult]] = {}
+        normalized: dict[int, str] = {}
 
         try:
             if self._is_concurrent_batch(calls):
                 self._execute_concurrently(
                     indexed_calls,
                     completed,
+                    normalized,
                     turn_id,
                     turn_control,
                     on_call,
@@ -64,6 +67,7 @@ class ToolBatchExecutor:
                 self._execute_sequentially(
                     indexed_calls,
                     completed,
+                    normalized,
                     turn_id,
                     turn_control,
                     on_call,
@@ -74,6 +78,17 @@ class ToolBatchExecutor:
                 completed[index][1] for index, _call in indexed_calls
             )
             self._commit_media(executed, on_media)
+            feedback = []
+            for index, call in indexed_calls:
+                result = completed[index][1]
+                feedback.extend(result.hook_feedback)
+                if result.executed:
+                    hook = self._tools.run_hooks("PostToolUse", {
+                        "tool_call": call.to_dict(),
+                        "tool_result": {"ok": result.error is None, "content": normalized[index]},
+                    }, turn_control)
+                    feedback.extend(hook.feedback)
+            append_hook_feedback(self._session, tuple(feedback))
         finally:
             self._cleanup_results(completed)
 
@@ -86,6 +101,7 @@ class ToolBatchExecutor:
         self,
         indexed_calls: tuple[tuple[int, ToolCall], ...],
         completed: dict[int, tuple[ToolCall, ToolResult]],
+        normalized: dict[int, str],
         turn_id: str,
         turn_control: TurnControl | None,
         on_call: ToolCallCallback | None,
@@ -103,7 +119,7 @@ class ToolBatchExecutor:
                 completed[index] = (call, result)
                 self._finish_call(call, result, turn_id)
                 active_call = None
-                self._commit_normalized_result(
+                normalized[index] = self._commit_normalized_result(
                     call, result, index, tool_count, on_result
                 )
         except BaseException as error:
@@ -120,6 +136,7 @@ class ToolBatchExecutor:
         self,
         indexed_calls: tuple[tuple[int, ToolCall], ...],
         completed: dict[int, tuple[ToolCall, ToolResult]],
+        normalized: dict[int, str],
         turn_id: str,
         turn_control: TurnControl | None,
         on_call: ToolCallCallback | None,
@@ -173,7 +190,7 @@ class ToolBatchExecutor:
                 completed[index] = (call, result)
                 try:
                     self._finish_call(call, result, turn_id)
-                    self._commit_normalized_result(
+                    normalized[index] = self._commit_normalized_result(
                         call, result, index, tool_count, on_result
                     )
                 except BaseException as error:
@@ -218,7 +235,7 @@ class ToolBatchExecutor:
         index: int,
         tool_count: int,
         on_result: ToolResultCallback | None,
-    ) -> None:
+    ) -> str:
         normalized_content = self._result_normalizer.normalize(result)
         self._session.add_item(
             "tool",
@@ -228,6 +245,7 @@ class ToolBatchExecutor:
         )
         if on_result is not None:
             on_result(result, index, tool_count)
+        return normalized_content
 
     def _commit_media(
         self,

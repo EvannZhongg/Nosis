@@ -22,6 +22,7 @@ from agent_core import (
     ToolResultEvent,
     UserSteerAppliedEvent,
     JobStatusEvent,
+    HookCompletedEvent,
     PlanSnapshot,
     RuntimeErrorInfo,
     plan_snapshot_to_dict,
@@ -241,6 +242,15 @@ def event_to_message(
     event: AgentEvent,
     turn_id: str,
 ) -> dict[str, object]:
+    if isinstance(event, HookCompletedEvent):
+        return {
+            "type": "hook_completed", "turn_id": turn_id,
+            "session_id": event.session_id, "invocation_id": event.invocation_id,
+            "hook_id": event.hook_id, "event": event.event,
+            "status": event.status, "decision": event.decision,
+            "reason": event.reason, "duration_ms": event.duration_ms,
+            "tool_call_id": event.tool_call_id,
+        }
     if isinstance(event, AssistantMessageDeltaEvent):
         return {
             "type": "assistant_delta",

@@ -77,7 +77,10 @@ class TurnContinuationPolicy:
         self.repetition.reset()
         return True
 
-    def after_response(self, wait_for_job: Callable[[], bool]) -> bool:
+    def after_response(
+        self, wait_for_job: Callable[[], bool],
+        before_finish: Callable[[], bool] | None = None,
+    ) -> bool:
         """Return whether another model call is needed after a final answer."""
         self.raise_if_cancelled()
         applied, pending = self.apply_jobs()
@@ -92,4 +95,13 @@ class TurnContinuationPolicy:
             applied, pending = self.apply_jobs()
             if applied:
                 return True
+        if before_finish is not None:
+            if self.apply_steering():
+                return True
+            if before_finish():
+                self.raise_if_cancelled()
+                self.repetition.reset()
+                self.apply_steering()
+                return True
+            self.raise_if_cancelled()
         return self.apply_steering(finishing=True)

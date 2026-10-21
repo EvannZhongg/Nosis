@@ -23,13 +23,15 @@ class LinuxSandboxBackend(SandboxBackend):
 
     def execute(
         self,
-        command: str,
+        command: str | tuple[str, ...],
         *,
         working_directory: Path,
         policy: SandboxPolicy,
         timeout_seconds: int,
         cancellation: CancellationSignal | None = None,
         excluded_environment_names: Collection[str] = (),
+        stdin: bytes | None = None,
+        read_only_paths: tuple[Path, ...] = (),
     ) -> CommandExecutionResult:
         _require_supported_policy(policy, self.default_policy)
         executable = shutil.which("bwrap")
@@ -68,12 +70,16 @@ class LinuxSandboxBackend(SandboxBackend):
         argv.extend(("--tmpfs", "/tmp"))
         _append_parent_directories(argv, workspace)
         argv.extend(("--bind", str(workspace), str(workspace)))
-        argv.extend(("--chdir", str(workspace), "/bin/sh", "-c", command))
+        for path in read_only_paths:
+            path = path.resolve()
+            _append_parent_directories(argv, path)
+            argv.extend(("--ro-bind", str(path), str(path)))
+        argv.extend(("--chdir", str(workspace), *command_process.command_argv(command, workspace)))
         # Preserve bwrap's nonzero status and setup diagnostic on failure;
         # never retry the command outside the sandbox.
         return command_process._execute_process(
             argv,
-            command=command,
+            command=command_process.command_display(command),
             working_directory=workspace,
             timeout_seconds=timeout_seconds,
             cancellation=cancellation,
@@ -81,6 +87,7 @@ class LinuxSandboxBackend(SandboxBackend):
                 Path("/tmp"), excluded_environment_names
             ),
             spool_directory=private_tmp,
+            stdin=stdin,
         )
 
     def close(self) -> None:

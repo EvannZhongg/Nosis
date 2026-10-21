@@ -132,9 +132,10 @@ class RuntimeHost:
     def run_turn(
         self, turn_id: str, text: str, *,
         attachments: Callable[[], tuple[AttachmentPart, ...]] = lambda: (),
+        input_source: str = "user",
     ) -> TurnResult:
         return self.turns.run_turn(
-            turn_id, text, lambda: self.planes.ensure(self.sessions), attachments,
+            turn_id, text, lambda: self.planes.ensure(self.sessions), attachments, input_source,
         )
 
     def close(self) -> None:

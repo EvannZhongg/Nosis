@@ -324,6 +324,35 @@ class ExecutionAuthorityTest(unittest.TestCase):
 
 
 class SandboxedCommandExecutorTest(unittest.TestCase):
+    def test_command_hooks_keep_argv_stdin_and_read_paths_inside_sandbox(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = root / "workspace"
+            plugin = root / "plugin"
+            workspace.mkdir()
+            plugin.mkdir()
+            command = ("python", str(plugin / "check.py"))
+            for backend_type in (LinuxSandboxBackend, MacOSSandboxBackend):
+                with self.subTest(backend=backend_type.__name__):
+                    backend = backend_type()
+                    self.addCleanup(backend.close)
+                    with patch("agent_core.execution.sandbox.linux.shutil.which", return_value="/usr/bin/bwrap"), patch(
+                        "agent_core.execution.process._execute_process",
+                        return_value=CommandExecutionResult("hook", 0, "{}", ""),
+                    ) as execute:
+                        SandboxedCommandExecutor(workspace, backend).execute(
+                            command, stdin=b"{}", read_only_paths=(plugin,),
+                        )
+                    argv = execute.call_args.args[0]
+                    self.assertEqual(argv[-2:], list(command))
+                    self.assertEqual(execute.call_args.kwargs["stdin"], b"{}")
+                    if backend_type is LinuxSandboxBackend:
+                        self.assertIn(["--ro-bind", str(plugin.resolve()), str(plugin.resolve())],
+                                      [argv[i:i+3] for i in range(len(argv)-2)])
+                    else:
+                        profile = argv[argv.index("-p") + 1]
+                        self.assertIn(str(plugin.resolve()).replace("\\", "\\\\"), profile)
+
     def test_platform_policies_describe_their_filesystem_boundary(self) -> None:
         for backend_type, filesystem, network in (
             (WindowsSandboxBackend, FilesystemAccess.WRITE_RESTRICTED, NetworkAccess.ALLOW),
@@ -399,6 +428,8 @@ class SandboxedCommandExecutorTest(unittest.TestCase):
                 timeout_seconds,
                 cancellation=None,
                 excluded_environment_names=(),
+                stdin=None,
+                read_only_paths=(),
             ):
                 self.calls.append(
                     (

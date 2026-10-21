@@ -622,6 +622,22 @@ describe('reducer', () => {
 });
 
 describe('sessions', () => {
+  it('keeps hook feedback out of the human transcript and shows hook denials', () => {
+    let state = reducer(ready(), { type: 'message', message: {
+      type: 'session_items', items: [
+        { role: 'user', content: 'work' },
+        { role: 'user', origin: 'hook_feedback', content: 'internal feedback' },
+      ],
+    } });
+    expect(state.entries.filter((entry) => entry.kind === 'user')).toHaveLength(1);
+    state = reducer(state, { type: 'message', message: {
+      type: 'hook_completed', turn_id: 't', session_id: 's', invocation_id: 'i',
+      hook_id: 'rules:check', event: 'PreToolUse', status: 'completed', decision: 'deny',
+      reason: 'protected file', duration_ms: 1, tool_call_id: 'call',
+    } });
+    expect(state.entries.at(-1)).toMatchObject({ kind: 'notice', text: 'protected file' });
+  });
+
   it('fills the open picker with the workspace sessions', () => {
     let state = reducer(ready(), { type: 'sessions_opened' });
     expect(state.sessions).toEqual({ list: [], selectedIndex: 0 });
