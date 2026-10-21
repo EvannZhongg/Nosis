@@ -235,11 +235,12 @@ describe("SessionSocket synchronization", () => {
       });
       socket.send({ type: "provider_set", provider: "second" });
       socket.send({ type: "workspace_set", workspace: "/new-workspace" });
+      socket.send({ type: "runtime_refresh" });
       socket.send({ type: "permission_set", preset: "workspace_access" });
       FakeWebSocket.latest.open();
       FakeWebSocket.latest.receive({ ...snapshot, phase, turn_id: "active-turn" });
 
-      expect(rejected.mock.calls).toEqual([["provider_set"], ["workspace_set"]]);
+      expect(rejected.mock.calls).toEqual([["provider_set"], ["workspace_set"], ["runtime_refresh"]]);
       expect(FakeWebSocket.latest.sent.slice(1).map((message) => JSON.parse(message))).toEqual([
         { type: "permission_set", preset: "workspace_access" },
       ]);

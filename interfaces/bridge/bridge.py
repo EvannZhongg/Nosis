@@ -95,6 +95,7 @@ class Bridge:
                 "permission_changed", "provider_changed", "workspace_changed",
                 "plan_updated", "context_window", "model_completed", "compression_completed", "job_status", "fatal",
                 "turn_completed", "turn_cancelled", "turn_failed",
+                "runtime_refreshed", "runtime_refresh_failed",
             }:
                 state = self._runtime_snapshot()
             items = None
@@ -538,6 +539,8 @@ class Bridge:
                 self._set_provider(message)
             elif message["type"] == "workspace_set":
                 self._set_workspace(message)
+            elif message["type"] == "runtime_refresh":
+                self._refresh_runtime()
             elif message["type"] == "list_sessions":
                 self._emit_sessions()
             elif message["type"] == "load_session":
@@ -598,6 +601,17 @@ class Bridge:
         self.emit("workspace_changed", workspace=str(self.host.sessions.workspace.path))
         if changed:
             self._emit_runtime_state("inactive")
+
+    def _refresh_runtime(self) -> None:
+        try:
+            provider, model = self.host.refresh_runtime()
+        except Exception as error:
+            self.emit(
+                "runtime_refresh_failed",
+                error=runtime_failure_to_dict(runtime_error_info(error)),
+            )
+        else:
+            self.emit("runtime_refreshed", provider=provider, model=model)
 
     def run_turn(self, message: dict[str, object]) -> None:
         turn_id = str(message["turn_id"])

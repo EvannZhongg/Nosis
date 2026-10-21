@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent } from "react";
+import { useEffect, useId, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent } from "react";
 import { ComposerPrimitive, unstable_useComposerInput } from "@assistant-ui/react";
-import { AlertTriangle, ArrowUp, ChevronDown, LoaderCircle, MessageCircleQuestion, Paperclip, ShieldCheck, X } from "lucide-react";
+import { AlertTriangle, ArrowUp, ChevronDown, LoaderCircle, MessageCircleQuestion, Paperclip, RefreshCw, ShieldCheck, X } from "lucide-react";
 import type { PermissionPreset } from "@nosis/protocol";
 import { shouldBlockRunningAttachmentSubmit, shouldSubmitAttachmentOnly, shouldSubmitComposerEnter } from "./composerState";
 import { PendingAttachment } from "./Messages/Attachments";
@@ -8,7 +8,12 @@ import { ContextWindowIndicator, RuntimeIndicators } from "./RuntimeIndicators";
 import type { SessionRuntime } from "./useSessionRuntime";
 
 export function Composer({ runtime }: { runtime: SessionRuntime }) {
-  const { setText: setComposerText } = unstable_useComposerInput();
+  const { value: composerText, setText: setComposerText, canSend } = unstable_useComposerInput();
+  const [commandDismissed, setCommandDismissed] = useState(false);
+  const commandMenuId = useId();
+  const showRefreshCommand = !commandDismissed && composerText.startsWith("/") && "/refresh".startsWith(composerText);
+  const refreshDisabled = !runtime.workspaceSelected || runtime.controlsDisabled || runtime.sessionRunning
+    || runtime.attaching || runtime.providerSaving || runtime.workspaceSaving || runtime.permissionSaving || runtime.refreshing;
   const [workspaceEditing, setWorkspaceEditing] = useState(false);
   const workspacePickerRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -16,6 +21,12 @@ export function Composer({ runtime }: { runtime: SessionRuntime }) {
   const composingRef = useRef(false);
   const questionFocusOptionId = runtime.question?.options.find((option) => option.recommended)?.id
     ?? runtime.question?.options[0]?.id;
+
+  useEffect(() => setCommandDismissed(false), [composerText]);
+
+  function runRefreshCommand() {
+    if (runtime.refreshRuntime()) setComposerText("");
+  }
 
   useEffect(() => {
     if (!workspaceEditing) return;
@@ -55,12 +66,41 @@ export function Composer({ runtime }: { runtime: SessionRuntime }) {
 
   function onComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     const nativeEvent = event.nativeEvent as globalThis.KeyboardEvent;
+    if (composingRef.current || nativeEvent.isComposing || nativeEvent.keyCode === 229) return;
+    if (showRefreshCommand) {
+      if (event.key === "Tab" && event.shiftKey) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setCommandDismissed(true);
+        return;
+      }
+      if (event.key === "ArrowUp" || event.key === "ArrowDown" || event.key === "Tab") {
+        event.preventDefault();
+        if (event.key === "Tab") setComposerText("/refresh");
+        return;
+      }
+      if (shouldSubmitComposerEnter(nativeEvent, false)) {
+        event.preventDefault();
+        if (!refreshDisabled) runRefreshCommand();
+        return;
+      }
+    }
     if (!shouldSubmitComposerEnter(nativeEvent, composingRef.current)) return;
     event.preventDefault();
     event.currentTarget.closest("form")?.requestSubmit();
   }
 
   function onComposerSubmit(event: FormEvent<HTMLFormElement>) {
+    const text = event.currentTarget.querySelector("textarea")?.value ?? "";
+    if (text.trim() === "/refresh" || showRefreshCommand) {
+      event.preventDefault();
+      if (!refreshDisabled) runRefreshCommand();
+      return;
+    }
+    if (runtime.composerGate.sendDisabled) {
+      event.preventDefault();
+      return;
+    }
     if (shouldBlockRunningAttachmentSubmit(runtime.running, runtime.pendingFiles.length)) {
       // Stop assistant-ui before it clears the draft; attachments cannot be steered
       // into an already running turn, so the whole pending message stays intact.
@@ -68,7 +108,6 @@ export function Composer({ runtime }: { runtime: SessionRuntime }) {
       runtime.notifyRunningAttachmentBlocked();
       return;
     }
-    const text = event.currentTarget.querySelector("textarea")?.value ?? "";
     if (!shouldSubmitAttachmentOnly(text, runtime.pendingFiles.length)) return;
     event.preventDefault();
     void runtime.submitMessage("");
@@ -110,7 +149,8 @@ export function Composer({ runtime }: { runtime: SessionRuntime }) {
     {runtime.alerts.length > 0 && <div className="feedback-alerts">{runtime.alerts.map((item) => <div className={`feedback-alert ${item.level}`} role="alert" key={item.id}><AlertTriangle size={15} /><span>{item.text}</span><button type="button" aria-label="关闭提示" onClick={() => runtime.dismissAlert(item.id)}><X size={13} /></button></div>)}</div>}
     {runtime.toast && <div className={`feedback-toast ${runtime.toast.level}`} role="status">{runtime.toast.text}</div>}
     {!runtime.attachmentReplaced && <RuntimeIndicators
-      running={runtime.running}
+      running={runtime.running || runtime.refreshing}
+      refreshing={runtime.refreshing}
       reconnecting={runtime.reconnecting}
       runtimePhase={runtime.runtimePhase}
       pendingSteers={runtime.pendingSteers}
@@ -122,6 +162,13 @@ export function Composer({ runtime }: { runtime: SessionRuntime }) {
     />}
     {runtime.pendingFiles.length > 0 && <div className="attachment-list" aria-label="待发送附件">{runtime.pendingFiles.map((file, index) => <PendingAttachment key={`${file.name}-${file.lastModified}-${index}`} file={file} onRemove={() => runtime.removePendingFile(index)} />)}</div>}
     <ComposerPrimitive.Root className="composer" onSubmit={onComposerSubmit}>
+      {showRefreshCommand && <div className="composer-command-menu" id={commandMenuId} role="listbox" aria-label="命令">
+        <button type="button" id={`${commandMenuId}-refresh`} role="option" aria-selected="true" disabled={refreshDisabled} onMouseDown={(event) => event.preventDefault()} onClick={runRefreshCommand}>
+          <RefreshCw size={16} />
+          <span><strong>/refresh</strong><small>{runtime.refreshing ? "正在重新加载…" : runtime.sessionRunning ? "当前任务结束后可用" : "重新加载配置、Skill、插件与 MCP"}</small></span>
+          <kbd>Enter</kbd>
+        </button>
+      </div>}
       <div ref={workspacePickerRef} className="workspace-picker-wrap">
         <button type="button" className="workspace-picker" onClick={() => setWorkspaceEditing((value) => !value)} disabled={runtime.controlsDisabled || runtime.sessionRunning} aria-expanded={workspaceEditing}>
           <span className="workspace-picker-icon">⌂</span><span className="workspace-picker-value">{runtime.displayedWorkspace || "选择项目"}</span>
@@ -138,6 +185,10 @@ export function Composer({ runtime }: { runtime: SessionRuntime }) {
       <ComposerPrimitive.Input
         placeholder={!runtime.workspaceSelected ? "请先选择工作区…" : runtime.question ? "请先回答上方问题…" : runtime.approval ? "请先处理上方确认…" : "Ask Nosis…"}
         aria-label="消息"
+        aria-autocomplete="list"
+        aria-expanded={showRefreshCommand}
+        aria-controls={showRefreshCommand ? commandMenuId : undefined}
+        aria-activedescendant={showRefreshCommand ? `${commandMenuId}-refresh` : undefined}
         rows={2}
         autoFocus
         submitMode="none"
@@ -166,9 +217,8 @@ export function Composer({ runtime }: { runtime: SessionRuntime }) {
             <option value="full_access">完全访问</option>
           </select>{runtime.permissionSaving ? <LoaderCircle size={12} className="spin" aria-label="正在保存权限" /> : <ChevronDown size={12} />}
         </label>
-        <div className="composer-actions"><ContextWindowIndicator window={runtime.contextWindow} cacheUsage={runtime.cacheUsage} />{runtime.pendingFiles.length > 0
-          ? <button type="submit" className="send-button" aria-label="发送消息" disabled={runtime.composerGate.sendDisabled || runtime.sessionRunning}><ArrowUp size={19} /></button>
-          : <ComposerPrimitive.Send className="send-button" aria-label={runtime.running ? "发送引导" : "发送消息"}><ArrowUp size={19} /></ComposerPrimitive.Send>}
+        <div className="composer-actions"><ContextWindowIndicator window={runtime.contextWindow} cacheUsage={runtime.cacheUsage} />
+          <button type="submit" className="send-button" aria-label={runtime.running ? "发送引导" : "发送消息"} disabled={runtime.composerGate.sendDisabled || (runtime.pendingFiles.length > 0 ? runtime.sessionRunning : !canSend)}><ArrowUp size={19} /></button>
         </div>
       </div>
     </ComposerPrimitive.Root>

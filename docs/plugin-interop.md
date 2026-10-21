@@ -56,10 +56,10 @@ Creator 的脚手架生成相同 manifest。独立校验器不 import Nosis：�
 
 ## 文件变更与重新装配
 
-不实现热加载，不新增 fingerprint 或配置项。Skill/Agent 文件变化不会单独触发重建，
-重新打开 Session 也可能复用 Plane。配置、Workspace、Provider、Instructions 或有效 MCP
-配置变化会沿用既有机制整体重建；重建时重新发现并装配所有组件。安装、更新、禁用和
-删除插件后，重启 Nosis 是使声明完整生效的操作边界。
+Skill/Agent 文件变化不会单独触发自动重建，重新打开 Session 也可能复用 Plane。
+配置、Workspace、Provider、Instructions 或有效 MCP 配置变化会在下一次 Turn 整体重建；
+重建时重新发现并装配所有组件。安装、更新、禁用和删除插件后，可在当前会话空闲时
+使用 GUI 或 TUI 的 `/refresh` 强制重新装配，无需重启应用。不增加文件监听或配置项。
 
 Plane 持有独立的 MCP Manager；关闭或重新装配时关闭其连接与 stdio 子进程。
 重新装配会重新启动 MCP Server 并发现工具，其他 Runtime 的连接不受影响。

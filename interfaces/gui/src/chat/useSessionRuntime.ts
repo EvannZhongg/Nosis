@@ -69,6 +69,7 @@ export function useSessionRuntime({
   const [initialPromptDraft, setInitialPromptDraft] = useState<string | null>(null);
   const [workspaceDraft, setWorkspaceDraft] = useState(session.workspace ?? "");
   const [pendingWorkspace, setPendingWorkspace] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
   const socketRef = useRef<SessionSocket | null>(null);
   const socketModelRef = useRef("");
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -102,7 +103,7 @@ export function useSessionRuntime({
   const permissionSaving = pendingPermissionPreset !== null;
   const providerSaving = pendingProvider !== null;
   const workspaceSaving = pendingWorkspace !== null;
-  const configurationPending = permissionSaving || providerSaving || workspaceSaving;
+  const configurationPending = permissionSaving || providerSaving || workspaceSaving || refreshing;
   const displayedProvider = pendingProvider ?? provider ?? "";
   const displayedWorkspace = pendingWorkspace ?? workspaceDraft;
   const workspaceSelected = Boolean(displayedWorkspace.trim());
@@ -117,8 +118,8 @@ export function useSessionRuntime({
     backgroundDisconnected,
     workspaceSelected,
   });
-  const controlsDisabled = attachmentReplaced || backgroundDisconnected || pendingUserItem !== null || Boolean(forkPreview);
-  const sessionRunning = running || backgroundActive || pendingUserItem !== null || Boolean(forkPreview);
+  const controlsDisabled = attachmentReplaced || backgroundDisconnected || pendingUserItem !== null || Boolean(forkPreview) || refreshing;
+  const sessionRunning = running || backgroundActive || pendingUserItem !== null || Boolean(forkPreview) || refreshing;
 
   useEffect(() => {
     if (session.workspace) setWorkspaceDraft(session.workspace);
@@ -205,6 +206,7 @@ export function useSessionRuntime({
     setPendingPermissionPreset(null);
     setPendingProvider(null);
     setPendingWorkspace(null);
+    setRefreshing(false);
   }
 
   function connect({ attachOnly = false, takeover = false }: { attachOnly?: boolean; takeover?: boolean } = {}): SessionSocket {
@@ -220,6 +222,11 @@ export function useSessionRuntime({
       takeover,
       onConfigurationRejected: (type) => {
         if (socketRef.current !== socket) return;
+        if (type === "runtime_refresh") {
+          setRefreshing(false);
+          showToast({ kind: "toast", level: "info", text: "请在当前任务结束后重新加载。" });
+          return;
+        }
         if (type === "provider_set") setPendingProvider(null);
         else setPendingWorkspace(null);
         showToast({ kind: "toast", level: "info", text: "会话正在执行任务，本次模型或工作区切换未应用，请在任务结束后重试。" });
@@ -296,6 +303,7 @@ export function useSessionRuntime({
             onWorkspaceChange?.(message.workspace);
           }
           applyRuntimePhase(message.phase);
+          if (message.phase === "starting" && message.turn_id === null) setRefreshing(true);
           if (!pendingUserItemRef.current) activeTurnIdRef.current = message.turn_id;
           setApproval(message.approval ? {
             requestId: message.approval.request_id,
@@ -316,6 +324,19 @@ export function useSessionRuntime({
           return;
         }
         if (message.type !== "session_open_failed" && typeof message.event_sequence === "number") eventCounterRef.current = message.event_sequence;
+        if (message.type === "runtime_refreshed" || message.type === "runtime_refresh_failed") {
+          setRefreshing(false);
+          if (message.replayed) return;
+          if (message.type === "runtime_refreshed") {
+            showToast({ kind: "toast", level: "info", text: "运行环境已重新加载。" });
+          } else {
+            showAlert({ kind: "alert", id: "runtime-refresh", level: "error", text: `重新加载失败：${message.error.message}` });
+          }
+          return;
+        }
+        if (message.type === "mcp_server_status" && message.status === "unavailable" && !message.replayed) {
+          showAlert({ kind: "alert", id: `mcp:${message.server}`, level: "warning", text: `MCP ${message.server} 连接失败：${message.error ?? "服务不可用"}` });
+        }
         if (message.type === "user_steer_applied" || message.type === "user_steer_rejected") {
           setPendingSteers((count) => Math.max(0, count - 1));
         }
@@ -508,6 +529,20 @@ export function useSessionRuntime({
     (socketRef.current ?? connect()).send({ type: "provider_set", provider: nextProvider });
   }
 
+  function refreshRuntime(): boolean {
+    if (!workspaceSelected || controlsDisabled || attaching || configurationPending) return false;
+    if (sessionRunning || runtimeIsActive(runtimePhaseRef.current)) {
+      showToast({ kind: "toast", level: "info", text: "请在当前任务结束后重新加载。" });
+      return false;
+    }
+    setRefreshing(true);
+    setAlerts((current) => Object.fromEntries(Object.entries(current).filter(
+      ([id]) => id !== "runtime-refresh" && id !== "runtime-warnings" && !id.startsWith("mcp:"),
+    )));
+    (socketRef.current ?? connect()).send({ type: "runtime_refresh" });
+    return true;
+  }
+
   function answerQuestion(answer: { option_id: string } | { text: string }) {
     if (!question) return;
     socketRef.current?.send({ type: "user_question_response", request_id: question.request_id, ...answer });
@@ -588,6 +623,7 @@ export function useSessionRuntime({
     permissionSaving,
     providerSaving,
     workspaceSaving,
+    refreshing,
     uploadingAttachments,
     pendingFiles,
     initialPromptDraft,
@@ -610,6 +646,7 @@ export function useSessionRuntime({
     answerQuestion,
     changePermissionPreset,
     changeProvider,
+    refreshRuntime,
     saveWorkspace,
     chooseNewWorkspace,
     chooseScratchWorkspace,

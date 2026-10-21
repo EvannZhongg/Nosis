@@ -68,7 +68,7 @@ Successful open emits, in order:
 
 `session_ready` confirms the control plane only. Apply the first standalone
 `runtime_state` before dispatching follow-up commands. Provider/Tool/MCP/Agent
-construction is lazy and happens on the first turn. First-use startup installs
+construction is lazy and happens on the first turn or an explicit refresh. First-use startup installs
 missing default configuration, prompts, Skills and Plugins under `~/.nosis`
 through agent_runtime; it preserves existing files. A session can open without
 provider credentials. Configure credentials in the installed provider config or
@@ -81,6 +81,31 @@ pair follows that failure. The process stays connected; `list_sessions` or
 another `open_session` is allowed. Other opening errors are fatal. A fresh
 `open_session` on an idle Bridge rebinds it and produces a new ready/sync pair;
 the process's sequence continues. Do not pipeline a rebind with a turn.
+
+## Explicit Runtime refresh
+
+After opening and synchronizing an idle session, send:
+
+```json
+{"type":"runtime_refresh"}
+```
+
+This forces a new execution plane even when configuration is unchanged. It
+reloads configuration, prompts, Skills and Plugin Agents, reconnects MCP and
+discovers tools again. The same Session, journal, permission preset and plan
+remain bound. No model request or conversation turn is created.
+
+Clients must disable refresh during an active turn; ordinary commands are
+processed serially by the Bridge. Runtime also enforces the idle requirement.
+Wait for `runtime_refreshed` (with `provider` and `model`) or
+`runtime_refresh_failed` (with a structured `error`). These events carry the
+current `runtime` snapshot. Assembly publishes `starting`, then `idle` on
+success or `failed` on failure. A failed refresh keeps the Bridge alive so the
+client can correct configuration and refresh again. It does not restore resources
+already closed. Individual unavailable MCP servers are reported through
+`mcp_server_status` and do not necessarily fail the entire assembly.
+
+Normal turns still check configuration changes automatically before executing.
 
 ## Runtime state
 

@@ -163,7 +163,15 @@ pre { overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-famil
 .plan-step.blocked { color: #b86565; }
 .plan-step-title { display: block; }
 .plan-step small { display: block; margin-top: 1px; color: #929aa8; font-size: 10px; }
-.composer { border: 1px solid #dfe4ed; border-radius: 12px; padding: 15px 15px 10px; background: #fff; box-shadow: 0 3px 15px #20385c04; }
+.composer { position: relative; border: 1px solid #dfe4ed; border-radius: 12px; padding: 15px 15px 10px; background: #fff; box-shadow: 0 3px 15px #20385c04; }
+.composer-command-menu { position: absolute; z-index: 6; bottom: calc(100% + 8px); left: 0; right: 0; padding: 6px; border: 1px solid #dfe4ed; border-radius: 10px; background: #fff; box-shadow: 0 8px 24px #20385c18; }
+.composer-command-menu button { display: flex; align-items: center; gap: 12px; width: 100%; padding: 8px 12px; border: 0; border-radius: 6px; background: #f1f3f8; color: #53688f; text-align: left; cursor: pointer; }
+.composer-command-menu button:focus-visible { outline: 2px solid #a7b5d2; outline-offset: 1px; }
+.composer-command-menu button:disabled { color: #9aa3b1; background: #f7f8fb; cursor: default; }
+.composer-command-menu span { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+.composer-command-menu strong { flex-shrink: 0; color: inherit; font-size: 12px; font-weight: 600; }
+.composer-command-menu small { color: #8893a6; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.composer-command-menu kbd { margin-left: auto; color: #9aa3b1; font-family: inherit; font-size: 10px; }
 .workspace-picker-wrap { position: relative; display: inline-block; width: fit-content; max-width: 100%; }
 .workspace-picker { display: inline-flex; align-items: center; gap: 9px; width: fit-content; max-width: 100%; border: 0; padding: 0 0 12px; background: transparent; color: #66728a; text-align: left; font-size: 12px; cursor: pointer; }
 .workspace-picker-icon { font-size: 16px; color: #4e5e78; }

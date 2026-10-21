@@ -27,6 +27,8 @@ RuntimeHost
 
 `ExecutionPlaneManager.ensure()` 在首个 `user_turn` 到来时延迟装配。复用条件是 Workspace、Provider 名称、解析后的 Agent 配置、配置 fingerprint、Instructions fingerprint 与有效 MCP 配置全部一致；任一变化时旧 plane 整体关闭并在下一次使用时重新创建。关闭时由执行面关闭其 MCP 连接及 stdio 子进程。
 
+空闲时可调用 `RuntimeHost.refresh_runtime()` 显式强制重新装配，即使上述输入未变化也会重建执行面，重新读取 Prompt、Skill、Plugin Agent，并重连 MCP、重新发现工具。该操作保留当前 Session、Journal、权限和 Plan，不调用模型、不创建 Turn；结果通过 `starting → idle/failed` 反馈。装配失败不会发布半成品，可修正后再次刷新；旧执行面关闭后的失败不恢复旧资源。正常 Turn 仍沿用原有变更检测。
+
 装配阶段负责：
 
 - 创建主 Provider、`fast_model` 对应的辅助模型 Provider、视觉 Provider 和图片生成 Provider

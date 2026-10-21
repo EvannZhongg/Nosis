@@ -38,6 +38,7 @@ RELAYED_MESSAGE_TYPES = frozenset(
         "permission_set",
         "provider_set",
         "workspace_set",
+        "runtime_refresh",
         "user_question_response",
     }
 )

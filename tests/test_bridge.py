@@ -3269,6 +3269,126 @@ class BridgeSessionOpenTest(BridgeTestCase):
         self.assertIn("read_skill", names)
 
 
+class RuntimeRefreshTest(BridgeTestCase):
+    def setUp(self) -> None:
+        self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.bridge, self.stdout = self.make_bridge([], self.root)
+        self.bridge.open_session(open_session_message(self.root))
+
+    def test_refresh_rebuilds_unchanged_resources_and_preserves_session_state(self) -> None:
+        host = self.bridge.host
+        host.set_permission_preset(PermissionPreset.FULL_ACCESS)
+        session = host.sessions.session
+        session.add_item("user", "Keep this conversation")
+        plan = host.sessions.plan
+        plan.update("Ship", (PlanStep("one", "Inspect", "pending"),))
+        first = host.planes.ensure(host.sessions)
+        journal = tuple(session.journal)
+        with patch.object(first.mcp, "close", wraps=first.mcp.close) as close:
+            self.bridge._refresh_runtime()
+        second = host.planes.current
+
+        self.assertIsNot(first, second)
+        close.assert_called_once_with()
+        self.assertIs(host.sessions.session, session)
+        self.assertIs(host.sessions.plan, plan)
+        self.assertEqual(tuple(session.journal), journal)
+        self.assertEqual(session.permission_preset, PermissionPreset.FULL_ACCESS)
+        self.assertIs(second.agent._session, session)
+        result = emitted(self.stdout)[-1]
+        self.assertEqual(result["type"], "runtime_refreshed")
+        self.assertEqual(result["runtime"]["phase"], "idle")
+        self.assertIsNone(result["runtime"]["turn_id"])
+
+    def test_refresh_loads_new_skills_and_prompt_without_a_turn(self) -> None:
+        host = self.bridge.host
+        first = host.planes.ensure(host.sessions)
+        skill = self.root / "skills" / "demo"
+        skill.mkdir(parents=True)
+        (skill / "SKILL.md").write_text(
+            "---\nname: demo\ndescription: New skill.\n---\nInstructions", encoding="utf-8",
+        )
+        (self.root / "prompts" / "Soul.md").write_text("Updated prompt", encoding="utf-8")
+        plugin = self.root / "plugins" / "example"
+        plugin.mkdir(parents=True)
+        (plugin / "plugin.json").write_text(json.dumps({
+            "name": "example", "components": {"agents": ["reviewer.md"]},
+        }), encoding="utf-8")
+        (plugin / "reviewer.md").write_text(
+            "---\nname: reviewer\ndescription: Review sources.\n---\nInspect the changes.",
+            encoding="utf-8",
+        )
+        self.assertIs(host.planes.ensure(host.sessions), first)
+
+        self.bridge._refresh_runtime()
+
+        self.assertEqual(host.planes.current.skills.names, ("demo",))
+        self.assertIn("Updated prompt", host.planes.current.agent._context._system_prompt)
+        self.assertEqual([role.name for role in host.planes.current.plugin_agents], ["example:reviewer"])
+        self.assertEqual(host.sessions.session.items, [])
+        self.assertEqual(host.sessions.session.turns, {})
+
+    def test_refresh_reconnects_and_rediscovers_mcp_with_unchanged_configuration(self) -> None:
+        config_path = self.root / "agent_config.json"
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        config["mcp"] = {"enabled": True, "servers": {"fake": {
+            "transport": "stdio", "command": sys.executable,
+            "args": [str(Path(__file__).with_name("fake_mcp_server.py"))],
+            "tools": {"enabled": ["echo"], "approval": "never"},
+        }}}
+        config_path.write_text(json.dumps(config), encoding="utf-8")
+        host = self.bridge.host
+        first = host.planes.ensure(host.sessions)
+
+        self.bridge._refresh_runtime()
+
+        second = host.planes.current
+        self.assertIsNot(second.mcp, first.mcp)
+        self.assertEqual(second.mcp.config, first.mcp.config)
+        statuses = [item["status"] for item in emitted(self.stdout) if item["type"] == "mcp_server_status"]
+        self.assertEqual(statuses.count("ready"), 2)
+        self.assertIn("closed", statuses)
+        result = second.agent._tools.execute(ToolCall("echo", "mcp__fake__echo", {"text": "reconnected"}))
+        self.assertIsNone(result.error)
+        self.assertEqual(result.output["structured_content"], {"echo": "reconnected"})
+
+    def test_failed_refresh_reports_error_and_can_be_retried(self) -> None:
+        host = self.bridge.host
+        host.planes.ensure(host.sessions)
+        with patch("agent_runtime.plane_manager.Agent", side_effect=RuntimeError("bad assembly")):
+            self.bridge._refresh_runtime()
+        failure = emitted(self.stdout)[-1]
+        self.assertEqual(failure["type"], "runtime_refresh_failed")
+        self.assertEqual(failure["error"]["message"], "bad assembly")
+        self.assertEqual(failure["runtime"]["phase"], "failed")
+        self.assertIsNone(host.planes.current)
+
+        self.bridge._refresh_runtime()
+
+        self.assertEqual(emitted(self.stdout)[-1]["type"], "runtime_refreshed")
+        self.assertIsNotNone(host.planes.current)
+
+    def test_runtime_rejects_refresh_during_a_turn(self) -> None:
+        host = self.bridge.host
+        plane = host.planes.ensure(host.sessions)
+        host.turns.turn_id = "busy"
+        try:
+            with self.assertRaisesRegex(RuntimeError, "during a turn"):
+                host.refresh_runtime()
+            self.assertIs(host.planes.current, plane)
+        finally:
+            host.turns.turn_id = None
+
+    def test_refresh_command_is_dispatched_without_a_user_turn(self) -> None:
+        with patch.object(self.bridge, "read_message", side_effect=[
+            {"type": "open_session", "workspace": str(self.root), "session_id": None},
+            decode('{"type":"runtime_refresh"}'), None,
+        ]):
+            self.bridge.serve()
+        self.assertEqual(emitted(self.stdout)[-1]["type"], "runtime_refreshed")
+        self.assertEqual(self.bridge.host.sessions.session.items, [])
+
+
 class SubagentRoleStartTest(BridgeTestCase):
     """Only enabled roles reach the model's subagent schema."""
 

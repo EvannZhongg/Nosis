@@ -26,6 +26,10 @@ export const COMMANDS: Command[] = [
     name: '/provider',
     description: 'Inspect provider, skill, plugin and MCP configuration',
   },
+  {
+    name: '/refresh',
+    description: 'Reload this session’s runtime, skills, plugins and MCP connections',
+  },
 ];
 
 export function parseCommand(value: string): { command: Command; argument: string } | undefined {

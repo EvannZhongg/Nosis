@@ -37,6 +37,7 @@ TUI 在启动或切换 Session 时先发送 `open_session`，收到首个 `runti
 | `/sessions` | 列出并切换当前 Workspace 的历史 Session |
 | `/model` | 切换当前 Session 的 Provider |
 | `/provider` | 查看 Provider、Skill、Plugin 与 MCP 配置概览 |
+| `/refresh` | 空闲时重新加载当前会话的配置、Prompt、Skill、Plugin 与 MCP 连接，保留对话和计划 |
 
 常用按键：
 

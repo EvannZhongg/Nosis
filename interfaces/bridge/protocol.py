@@ -36,6 +36,7 @@ COMMAND_TYPES = frozenset({
     "user_question_response", "permission_set", "provider_set", "workspace_set",
     "list_sessions", "load_session", "shutdown", "settings_get",
     "settings_provider_save", "settings_agent_save", "settings_routing_save",
+    "runtime_refresh",
 })
 
 

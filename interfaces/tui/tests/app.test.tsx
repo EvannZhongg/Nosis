@@ -320,6 +320,25 @@ describe('App', () => {
     expect(turns()).toHaveLength(0);
   });
 
+  it('refreshes the runtime without creating a turn or restarting the bridge', async () => {
+    const { stdin, lastFrame } = renderApp();
+    await waitForReady(lastFrame);
+    await typeDraft(stdin, lastFrame, '/refresh');
+    stdin.write('\r');
+    await waitFor(() => expect(sent).toContainEqual({ type: 'runtime_refresh' }));
+    expect(turns()).toHaveLength(0);
+    expect(bridgeCount).toBe(1);
+    await typeDraft(stdin, lastFrame, 'continue afterwards');
+    stdin.write('\r');
+    await waitFor(() => expect(lastFrame()).toContain('continue afterwards'));
+    expect(turns()).toHaveLength(0);
+    emit({ type: 'runtime_refreshed', provider: 'test', model: 'test/updated' });
+    await waitFor(() => expect(lastFrame()).toContain('Runtime refreshed.'));
+    expect(lastFrame()).toContain('test/updated');
+    stdin.write('\r');
+    await waitFor(() => expect(turns()).toContainEqual(expect.objectContaining({ text: 'continue afterwards' })));
+  });
+
   it('opens /model and switches through provider_set', async () => {
     const { stdin, lastFrame } = renderApp();
     await waitForReady(lastFrame);

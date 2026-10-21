@@ -86,6 +86,7 @@ export type Action =
   | { type: 'message'; message: Incoming }
   | { type: 'submit'; turnId: string; text: string }
   | { type: 'steer_submitted' }
+  | { type: 'refresh_submitted' }
   | { type: 'approval_choice'; choice: ApprovalChoice }
   | { type: 'approval_resolved' }
   | { type: 'question_choice'; selectedIndex: number }
@@ -362,6 +363,9 @@ function reduceAction(state: State, action: Action): State {
     case 'steer_submitted':
       return { ...state, pendingSteers: state.pendingSteers + 1 };
 
+    case 'refresh_submitted':
+      return { ...state, status: 'starting', turnId: null };
+
     case 'approval_choice':
       return state.approval === null
         ? state
@@ -453,7 +457,7 @@ function applyMessage(state: State, message: Incoming): State {
         status,
         turnId: message.turn_id,
         permissionPreset: message.permission_preset,
-        contextWindow: message.context_window ?? state.contextWindow,
+        contextWindow: message.context_window,
         cacheUsage: message.cache_usage,
         plan: visiblePlan(message.plan),
         mcpStatus: message.phase === 'starting' ? state.mcpStatus : null,
@@ -658,6 +662,18 @@ function applyMessage(state: State, message: Incoming): State {
 
     case 'provider_changed':
       return { ...state, provider: message.provider, model: message.model, usage: null };
+
+    case 'runtime_refreshed':
+      return {
+        ...state, status: 'idle', provider: message.provider, model: message.model,
+        entries: [...state.entries, { kind: 'notice', id: nextId('notice'), level: 'info', text: 'Runtime refreshed.' }],
+      };
+
+    case 'runtime_refresh_failed':
+      return {
+        ...state,
+        entries: [...state.entries, { kind: 'notice', id: nextId('notice'), level: 'error', text: `Runtime refresh failed: ${message.error.message}` }],
+      };
 
     case 'settings_snapshot':
       return { ...state, settings: message.settings };

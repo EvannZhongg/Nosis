@@ -9,14 +9,14 @@ export type SessionSocketOptions = {
   afterEvent?: number;
   takeover?: boolean;
   onMessage: (message: Incoming) => void;
-  onConfigurationRejected?: (type: "provider_set" | "workspace_set") => void;
+  onConfigurationRejected?: (type: "provider_set" | "workspace_set" | "runtime_refresh") => void;
   onClose: () => void;
   onError: () => void;
 };
 
 /** What the browser may send: relayed bridge messages plus 'cancel'. */
 type Sendable =
-  Extract<Outgoing, { type: "user_turn" | "user_steer" | "approval_response" | "permission_set" | "provider_set" | "workspace_set" | "user_question_response" | "cancel" }>;
+  Extract<Outgoing, { type: "user_turn" | "user_steer" | "approval_response" | "permission_set" | "provider_set" | "workspace_set" | "runtime_refresh" | "user_question_response" | "cancel" }>;
 type UserTurn = Extract<Sendable, { type: "user_turn" }>;
 type QueuedCommand = {
   message: Sendable;
@@ -134,7 +134,7 @@ export class SessionSocket {
   ): void {
     // Configuration selected before attachment is conditional on the current
     // snapshot, never on a replayed phase or React's next render.
-    if ((message.type === "provider_set" || message.type === "workspace_set")
+    if ((message.type === "provider_set" || message.type === "workspace_set" || message.type === "runtime_refresh")
       && runtimeIsActive(this.phase)) {
       this.options.onConfigurationRejected?.(message.type);
       return;
@@ -145,6 +145,7 @@ export class SessionSocket {
         this.pendingUserTurns.set(message.turn_id, acknowledgment);
       }
     }
+    if (message.type === "runtime_refresh") this.phase = "starting";
     try {
       this.write(message);
     } catch (error) {

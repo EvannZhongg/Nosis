@@ -273,6 +273,8 @@ export type Incoming = (
   | { type: 'permission_changed'; preset: PermissionPreset }
   | { type: 'provider_changed'; provider: string; model: string }
   | { type: 'workspace_changed'; workspace: string }
+  | { type: 'runtime_refreshed'; provider: string; model: string }
+  | { type: 'runtime_refresh_failed'; error: RuntimeFailure }
   | { type: 'sessions_listed'; sessions: SessionSummary[] }
   | { type: 'session_items'; items: SessionItem[] }
   | { type: 'plan_updated'; plan: PlanSnapshot }
@@ -305,6 +307,7 @@ export type Outgoing =
   | { type: 'permission_set'; preset: PermissionPreset }
   | { type: 'provider_set'; provider: string }
   | { type: 'workspace_set'; workspace: string }
+  | { type: 'runtime_refresh' }
   | { type: 'cancel'; turn_id: string }
   | { type: 'user_question_response'; request_id: string; option_id?: string; text?: string }
   // List stored conversations; control-plane-only Sessions can be absent.

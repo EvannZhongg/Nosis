@@ -345,9 +345,11 @@ export function App(props: AppProps): React.ReactElement {
     // execution snapshot and then get reset back to idle by that snapshot.
     if (state.status === 'opening') return;
     if (state.status === 'session_unavailable' && text !== '/sessions') return;
+    const parsed = parseCommand(text);
+    if (parsed?.command.name === '/refresh' && inputBusy) return;
+    if (!parsed && busy && state.turnId === null) return;
     setDraft('');
     // Commands are answered by the TUI, so the agent never sees them.
-    const parsed = parseCommand(text);
     if (parsed) {
       if (parsed.command.name === '/permissions') setPermissionChoice(state.permissionPreset);
       else if (parsed.command.name === '/sessions') {
@@ -361,6 +363,9 @@ export function App(props: AppProps): React.ReactElement {
       } else if (parsed.command.name === '/provider') {
         setSettingsMode('provider');
         bridgeRef.current?.send({ type: 'settings_get' });
+      } else if (parsed.command.name === '/refresh') {
+        dispatch({ type: 'refresh_submitted' });
+        bridgeRef.current?.send({ type: 'runtime_refresh' });
       }
       return;
     }

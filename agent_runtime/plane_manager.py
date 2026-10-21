@@ -70,7 +70,9 @@ class ExecutionPlaneManager:
         self._execution_authority_limit = execution_authority_limit
         self.current: ExecutionPlane | None = None
 
-    def ensure(self, session: SessionRuntimeController) -> ExecutionPlane:
+    def ensure(
+        self, session: SessionRuntimeController, *, force: bool = False,
+    ) -> ExecutionPlane:
         if (
             session.session is None
             or session.store is None
@@ -100,12 +102,15 @@ class ExecutionPlaneManager:
             servers=merge_mcp_servers((agent_config.mcp.servers, plugin_mcp_servers)),
         )
         plane = self.current
-        if plane is not None and plane.mcp.config == mcp_config and plane.matches(
-            workspace=session.workspace,
-            provider_name=session.provider_name,
-            agent_config=agent_config,
-            configuration_fingerprint=config_fingerprint,
-            instructions=instructions,
+        if (
+            not force and plane is not None and plane.mcp.config == mcp_config
+            and plane.matches(
+                workspace=session.workspace,
+                provider_name=session.provider_name,
+                agent_config=agent_config,
+                configuration_fingerprint=config_fingerprint,
+                instructions=instructions,
+            )
         ):
             if plane.agent is None:
                 self._bind_session(plane, session)

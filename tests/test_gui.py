@@ -215,6 +215,29 @@ class BridgeProcessSpawnTest(unittest.IsolatedAsyncioTestCase):
 
 @unittest.skipIf(TestClient is None, "Install the gui extra to test the GUI")
 class ActiveSessionTest(unittest.IsolatedAsyncioTestCase):
+    async def test_refresh_is_busy_until_the_bridge_publishes_state(self) -> None:
+        bridge = FakeBridge()
+        runtime = active_session.ActiveSession("s1", "first", "/tmp", [], bridge)
+        self.addAsyncCleanup(runtime.close)
+        runtime.send({"type": "runtime_refresh"})
+        self.assertTrue(runtime.running)
+        self.assertEqual(runtime.state["phase"], "inactive")
+        bridge.emit(bridge_protocol.runtime_state_message(
+            phase="starting", provider="first", permission_preset="full_access",
+            approval=None, question=None, context_window=None, cache_usage=None, jobs=[],
+        ))
+        await _wait_for_async(lambda: runtime.event_sequence == 1)
+        self.assertTrue(runtime.running)
+        bridge.emit(bridge_protocol.runtime_state_message(
+            phase="idle", provider="first", permission_preset="full_access",
+            approval=None, question=None, context_window=None, cache_usage=None, jobs=[],
+        ))
+        await _wait_for_async(lambda: runtime.event_sequence == 2)
+        self.assertTrue(runtime.running)
+        bridge.emit({"type": "runtime_refreshed", "provider": "first", "model": "test/model"})
+        await _wait_for_async(lambda: runtime.event_sequence == 3)
+        self.assertFalse(runtime.running)
+
     async def test_caches_protocol_cursors_without_deriving_them_from_phase(self) -> None:
         bridge = FakeBridge()
         runtime = active_session.ActiveSession("s1", "first", "/tmp", [], bridge)
@@ -971,6 +994,9 @@ class GuiTest(unittest.TestCase):
                         "workspace": str(self.root.resolve()),
                     }
                 ],
+                "runtime_refresh": [
+                    {"type": "runtime_refreshed", "provider": "second", "model": "openai/second"}
+                ],
             }
         )
         with self.client(bridge) as client:
@@ -995,10 +1021,12 @@ class GuiTest(unittest.TestCase):
                     socket.receive_json()["type"],
                     "workspace_changed",
                 )
+                socket.send_json({"type": "runtime_refresh"})
+                self.assertEqual(socket.receive_json()["type"], "runtime_refreshed")
 
         self.assertEqual(
             [message["type"] for message in bridge.sent],
-            ["open_session", "provider_set", "workspace_set"],
+            ["open_session", "provider_set", "workspace_set", "runtime_refresh"],
         )
 
     def test_creates_a_persistent_scratch_workspace_for_a_session(self) -> None:

@@ -39,6 +39,7 @@ class ActiveSession:
         )
         self.transcript = {"items": items, "event_sequence": 0}
         self._pending_turn: str | None = None
+        self._pending_refresh = False
         self._snapshot_ready = asyncio.Event()
         self._resume_after = 0
         self.done = False
@@ -118,6 +119,9 @@ class ActiveSession:
         if message.get("type") == "user_turn":
             self._pending_turn = str(message["turn_id"])
             self._snapshot_ready.clear()
+        elif message.get("type") == "runtime_refresh":
+            self._pending_refresh = True
+            self._snapshot_ready.clear()
         self.bridge.send(message)
 
     def owns_attachment(self, attachment_id: str) -> bool:
@@ -130,7 +134,8 @@ class ActiveSession:
     @property
     def running(self) -> bool:
         return not self.done and (
-            self._pending_turn is not None or runtime_is_active(self.state["phase"])
+            self._pending_turn is not None or self._pending_refresh
+            or runtime_is_active(self.state["phase"])
         )
 
     @property
@@ -182,6 +187,8 @@ class ActiveSession:
                     if message["type"] in {"turn_completed", "turn_cancelled", "turn_failed", "fatal", "session_open_failed"}:
                         self._pending_turn = None
                         self._snapshot_ready.set()
+                    if message["type"] in {"runtime_refreshed", "runtime_refresh_failed", "fatal", "session_open_failed"}:
+                        self._pending_refresh = False
                     if message["type"] in {"fatal", "session_open_failed"}:
                         self._failure_pending = True
                     self._events.append(message)

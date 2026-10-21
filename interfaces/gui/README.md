@@ -105,6 +105,8 @@ React 应用提供可折叠的 Session 列表、对话区和 Workspace 文件树
 
 Settings 页面覆盖 Provider、默认路由、Agent Tool、上下文、Memory、Skill、Plugin、MCP 和 Schedule。API key 只写入 `~/.nosis/.env`，服务端返回的设置快照只包含凭据来源与是否已配置。
 
+对话输入框首字符为 `/` 时展开命令菜单。`/refresh` 在当前会话空闲时重新加载运行环境，保留对话、权限和计划，并重连 MCP；支持点击、Enter 执行、Tab 补全、Esc 收起。运行中不能执行刷新，草稿保持不变。配置变化仍会在下一轮对话自动检查并应用。
+
 Context Window 指示器展开后显示当前输入、缓存命中率、可用输入上限、剩余输入空间、压缩触发点、模型总窗口、压缩次数与当前压缩总结。后台任务指示器显示任务数量、类型、Job ID 与状态，shell Job 展开命令、subagent Job 展开角色与任务描述。Assistant 消息把 reasoning 与 Tool 调用折叠为可展开的推理与执行过程区块：Turn 运行且尚未出现回答文本时默认展开，回答开始后自动折叠，回答本身始终可见。
 
 执行过程完全由结构化协议渲染，不从 assistant 自由文本推断 Tool、计划或状态。停止操作会取消当前 Turn，但不会撤销已完成的 Tool 操作。

@@ -99,6 +99,17 @@ class RuntimeHost:
             self.sessions.change_workspace(workspace)
         return changed
 
+    def refresh_runtime(self) -> tuple[str, str]:
+        self._require_idle()
+        try:
+            plane = self.planes.ensure(self.sessions, force=True)
+        except Exception:
+            self.callbacks.on_phase("failed", ())
+            raise
+        self.callbacks.on_phase("idle", plane.runtime_warnings)
+        plane.runtime_warnings = ()
+        return plane.provider_name, plane.provider.model_name
+
     def set_permission_preset(self, preset: PermissionPreset) -> None:
         if self.sessions.permissions is None:
             raise RuntimeError("session is not initialized")

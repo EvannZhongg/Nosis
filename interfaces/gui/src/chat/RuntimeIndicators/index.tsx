@@ -9,6 +9,7 @@ export { ContextWindowIndicator } from "./ContextWindow";
 
 export function RuntimeIndicators({
   running,
+  refreshing = false,
   reconnecting,
   runtimePhase,
   pendingSteers,
@@ -19,6 +20,7 @@ export function RuntimeIndicators({
   onStop,
 }: {
   running: boolean;
+  refreshing?: boolean;
   reconnecting: boolean;
   runtimePhase: RuntimePhase;
   pendingSteers: number;
@@ -52,23 +54,25 @@ export function RuntimeIndicators({
   return <div className="activity">
     {running && <LoaderCircle size={13} className="spin" />}
     <span className="activity-label" role="status">{running
-      ? reconnecting
-        ? "连接中断，任务仍在后台运行，正在重新连接…"
-        : runtimePhase === "starting"
-          ? "正在启动 Agent…"
-          : approval
-            ? "等待你的确认"
-            : question
-              ? "等待你的选择"
-              : pendingSteers
-                ? `Nosis 正在处理… ${pendingSteers} 条引导待应用`
-                : "Nosis 正在处理…"
+      ? refreshing
+        ? "正在重新加载运行环境…"
+        : reconnecting
+          ? "连接中断，任务仍在后台运行，正在重新连接…"
+          : runtimePhase === "starting"
+            ? "正在启动 Agent…"
+            : approval
+              ? "等待你的确认"
+              : question
+                ? "等待你的选择"
+                : pendingSteers
+                  ? `Nosis 正在处理… ${pendingSteers} 条引导待应用`
+                  : "Nosis 正在处理…"
       : "Plan 尚未完成"}</span>
     <div className="activity-controls">
       {order.map((item) => item === "plan"
         ? plan && <PlanStatus key="plan" plan={plan} open={popover === "plan" && !interactionActive} disabled={interactionActive} onOpenChange={setPlanOpen} />
         : hasJobs && <BackgroundJobs key="jobs" jobs={jobs} open={popover === "jobs" && !interactionActive && !reconnecting} disabled={interactionActive || reconnecting} onOpenChange={setJobsOpen} />)}
-      {running && !interactionActive && <button className="stop-button" aria-label="停止执行" onClick={onStop}><Square size={11} /> 停止</button>}
+      {running && !refreshing && !interactionActive && <button className="stop-button" aria-label="停止执行" onClick={onStop}><Square size={11} /> 停止</button>}
     </div>
   </div>;
 }
