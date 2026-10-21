@@ -11,6 +11,8 @@ from agent_core import (
     WorkspaceInstructions,
 )
 from agent_core.prompting import render_subagent_prompt, render_system_prompt
+from agent_core.mcp.manager import McpServerInstructions
+from agent_core.skills import Skill, SkillRegistry
 
 
 SYSTEM_TEMPLATE = "I am Nosis.\n\nCurrent workspace: {{workspace}}"
@@ -75,6 +77,36 @@ class PromptsTest(unittest.TestCase):
         self.assertLess(prompt.index("global rule"), prompt.index("claude rule"))
         self.assertLess(prompt.index("claude rule"), prompt.index("agent rule"))
         self.assertIn("Earlier sources override later sources", prompt)
+
+    def test_mcp_instructions_append_after_existing_main_and_subagent_prefixes(self) -> None:
+        role = SubagentRole(
+            name="reviewer", description="Review code.", instructions="Report findings.",
+            tools=("mcp__review-kit_analyzer__echo",), provider=_TextOnlyProvider(),
+        )
+        guide = "Use echo for review.\n\nPreserve this second paragraph."
+        entries = (
+            McpServerInstructions("review-kit:analyzer", role.tools, guide),
+            McpServerInstructions("docs", ("mcp__docs__search",), "Search docs first."),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = Workspace(root)
+            skills = SkillRegistry((Skill("review", "Inspect code.", root),))
+            for render, args in (
+                (render_system_prompt, (SYSTEM_TEMPLATE, workspace, skills)),
+                (render_subagent_prompt, (SUBAGENT_TEMPLATE, workspace, role, skills)),
+            ):
+                with self.subTest(render=render.__name__):
+                    prefix = render(*args, instructions=self.instructions(root))
+                    prompt = render(
+                        *args, instructions=self.instructions(root), mcp_instructions=entries,
+                    )
+                    self.assertNotIn("## MCP Server Instructions", prefix)
+                    self.assertTrue(prompt.startswith(prefix + "\n\n## MCP Server Instructions"))
+                    self.assertEqual(prompt.count(guide), 1)
+                    self.assertIn("### review-kit:analyzer\nTools: `mcp__review-kit_analyzer__echo`", prompt)
+                    self.assertLess(prompt.index("### review-kit:analyzer"), prompt.index("### docs"))
+                    self.assertTrue(prompt.endswith("Search docs first."))
 
     def test_loads_subagent_prompt_with_workspace_and_role(self) -> None:
         role = SubagentRole(

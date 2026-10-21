@@ -14,7 +14,7 @@ if _delay > 0:
     time.sleep(_delay)
 
 
-server = MCPServer("nosis-test")
+server = MCPServer("nosis-test", instructions=os.environ.get("TEST_MCP_INSTRUCTIONS"))
 
 
 @server.tool(description="Return the physical server identity")

@@ -128,7 +128,11 @@ class BridgeProcess:
             [sys.executable, "-m", "interfaces.bridge"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self.log,
             text=True, encoding="utf-8",
-            env={**os.environ, "USERPROFILE": str(home), "HOME": str(home), "PYTHONUTF8": "1"},
+            env={
+                **os.environ, "USERPROFILE": str(home), "HOME": str(home),
+                "PYTHONUTF8": "1", "NO_PROXY": "127.0.0.1,localhost",
+                "no_proxy": "127.0.0.1,localhost",
+            },
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
         self.job = ProcessJob(self.process)

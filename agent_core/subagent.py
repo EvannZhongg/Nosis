@@ -178,6 +178,19 @@ class SubagentRuntime:
             cancellation=cancellation,
             execution=None,
         )
+        tools = self._catalog.select(
+            (
+                *skill_aware_tool_names(
+                    vision_aware_tool_names(
+                        role.tools, role.provider, role.vision_provider
+                    ),
+                    parent.skills,
+                ),
+                *(("remember",) if memory is not None else ()),
+            ),
+            context,
+            policy=self._tool_policy,
+        )
         child = Agent(
             provider=role.provider,
             session=session,
@@ -187,25 +200,17 @@ class SubagentRuntime:
                 role,
                 parent.skills,
                 instructions=self._workspace_instructions,
+                mcp_instructions=(
+                    context.mcp.instructions_for(tool.name for tool in tools.definitions)
+                    if context.mcp is not None else ()
+                ),
             ),
             consolidator_prompt=self._consolidator_prompt,
             memory_context=(
                 memory.store.load(parent.workspace.path) if memory is not None else None
             ),
             config=self._config,
-            tools=self._catalog.select(
-                (
-                    *skill_aware_tool_names(
-                        vision_aware_tool_names(
-                            role.tools, role.provider, role.vision_provider
-                        ),
-                        parent.skills,
-                    ),
-                    *(("remember",) if memory is not None else ()),
-                ),
-                context,
-                policy=self._tool_policy,
-            ),
+            tools=tools,
             context=context,
             tool_result_normalizer=ToolResultNormalizer(
                 parent.workspace,

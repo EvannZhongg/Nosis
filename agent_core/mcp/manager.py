@@ -5,7 +5,7 @@ import threading
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 from mcp import ClientSession
 from mcp.types import PaginatedRequestParams
@@ -29,6 +29,13 @@ class McpServerStatus:
     status: str
     tool_count: int | None = None
     error: str | None = None
+
+
+@dataclass(frozen=True)
+class McpServerInstructions:
+    server: str
+    tools: tuple[str, ...]
+    instructions: str
 
 
 @dataclass
@@ -63,6 +70,7 @@ class McpClientManager:
         self._startup_error: BaseException | None = None
         self._tools: tuple[Tool, ...] = ()
         self._tool_origins: dict[str, tuple[str, str]] = {}
+        self._server_instructions: dict[str, str] = {}
         self._servers = {
             server.identifier: server
             for server in config.servers
@@ -87,6 +95,22 @@ class McpClientManager:
         qualified_name: str,
     ) -> tuple[str, str] | None:
         return self._tool_origins.get(qualified_name)
+
+    def instructions_for(
+        self,
+        tool_names: Iterable[str],
+    ) -> tuple[McpServerInstructions, ...]:
+        """Select startup instructions for an Agent's actual MCP tools."""
+        selected: dict[str, list[str]] = {}
+        for name in sorted(set(tool_names)):
+            origin = self.tool_identity(name)
+            if origin is not None:
+                selected.setdefault(origin[0], []).append(name)
+        return tuple(
+            McpServerInstructions(server, tuple(selected[server]), instructions)
+            for server, instructions in self._server_instructions.items()
+            if server in selected
+        )
 
     def start(self) -> None:
         """Connect while the caller prepares other independent dependencies."""
@@ -234,6 +258,9 @@ class McpClientManager:
                         sessions[config.identifier] = session
                         self._tool_origins.update(origins)
                         tools.extend(server_tools)
+                        instructions = session.instructions
+                        if instructions and instructions.strip():
+                            self._server_instructions[config.identifier] = instructions.strip()
                         self._emit(
                             config.identifier,
                             "ready",

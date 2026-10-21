@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from agent_core import LLMResponse, McpConfig, McpServerConfig, ToolCall
@@ -36,7 +37,7 @@ class McpRegistrationIsolationTest(unittest.TestCase):
 
         async def start_server(stack, server):
             names = ("unique", "dup-name", "dup.name", "dup_name") if server.name == "bad" else ("echo",)
-            return object(), tuple(
+            return SimpleNamespace(instructions=f"Use {server.identifier}."), tuple(
                 McpTool(server.identifier, name, name, {"type": "object"})
                 for name in names
             )
@@ -46,6 +47,10 @@ class McpRegistrationIsolationTest(unittest.TestCase):
             manager.wait_ready()
         self.assertEqual(manager.tool_names, ("mcp__healthy__echo",))
         self.assertIsNone(manager.tool_identity("mcp__bad__unique"))
+        self.assertEqual(
+            [entry.server for entry in manager.instructions_for(("mcp__bad__unique", *manager.tool_names))],
+            ["healthy"],
+        )
         self.assertEqual([(status.server, status.status) for status in statuses], [
             ("bad", "connecting"), ("healthy", "connecting"),
             ("bad", "unavailable"), ("healthy", "ready"),
@@ -65,6 +70,7 @@ class PluginInteropTest(BridgeTestCase):
         self.server_config = {
             "command": sys.executable,
             "args": [str(Path(__file__).with_name("fake_mcp_server.py"))],
+            "env": {"TEST_MCP_INSTRUCTIONS": "Use analyzer echo for code review."},
             "tools": {"enabled": ["echo"], "approval": "never"},
         }
         self.write_mcp()
@@ -121,12 +127,44 @@ class PluginInteropTest(BridgeTestCase):
         self.assertEqual({tool.name for tool in self.child.requests[0].tools}, {"read_file", "read_skill", TOOL})
         self.assertIn("review-kit:code-review", self.child.requests[0].system_prompt)
         self.assertIn("Review the requested code.", self.child.requests[0].system_prompt)
+        for request in (self.main.requests[0], self.child.requests[0]):
+            self.assertIn("### review-kit:analyzer", request.system_prompt)
+            self.assertIn(f"Tools: `{TOOL}`", request.system_prompt)
+            self.assertEqual(request.system_prompt.count("Use analyzer echo for code review."), 1)
+        for requests in (self.main.requests, self.child.requests):
+            self.assertTrue(all(request.system_prompt == requests[0].system_prompt for request in requests))
         self.assertTrue(any("source review" in str(message.content) for message in self.child.requests[-1].messages))
         plane = bridge.host.planes.current
         runtime = plane.agent._tools._context.subagents
         self.assertIs(runtime._catalog, plane.catalog)
         self.assertIs(runtime._tool_policy, bridge.host.sessions.permissions)
         self.assertTrue(any("subagents" in path.parts for path in self.root.rglob("*.jsonl")))
+
+    def test_mcp_instructions_follow_each_agents_actual_tool_selection(self) -> None:
+        other = {**self.server_config, "env": {"TEST_MCP_INSTRUCTIONS": "Other server guide."}}
+        self.write_mcp(other=other)
+        self.main = MockProvider(["done"])
+        self.child = MockProvider(["reviewed", "reviewed without MCP"])
+        bridge, stdout = self.open()
+        bridge.run_turn({"turn_id": "instructions", "text": "Review the workspace."})
+        self.assertTrue(any(message["type"] == "turn_completed" for message in emitted(stdout)))
+        plane = bridge.host.planes.current
+        result = plane.agent._tools.execute(ToolCall(
+            "review", "subagent", {"role": "review-kit:reviewer", "task": "Review"},
+        ))
+        self.assertIsNone(result.error)
+        self.assertIn("Other server guide.", self.main.requests[0].system_prompt)
+        self.assertIn("Use analyzer echo for code review.", self.child.requests[0].system_prompt)
+        self.assertNotIn("Other server guide.", self.child.requests[0].system_prompt)
+
+        write_agent(self.plugin, fields="tools: [read_file]\n")
+        bridge.host.planes.close()
+        plane = bridge.host.planes.ensure(bridge.host.sessions)
+        result = plane.agent._tools.execute(ToolCall(
+            "review-local", "subagent", {"role": "review-kit:reviewer", "task": "Review locally"},
+        ))
+        self.assertIsNone(result.error)
+        self.assertNotIn("## MCP Server Instructions", self.child.requests[-1].system_prompt)
 
     def test_reviewer_cannot_call_tools_outside_its_selection(self) -> None:
         self.child = MockProvider([

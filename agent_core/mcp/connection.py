@@ -2,8 +2,11 @@
 
 import asyncio
 import os
+import ssl
 from contextlib import AsyncExitStack
 from pathlib import Path
+from urllib.parse import urlsplit
+from urllib.request import proxy_bypass_environment
 
 import httpx2
 from mcp import ClientSession, StdioServerParameters
@@ -36,8 +39,25 @@ class McpConnection:
                     )
                     read, write = await stack.enter_async_context(stdio_client(parameters))
                 else:
+                    env = {
+                        **os.environ,
+                        **config.env,
+                    }
+                    proxy = _http_proxy(config.url or "", env)
+                    cafile = env.get("SSL_CERT_FILE")
+                    capath = env.get("SSL_CERT_DIR")
+                    verify = (
+                        ssl.create_default_context(cafile=cafile, capath=capath)
+                        if cafile or capath
+                        else httpx2.create_ssl_context(trust_env=False)
+                    )
                     client = await stack.enter_async_context(
-                        httpx2.AsyncClient(headers=config.headers)
+                        httpx2.AsyncClient(
+                            headers=config.headers,
+                            trust_env=False,
+                            proxy=proxy,
+                            verify=verify,
+                        )
                     )
                     read, write = await stack.enter_async_context(
                         streamable_http_client(config.url or "", http_client=client)
@@ -60,3 +80,17 @@ class McpConnection:
         if not self.ready.done() or self.ready.cancelled():
             self._task.cancel()
         await asyncio.gather(self._task, return_exceptions=True)
+
+
+def _http_proxy(url: str, environment: dict[str, str]) -> str | None:
+    """Read proxy settings without inheriting platform-wide defaults."""
+    values = {key.lower(): value for key, value in environment.items()}
+    proxies = {
+        scheme: values[f"{scheme}_proxy"]
+        for scheme in ("http", "https", "all", "no")
+        if values.get(f"{scheme}_proxy")
+    }
+    parsed = urlsplit(url)
+    if proxy_bypass_environment(parsed.netloc, proxies):
+        return None
+    return proxies.get(parsed.scheme) or proxies.get("all")

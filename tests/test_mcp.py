@@ -20,7 +20,7 @@ from agent_core.mcp.config import (
     namespace_mcp_servers,
 )
 from agent_core.mcp.tool import McpTool, qualified_tool_name
-from agent_core.mcp.manager import McpClientManager
+from agent_core.mcp.manager import McpClientManager, McpServerInstructions
 from agent_core.tools.policy import McpApprovalPolicy
 from tests.image_fixtures import png_bytes
 
@@ -368,6 +368,49 @@ class McpToolTest(unittest.TestCase):
 
 
 class McpClientManagerTest(unittest.TestCase):
+    def test_instructions_are_scoped_to_selected_tools_and_frozen_at_startup(self) -> None:
+        config = load_mcp_config({"enabled": True, "servers": {
+            name: {"command": "unused", "enabled": name != "disabled"}
+            for name in ("first", "second", "blank", "missing", "filtered", "failed", "disabled")
+        }})
+        manager = McpClientManager(config, Path.cwd())
+        self.addCleanup(manager.close)
+        sessions = {}
+
+        async def start_server(stack, server):
+            if server.name == "failed":
+                raise RuntimeError("discovery failed")
+            session = SimpleNamespace(instructions={
+                "blank": " \n\t", "missing": None,
+            }.get(server.name, f"  Use {server.name}.\n\nKeep the full guide.  "))
+            sessions[server.name] = session
+            return session, tuple(
+                McpTool(server.identifier, name, name, {"type": "object"})
+                for name in (() if server.name == "filtered" else ("echo", "other"))
+            )
+
+        with patch.object(manager, "_start_server", start_server):
+            manager.start()
+            manager.wait_ready()
+
+        expected = (
+            McpServerInstructions("first", ("mcp__first__echo",), "Use first.\n\nKeep the full guide."),
+            McpServerInstructions("second", ("mcp__second__echo",), "Use second.\n\nKeep the full guide."),
+        )
+        selected = (
+            "mcp__second__echo", "mcp__first__echo", "mcp__first__echo",
+            "read_file", "mcp__blank__echo", "mcp__missing__echo",
+            "mcp__filtered__echo", "mcp__failed__echo", "mcp__disabled__echo",
+        )
+        self.assertEqual(manager.instructions_for(selected), expected)
+        self.assertEqual(manager.instructions_for(reversed(selected)), expected)
+        self.assertEqual(manager.instructions_for(("mcp__second__echo",)), expected[1:])
+        self.assertEqual(manager.instructions_for(("read_file",)), ())
+        self.assertEqual(manager.instructions_for(()), ())
+        self.assertNotIn("disabled", sessions)
+        sessions["first"].instructions = "Changed after startup."
+        self.assertEqual(manager.instructions_for(selected), expected)
+
     def test_streamable_http_connections_close_independently(self) -> None:
         with socket.socket() as listener:
             listener.bind(("127.0.0.1", 0))
@@ -376,6 +419,7 @@ class McpClientManagerTest(unittest.TestCase):
             [sys.executable, str(Path(__file__).with_name("fake_mcp_server.py")), str(port)],
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            env={**os.environ, "TEST_MCP_INSTRUCTIONS": "Use echo over HTTP."},
         )
         self.addCleanup(process.wait, 5)
         self.addCleanup(process.terminate)
@@ -396,6 +440,9 @@ class McpClientManagerTest(unittest.TestCase):
             self.addCleanup(manager.close)
             manager.start()
             self.assertEqual(tuple(tool.name for tool in manager.wait_ready()), ("mcp__fake__echo",))
+            self.assertEqual(manager.instructions_for(manager.tool_names), (
+                McpServerInstructions("fake", ("mcp__fake__echo",), "Use echo over HTTP."),
+            ))
             self.assertEqual(manager.call_tool("fake", "echo", {"text": "http"})["structured_content"], {"echo": "http"})
         thread = managers[0]._thread
         managers[0].close()
@@ -477,7 +524,7 @@ class McpClientManagerTest(unittest.TestCase):
         async def start_server(stack, server):
             entered.set()
             await asyncio.to_thread(release.wait)
-            return object(), ()
+            return SimpleNamespace(instructions=None), ()
 
         with patch.object(manager, "_start_server", start_server):
             try:
@@ -497,6 +544,8 @@ class McpClientManagerTest(unittest.TestCase):
         calls = []
 
         class RemoteSession:
+            instructions = None
+
             async def call_tool(self, name, arguments):
                 calls.append(name)
                 if name == "slow":
@@ -554,6 +603,7 @@ class McpClientManagerTest(unittest.TestCase):
                         "transport": "stdio",
                         "command": sys.executable,
                         "args": [str(Path(__file__).with_name("fake_mcp_server.py"))],
+                        "env": {"TEST_MCP_INSTRUCTIONS": "Use echo to repeat text."},
                         "tools": {
                             "enabled": ["echo"],
                             "approval": "never",
@@ -576,6 +626,9 @@ class McpClientManagerTest(unittest.TestCase):
                 ("fake", "echo"),
             )
             self.assertFalse(manager.requires_approval("mcp__fake__echo"))
+            self.assertEqual(manager.instructions_for(manager.tool_names), (
+                McpServerInstructions("fake", ("mcp__fake__echo",), "Use echo to repeat text."),
+            ))
             result = tools[0].execute(
                 {"text": "hello"},
                 ToolExecutionContext(
@@ -642,7 +695,7 @@ class McpClientManagerTest(unittest.TestCase):
             if len(entered) == 2:
                 both_started.set()
             await asyncio.to_thread(release.wait)
-            return object(), ()
+            return SimpleNamespace(instructions=None), ()
 
         with patch.object(manager, "_start_server", start_server):
             manager.start()

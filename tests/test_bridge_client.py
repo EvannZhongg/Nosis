@@ -118,6 +118,8 @@ class ExternalBridgeClientTest(unittest.TestCase):
         self.env = {
             **os.environ, "HOME": str(self.home), "USERPROFILE": str(self.home),
             "PYTHONPATH": str(self.site), "PYTHONUTF8": "1",
+            "NO_PROXY": "127.0.0.1,localhost",
+            "no_proxy": "127.0.0.1,localhost",
             "NOSIS_TEST_BRIDGE": str(self.command),
         }
 

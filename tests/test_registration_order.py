@@ -167,7 +167,7 @@ class RegistrationOrderTest(unittest.TestCase):
                         await released.wait()
                     completed.append(server.identifier)
                     released.set()
-                    return object(), tuple(
+                    return SimpleNamespace(instructions=f"Use {server.identifier}."), tuple(
                         McpTool(server.identifier, name, "demo", {"type": "object"})
                         for name in ("z-tool", "a-tool")
                     )
@@ -182,6 +182,11 @@ class RegistrationOrderTest(unittest.TestCase):
                             for server in server_names for tool in ("z-tool", "a-tool")
                         )
                         self.assertEqual(manager.tool_names, expected)
+                        instructions = manager.instructions_for(reversed(expected))
+                        self.assertEqual(tuple(entry.server for entry in instructions), server_names)
+                        self.assertEqual(tuple(entry.instructions for entry in instructions), tuple(
+                            f"Use {name}." for name in server_names
+                        ))
                         context = ToolExecutionContext(
                             Workspace(Path.cwd()), Session(), mcp=manager,
                         )

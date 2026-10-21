@@ -7,7 +7,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agent_core.memory import MemoryContext, MemoryDocument
+from agent_core.mcp.manager import McpServerInstructions
 from agent_core.plan import PlanSnapshot, PlanStep
+from agent_core.prompting import render_system_prompt
 
 from agent_core import (
     AgentRunResult,
@@ -565,8 +567,14 @@ class AgentTest(unittest.TestCase):
             (PlanStep("later", "Pending work", "pending"),),
         )
         provider = MockProvider(["- [ephemeral] Checkpoint."])
+        system_prompt = render_system_prompt(
+            "Original system", TEST_WORKSPACE,
+            mcp_instructions=(McpServerInstructions(
+                "demo", ("mcp__demo__echo",), "MCP guide remains outside the checkpoint.",
+            ),),
+        )
         context = ContextManager(
-            provider, session, "Original system", CONSOLIDATOR_PROMPT,
+            provider, session, system_prompt, CONSOLIDATOR_PROMPT,
             replace(AGENT_CONFIG, context=ContextCompressionConfig(keep_recent_units=2)),
             media_root=TEST_WORKSPACE.path,
             memory_context=MemoryContext(
@@ -581,6 +589,12 @@ class AgentTest(unittest.TestCase):
         context.archive(original)
         compressed = provider.requests[0]
         self.assertEqual(compressed.system_prompt, original.system_prompt)
+        self.assertEqual(context.build_request(tools).system_prompt, system_prompt)
+        self.assertIn("MCP guide remains outside the checkpoint.", compressed.system_prompt)
+        self.assertFalse(any(
+            "MCP guide remains outside the checkpoint." in str(message.content)
+            for message in compressed.messages
+        ))
         self.assertIs(compressed.tools, original.tools)
         self.assertEqual(compressed.media_root, original.media_root)
         self.assertEqual(compressed.messages[:-1], original.messages[:6])

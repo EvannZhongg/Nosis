@@ -393,6 +393,24 @@ class ExecutionPlaneManager:
                     else None
                 ),
             )
+            tools = catalog.select(
+                (
+                    *skill_aware_tool_names(
+                        vision_aware_tool_names(
+                            agent_config.tools.enabled,
+                            main_provider,
+                            vision_provider,
+                        ),
+                        skills,
+                    ),
+                    "ask_user",
+                    "update_plan",
+                    *mcp.tool_names,
+                    *(("remember",) if memory is not None else ()),
+                ),
+                context,
+                policy=session.permissions,
+            )
             agent = Agent(
                 provider=main_provider,
                 session=session.session,
@@ -401,28 +419,14 @@ class ExecutionPlaneManager:
                     workspace,
                     skills,
                     instructions=instructions,
+                    mcp_instructions=mcp.instructions_for(
+                        tool.name for tool in tools.definitions
+                    ),
                 ),
                 consolidator_prompt=prompts.consolidator,
                 memory_context=memory_context,
                 config=agent_config,
-                tools=catalog.select(
-                    (
-                        *skill_aware_tool_names(
-                            vision_aware_tool_names(
-                                agent_config.tools.enabled,
-                                main_provider,
-                                vision_provider,
-                            ),
-                            skills,
-                        ),
-                        "ask_user",
-                        "update_plan",
-                        *mcp.tool_names,
-                        *(("remember",) if memory is not None else ()),
-                    ),
-                    context,
-                    policy=session.permissions,
-                ),
+                tools=tools,
                 context=context,
             )
             plane.memory = memory
