@@ -129,7 +129,8 @@ class PluginInteropTest(BridgeTestCase):
         self.assertIn("Review the requested code.", self.child.requests[0].system_prompt)
         for request in (self.main.requests[0], self.child.requests[0]):
             self.assertIn("### review-kit:analyzer", request.system_prompt)
-            self.assertIn(f"Tools: `{TOOL}`", request.system_prompt)
+            self.assertNotIn("Tools:", request.system_prompt)
+            self.assertNotIn(TOOL, request.system_prompt)
             self.assertEqual(request.system_prompt.count("Use analyzer echo for code review."), 1)
         for requests in (self.main.requests, self.child.requests):
             self.assertTrue(all(request.system_prompt == requests[0].system_prompt for request in requests))

@@ -394,8 +394,8 @@ class McpClientManagerTest(unittest.TestCase):
             manager.wait_ready()
 
         expected = (
-            McpServerInstructions("first", ("mcp__first__echo",), "Use first.\n\nKeep the full guide."),
-            McpServerInstructions("second", ("mcp__second__echo",), "Use second.\n\nKeep the full guide."),
+            McpServerInstructions("first", "Use first.\n\nKeep the full guide."),
+            McpServerInstructions("second", "Use second.\n\nKeep the full guide."),
         )
         selected = (
             "mcp__second__echo", "mcp__first__echo", "mcp__first__echo",
@@ -404,6 +404,9 @@ class McpClientManagerTest(unittest.TestCase):
         )
         self.assertEqual(manager.instructions_for(selected), expected)
         self.assertEqual(manager.instructions_for(reversed(selected)), expected)
+        self.assertEqual(manager.instructions_for((
+            "mcp__first__other", "mcp__first__echo", "mcp__second__other",
+        )), expected)
         self.assertEqual(manager.instructions_for(("mcp__second__echo",)), expected[1:])
         self.assertEqual(manager.instructions_for(("read_file",)), ())
         self.assertEqual(manager.instructions_for(()), ())
@@ -441,7 +444,7 @@ class McpClientManagerTest(unittest.TestCase):
             manager.start()
             self.assertEqual(tuple(tool.name for tool in manager.wait_ready()), ("mcp__fake__echo",))
             self.assertEqual(manager.instructions_for(manager.tool_names), (
-                McpServerInstructions("fake", ("mcp__fake__echo",), "Use echo over HTTP."),
+                McpServerInstructions("fake", "Use echo over HTTP."),
             ))
             self.assertEqual(manager.call_tool("fake", "echo", {"text": "http"})["structured_content"], {"echo": "http"})
         thread = managers[0]._thread
@@ -627,7 +630,7 @@ class McpClientManagerTest(unittest.TestCase):
             )
             self.assertFalse(manager.requires_approval("mcp__fake__echo"))
             self.assertEqual(manager.instructions_for(manager.tool_names), (
-                McpServerInstructions("fake", ("mcp__fake__echo",), "Use echo to repeat text."),
+                McpServerInstructions("fake", "Use echo to repeat text."),
             ))
             result = tools[0].execute(
                 {"text": "hello"},

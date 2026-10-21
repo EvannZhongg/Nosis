@@ -48,7 +48,7 @@ Manager 在后台线程中并发连接 Server，装配其他依赖后通过 `wai
 
 主 Agent 与子 Agent 通过同一执行面的 Tool Catalog 和上下文调用 MCP，审批与取消仍走既有 ToolPolicy 和 Turn 控制。相同装配输入下切换 Session 可复用执行面；Provider、Workspace、配置、Instructions 或有效 MCP 配置变化时，旧执行面连同 MCP 连接一起关闭，随后重新启动和发现工具。
 
-Server 初始化返回的 `instructions` 由 Manager 在成功注册时保存为执行面内的固定快照。主 Agent 与子 Agent 按实际选出的 MCP ToolSet 取得相关 Server 的完整说明，在创建 Agent 时追加到 system prompt 的 Workspace Instructions 与 Skill 目录之后、Memory 和压缩摘要之前。说明标明 Server 身份及当前可见的限定工具名，不覆盖执行、授权或任务约束；无可见工具、无说明或注册失败的 Server 不注入。说明顺序不受连接完成顺序影响，不随 Turn、计划或 Jobs 更新，也不由历史压缩摘要替代。
+Server 初始化返回的 `instructions` 由 Manager 在成功注册时保存为执行面内的固定快照。主 Agent 与子 Agent 按实际选出的 MCP ToolSet 取得相关 Server 的完整说明，在创建 Agent 时追加到 system prompt 的 Workspace Instructions 与 Skill 目录之后、Memory 和压缩摘要之前。说明保留 Server 身份及原文，不另行列举工具名，不覆盖执行、授权或任务约束；无可见工具、无说明或注册失败的 Server 不注入。说明顺序不受连接完成顺序影响，不随 Turn、计划或 Jobs 更新，也不由历史压缩摘要替代。
 
 stdio 的相对 cwd 基于 Workspace 解析，未配置时使用当前 Workspace；Plugin Server 的 cwd 由 PluginLoader 解析到 Plugin 根目录。streamable HTTP 直接使用当前 Runtime 的环境与配置 headers。
 

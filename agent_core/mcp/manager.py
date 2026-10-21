@@ -34,7 +34,6 @@ class McpServerStatus:
 @dataclass(frozen=True)
 class McpServerInstructions:
     server: str
-    tools: tuple[str, ...]
     instructions: str
 
 
@@ -101,13 +100,13 @@ class McpClientManager:
         tool_names: Iterable[str],
     ) -> tuple[McpServerInstructions, ...]:
         """Select startup instructions for an Agent's actual MCP tools."""
-        selected: dict[str, list[str]] = {}
-        for name in sorted(set(tool_names)):
+        selected: set[str] = set()
+        for name in tool_names:
             origin = self.tool_identity(name)
             if origin is not None:
-                selected.setdefault(origin[0], []).append(name)
+                selected.add(origin[0])
         return tuple(
-            McpServerInstructions(server, tuple(selected[server]), instructions)
+            McpServerInstructions(server, instructions)
             for server, instructions in self._server_instructions.items()
             if server in selected
         )

@@ -570,7 +570,7 @@ class AgentTest(unittest.TestCase):
         system_prompt = render_system_prompt(
             "Original system", TEST_WORKSPACE,
             mcp_instructions=(McpServerInstructions(
-                "demo", ("mcp__demo__echo",), "MCP guide remains outside the checkpoint.",
+                "demo", "MCP guide remains outside the checkpoint.",
             ),),
         )
         context = ContextManager(

@@ -85,8 +85,8 @@ class PromptsTest(unittest.TestCase):
         )
         guide = "Use echo for review.\n\nPreserve this second paragraph."
         entries = (
-            McpServerInstructions("review-kit:analyzer", role.tools, guide),
-            McpServerInstructions("docs", ("mcp__docs__search",), "Search docs first."),
+            McpServerInstructions("review-kit:analyzer", guide),
+            McpServerInstructions("docs", "Search docs first."),
         )
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -104,7 +104,9 @@ class PromptsTest(unittest.TestCase):
                     self.assertNotIn("## MCP Server Instructions", prefix)
                     self.assertTrue(prompt.startswith(prefix + "\n\n## MCP Server Instructions"))
                     self.assertEqual(prompt.count(guide), 1)
-                    self.assertIn("### review-kit:analyzer\nTools: `mcp__review-kit_analyzer__echo`", prompt)
+                    self.assertIn(f"### review-kit:analyzer\n\n{guide}", prompt)
+                    self.assertNotIn("Tools:", prompt)
+                    self.assertNotIn(role.tools[0], prompt)
                     self.assertLess(prompt.index("### review-kit:analyzer"), prompt.index("### docs"))
                     self.assertTrue(prompt.endswith("Search docs first."))
 
