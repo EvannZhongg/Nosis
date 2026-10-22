@@ -56,7 +56,9 @@ class UserAnchorWindowTest(unittest.TestCase):
                 keep_recent_units=1, user_anchor_token_budget=budget
             ),
         )
-        return ContextManager(provider, session, "System", "Consolidate", config), provider
+        context = ContextManager(provider, session, "System", "Consolidate", config)
+        provider.counted_requests.clear()
+        return context, provider
 
     def rendered(self, request):
         return "\n".join(message.content or "" for message in request.messages)

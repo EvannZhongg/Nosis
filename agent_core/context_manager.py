@@ -64,6 +64,7 @@ class ContextLimits:
 @dataclass(frozen=True)
 class ContextWindow:
     input_tokens: int
+    system_prompt_tokens: int
     max_input_tokens: int
     max_context_tokens: int
     output_reserve_tokens: int
@@ -122,6 +123,12 @@ class ContextManager:
             keep_recent_units=compression.keep_recent_units,
             user_anchor_token_budget=compression.user_anchor_token_budget,
         )
+        # Subtract request framing so this reports only the fixed prompt text.
+        self._system_prompt_tokens = provider.count_input_tokens(
+            LLMRequest(system_prompt=system_prompt, messages=()),
+        ) - provider.count_input_tokens(
+            LLMRequest(system_prompt="", messages=()),
+        )
 
     @property
     def hard_limit(self) -> int:
@@ -134,6 +141,7 @@ class ContextManager:
     def window(self, input_tokens: int) -> ContextWindow:
         return ContextWindow(
             input_tokens=input_tokens,
+            system_prompt_tokens=self._system_prompt_tokens,
             max_input_tokens=self.hard_limit,
             max_context_tokens=self._provider.max_context_tokens,
             output_reserve_tokens=self._output_reserve_tokens,

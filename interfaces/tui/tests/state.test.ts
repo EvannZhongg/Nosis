@@ -26,6 +26,7 @@ const RUNTIME_READY = {
   jobs: [],
   context_window: {
     input_tokens: 10,
+    system_prompt_tokens: 4,
     max_input_tokens: 900,
     max_context_tokens: 1000,
     output_reserve_tokens: 100,
@@ -525,6 +526,7 @@ describe('reducer', () => {
         type: 'context_window',
         turn_id: null,
         input_tokens: 120,
+        system_prompt_tokens: 40,
         max_input_tokens: 900,
         max_context_tokens: 1000,
         output_reserve_tokens: 100,

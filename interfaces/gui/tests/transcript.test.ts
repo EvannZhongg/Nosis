@@ -249,7 +249,7 @@ describe("applyMessage", () => {
     ];
     const result = fold([
       {
-        type: "context_window", turn_id: "t2", input_tokens: 10,
+        type: "context_window", turn_id: "t2", input_tokens: 10, system_prompt_tokens: 4,
         max_input_tokens: 100, max_context_tokens: 120, output_reserve_tokens: 20,
         compression_threshold: 80, compression_count: 0, compression_summary: null, event_sequence: 15,
         transcript: { items: checkpoint, event_sequence: 15 },
@@ -380,6 +380,7 @@ describe("applyMessage", () => {
       jobs: [],
       context_window: {
         input_tokens: 10,
+        system_prompt_tokens: 4,
         max_input_tokens: 900,
         max_context_tokens: 1000,
         output_reserve_tokens: 100,
@@ -436,6 +437,7 @@ describe("applyMessage", () => {
       type: "context_window",
       turn_id: "t1",
       input_tokens: 120,
+      system_prompt_tokens: 40,
       max_input_tokens: 900,
       max_context_tokens: 1000,
       output_reserve_tokens: 100,
@@ -445,6 +447,7 @@ describe("applyMessage", () => {
     });
 
     expect(applied.contextWindow?.compression_count).toBe(2);
+    expect(applied.contextWindow?.system_prompt_tokens).toBe(40);
     expect(applied.feedback).toBeUndefined();
   });
 

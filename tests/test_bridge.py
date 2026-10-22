@@ -248,6 +248,7 @@ class ProtocolTest(unittest.TestCase):
                 ContextWindowEvent(
                     ContextWindow(
                         input_tokens=120,
+                        system_prompt_tokens=40,
                         max_input_tokens=900,
                         max_context_tokens=1000,
                         output_reserve_tokens=100,
@@ -262,6 +263,7 @@ class ProtocolTest(unittest.TestCase):
                 "type": "context_window",
                 "turn_id": "t1",
                 "input_tokens": 120,
+                "system_prompt_tokens": 40,
                 "max_input_tokens": 900,
                 "max_context_tokens": 1000,
                 "output_reserve_tokens": 100,
@@ -3216,6 +3218,7 @@ class BridgeSessionOpenTest(BridgeTestCase):
             ContextWindowEvent(
                 ContextWindow(
                     input_tokens=240,
+                    system_prompt_tokens=60,
                     max_input_tokens=900,
                     max_context_tokens=1000,
                     output_reserve_tokens=100,
@@ -3233,6 +3236,7 @@ class BridgeSessionOpenTest(BridgeTestCase):
             emitted(stdout)[-1]["context_window"],
             {
                 "input_tokens": 240,
+                "system_prompt_tokens": 60,
                 "max_input_tokens": 900,
                 "max_context_tokens": 1000,
                 "output_reserve_tokens": 100,

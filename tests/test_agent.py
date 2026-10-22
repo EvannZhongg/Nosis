@@ -295,7 +295,7 @@ class AgentTest(unittest.TestCase):
              LLMResponse(content="done")],
             control, {2: "try once more"},
         )
-        provider._input_tokens = iter([1, 800, 1, 1, 1])
+        provider._input_tokens = iter([10, 4, 1, 800, 1, 1, 1])
         session = Session("compression-steer")
         agent = Agent(
             provider, session, "system", CONSOLIDATOR_PROMPT,
@@ -332,6 +332,49 @@ class AgentTest(unittest.TestCase):
         self.assertEqual(window.max_input_tokens, 1_040_384)
         self.assertEqual(window.compression_threshold, 262_144)
         self.assertIsNone(window.compression_summary)
+
+    def test_system_prompt_tokens_exclude_runtime_context_and_request_framing(self) -> None:
+        prompt = render_system_prompt(
+            "You are helpful. Workspace: {{workspace}}", TEST_WORKSPACE,
+            mcp_instructions=(McpServerInstructions("docs", "Search the docs."),),
+        )
+        for system_prompt in ("", prompt):
+            with self.subTest(system_prompt=system_prompt):
+                provider = MockProvider([])
+                session = Session("session-1")
+                session.set_archived_summary("Keep the task.", 0)
+                session.plan = PlanSnapshot(
+                    "plan-1", "Finish the task", 1,
+                    (PlanStep("step-1", "Work", "pending"),),
+                )
+                with patch.object(provider, "count_input_tokens", side_effect=lambda request:
+                                  7 + len(request.system_prompt.split())) as count:
+                    context = ContextManager(
+                        provider, session, system_prompt, CONSOLIDATOR_PROMPT,
+                        AGENT_CONFIG,
+                        memory_context=MemoryContext(
+                            MemoryDocument(facts=("A remembered fact.",)), MemoryDocument(),
+                        ),
+                    )
+                    request = context.build_request(tool_set(EchoTool(), session=session).definitions)
+                    self.assertTrue(request.messages)
+                    self.assertTrue(request.tools)
+                    self.assertEqual(context.window(120).system_prompt_tokens, len(system_prompt.split()))
+                    session.set_archived_summary("A different summary.", 0)
+                    self.assertEqual(context.window(240).system_prompt_tokens, len(system_prompt.split()))
+                    self.assertEqual(count.call_count, 2)
+                    self.assertEqual(count.call_args_list[0].args[0], LLMRequest(system_prompt, ()))
+                    self.assertEqual(count.call_args_list[1].args[0], LLMRequest("", ()))
+
+    def test_system_prompt_tokens_reach_initial_snapshot_and_turn_events(self) -> None:
+        provider = MockProvider(["done"], input_tokens=[43, 7, 120, 160, 180])
+        agent = make_agent(provider, Session("session-1"))
+        self.assertEqual(agent.context_window().system_prompt_tokens, 36)
+        events = []
+        agent.run("hello", events.append)
+        windows = [event.window for event in events if isinstance(event, ContextWindowEvent)]
+        self.assertEqual([window.input_tokens for window in windows], [160, 180])
+        self.assertEqual([window.system_prompt_tokens for window in windows], [36, 36])
 
     def test_context_window_includes_current_compression_summary(self) -> None:
         provider = MockProvider([], max_context_tokens=1_000)
@@ -671,7 +714,7 @@ class AgentTest(unittest.TestCase):
 
     def test_archive_checks_main_window_again_for_a_repair(self) -> None:
         session = Session(items=[Message("user", "old"), Message("assistant", "retained")])
-        provider = MockProvider(["invalid checkpoint"], input_tokens=[899, 901])
+        provider = MockProvider(["invalid checkpoint"], input_tokens=[10, 4, 899, 901])
         context = ContextManager(
             provider, session, "System", CONSOLIDATOR_PROMPT,
             replace(AGENT_CONFIG, context=ContextCompressionConfig(keep_recent_units=1)),
@@ -1478,7 +1521,7 @@ class AgentTest(unittest.TestCase):
         self.assertEqual(context.exception.max_context_tokens, 1000)
         self.assertEqual(context.exception.output_reserve_tokens, 100)
         self.assertEqual(context.exception.max_input_tokens, 900)
-        self.assertEqual(len(provider.counted_requests), 1)
+        self.assertEqual(len(provider.counted_requests), 3)
         self.assertEqual(provider.requests, [])
 
     def test_rejects_output_reserve_not_smaller_than_context_limit(self) -> None:
@@ -1974,7 +2017,7 @@ class AgentTest(unittest.TestCase):
                 "- [ephemeral] Active turn checkpoint.",
                 "done",
             ],
-            input_tokens=[100, 100, 100, 800, 100, 100, 120],
+            input_tokens=[10, 4, 100, 100, 100, 800, 100, 100, 120],
         )
         session = Session(session_id="session-1")
         agent = make_agent(

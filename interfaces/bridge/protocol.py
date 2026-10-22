@@ -75,6 +75,7 @@ def runtime_failure_to_dict(error: RuntimeErrorInfo) -> dict[str, object]:
 def context_window_to_dict(window: ContextWindow) -> dict[str, object]:
     return {
         "input_tokens": window.input_tokens,
+        "system_prompt_tokens": window.system_prompt_tokens,
         "max_input_tokens": window.max_input_tokens,
         "max_context_tokens": window.max_context_tokens,
         "output_reserve_tokens": window.output_reserve_tokens,

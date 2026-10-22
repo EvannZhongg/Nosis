@@ -65,6 +65,7 @@ export function cacheHitPercent(usage: CacheUsage | null): number | null {
 
 export type ContextWindow = {
   input_tokens: number;
+  system_prompt_tokens: number;
   max_input_tokens: number;
   max_context_tokens: number;
   output_reserve_tokens: number;

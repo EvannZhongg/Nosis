@@ -174,7 +174,7 @@ describe('App', () => {
     await waitForReady(lastFrame);
     emit({
       type: 'context_window', turn_id: 't1',
-      input_tokens: 120, max_input_tokens: 900, max_context_tokens: 1000,
+      input_tokens: 120, system_prompt_tokens: 40, max_input_tokens: 900, max_context_tokens: 1000,
       output_reserve_tokens: 100, compression_threshold: 800,
       compression_count: 0, compression_summary: null,
     });
