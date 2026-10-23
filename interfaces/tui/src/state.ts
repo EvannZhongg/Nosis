@@ -703,6 +703,13 @@ function applyMessage(state: State, message: Incoming): State {
         ? state
         : { ...state, sessions: { list: message.sessions, selectedIndex: 0 } };
 
+    case 'session_title_updated':
+      return state.sessions === null ? state : {
+        ...state,
+        sessions: { ...state.sessions, list: state.sessions.list.map((item) =>
+          item.session_id === message.session_id ? { ...item, title: message.title } : item) },
+      };
+
     case 'session_items':
       // Appended rather than prepended: the restart already emptied the
       // transcript, so the resumed notice stays above the stored turns.

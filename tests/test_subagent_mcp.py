@@ -22,7 +22,7 @@ class SubagentMcpTest(BridgeTestCase):
     def open(self, roles, *, mcp_enabled=True, server_enabled=True):
         bridge, _ = self.make_bridge([], self.root)
         bridge.open_session(open_session_message(self.root, agent_config={
-            "max_same_tool_calls": 5, "output_reserve_tokens": 100,
+            "max_same_tool_calls": 5, "output_reserve_tokens": 100, "generate_session_title": False,
             "workspace_instruction_files": [], "memory": {"enabled": False},
             "main_agent": {"tools": {"subagent": True}},
             "subagent_roles": {name: {"description": name, **settings} for name, settings in roles.items()},

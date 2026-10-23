@@ -56,6 +56,7 @@ from .settings import EnvironmentReloader, configuration_fingerprint
 from .callbacks import RuntimeCallbacks
 from .computer import DesktopComputer
 from .session_controller import SessionRuntimeController
+from .session_title import SessionTitleTask
 
 
 class ExecutionPlaneManager:
@@ -160,9 +161,7 @@ class ExecutionPlaneManager:
             prompts = load_prompt_templates(self._config_directory / "prompts")
 
             main_provider = self._provider_for(config, workspace, agent_config)
-            fast_config = (
-                load_fast_config(config_path) if agent_config.memory.enabled else None
-            )
+            fast_config = load_fast_config(config_path)
             fast_provider = (
                 self._provider_for(fast_config, workspace, agent_config)
                 if fast_config is not None else main_provider
@@ -458,6 +457,11 @@ class ExecutionPlaneManager:
                 context=context,
             )
             plane.memory = memory
+            if agent_config.generate_session_title:
+                plane.title_task = SessionTitleTask(
+                    session.session, session.store, fast_provider, prompts.session_title,
+                    self.callbacks.on_session_title,
+                )
             plane.agent = agent
             plane.context_window = agent.context_window()
         except BaseException:

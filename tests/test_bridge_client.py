@@ -232,6 +232,7 @@ class ExternalBridgeClientTest(unittest.TestCase):
         agent_path = config / "agent_config.json"
         agent = json.loads(agent_path.read_text(encoding="utf-8"))
         agent["memory"]["enabled"] = False
+        agent["generate_session_title"] = False
         agent["mcp"]["enabled"] = False
         agent["provider"]["max_retries"] = 0
         agent["skills"] = {"global_paths": [], "workspace_paths": []}

@@ -245,6 +245,16 @@ class AgentConfigTest(unittest.TestCase):
                     payload["provider"] = provider
                 self.assertEqual(self.load_json(payload).provider, expected)
 
+    def test_session_title_generation_switch_requires_a_boolean(self) -> None:
+        for enabled in (True, False):
+            self.assertIs(self.load({
+                "generate_session_title": enabled,
+                "main_agent": {"tools": ENABLED_TOOLS},
+            }).generate_session_title, enabled)
+        for value in (None, "false", 0, 1, [], {}):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "generate_session_title"):
+                self.load({"generate_session_title": value, "main_agent": {"tools": ENABLED_TOOLS}})
+
     def test_rejects_invalid_provider_request_policy(self) -> None:
         for provider in (
             {"request_timeout_seconds": 0, "max_retries": 2},

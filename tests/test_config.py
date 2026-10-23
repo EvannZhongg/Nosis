@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from tests.provider_fixtures import capabilities_stub, TEXT_MODEL, VISION_MODEL
 
-from agent_core import DirectorySkillSource, SkillLoader
+from agent_core import DirectorySkillSource, SkillLoader, load_agent_config
 from agent_core.providers import ModelProvider
 from agent_runtime.config import (
     DEFAULT_CONFIG_FILENAMES,
@@ -29,6 +29,21 @@ from agent_runtime.plugins import PluginManager
 
 
 class ConfigTest(unittest.TestCase):
+    def test_existing_agent_config_can_omit_session_title_generation_switch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_directory = Path(directory)
+            initialize_config_directory(config_directory)
+            path = config_directory / "agent_config.json"
+            document = json.loads(path.read_text(encoding="utf-8"))
+            del document["generate_session_title"]
+            path.write_text(json.dumps(document), encoding="utf-8")
+            preserved = path.read_bytes()
+
+            initialize_config_directory(config_directory)
+
+            self.assertEqual(path.read_bytes(), preserved)
+            self.assertTrue(load_agent_config(path).generate_session_title)
+
     def test_fast_model_selection_and_inheritance(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.json"
@@ -214,6 +229,7 @@ class ConfigTest(unittest.TestCase):
                     config_directory / "prompts" / "Consolidator.md",
                     config_directory / "prompts" / "GlobalMemory.md",
                     config_directory / "prompts" / "WorkspaceMemory.md",
+                    config_directory / "prompts" / "SessionTitle.md",
                     config_directory / "skills" / "plugin-creator",
                     config_directory / "skills" / "skill-creator",
                     config_directory / "plugins" / "playwright",
@@ -348,6 +364,7 @@ class ConfigTest(unittest.TestCase):
                     config_directory / "prompts" / "Consolidator.md",
                     config_directory / "prompts" / "GlobalMemory.md",
                     config_directory / "prompts" / "WorkspaceMemory.md",
+                    config_directory / "prompts" / "SessionTitle.md",
                     config_directory / "skills" / "plugin-creator",
                 ),
             )
@@ -380,7 +397,7 @@ class ConfigTest(unittest.TestCase):
             prompts.mkdir()
             for filename in (
                 "Soul.md", "SubAgent.md", "Consolidator.md",
-                "GlobalMemory.md", "WorkspaceMemory.md",
+                "GlobalMemory.md", "WorkspaceMemory.md", "SessionTitle.md",
             ):
                 (prompts / filename).write_text(filename, encoding="utf-8")
             (defaults / "plugins").mkdir()
@@ -423,7 +440,7 @@ class ConfigTest(unittest.TestCase):
             prompts.mkdir()
             for filename in (
                 "Soul.md", "SubAgent.md", "Consolidator.md",
-                "GlobalMemory.md", "WorkspaceMemory.md",
+                "GlobalMemory.md", "WorkspaceMemory.md", "SessionTitle.md",
             ):
                 (prompts / filename).write_text(filename, encoding="utf-8")
             (defaults / "skills").mkdir()
@@ -465,7 +482,7 @@ class ConfigTest(unittest.TestCase):
             prompts.mkdir()
             for filename in (
                 "Soul.md", "SubAgent.md", "Consolidator.md",
-                "GlobalMemory.md", "WorkspaceMemory.md",
+                "GlobalMemory.md", "WorkspaceMemory.md", "SessionTitle.md",
             ):
                 (prompts / filename).write_text(filename, encoding="utf-8")
             (defaults / "plugins").mkdir()

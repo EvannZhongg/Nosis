@@ -22,7 +22,7 @@ class LLMRequest:
 
 @dataclass(frozen=True)
 class AuxiliaryModelCall:
-    task: Literal["compression", "memory"]
+    task: Literal["compression", "memory", "session_title"]
     scope: str | None
     attempt: int
     status: Literal["completed", "invalid_response", "failed", "cancelled"]

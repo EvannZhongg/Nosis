@@ -1281,6 +1281,7 @@ def open_session_message(
         "Consolidator.md": "Consolidate the conversation.",
         "GlobalMemory.md": "Reconcile global memory as JSON.",
         "WorkspaceMemory.md": "Reconcile workspace memory as JSON.",
+        "SessionTitle.md": "Name this conversation: {{conversation}}",
     }.items():
         path = prompts / filename
         if not path.exists():
@@ -1313,6 +1314,7 @@ def open_session_message(
         }), encoding="utf-8",
     )
     resolved_agent_config = {
+        "generate_session_title": False,
         "provider": {
             "request_timeout_seconds": 300,
             "max_retries": 2,
@@ -2273,7 +2275,7 @@ class BridgeSessionOpenTest(BridgeTestCase):
         self.assertEqual(len(compression), 1)
         self.assertEqual(compression[0].payload["usage"], records[0]["usage"])
 
-    def test_disabled_memory_does_not_load_the_fast_model(self) -> None:
+    def test_disabled_memory_still_loads_the_fast_model(self) -> None:
         directory = self.enterContext(tempfile.TemporaryDirectory())
         root = Path(directory)
         bridge, _ = self.make_bridge([], root)
@@ -2288,16 +2290,17 @@ class BridgeSessionOpenTest(BridgeTestCase):
             },
             provider_config={
                 "main_agent": {"provider": "first"},
-                "fast_model": {"provider": "unused"},
+                "fast_model": {"provider": "fast"},
                 "providers": {
                     "first": {"model": "openai/first", "max_context_tokens": 1000},
-                    "unused": {"model": "openai/unused", "key": "${NOSIS_TEST_UNUSED_FAST_MODEL_KEY}"},
+                    "fast": {"model": "openai/fast", "max_context_tokens": 1000},
                 },
             },
         ))
         plane = bridge.host.planes.ensure(bridge.host.sessions)
         self.assertIs(plane.agent._context._provider, plane.provider)
-        self.assertIs(plane.fast_provider, plane.provider)
+        self.assertIsNot(plane.fast_provider, plane.provider)
+        self.assertEqual(plane.fast_provider.model_name, "openai/fast")
         self.assertIsNone(plane.memory)
 
     def test_subagent_compression_and_memory_are_logged_in_own_session(self) -> None:

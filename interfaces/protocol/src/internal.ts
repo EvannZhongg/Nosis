@@ -24,6 +24,7 @@ export type AgentSettings = {
   max_same_tool_calls: number;
   output_reserve_tokens: number;
   max_generation_tokens: number | null;
+  generate_session_title: boolean;
   workspace_instruction_files: string[];
   tools: Record<string, boolean>;
   context: { compression: { enabled: boolean; trigger_ratio: number | null; keep_recent_units: number; user_anchor_token_budget: number } };

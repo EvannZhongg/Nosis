@@ -40,10 +40,20 @@ export function App() {
   const [initialPrompts, setInitialPrompts] = useState<Record<string, string>>({});
   const [pendingFork, setPendingFork] = useState<{ sessionId: string; itemIndex: number; text: string } | null>(null);
   const settingsMenuRef = useRef<HTMLDivElement>(null);
+  const updatedTitlesRef = useRef(new Map<string, string>());
 
   const refreshSessions = useCallback(async () => {
     try {
-      setSessionGroups(await get<WorkspaceSessions[]>("/api/sessions"));
+      const titlesAtRequest = updatedTitlesRef.current;
+      const groups = await get<WorkspaceSessions[]>("/api/sessions");
+      setSessionGroups(groups.map((group) => ({
+        ...group,
+        sessions: group.sessions.map((item) => {
+          const title = updatedTitlesRef.current.get(item.session_id);
+          return title !== undefined && title !== titlesAtRequest.get(item.session_id)
+            ? { ...item, title } : item;
+        }),
+      })));
     } catch (error) {
       setError(String(error));
     }
@@ -322,7 +332,13 @@ export function App() {
             void refreshSessions();
             void refreshSession(current.session_id);
             setWorkspaceVersion((value) => value + 1);
-          }} onSessionAvailable={() => { void refreshSessions(); }} onWorkspaceChange={(workspace) => {
+          }} onSessionAvailable={() => { void refreshSessions(); }} onTitleChange={(sessionId, title) => {
+            updatedTitlesRef.current = new Map(updatedTitlesRef.current).set(sessionId, title);
+            setSessionGroups((groups) => groups.map((group) => ({
+              ...group,
+              sessions: group.sessions.map((item) => item.session_id === sessionId ? { ...item, title } : item),
+            })));
+          }} onWorkspaceChange={(workspace) => {
             setChatSessions((all) => all.map((item) => item.session_id === current.session_id ? { ...item, workspace } : item));
             setWorkspaceVersion((value) => value + 1);
           }} onEditMessage={(anchorId, content) => forkFromMessage(current, anchorId, content)} initialPrompt={initialPrompts[current.session_id]} onInitialPromptConsumed={() => setInitialPrompts((all) => { const next = { ...all }; delete next[current.session_id]; return next; })} /></div>;

@@ -459,10 +459,13 @@ class Session:
             },
         )
 
-    def auxiliary_model_completed(self, call: "AuxiliaryModelCall", *, model: str | None) -> None:
+    def auxiliary_model_completed(
+        self, call: "AuxiliaryModelCall", *, model: str | None,
+        turn_id: str | None = None,
+    ) -> None:
         self._event(
             f"{call.task}_completed",
-            self._current_turn_id,
+            turn_id if turn_id is not None else self._current_turn_id,
             {
                 "model": model,
                 "scope": call.scope,

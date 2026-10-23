@@ -200,6 +200,15 @@ def sessions_listed_message(
     }
 
 
+def session_title_updated_message(
+    session_id: str, title: str, title_source: str,
+) -> dict[str, object]:
+    return {
+        "type": "session_title_updated", "session_id": session_id,
+        "title": title, "title_source": title_source,
+    }
+
+
 def session_items_message(
     items: list[dict[str, object]],
 ) -> dict[str, object]:

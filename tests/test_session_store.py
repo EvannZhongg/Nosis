@@ -474,7 +474,10 @@ class JsonlSessionStoreTest(unittest.TestCase):
                     / "session.json"
                 ).read_text(encoding="utf-8")
             )
-            self.assertEqual(metadata, {"permission_preset": "full_access"})
+            self.assertEqual(metadata, {
+                "permission_preset": "full_access", "title": "",
+                "title_source": "initial", "has_activity": False,
+            })
             self.assertEqual(
                 JsonlSessionStore(store.directory).load("session-1").permission_preset,
                 PermissionPreset.FULL_ACCESS,

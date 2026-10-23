@@ -1,4 +1,4 @@
-"""Migrate historical Session journals to the current Job and token usage format.
+"""Migrate Session journals and populate their listing/title metadata.
 
 Run with Python 3.11+ on Windows, macOS, or Linux after stopping Nosis:
     python scripts/migrate_sessions.py
@@ -11,7 +11,14 @@ import argparse
 import json
 import os
 import tempfile
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from agent_core.atomic import atomic_write_text
+from agent_core.session import message_from_dict
+from agent_core.session_title import initial_session_title
 
 
 FINISHED_JOB_EVENTS = {
@@ -102,6 +109,36 @@ def migrate_journal(path: Path) -> bool:
     return True
 
 
+def migrate_metadata(path: Path) -> bool:
+    metadata_path = path.parent / "session.json"
+    original = metadata_path.read_bytes() if metadata_path.exists() else None
+    metadata = json.loads(original) if original is not None else {}
+    records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    updated = dict(metadata)
+    if "title" not in updated:
+        message = next((
+            record["payload"]["message"] for record in records
+            if record["event_type"] == "message_appended"
+            and record["payload"].get("message", {}).get("role") == "user"
+        ), None)
+        updated["title"] = (
+            initial_session_title(message_from_dict(message), path.stem)
+            if message is not None else path.stem
+        )
+    if "title_source" not in updated:
+        updated["title_source"] = "manual" if metadata.get("title") else "initial"
+    updated["has_activity"] = any(
+        record["event_type"] not in {"permission_preset_changed", "plan_updated"}
+        for record in records
+    )
+    if updated == metadata:
+        return False
+    if original is not None:
+        atomic_write_text(metadata_path.with_name("session.json.bak"), original.decode("utf-8"))
+    atomic_write_text(metadata_path, json.dumps(updated, ensure_ascii=False))
+    return True
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -117,6 +154,7 @@ def main() -> None:
 
     migrated = 0
     skipped = 0
+    metadata_updated = 0
     for path in sorted(root.rglob("*.jsonl")):
         if path.stem != path.parent.name:
             continue
@@ -125,7 +163,10 @@ def main() -> None:
             migrated += 1
         else:
             skipped += 1
+        if migrate_metadata(path):
+            metadata_updated += 1
     print(f"Migrated {migrated} Session journal(s), skipped {skipped} already up to date.")
+    print(f"Updated metadata for {metadata_updated} Session(s).")
 
 
 if __name__ == "__main__":

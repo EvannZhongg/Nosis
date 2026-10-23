@@ -117,7 +117,7 @@ def create_sessions_router(
                         else None
                     ),
                     "editable_user_messages": store.editable_user_messages(
-                        session.session_id
+                        session
                     ),
                 }
             )
@@ -159,7 +159,7 @@ def create_sessions_router(
                         else None
                     ),
                     "editable_user_messages": store.editable_user_messages(
-                        forked.session_id
+                        forked
                     ),
                 }
             )

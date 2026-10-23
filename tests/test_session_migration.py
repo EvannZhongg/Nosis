@@ -41,6 +41,40 @@ def run_migration(root: Path, *, check: bool = True) -> subprocess.CompletedProc
 
 
 class SessionMigrationTest(unittest.TestCase):
+    def test_metadata_migration_preserves_journal_and_existing_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            path = root / "s" / "s.jsonl"
+            body = write_journal(path, [event(1, "message_appended", {
+                "message": {"role": "user", "content": "首条提问"},
+            })])
+            metadata_path = path.parent / "session.json"
+            metadata_path.write_text(json.dumps({"provider": "main"}), encoding="utf-8")
+            modified = path.stat().st_mtime_ns
+            first = run_migration(root)
+            self.assertIn("Updated metadata for 1 Session(s)", first.stdout)
+            self.assertEqual(json.loads(metadata_path.read_text(encoding="utf-8")), {
+                "provider": "main", "title": "首条提问", "title_source": "initial", "has_activity": True,
+            })
+            self.assertEqual(path.read_bytes(), body)
+            self.assertEqual(path.stat().st_mtime_ns, modified)
+            second = run_migration(root)
+            self.assertIn("Updated metadata for 0 Session(s)", second.stdout)
+
+    def test_metadata_migration_preserves_manual_and_generated_titles(self) -> None:
+        for source in ("manual", "generated"):
+            with self.subTest(source=source), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                path = root / "s" / "s.jsonl"
+                write_journal(path, [event(1, "turn_started", {"status": "running"})])
+                metadata = {"title": "已有标题", "title_source": source}
+                metadata_path = path.parent / "session.json"
+                metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+                run_migration(root)
+                self.assertEqual(json.loads(metadata_path.read_text(encoding="utf-8")), {
+                    **metadata, "has_activity": True,
+                })
+
     def test_old_model_usage_migrates_and_session_cache_totals_replay(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "sessions"

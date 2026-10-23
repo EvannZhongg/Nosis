@@ -9,6 +9,7 @@ from agent_core import (
     ExecutionAuthority, FULL_ACCESS_AUTHORITY, McpApprovalPolicy,
     PermissionPreset, SchedulerService, ShellApprovalPolicy,
     ComputerApprovalPolicy, Workspace,
+    UnitCompletedEvent,
 )
 
 from .callbacks import RuntimeCallbacks
@@ -125,6 +126,10 @@ class RuntimeHost:
 
     def publish_event(self, event: AgentEvent, turn_id: str) -> None:
         plane = self.planes.current
+        if isinstance(event, UnitCompletedEvent):
+            if plane is not None and plane.title_task is not None:
+                plane.title_task.start(event.start, event.end, turn_id)
+            return
         if isinstance(event, ContextWindowEvent) and plane is not None:
             plane.context_window = event.window
         self.callbacks.on_event(event, turn_id)

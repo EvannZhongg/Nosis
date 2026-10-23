@@ -155,6 +155,12 @@ explicit refresh, not a stream replay or cursor acknowledgment.
 The session listing contains stored conversations; a newly opened empty Session
 can be absent from that list.
 
+Automatic naming may emit `session_title_updated` after the first completed
+assistant/Tool unit, independently of turn completion. It carries `session_id`,
+`title` and `title_source` (`initial`, `generated`, or `manual`). Apply it to the
+matching list row without changing turn state; subsequent listings return the
+persisted title.
+
 Attachments are local descriptors `{type: "image" | "file", path, filename,
 mime_type, size_bytes}`. Paths reference files readable by the Runtime under its
 existing workspace/permission rules; there is no binary upload transport. Runtime

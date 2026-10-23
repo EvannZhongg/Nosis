@@ -20,6 +20,7 @@ export function Chat({
   onBusyChange,
   onContextWindowChange,
   onSessionAvailable,
+  onTitleChange,
   onTurnEnd,
   onWorkspaceChange,
   onEditMessage,
@@ -38,6 +39,7 @@ export function Chat({
   onBusyChange: (busy: boolean) => void;
   onContextWindowChange: (window: ContextWindow | null) => void;
   onSessionAvailable: () => void;
+  onTitleChange?: (sessionId: string, title: string) => void;
   onTurnEnd: () => void;
   onWorkspaceChange?: (workspace: string) => void;
   onEditMessage: (anchorId: string, content: string) => Promise<void>;
@@ -58,6 +60,7 @@ export function Chat({
     onBusyChange,
     onContextWindowChange,
     onSessionAvailable,
+    onTitleChange,
     onTurnEnd,
     onWorkspaceChange,
     initialPrompt,

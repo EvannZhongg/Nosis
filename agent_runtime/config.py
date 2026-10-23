@@ -32,6 +32,7 @@ PROMPT_FILENAMES = (
     "Consolidator.md",
     "GlobalMemory.md",
     "WorkspaceMemory.md",
+    "SessionTitle.md",
 )
 
 
@@ -63,6 +64,7 @@ class PromptTemplates:
     consolidator: str
     global_memory: str
     workspace_memory: str
+    session_title: str
 
 
 def default_config_directory() -> Path:
@@ -291,6 +293,9 @@ def load_prompt_templates(directory: Path) -> PromptTemplates:
         ),
         workspace_memory=(
             (directory / "WorkspaceMemory.md").read_text(encoding="utf-8").strip()
+        ),
+        session_title=(
+            (directory / "SessionTitle.md").read_text(encoding="utf-8").strip()
         ),
     )
 

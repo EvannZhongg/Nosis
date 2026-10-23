@@ -278,6 +278,7 @@ export type Incoming = (
   | { type: 'runtime_refreshed'; provider: string; model: string }
   | { type: 'runtime_refresh_failed'; error: RuntimeFailure }
   | { type: 'sessions_listed'; sessions: SessionSummary[] }
+  | { type: 'session_title_updated'; session_id: string; title: string; title_source: 'initial' | 'generated' | 'manual' }
   | { type: 'session_items'; items: SessionItem[] }
   | { type: 'plan_updated'; plan: PlanSnapshot }
   | UserQuestion

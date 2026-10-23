@@ -512,6 +512,7 @@ class GuiTest(unittest.TestCase):
         (self.config / "agent_config.json").write_text(json.dumps({
             "max_same_tool_calls": 5,
             "output_reserve_tokens": 100,
+            "generate_session_title": False,
             "max_generation_tokens": None,
             "provider": {"request_timeout_seconds": 300, "max_retries": 2},
             "scratch_workspace_root": str(self.root / "scratch"),
@@ -1831,7 +1832,9 @@ class GuiTest(unittest.TestCase):
                     }
                 ],
             )
-            data = client.get("/api/sessions/from-tui").json()
+            with patch.object(self.store, "load", wraps=self.store.load) as load:
+                data = client.get("/api/sessions/from-tui").json()
+                self.assertEqual(load.call_count, 1)
 
         self.assertEqual(data["items"][0]["content"], "TUI 对话")
         self.assertEqual(data["permission_preset"], "ask_for_approval")

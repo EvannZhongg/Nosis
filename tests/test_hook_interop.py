@@ -46,7 +46,7 @@ class HookInteropTest(BridgeTestCase):
     def open(self):
         bridge, stdout = self.make_bridge([], self.root)
         bridge.open_session(open_session_message(self.root, agent_config={
-            "max_same_tool_calls": 5, "output_reserve_tokens": 100,
+            "max_same_tool_calls": 5, "output_reserve_tokens": 100, "generate_session_title": False,
             "workspace_instruction_files": [], "memory": {"enabled": False},
             "main_agent": {"tools": {"subagent": True, "shell": True, "read_file": True, "write_file": True}},
         }, provider_config={

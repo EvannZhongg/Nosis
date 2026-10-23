@@ -26,6 +26,7 @@ from .protocol import (
     session_open_failed_message,
     session_items_message,
     sessions_listed_message,
+    session_title_updated_message,
     settings_snapshot_message,
     settings_update_failed_message,
     user_turn_received_message,
@@ -67,6 +68,9 @@ class Bridge:
                 on_event=self._emit_agent_event,
                 on_phase=lambda phase, warnings: self._emit_runtime_state(phase, runtime_warnings=warnings),
                 on_plan=lambda snapshot: self.emit(**plan_updated_message(snapshot)),
+                on_session_title=lambda session_id, title, source: self.emit(
+                    **session_title_updated_message(session_id, title, source),
+                ),
                 on_mcp_status=self._emit_mcp_status,
                 request_permission=self.request_permission,
                 ask_user=self.request_user_choice,

@@ -91,7 +91,7 @@ class PluginInteropTest(BridgeTestCase):
     def open(self, lines: list[str] | None = None, *, mcp_enabled: bool = True):
         bridge, stdout = self.make_bridge(lines or [], self.root)
         bridge.open_session(open_session_message(self.root, agent_config={
-            "max_same_tool_calls": 5, "output_reserve_tokens": 100,
+            "max_same_tool_calls": 5, "output_reserve_tokens": 100, "generate_session_title": False,
             "workspace_instruction_files": [],
             "memory": {"enabled": False},
             "main_agent": {"tools": {"subagent": True}},

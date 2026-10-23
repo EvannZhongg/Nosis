@@ -21,6 +21,7 @@ from agent_core import (
     AssistantMessageDeltaEvent,
     AssistantMessageEvent,
     ModelCompletedEvent,
+    UnitCompletedEvent,
     CompressionCompletedEvent,
     ContextManager,
     ContextCompressionConfig,
@@ -1729,6 +1730,10 @@ class AgentTest(unittest.TestCase):
             AgentRunResult("tool completed", TokenUsage(1100, 30, 1130, 1000, None)),
         )
         completed = [event for event in events if isinstance(event, ModelCompletedEvent)]
+        self.assertEqual(
+            [event for event in events if isinstance(event, UnitCompletedEvent)],
+            [UnitCompletedEvent(1, 3), UnitCompletedEvent(3, 4)],
+        )
         self.assertEqual(completed, [
             ModelCompletedEvent(1, TokenUsage(1000, 20, 1020, 800, 100), CacheUsage(1000, 800)),
             ModelCompletedEvent(2, TokenUsage(1100, 30, 1130, 1000, None), CacheUsage(2100, 1800)),
@@ -1848,7 +1853,7 @@ class AgentTest(unittest.TestCase):
             for event in events
             if not isinstance(
                 event,
-                (AssistantMessageDeltaEvent, ContextWindowEvent, ModelCompletedEvent),
+                (AssistantMessageDeltaEvent, ContextWindowEvent, ModelCompletedEvent, UnitCompletedEvent),
             )
         ]
         self.assertEqual(

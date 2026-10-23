@@ -19,6 +19,7 @@ PROVIDERS = {
 AGENT = {
     "max_same_tool_calls": 5,
     "output_reserve_tokens": 100,
+    "generate_session_title": False,
     "max_generation_tokens": None,
     "provider": {"request_timeout_seconds": 300, "max_retries": 2},
     "scratch_workspace_root": "~/.nosis/workspaces/scratch",

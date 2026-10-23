@@ -7,9 +7,10 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import BinaryIO, Iterable, Iterator
 
-from .content import FilePart, ImagePart, text_content
+from .atomic import atomic_write_text
 from .permissions import PermissionPreset
 from .session import JournalEvent, JournalSink, Session, message_from_dict
+from .session_title import initial_session_title
 from .session_paths import (
     _validate_session_id,
     default_sessions_directory,
@@ -69,10 +70,11 @@ class JsonlSessionStore:
 
     def editable_user_messages(
         self,
-        session_id: str,
+        session: Session | str,
     ) -> list[dict[str, object]]:
         """Project the latest user-authored turn into a stable fork target."""
-        session = self.load(session_id, recover=False)
+        if isinstance(session, str):
+            session = self.load(session, recover=False)
         return _editable_user_messages(session)
 
     def fork_session(
@@ -116,6 +118,7 @@ class JsonlSessionStore:
 
             workspace = self._workspace_for_unlocked(source_session_id)
             metadata = _session_metadata(source_directory)
+            metadata.update(title="", title_source="initial", has_activity=False)
             metadata["forked_from"] = source_session_id
             metadata["fork_anchor_id"] = anchor_id
             prefix = tuple(source.journal[:turn_start])
@@ -167,8 +170,7 @@ class JsonlSessionStore:
                         workspace_from_key(workspace_dir.name)
                     ),
                     "sessions": [
-                        _session_summary(session_id, path)
-                        for _, session_id, path in sessions
+                        summary for _, _, summary in sessions
                     ],
                     "updated": max(entry[0] for entry in sessions),
                 }
@@ -183,8 +185,7 @@ class JsonlSessionStore:
     ) -> list[dict[str, object]]:
         """List one Workspace's Sessions, most recently written first."""
         return [
-            _session_summary(session_id, path)
-            for _, session_id, path in _scan_sessions(
+            summary for _, _, summary in _scan_sessions(
                 workspace_directory(self._directory, workspace)
             )
         ]
@@ -257,7 +258,7 @@ class JsonlSessionStore:
             target.mkdir(parents=True, exist_ok=True)
             metadata_path = target / SESSION_METADATA_FILENAME
             if not metadata_path.exists():
-                _write_session_metadata(target, {})
+                _write_session_metadata(target, _new_session_metadata())
 
     def workspace_for(self, session_id: str) -> str | None:
         _validate_session_id(session_id)
@@ -323,6 +324,30 @@ class JsonlSessionStore:
         with self._locked_session(session_id):
             self._append_events_unlocked(session_id, events, workspace)
 
+    def title_source_for(self, session_id: str) -> str:
+        with self._locked_session(session_id):
+            directory = self._find_session_directory(session_id)
+            if directory is None:
+                raise ValueError(f"session does not exist: {session_id!r}")
+            return str(_session_metadata(directory)["title_source"])
+
+    def set_title(
+        self, session_id: str, title: str, source: str, *,
+        expected_source: str | None = None,
+    ) -> bool:
+        if source not in {"initial", "generated", "manual"} or not title.strip():
+            raise ValueError("invalid Session title or source")
+        with self._locked_session(session_id):
+            directory = self._find_session_directory(session_id)
+            if directory is None:
+                raise ValueError(f"session does not exist: {session_id!r}")
+            metadata = _session_metadata(directory)
+            if expected_source is not None and metadata["title_source"] != expected_source:
+                return False
+            metadata.update(title=title, title_source=source)
+            _write_session_metadata(directory, metadata)
+            return True
+
     @contextmanager
     def open_journal(
         self, session_id: str, workspace: Path | str | None = None,
@@ -338,6 +363,8 @@ class JsonlSessionStore:
             if path is None:
                 raise ValueError(f"session has no journal path: {session_id!r}")
             path.parent.mkdir(parents=True, exist_ok=True)
+            if not (path.parent / SESSION_METADATA_FILENAME).exists():
+                _write_session_metadata(path.parent, _new_session_metadata())
             file = _open_journal_file(path)
         try:
             with self._locked_session(session_id):
@@ -346,6 +373,7 @@ class JsonlSessionStore:
             def append(events: tuple[JournalEvent, ...]) -> None:
                 with self._locked_session(session_id):
                     _write_journal_events(file, events)
+                    _update_session_metadata(path.parent, session_id, events)
 
             yield append
         finally:
@@ -367,9 +395,13 @@ class JsonlSessionStore:
         if path is None:
             raise ValueError(f"session has no journal path: {session_id!r}")
         path.parent.mkdir(parents=True, exist_ok=True)
+        if not (path.parent / SESSION_METADATA_FILENAME).exists():
+            _write_session_metadata(path.parent, _new_session_metadata())
+        events = tuple(events)
         with _open_journal_file(path) as file:
             _prepare_journal_append(file)
             _write_journal_events(file, events)
+        _update_session_metadata(path.parent, session_id, events)
 
     @contextmanager
     def _locked_session(self, session_id: str) -> Iterator[None]:
@@ -601,84 +633,65 @@ def _write_session_metadata(
     directory: Path,
     metadata: dict[str, object],
 ) -> None:
-    with (directory / SESSION_METADATA_FILENAME).open(
-        "w", encoding="utf-8"
-    ) as file:
-        json.dump(metadata, file, ensure_ascii=False)
-        file.flush()
-        os.fsync(file.fileno())
+    atomic_write_text(
+        directory / SESSION_METADATA_FILENAME,
+        json.dumps(metadata, ensure_ascii=False),
+    )
 
 
-def _scan_sessions(directory: Path) -> list[tuple[int, str, Path]]:
-    """Return one Workspace's journals as (mtime, session_id, path)."""
+def _new_session_metadata() -> dict[str, object]:
+    return {"title": "", "title_source": "initial", "has_activity": False}
+
+
+def _update_session_metadata(
+    directory: Path, session_id: str, events: tuple[JournalEvent, ...],
+) -> None:
+    metadata = _session_metadata(directory)
+    changed = False
+    for event in events:
+        if not metadata["has_activity"] and event.event_type not in {
+            "permission_preset_changed", "plan_updated",
+        }:
+            metadata["has_activity"] = True
+            changed = True
+        message = event.payload.get("message")
+        if (
+            not metadata["title"] and metadata["title_source"] == "initial"
+            and event.event_type == "message_appended"
+            and isinstance(message, dict) and message.get("role") == "user"
+        ):
+            metadata["title"] = initial_session_title(message_from_dict(message), session_id)
+            changed = True
+    if changed:
+        _write_session_metadata(directory, metadata)
+
+
+def _scan_sessions(directory: Path) -> list[tuple[int, str, dict[str, object]]]:
+    """List summaries from metadata; journal contents are never opened."""
     if not directory.is_dir():
         return []
-    found = [
-        (path.stat().st_mtime_ns, session_dir.name, path)
-        for session_dir in directory.iterdir()
-        if (path := session_dir / f"{session_dir.name}.jsonl").is_file()
-        and _has_session_activity(path)
-    ]
+    found = []
+    for session_dir in directory.iterdir():
+        path = session_dir / f"{session_dir.name}.jsonl"
+        if not path.is_file():
+            continue
+        metadata = _session_metadata(session_dir)
+        if metadata["has_activity"]:
+            found.append((
+                path.stat().st_mtime_ns, session_dir.name,
+                _session_summary(session_dir.name, metadata),
+            ))
     found.sort(key=lambda entry: (entry[0], entry[1]), reverse=True)
     return found
 
 
-def _has_session_activity(path: Path) -> bool:
-    """Keep control-plane-only configuration out of conversation lists."""
-    try:
-        with path.open(encoding="utf-8") as file:
-            return any(
-                _event_from_dict(json.loads(line)).event_type
-                not in {"permission_preset_changed", "plan_updated"}
-                for line in file
-                if line.strip()
-            )
-    except (OSError, ValueError):
-        # Keep damaged journals discoverable so loading surfaces the error.
-        return True
-
-
-def _session_summary(session_id: str, path: Path) -> dict[str, object]:
-    metadata = _session_metadata(path.parent)
+def _session_summary(session_id: str, metadata: dict[str, object]) -> dict[str, object]:
     return {
         "session_id": session_id,
-        "title": _session_title(path, session_id),
+        "title": metadata["title"] or session_id,
         **(
             {"forked_from": metadata["forked_from"]}
             if isinstance(metadata.get("forked_from"), str)
             else {}
         ),
     }
-
-
-def _session_title(path: Path, session_id: str) -> str:
-    try:
-        with path.open(encoding="utf-8") as file:
-            for line in file:
-                event = _event_from_dict(json.loads(line))
-                message = event.payload.get("message")
-                if (
-                    event.event_type == "message_appended"
-                    and isinstance(message, dict)
-                    and message.get("role") == "user"
-                ):
-                    parsed = message_from_dict(message)
-                    content = text_content(parsed.content)
-                    if content:
-                        return content
-                    filenames = [
-                        part.filename
-                        for part in parsed.parts
-                        if isinstance(part, (ImagePart, FilePart))
-                        and part.filename
-                    ]
-                    if filenames:
-                        return (
-                            filenames[0]
-                            if len(filenames) == 1
-                            else f"{filenames[0]} 等 {len(filenames)} 个附件"
-                        )
-                    return session_id
-    except (OSError, ValueError):
-        pass
-    return session_id

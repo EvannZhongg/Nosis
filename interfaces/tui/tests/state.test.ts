@@ -37,6 +37,16 @@ const RUNTIME_READY = {
   plan: null,
 };
 
+it('updates a session picker title from a structured title event', () => {
+  const state = { ...initialState, sessions: {
+    list: [{ session_id: 's', title: 'initial' }], selectedIndex: 0,
+  } };
+  const updated = reducer(state, { type: 'message', message: {
+    type: 'session_title_updated', session_id: 's', title: 'Generated title', title_source: 'generated',
+  } });
+  expect(updated.sessions?.list[0].title).toBe('Generated title');
+});
+
 describe('plan', () => {
   it('restores and updates the current plan outside the transcript', () => {
     let state = reducer(initialState, {

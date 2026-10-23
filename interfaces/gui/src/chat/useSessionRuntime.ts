@@ -20,6 +20,7 @@ export type SessionRuntimeOptions = {
   onBusyChange: (busy: boolean) => void;
   onContextWindowChange: (window: ContextWindow | null) => void;
   onSessionAvailable: () => void;
+  onTitleChange?: (sessionId: string, title: string) => void;
   onTurnEnd: () => void;
   onWorkspaceChange?: (workspace: string) => void;
   initialPrompt?: string;
@@ -39,6 +40,7 @@ export function useSessionRuntime({
   onBusyChange,
   onContextWindowChange,
   onSessionAvailable,
+  onTitleChange,
   onTurnEnd,
   onWorkspaceChange,
   initialPrompt,
@@ -324,6 +326,9 @@ export function useSessionRuntime({
           return;
         }
         if (message.type !== "session_open_failed" && typeof message.event_sequence === "number") eventCounterRef.current = message.event_sequence;
+        if (message.type === "session_title_updated") {
+          onTitleChange?.(message.session_id, message.title);
+        }
         if (message.type === "runtime_refreshed" || message.type === "runtime_refresh_failed") {
           setRefreshing(false);
           if (message.replayed) return;

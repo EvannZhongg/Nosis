@@ -306,6 +306,7 @@ class BridgeIntegrationTest(unittest.TestCase):
             "main_agent": {"provider": "main"}, "subagent": {"provider": "reviewer"}, "providers": providers,
         })
         self.json_file(self.config / "agent_config.json", {
+            "generate_session_title": False,
             "max_same_tool_calls": 5, "output_reserve_tokens": 1000, "workspace_instruction_files": [],
             "provider": {"request_timeout_seconds": 15, "max_retries": 0},
             "skills": {"global_paths": [], "workspace_paths": []},

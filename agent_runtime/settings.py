@@ -247,6 +247,7 @@ class SettingsStore:
                 "max_same_tool_calls": agent_config.max_same_tool_calls,
                 "output_reserve_tokens": agent_config.output_reserve_tokens,
                 "max_generation_tokens": agent_config.max_generation_tokens,
+                "generate_session_title": agent_config.generate_session_title,
                 "workspace_instruction_files": list(agent_config.workspace_instruction_files),
                 "tools": {name: agent_config.tools.is_enabled(name) for name in TOOL_NAMES},
                 "context": {
@@ -477,7 +478,7 @@ class SettingsStore:
             raise ValueError("agent settings must be an object")
         allowed = {
             "max_same_tool_calls", "output_reserve_tokens", "max_generation_tokens",
-            "workspace_instruction_files", "tools", "context", "memory", "subagent_roles", "mcp_enabled",
+            "workspace_instruction_files", "tools", "context", "memory", "subagent_roles", "mcp_enabled", "generate_session_title",
         }
         unknown = set(payload) - allowed
         if unknown:
@@ -486,6 +487,7 @@ class SettingsStore:
         for field in (
             "max_same_tool_calls", "output_reserve_tokens", "max_generation_tokens",
             "workspace_instruction_files",
+            "generate_session_title",
         ):
             if field in payload:
                 document[field] = payload[field]

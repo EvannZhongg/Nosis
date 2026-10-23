@@ -70,6 +70,14 @@ class CompressionCompletedEvent:
 
 
 @dataclass(frozen=True)
+class UnitCompletedEvent:
+    """An assistant response and its optional Tool batch are durable."""
+
+    start: int
+    end: int
+
+
+@dataclass(frozen=True)
 class ToolBatchStartedEvent:
     model_call_index: int
     tool_calls: tuple[ToolCall, ...]
@@ -122,6 +130,7 @@ AgentEvent: TypeAlias = (
     | AssistantMessageEvent
     | ModelCompletedEvent
     | CompressionCompletedEvent
+    | UnitCompletedEvent
     | ToolBatchStartedEvent
     | ToolCallEvent
     | ToolResultEvent
@@ -352,6 +361,7 @@ class Agent:
             if response.tool_calls:
                 repetition.check(response.tool_calls)
 
+                unit_start = len(self._session.items)
                 assistant_timestamp_utc = self._now().astimezone(timezone.utc)
                 self._session.add_item(
                     role="assistant",
@@ -417,6 +427,8 @@ class Agent:
                     on_result=emit_result,
                     on_media=emit_media,
                 )
+                if on_event is not None:
+                    on_event(UnitCompletedEvent(unit_start, len(self._session.items)))
                 continuation.raise_if_cancelled()
                 continuation.apply_jobs()
                 continuation.apply_steering()
@@ -434,6 +446,7 @@ class Agent:
                 )
 
             response_timestamp_utc = self._now().astimezone(timezone.utc)
+            unit_start = len(self._session.items)
             self._session.add_item(
                 "assistant",
                 response.content,
@@ -450,6 +463,7 @@ class Agent:
                     )
                 )
                 on_event(ContextWindowEvent(self.context_window()))
+                on_event(UnitCompletedEvent(unit_start, len(self._session.items)))
             jobs = self._execution_context.jobs
 
             def before_finish() -> bool:

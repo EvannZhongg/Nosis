@@ -23,6 +23,7 @@ from agent_core.hooks import HookRunner
 from .computer import DesktopComputer
 
 if TYPE_CHECKING:
+    from .session_title import SessionTitleTask
     from agent_core.mcp.manager import McpClientManager
     from .config import PromptTemplates
     from .plugins import PluginAgent
@@ -52,6 +53,7 @@ class ExecutionPlane:
     role_tools: dict[str, tuple[str, ...]] = field(default_factory=dict)
     tool_settings: ToolSettings = field(default_factory=ToolSettings)
     memory: MemoryManager | None = None
+    title_task: "SessionTitleTask | None" = None
     agent: Agent | None = None
     jobs: JobManager | None = None
     context_window: ContextWindow | None = None
@@ -77,6 +79,10 @@ class ExecutionPlane:
         )
 
     def unbind_session(self) -> None:
+        title_task = self.title_task
+        self.title_task = None
+        if title_task is not None:
+            title_task.close()
         jobs = self.jobs
         self.jobs = None
         self.agent = None
