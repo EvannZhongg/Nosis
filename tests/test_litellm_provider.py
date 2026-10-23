@@ -24,6 +24,7 @@ from agent_core import (
     TurnControl,
 )
 from agent_core.providers import LiteLLMProvider
+from tests.image_fixtures import png_bytes
 
 
 def chunk(
@@ -188,7 +189,7 @@ class LiteLLMProviderTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             image = root / "image.png"
-            image.write_bytes(b"image-bytes")
+            image.write_bytes(png_bytes(4, 4))
             content = _content_to_provider_format(
                 Message(
                     role="user",
@@ -308,7 +309,7 @@ class LiteLLMProviderTest(unittest.TestCase):
             root = Path(directory)
             image = root / ".nosis" / "attachments" / "a1.png"
             image.parent.mkdir(parents=True)
-            image.write_bytes(b"image-bytes")
+            image.write_bytes(png_bytes(4, 4))
             provider = LiteLLMProvider(
                 model="vision/test",
                 max_context_tokens=1000,
@@ -331,7 +332,7 @@ class LiteLLMProviderTest(unittest.TestCase):
             )
 
         sent = completion_mock.call_args.kwargs["messages"][1]["content"]
-        encoded = base64.b64encode(b"image-bytes").decode("ascii")
+        encoded = base64.b64encode(png_bytes(4, 4)).decode("ascii")
         self.assertEqual(
             sent[1]["image_url"]["url"],
             f"data:image/png;base64,{encoded}",

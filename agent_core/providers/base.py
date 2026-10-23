@@ -20,7 +20,6 @@ from agent_core.llm import (
 )
 from agent_core.content import FilePart, ImagePart, TextPart
 from agent_core.media import (
-    UnsupportedImageError,
     encode_data_url,
     estimate_image_tokens,
     fit_image_size,
@@ -345,8 +344,8 @@ def _media_tokens(
             try:
                 path = _resolve_media_path(part.path, media_root)
                 info = probe_image(path)
-            except (FileNotFoundError, ValueError, UnsupportedImageError):
-                # An unreadable image is sent as a short text notice, so
+            except FileNotFoundError:
+                # A missing image is sent as a short text notice, so
                 # it costs nothing beyond what the tokenizer counted.
                 continue
             total += estimate_image_tokens(*fit_image_size(info.width, info.height, max_image_edge))
@@ -355,8 +354,6 @@ def _media_tokens(
 
 def _request_image_edge_limit(request: LLMRequest, provider: ModelProvider | None) -> int | None:
     if provider is None or "image" not in provider.capabilities.input_modalities:
-        return None
-    if image_edge_limit(provider.model_name, provider._base_url, 0) is None:
         return None
     media_root = _media_root(request, provider)
     count = 0
@@ -484,8 +481,10 @@ def _content_to_provider_format(
                     }
                 )
                 continue
+            # Validate the same formats and byte limit used by token counting,
+            # regardless of whether this service needs dimension adaptation.
+            info = probe_image(path)
             if max_image_edge is not None:
-                info = probe_image(path)
                 width, height = fit_image_size(info.width, info.height, max_image_edge)
                 if (width, height) != (info.width, info.height):
                     rendered.append({

@@ -144,6 +144,8 @@ Shell 通过 `ExecutionRouter` 根据 `ExecutionScope` 和当前 `ExecutionAutho
 
 图片在共享请求序列化阶段按 `providers/image_limits.py` 的内部策略处理，覆盖用户附件、Tool 图片及历史重发。DeepSeek Flash（含 `deepseek-v4-flash-vision-exp` 别名）单边最多 8192 像素，请求包含至少 15 张图片时降为 4096；Claude 单边最多 8000 像素，超过 20 张时降为 2000。策略识别官方端点；未指定端点时使用模型路由，未知端点和未覆盖的服务保持原有发送行为。OpenAI、Gemini 等服务端的推理缩放尺寸不作为客户端上传限制。超限图片仅在内存中等比缩小，发送时附带原图尺寸和坐标换算；原始附件与 Journal 不变。编码缓存包含目标尺寸上限，token 估算使用发送尺寸且不解码图片。
 
+所有视觉 Provider 在 token 估算和发送阶段都使用相同的格式探测和 5 MiB 字节上限检查。缺失图片以文本提示替代，不计图片 token；存在但为空、格式不可识别或超出字节上限的图片直接报错，不按 0 token 忽略，也不发送给上游。路径越界等调用错误同样直接报错。未知服务仅不应用尺寸缩放规则，仍受统一图片校验约束。
+
 Responses 工具参数从 `response.completed` 的完整 output 读取，推理及加密状态通过消息的 `provider_data` 写入 Session Journal，后续请求原样回传；加密推理的 token 数使用服务端 usage 纳入上下文估算。Bridge 的呈现消息和 GUI 的会话读取响应不携带该状态。原生 SDK 流中断或协议异常会报错，不通过强制工具选择重新请求。
 
 `ToolCallStreamAssembler` 负责把流式 Tool Call 分片组装为结构化参数，并在协议异常时提供不包含完整敏感参数的定位信息。

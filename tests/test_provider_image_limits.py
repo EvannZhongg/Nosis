@@ -11,7 +11,10 @@ from unittest.mock import patch
 from PIL import Image
 
 from agent_core import ImagePart, LLMRequest, Message, ProviderCapabilities, TextPart
-from agent_core.media import clear_encoded_cache, encode_data_url, estimate_image_tokens
+from agent_core.media import (
+    MAX_IMAGE_BYTES, UnsupportedImageError, clear_encoded_cache,
+    encode_data_url, estimate_image_tokens,
+)
 from agent_core.providers import LiteLLMProvider, OpenAIProvider
 from agent_core.providers.base import _media_tokens, _request_messages
 from agent_core.providers.image_limits import image_edge_limit
@@ -165,3 +168,51 @@ class ProviderImageLimitsTest(unittest.TestCase):
                 url = encode_data_url(self.root / part.path, part.mime_type, max_edge=8000)
                 self.assertTrue(url.startswith("data:image/jpeg;base64,"))
                 self.assertEqual(self.decoded_size(url), expected)
+
+    def test_invalid_images_fail_in_both_counting_and_serialization_for_all_routes(self):
+        for payload, error in (
+            (b"", "empty"),
+            (b"not an image", "not a supported image"),
+            (b"x" * (MAX_IMAGE_BYTES + 1), "exceeding"),
+        ):
+            part = self.image((10, 10))
+            (self.root / part.path).write_bytes(payload)
+            request = self.request(part)
+            for model, url in (
+                ("deepseek/deepseek-flash", None),
+                ("anthropic/claude-sonnet-4-5", None),
+                ("openai/gpt-5", None),
+                ("deepseek/deepseek-flash", "https://relay.example/v1"),
+            ):
+                provider = self.provider(model, url)
+                with self.subTest(model=model, url=url, error=error):
+                    with self.assertRaisesRegex(UnsupportedImageError, error):
+                        _media_tokens(request, provider)
+                    for encode in (False, True):
+                        with self.assertRaisesRegex(UnsupportedImageError, error):
+                            _request_messages(request, provider, encode_media=encode)
+                    with patch("agent_core.providers.base.token_counter", return_value=0):
+                        with self.assertRaisesRegex(UnsupportedImageError, error):
+                            provider.count_input_tokens(request)
+                    with patch("agent_core.providers.litellm_provider.completion") as call:
+                        with self.assertRaisesRegex(UnsupportedImageError, error):
+                            provider.stream(request, lambda _: None)
+                        call.assert_not_called()
+
+    def test_native_responses_rejects_invalid_image_at_unknown_endpoint(self):
+        part = self.image((10, 10))
+        (self.root / part.path).write_bytes(b"")
+        provider = self.provider(url="https://relay.example/v1", native=True)
+        with self.assertRaisesRegex(UnsupportedImageError, "empty"):
+            _responses_input(self.request(part), provider)
+
+    def test_unsafe_paths_fail_in_counting_and_serialization(self):
+        part = ImagePart(path="../outside.png", mime_type="image/png")
+        request = self.request(part)
+        for model in ("deepseek/deepseek-flash", "openai/gpt-5"):
+            provider = self.provider(model)
+            with self.subTest(model=model):
+                with self.assertRaisesRegex(ValueError, "within media_root"):
+                    _media_tokens(request, provider)
+                with self.assertRaisesRegex(ValueError, "within media_root"):
+                    _request_messages(request, provider)

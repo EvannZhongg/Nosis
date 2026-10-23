@@ -112,7 +112,7 @@ class ImageTokenCountingTest(ImageRequestTestCase):
 
         self.assertLess(count, 200)
 
-    def test_an_unreadable_image_is_not_counted(self) -> None:
+    def test_a_missing_image_is_not_counted(self) -> None:
         missing = ImagePart(path="absent.png", mime_type="image/png")
 
         count = self.provider().count_input_tokens(self.request(missing))
@@ -135,7 +135,7 @@ class ImageEncodingTest(ImageRequestTestCase):
             )
         )
 
-    def test_the_file_is_read_once_across_repeated_sends(self) -> None:
+    def test_header_and_payload_are_each_read_once_across_repeated_sends(self) -> None:
         """A tool-heavy turn calls the model many times with one image."""
         (self.root / "a.png").write_bytes(png_bytes(8, 8))
         image = ImagePart(path="a.png", mime_type="image/png")
@@ -154,7 +154,8 @@ class ImageEncodingTest(ImageRequestTestCase):
             for _ in range(4):
                 _request_messages(request, provider)
 
-        self.assertEqual(len(reads), 1)
+        # One bounded header probe and one payload encoding; both are cached.
+        self.assertEqual(len(reads), 2)
 
     def test_counting_then_sending_still_sends_the_bytes(self) -> None:
         """The count path must not poison the cache with a placeholder."""
