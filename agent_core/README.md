@@ -142,6 +142,8 @@ Shell 通过 `ExecutionRouter` 根据 `ExecutionScope` 和当前 `ExecutionAutho
 
 `ModelProvider` 共享媒体序列化、token 估算、模型信息和可取消的流读取。模型上下文窗口、输出限制和视觉能力仍从 LiteLLM 的模型目录取得：保留其联网更新及库内置目录，未知模型必须显式配置 `max_context_tokens`，不猜测窗口大小。
 
+图片在共享请求序列化阶段按 `providers/image_limits.py` 的内部策略处理，覆盖用户附件、Tool 图片及历史重发。DeepSeek Flash（含 `deepseek-v4-flash-vision-exp` 别名）单边最多 8192 像素，请求包含至少 15 张图片时降为 4096；Claude 单边最多 8000 像素，超过 20 张时降为 2000。策略识别官方端点；未指定端点时使用模型路由，未知端点和未覆盖的服务保持原有发送行为。OpenAI、Gemini 等服务端的推理缩放尺寸不作为客户端上传限制。超限图片仅在内存中等比缩小，发送时附带原图尺寸和坐标换算；原始附件与 Journal 不变。编码缓存包含目标尺寸上限，token 估算使用发送尺寸且不解码图片。
+
 Responses 工具参数从 `response.completed` 的完整 output 读取，推理及加密状态通过消息的 `provider_data` 写入 Session Journal，后续请求原样回传；加密推理的 token 数使用服务端 usage 纳入上下文估算。Bridge 的呈现消息和 GUI 的会话读取响应不携带该状态。原生 SDK 流中断或协议异常会报错，不通过强制工具选择重新请求。
 
 `ToolCallStreamAssembler` 负责把流式 Tool Call 分片组装为结构化参数，并在协议异常时提供不包含完整敏感参数的定位信息。
@@ -152,6 +154,7 @@ Responses 工具参数从 `response.completed` 的完整 output 读取，推理�
 | `providers/base.py` | 模型元数据、token 估算、媒体与取消机制 |
 | `providers/openai_provider.py` | 原生 Responses 与 Chat Completions 协议 |
 | `providers/litellm_provider.py` | LiteLLM 文本和视觉适配 |
+| `providers/image_limits.py` | 已知服务的图片上传尺寸限制 |
 | `providers/reasoning.py` | `reasoning_effort` 与自定义推理参数的校验和路由映射 |
 | `providers/tool_call_stream.py` | 流式 Tool Call 组装与校验 |
 | `image_generation.py` | 图片生成抽象 |

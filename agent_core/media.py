@@ -21,6 +21,7 @@ import math
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
 
 
@@ -202,17 +203,26 @@ def _area_image_tokens(width: int, height: int) -> int:
     return math.ceil(width * height / _AREA_PIXELS_PER_TOKEN)
 
 
-def encode_data_url(path: Path, mime_type: str) -> str:
+def fit_image_size(width: int, height: int, max_edge: int | None) -> tuple[int, int]:
+    """Fit within a provider's upload dimensions without enlarging images."""
+    if max_edge is None or max(width, height) <= max_edge:
+        return width, height
+    scale = max_edge / max(width, height)
+    return max(1, int(width * scale)), max(1, int(height * scale))
+
+
+def encode_data_url(path: Path, mime_type: str, *, max_edge: int | None = None) -> str:
     """Return ``data:<mime>;base64,<payload>`` for *path*, memoized.
 
     A turn sends its images on every model call, and a tool-heavy turn
     makes many calls, so encoding on each one would re-read and re-encode
     the same file repeatedly.  The cache key includes the file's
-    modification time and size, so an edited image is re-encoded rather
-    than served stale.
+    modification time, size and target edge, so edits and a request's
+    changing image limit cannot reuse a stale encoding. Resized images
+    are encoded in memory; the original file stays unchanged.
     """
     stat = path.stat()
-    key = (str(path), stat.st_mtime_ns, stat.st_size)
+    key = (str(path), stat.st_mtime_ns, stat.st_size, mime_type, max_edge)
     with _cache_lock:
         cached = _encoded_cache.get(key)
         if cached is not None:
@@ -224,8 +234,36 @@ def encode_data_url(path: Path, mime_type: str) -> str:
     # not stall a parallel batch of reads. Two threads racing on the
     # same new image both encode it and store equal results, which costs
     # one redundant pass and keeps the lock uncontended.
-    with path.open("rb") as file:
-        payload = base64.b64encode(file.read()).decode("ascii")
+    size = None
+    if max_edge is not None:
+        info = probe_image(path)
+        target = fit_image_size(info.width, info.height, max_edge)
+        if target != (info.width, info.height):
+            size = target
+    if size is not None:
+        from PIL import Image
+
+        with Image.open(path) as image:
+            has_alpha = "A" in image.getbands() or "transparency" in image.info
+            with image.convert("RGBA" if has_alpha else "RGB") as pixels:
+                resized = pixels.resize(size, Image.Resampling.LANCZOS)
+            # JPEG stays compact for photographs; PNG preserves screenshot
+            # text and transparency, including palette-based sources.
+            image_format = "JPEG" if image.format == "JPEG" else "PNG"
+            with BytesIO() as buffer:
+                with resized:
+                    resized.save(buffer, format=image_format)
+                data = buffer.getvalue()
+            if len(data) > MAX_IMAGE_BYTES:
+                raise UnsupportedImageError(
+                    f"resized image is {len(data)} bytes, exceeding the maximum "
+                    f"of {MAX_IMAGE_BYTES} bytes for inline delivery"
+                )
+            payload = base64.b64encode(data).decode("ascii")
+        mime_type = "image/jpeg" if image_format == "JPEG" else "image/png"
+    else:
+        with path.open("rb") as file:
+            payload = base64.b64encode(file.read()).decode("ascii")
     encoded = f"data:{mime_type};base64,{payload}"
 
     with _cache_lock:
@@ -268,7 +306,7 @@ _CACHE_MAX_ENTRIES = 64
 _PROBE_CACHE_ENTRIES = 512
 
 _cache_lock = threading.Lock()
-_encoded_cache: "OrderedDict[tuple[str, int, int], str]" = OrderedDict()
+_encoded_cache: "OrderedDict[tuple[str, int, int, str, int | None], str]" = OrderedDict()
 _probe_cache: "OrderedDict[tuple[str, int, int], ImageInfo]" = OrderedDict()
 
 #: Running total of ``_encoded_cache`` value lengths, maintained on

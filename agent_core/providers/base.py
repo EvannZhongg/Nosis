@@ -22,6 +22,8 @@ from agent_core.content import FilePart, ImagePart, TextPart
 from agent_core.media import (
     UnsupportedImageError,
     encode_data_url,
+    estimate_image_tokens,
+    fit_image_size,
     probe_image,
 )
 from agent_core.path_utils import path_for_comparison
@@ -29,6 +31,7 @@ from agent_core.session import Message
 from agent_core.tools import AnalyzeImageTool, ToolDefinition
 
 from ._utils import get_field
+from .image_limits import image_edge_limit
 from .reasoning import normalize_semantic_effort, validate_reasoning_parameters
 
 
@@ -291,6 +294,7 @@ def _request_messages(
     *,
     encode_media: bool = True,
 ) -> list[dict[str, object]]:
+    max_image_edge = _request_image_edge_limit(request, provider)
     return [
         {"role": "system", "content": request.system_prompt},
         *[
@@ -306,6 +310,7 @@ def _request_messages(
                 ),
                 media_root=_media_root(request, provider),
                 encode_media=encode_media,
+                max_image_edge=max_image_edge,
             )
             for message in request.messages
         ],
@@ -331,6 +336,7 @@ def _media_tokens(
     if provider is not None and "image" not in provider.capabilities.input_modalities:
         return 0
     media_root = _media_root(request, provider)
+    max_image_edge = _request_image_edge_limit(request, provider)
     total = 0
     for message in request.messages:
         for part in message.parts:
@@ -343,8 +349,26 @@ def _media_tokens(
                 # An unreadable image is sent as a short text notice, so
                 # it costs nothing beyond what the tokenizer counted.
                 continue
-            total += info.token_estimate
+            total += estimate_image_tokens(*fit_image_size(info.width, info.height, max_image_edge))
     return total
+
+
+def _request_image_edge_limit(request: LLMRequest, provider: ModelProvider | None) -> int | None:
+    if provider is None or "image" not in provider.capabilities.input_modalities:
+        return None
+    if image_edge_limit(provider.model_name, provider._base_url, 0) is None:
+        return None
+    media_root = _media_root(request, provider)
+    count = 0
+    for message in request.messages:
+        for part in message.parts:
+            if isinstance(part, ImagePart):
+                try:
+                    _resolve_media_path(part.path, media_root)
+                except FileNotFoundError:
+                    continue
+                count += 1
+    return image_edge_limit(provider.model_name, provider._base_url, count)
 
 
 def _request_tools(request: LLMRequest) -> list[dict[str, object]]:
@@ -375,6 +399,7 @@ def _message_to_dict(
     can_analyze_images: bool = False,
     media_root: Path | None = None,
     encode_media: bool = True,
+    max_image_edge: int | None = None,
 ) -> dict[str, object]:
     data: dict[str, object] = {
         "role": message.role,
@@ -384,6 +409,7 @@ def _message_to_dict(
             can_analyze_images=can_analyze_images,
             media_root=media_root,
             encode_media=encode_media,
+            max_image_edge=max_image_edge,
         ),
     }
     if message.reasoning is not None:
@@ -412,6 +438,7 @@ def _content_to_provider_format(
     can_analyze_images: bool = False,
     media_root: Path | None = None,
     encode_media: bool = True,
+    max_image_edge: int | None = None,
 ) -> object:
     parts = message.parts
     if not parts:
@@ -457,6 +484,20 @@ def _content_to_provider_format(
                     }
                 )
                 continue
+            if max_image_edge is not None:
+                info = probe_image(path)
+                width, height = fit_image_size(info.width, info.height, max_image_edge)
+                if (width, height) != (info.width, info.height):
+                    rendered.append({
+                        "type": "text",
+                        "text": (
+                            f"[Image {part.path}: sent at {width}x{height}; "
+                            f"original {info.width}x{info.height}. "
+                            "To use original-image pixel coordinates or screenshot coordinate metadata, "
+                            f"multiply image x by {info.width / width:.8g} "
+                            f"and y by {info.height / height:.8g} first.]"
+                        ),
+                    })
             if not encode_media:
                 # Counting tokens never needs the bytes: the caller adds
                 # each image's estimated cost separately. A placeholder
@@ -467,7 +508,7 @@ def _content_to_provider_format(
                 {
                     "type": "image_url",
                     "image_url": {
-                        "url": encode_data_url(path, part.mime_type)
+                        "url": encode_data_url(path, part.mime_type, max_edge=max_image_edge)
                     },
                 }
             )
