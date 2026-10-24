@@ -109,7 +109,8 @@ Runtime 通过 `JsonlSessionStore.open_journal()` 持有当前 Session 的写入
 | `context.py` | 每次调用所需的 Workspace、Session、执行器等依赖 |
 | `paths.py` | 读取路径解析与 Workspace 包含校验 |
 | `globs.py` | 文件路径 glob 匹配 |
-| `policy.py` | Shell、桌面自动化与 MCP 的授权策略组合 |
+| `policy.py` | Shell、文件写入、桌面自动化与 MCP 的授权策略组合 |
+| `approval.py` | 文件写入审批摘要与审批历史文本 |
 | `budget.py` | Tool 结果大小预算 |
 | `builtin/` | 内置 Tool 实现 |
 
@@ -123,7 +124,9 @@ Shell 通过 `ExecutionRouter` 根据 `ExecutionScope` 和当前 `ExecutionAutho
 | `Workspace Access` | `workspace` | 仅 `host` 请求确认 |
 | `Full Access` | `host` | 不请求确认 |
 
-显式传入的 scope 始终生效，但仍受 Runtime 提供的 authority 上限约束。文件 Tool 不经过 Shell scope，始终限制在 Workspace。
+显式传入的 scope 始终生效，但仍受 Runtime 提供的 authority 上限约束。`apply_patch`、`edit_file`、`write_file` 解析为 Workspace scope，因此同样按 preset 决定是否确认：`Ask for approval` 请求确认，`Workspace Access` 与 `Full Access` 直接执行。文件 Tool 在任何 preset 下都限制在 Workspace 内，不使用宿主执行器。
+
+审批提示与审批历史只写入有界摘要：路径、字节与行数、每个文本字段的前 3 行预览，整体不超过 2048 字符，patch 最多列出 8 个文件操作并说明省略数量。完整参数保留在原始 Tool Call 中，不重复写入用户交互记录。
 
 `execution/` 负责进程超时、取消、输出 spool、平台 shell 和沙箱路由：
 

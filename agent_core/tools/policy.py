@@ -1,6 +1,7 @@
 import subprocess
 from typing import Callable
 
+from ..approval import approval_description
 from ..execution.router import WORKSPACE_WRITE_TOOLS
 from .base import ToolCall, ToolPolicy
 from .context import ToolExecutionContext
@@ -36,11 +37,8 @@ class FileWriteApprovalPolicy:
     def authorize(self, call: ToolCall, context: ToolExecutionContext) -> bool:
         if call.name not in WORKSPACE_WRITE_TOOLS:
             return False
-        description = call.name + "\n" + "\n".join(
-            f"{key}: {value}" for key, value in call.arguments.items()
-        )
         if not self._request_permission(
-            description, kind="file", tool_name=call.name,
+            approval_description(call), kind="file", tool_name=call.name,
         ):
             raise PermissionError("file change was not approved")
         return True

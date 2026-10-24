@@ -12,6 +12,7 @@ from agent_core import (
     ExecutionRouter,
     ExecutionScope,
     FileWriteApprovalPolicy,
+    JsonlSessionStore,
     PermissionController,
     PermissionPreset,
     Session,
@@ -67,8 +68,7 @@ class FileWritePermissionTest(unittest.TestCase):
                                 request.assert_called_once()
                                 self.assertEqual(request.call_args.kwargs, {"kind": "file", "tool_name": name})
                                 self.assertIn(name, request.call_args.args[0])
-                                if name == "apply_patch":
-                                    self.assertIn(call.arguments["patch"], request.call_args.args[0])
+                                self.assertIn("file.txt", request.call_args.args[0])
                                 self.assertEqual(session.user_anchors[-1].source, "approval_response")
                                 self.assertIn(
                                     "approved" if approved else "denied",
@@ -112,6 +112,101 @@ class FileWritePermissionTest(unittest.TestCase):
             ToolCall("read", "read_file", {"path": "file.txt"}), None,
         ))
         request.assert_not_called()
+
+    def test_large_payload_is_only_stored_in_the_original_tool_call(self) -> None:
+        marker = "FULL_PAYLOAD_END_MARKER"
+        payload = "预览" * 3000 + "\n" + "line\n" * 10 + marker
+        for name in ("apply_patch", "edit_file", "write_file"):
+            for approved in (True, False):
+                with self.subTest(tool=name, approved=approved), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    target = root / "file.txt"
+                    target.write_bytes(b"old\n")
+                    arguments = {
+                        "apply_patch": {"patch": patch_text(
+                            "*** Update File: file.txt\n@@\n-old\n"
+                            + "\n".join("+" + line for line in payload.split("\n"))
+                        )},
+                        "edit_file": {"path": "file.txt", "old_text": "old\n", "new_text": payload},
+                        "write_file": {"path": "file.txt", "content": payload, "overwrite": True},
+                    }[name]
+                    call = ToolCall("write", name, arguments)
+                    session = Session()
+                    session.set_permission_preset(PermissionPreset.ASK_FOR_APPROVAL)
+                    session.begin_turn("turn")
+                    session.add_item("assistant", None, tool_calls=(call,))
+                    request = Mock(return_value=approved)
+                    controller = PermissionController(session, FileWriteApprovalPolicy(request))
+                    context = ToolExecutionContext(
+                        Workspace(root), session,
+                        execution_router=ExecutionRouter(Mock(), Mock(), authority=controller.authority),
+                    )
+                    tools = ToolCatalog([ApplyPatchTool(), EditFileTool(), WriteFileTool()]).select(
+                        [name], context, policy=controller,
+                    )
+
+                    result = tools.execute(call)
+
+                    description = request.call_args.args[0]
+                    text = arguments["patch"] if name == "apply_patch" else payload
+                    self.assertIn(f"{len(text.encode('utf-8'))} bytes", description)
+                    self.assertIn(f"{text.count(chr(10)) + 1} lines", description)
+                    self.assertIn("file.txt", description)
+                    self.assertIn("预览", description)
+                    self.assertNotIn(marker, description)
+                    self.assertLessEqual(len(description), 2048)
+                    self.assertLessEqual(max(map(len, description.splitlines())), 160)
+                    interaction = session.user_anchors[-1].content
+                    self.assertIn(description, interaction)
+                    self.assertNotIn(marker, interaction)
+                    self.assertLess(len(interaction), 2200)
+                    self.assertEqual(result.error is None, approved)
+                    expected = payload + "\n" if name == "apply_patch" else payload
+                    self.assertEqual(target.read_bytes(), expected.encode("utf-8") if approved else b"old\n")
+
+                    store = JsonlSessionStore(root / "sessions")
+                    store.bind_workspace(session.session_id, root)
+                    store.append_events(session.session_id, session.journal, workspace=root)
+                    restored = store.load(session.session_id)
+                    self.assertEqual(restored.user_anchors[-1].content, interaction)
+                    self.assertEqual(restored.items[-2].tool_calls[0].arguments, arguments)
+                    self.assertEqual(sum(
+                        json.dumps(event.payload, ensure_ascii=False).count(marker)
+                        for event in restored.journal
+                    ), 1)
+
+    def test_patch_summary_bounds_the_file_list_and_reports_omitted_files(self) -> None:
+        request = Mock(return_value=True)
+        body = "\n".join(f"*** Add File: path/{index}.txt\n+new" for index in range(20))
+        call = ToolCall("patch", "apply_patch", {"patch": patch_text(body)})
+
+        FileWriteApprovalPolicy(request).authorize(call, None)
+
+        description = request.call_args.args[0]
+        self.assertIn("20 files", description)
+        self.assertIn("path/0.txt", description)
+        self.assertIn("path/7.txt", description)
+        self.assertNotIn("path/8.txt", description)
+        self.assertIn("12 more files", description)
+        self.assertLessEqual(len(description), 2048)
+
+    def test_edit_summary_bounds_both_text_fields_and_long_paths(self) -> None:
+        request = Mock(return_value=True)
+        call = ToolCall("edit", "edit_file", {
+            "path": "src/" + "p" * 5000,
+            "old_text": "old" * 10000,
+            "new_text": "新" * 10000,
+        })
+
+        FileWriteApprovalPolicy(request).authorize(call, None)
+
+        description = request.call_args.args[0]
+        self.assertIn("Old text: 30000 bytes, 1 lines", description)
+        self.assertIn("New text: 30000 bytes, 1 lines", description)
+        self.assertNotIn(call.arguments["old_text"], description)
+        self.assertNotIn(call.arguments["new_text"], description)
+        self.assertLessEqual(max(map(len, description.splitlines())), 166)
+        self.assertLessEqual(len(description), 2048)
 
 
 class ApplyPatchRegressionTest(unittest.TestCase):

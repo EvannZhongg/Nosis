@@ -1,10 +1,10 @@
 """Runtime permission state and Tool authorization policy."""
 
-import json
 from enum import StrEnum
 from threading import Lock
 from typing import TYPE_CHECKING, Callable
 
+from .approval import approval_description
 from .execution.authority import (
     APPROVAL_REQUIRED_AUTHORITY,
     FULL_ACCESS_AUTHORITY,
@@ -93,8 +93,7 @@ class PermissionController:
         approved: bool,
     ) -> None:
         context.session.record_user_interaction(
-            f"Tool approval: {call.name}"
-            f"({json.dumps(call.arguments, ensure_ascii=False)})\n"
+            f"Tool approval: {approval_description(call)}\n"
             f"User response: {'approved' if approved else 'denied'}",
             "approval_response",
         )

@@ -201,6 +201,11 @@ unblock them through existing Runtime cancellation.
 Workspace file writes (`apply_patch`, `edit_file`, `write_file`) request approval
 under `ask_for_approval`; `workspace_access` and `full_access` allow them without
 a prompt. File tools stay confined to the current workspace under every preset.
+File approval descriptions are limited to 2048 characters: paths, byte/line counts,
+and a preview of at most three lines per text field (120 characters per line).
+Patch summaries list at most eight file operations and report the omitted count.
+Approval responses record the same summary in history; full arguments remain in
+the original Tool Call instead of being duplicated in the user interaction.
 Tool errors can include optional structured `details`. An `apply_patch` commit
 failure reports `completed`, `failed`, `pending`, and `cause` there; completed
 operations remain applied. The same details are retained in Session tool results.
