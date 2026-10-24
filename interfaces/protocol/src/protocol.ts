@@ -14,7 +14,7 @@ export type ToolCall = {
   id: string;
   name: string;
   arguments: { readonly [key: string]: JSONValue } | string;
-  argument_error?: { type: string; message: string };
+  argument_error?: ProtocolError;
 };
 
 export type ImageAttachment = {
@@ -38,7 +38,10 @@ export type UserAttachment = ImageAttachment | FileAttachment;
 export type ProtocolError = {
   type: string;
   message: string;
+  details?: { readonly [key: string]: JSONValue };
 };
+
+export type ApprovalKind = 'shell' | 'file' | 'computer' | 'mcp';
 
 export type RuntimeFailure = ProtocolError & {
   details: { readonly [key: string]: JSONValue };
@@ -181,7 +184,7 @@ export type RuntimeState = {
     turn_id: string | null;
     request_id: string;
     command: string;
-    kind?: 'shell' | 'computer' | 'mcp';
+    kind?: ApprovalKind;
     server?: string | null;
     tool_name?: string | null;
   } | null;
@@ -268,7 +271,7 @@ export type Incoming = (
       turn_id: string | null;
       request_id: string;
       command: string;
-      kind?: 'shell' | 'computer' | 'mcp';
+      kind?: ApprovalKind;
       server?: string | null;
       tool_name?: string | null;
     }

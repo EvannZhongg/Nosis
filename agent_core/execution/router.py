@@ -12,6 +12,9 @@ if TYPE_CHECKING:
     from ..tools.base import ToolCall
 
 
+WORKSPACE_WRITE_TOOLS = frozenset({"apply_patch", "edit_file", "write_file"})
+
+
 @dataclass(frozen=True)
 class ResolvedExecution:
     scope: ExecutionScope | None
@@ -60,12 +63,12 @@ class ExecutionRouter:
                     else self._host_executor
                 ),
             )
-        scope = (
-            ExecutionScope.HOST
-            if call.name in {"computer_action", "computer_screenshot"}
-            or self._host_tool(call.name)
-            else None
-        )
+        if call.name in WORKSPACE_WRITE_TOOLS:
+            scope = ExecutionScope.WORKSPACE
+        elif call.name in {"computer_action", "computer_screenshot"} or self._host_tool(call.name):
+            scope = ExecutionScope.HOST
+        else:
+            scope = None
         if scope is not None and not authority.allows(scope):
             raise PermissionError(
                 f"execution scope '{scope.value}' exceeds authority"

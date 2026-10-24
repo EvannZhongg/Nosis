@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import React from 'react';
 import { render } from 'ink-testing-library';
-import type { Incoming } from '@nosis/protocol/internal';
+import type { ApprovalKind, Incoming } from '@nosis/protocol/internal';
 
 const sent: any[] = [];
 let emit: (message: Incoming) => void = () => {};
@@ -111,7 +111,7 @@ async function typeDraft(
   await waitFor(() => expect(lastFrame()).toContain(text));
 }
 
-const requestApproval = (command: string, kind?: 'shell' | 'computer' | 'mcp'): void => {
+const requestApproval = (command: string, kind?: ApprovalKind): void => {
   emit({ type: 'approval_request', turn_id: 't1', request_id: 't1:1', command, kind });
 };
 
@@ -765,6 +765,17 @@ describe('App', () => {
 
     requestApproval("computer_action({'action': 'click'})", 'computer');
     await waitFor(() => expect(lastFrame()).toContain('Computer interaction requires approval'));
+  });
+
+  it('labels file approvals and sends the user decision', async () => {
+    const { lastFrame, stdin } = renderApp();
+    await waitForReady(lastFrame);
+
+    requestApproval('*** Update File: notes.txt', 'file');
+    await waitFor(() => expect(lastFrame()).toContain('File change requires approval'));
+    expect(lastFrame()).toContain('*** Update File: notes.txt');
+    stdin.write('\r');
+    await waitFor(() => expect(approvalResponse()).toMatchObject({ approved: true }));
   });
 
   it('labels MCP approvals distinctly', async () => {

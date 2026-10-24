@@ -1,6 +1,7 @@
 import subprocess
 from typing import Callable
 
+from ..execution.router import WORKSPACE_WRITE_TOOLS
 from .base import ToolCall, ToolPolicy
 from .context import ToolExecutionContext
 
@@ -25,6 +26,23 @@ class ShellApprovalPolicy:
             command = "[Hook] " + subprocess.list2cmdline([command, *call.arguments["args"]])
         if not self._request_permission(command):
             raise PermissionError("shell command was not approved")
+        return True
+
+
+class FileWriteApprovalPolicy:
+    def __init__(self, request_permission: Callable[..., bool]) -> None:
+        self._request_permission = request_permission
+
+    def authorize(self, call: ToolCall, context: ToolExecutionContext) -> bool:
+        if call.name not in WORKSPACE_WRITE_TOOLS:
+            return False
+        description = call.name + "\n" + "\n".join(
+            f"{key}: {value}" for key, value in call.arguments.items()
+        )
+        if not self._request_permission(
+            description, kind="file", tool_name=call.name,
+        ):
+            raise PermissionError("file change was not approved")
         return True
 
 

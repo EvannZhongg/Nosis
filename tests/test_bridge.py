@@ -374,6 +374,21 @@ class ProtocolTest(unittest.TestCase):
             {"type": "PermissionError", "message": "denied"},
         )
 
+    def test_tool_result_preserves_partial_patch_failure_details(self) -> None:
+        details = {
+            "completed": [{"path": "a.txt", "operation": "updated"}],
+            "failed": {"path": "b.txt", "operation": "updated"},
+            "pending": [],
+        }
+        message = event_to_message(ToolResultEvent(
+            tool_result=ToolResult("patch", "apply_patch", error=ToolError(
+                "PatchApplyError", "locked", details,
+            )),
+            tool_index=1, tool_count=1,
+        ), "t1")
+        self.assertFalse(message["ok"])
+        self.assertEqual(message["error"]["details"], details)
+
     def test_usage_to_dict(self) -> None:
         self.assertIsNone(usage_to_dict(None))
         self.assertEqual(
@@ -532,6 +547,37 @@ class IsolatedBridgeTest(unittest.TestCase):
 
 
 class PermissionProtocolTest(BridgeTestCase):
+    def test_file_writers_use_bridge_approval_and_preserve_denied_files(self) -> None:
+        from tests.test_file_writes import write_call
+
+        for name in ("apply_patch", "edit_file", "write_file"):
+            for approved in (True, False):
+                with self.subTest(tool=name, approved=approved):
+                    directory = self.enterContext(tempfile.TemporaryDirectory())
+                    root = Path(directory)
+                    target = root / "file.txt"
+                    target.write_bytes(b"old\n")
+                    bridge, stdout = self.make_bridge([
+                        json.dumps({"type": "approval_response", "request_id": "t1:1", "approved": approved}),
+                    ], root)
+                    bridge.open_session(open_session_message(root, session_id="s", agent_config={
+                        "max_same_tool_calls": 5,
+                        "output_reserve_tokens": 100,
+                        "workspace_instruction_files": [],
+                        "main_agent": {"tools": {name: True}},
+                    }))
+                    bridge.host.turns.turn_id = "t1"
+                    plane = bridge.host.planes.ensure(bridge.host.sessions)
+
+                    result = plane.agent._tools.execute(write_call(name))
+
+                    approval = next(message for message in emitted(stdout) if message["type"] == "approval_request")
+                    self.assertEqual(approval["kind"], "file")
+                    self.assertEqual(approval["tool_name"], name)
+                    self.assertIn(name, approval["command"])
+                    self.assertEqual(result.error is None, approved)
+                    self.assertEqual(target.read_bytes(), b"new\n" if approved else b"old\n")
+
     def test_bridge_accepts_workspace_access_before_runtime_start(self) -> None:
         directory = self.enterContext(tempfile.TemporaryDirectory())
         root = Path(directory)

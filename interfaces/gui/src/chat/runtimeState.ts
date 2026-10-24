@@ -1,12 +1,12 @@
 import type { ThreadMessageLike } from "@assistant-ui/react";
-import type { BackgroundJob, PlanSnapshot } from "@nosis/protocol";
+import type { ApprovalKind, BackgroundJob, PlanSnapshot } from "@nosis/protocol";
 
 export type { BackgroundJob } from "@nosis/protocol/internal";
 
 export type Approval = {
   requestId: string;
   command: string;
-  kind?: "shell" | "computer" | "mcp";
+  kind?: ApprovalKind;
   server?: string;
   toolName?: string;
 };

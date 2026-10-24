@@ -18,11 +18,14 @@ DEFAULT_TOOL_RESULT_PREVIEW_CHARS = 1200
 def artifact_body(result: ToolResult) -> str:
     """Render a reading view, retaining nested text without JSON escaping."""
     if result.error is not None:
-        return (
+        body = (
             f"Tool '{result.name}' failed.\n"
             f"error_type: {result.error.type}\n\n"
             f"{result.error.message}"
         )
+        if result.error.details is not None:
+            body += "\n\n" + json.dumps(result.error.details, ensure_ascii=False, indent=2)
+        return body
     output = result.output
     if isinstance(output, str):
         return output

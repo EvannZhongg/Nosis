@@ -1,6 +1,6 @@
 import json
 from abc import ABC, abstractmethod
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, ClassVar, Protocol, TypeAlias
 
@@ -25,6 +25,21 @@ JSONValue: TypeAlias = (
 class ToolError:
     type: str
     message: str
+    details: dict[str, JSONValue] | None = None
+
+    def to_dict(self) -> dict[str, JSONValue]:
+        data: dict[str, JSONValue] = {"type": self.type, "message": self.message}
+        if self.details is not None:
+            data["details"] = self.details
+        return data
+
+
+class ToolExecutionError(Exception):
+    """Carry structured execution failure details through the ToolSet."""
+
+    def __init__(self, error: ToolError) -> None:
+        super().__init__(error.message)
+        self.error = error
 
 
 @dataclass(frozen=True)
@@ -67,7 +82,7 @@ class ToolCall:
             "id": self.id, "name": self.name, "arguments": self.arguments,
         }
         if self.argument_error is not None:
-            data["argument_error"] = asdict(self.argument_error)
+            data["argument_error"] = self.argument_error.to_dict()
         return data
 
     @classmethod
@@ -129,7 +144,7 @@ class ToolResult:
         if self.error is not None:
             data: dict[str, JSONValue] = {
                 "ok": False,
-                "error": asdict(self.error),
+                "error": self.error.to_dict(),
             }
         else:
             data = {

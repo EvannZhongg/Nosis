@@ -189,7 +189,7 @@ unapplied when the turn ends. Stale cancellation/interaction IDs have no effect.
 Do not resubmit after an ambiguous disconnect as though IDs made it idempotent.
 
 Approval requests include `request_id`, `turn_id`, human-readable `command`, and
-optional `kind` (`shell`, `computer`, `mcp`), `server` and `tool_name` (some optional
+optional `kind` (`shell`, `file`, `computer`, `mcp`), `server` and `tool_name` (some optional
 values may be `null`). Display the request and submit the user's boolean decision.
 The same request is in `runtime.approval`; avoid rendering it twice. Questions
 include `question`, `options: [{id, label, description?, recommended?}]` and
@@ -197,6 +197,13 @@ include `question`, `options: [{id, label, description?, recommended?}]` and
 allowed. An invalid answer leaves the question outstanding; there is no validation
 error response. Interactions are serialized by Bridge. Cancellation and shutdown
 unblock them through existing Runtime cancellation.
+
+Workspace file writes (`apply_patch`, `edit_file`, `write_file`) request approval
+under `ask_for_approval`; `workspace_access` and `full_access` allow them without
+a prompt. File tools stay confined to the current workspace under every preset.
+Tool errors can include optional structured `details`. An `apply_patch` commit
+failure reports `completed`, `failed`, `pending`, and `cause` there; completed
+operations remain applied. The same details are retained in Session tool results.
 
 `cancel` addresses exactly the supplied queued/active turn. It can race completion;
 a completed terminal outcome remains valid. It has no separate response. On an

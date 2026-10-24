@@ -1,12 +1,12 @@
-import errno
-import os
 import re
 from dataclasses import dataclass
+from pathlib import Path
 
 from ...path_utils import path_for_comparison
-from ..base import JSONValue, Tool, ToolDefinition
+from ...turn_control import AgentCancelled
+from ..base import JSONValue, Tool, ToolDefinition, ToolError, ToolExecutionError
 from ..context import ToolExecutionContext
-from ...atomic import atomic_write_bytes
+from ..files import missing_parent_directories, write_file_bytes
 
 
 @dataclass(frozen=True)
@@ -47,7 +47,17 @@ class ApplyPatchTool(Tool):
                 "'*** Add File:', '*** Update File:', or '*** Delete File:' "
                 "sections. Update sections contain @@ hunks whose lines start "
                 "with space (context), + (add), or - (remove). Standard "
-                "unified-diff hunk ranges are validated when present."
+                "unified-diff hunk ranges are validated when present. Paths are "
+                "relative to the workspace root; missing parent directories are "
+                "created for added files. Bare @@ hunks must match exactly once; "
+                "include more context or use numbered ranges to disambiguate. "
+                "Updates preserve existing line endings and whether a non-empty "
+                "file ends with a newline; new non-empty files use LF and a final "
+                "newline. "
+                "All changes are validated before writing. A write failure reports "
+                "completed, failed, and pending operations; completed changes "
+                "remain applied. Example:\n*** Begin Patch\n"
+                "*** Update File: notes.txt\n@@\n-old\n+new\n*** End Patch"
             ),
             parameters={
                 "type": "object",
@@ -73,24 +83,39 @@ class ApplyPatchTool(Tool):
         if not isinstance(patch, str) or not patch:
             raise ValueError("apply_patch requires a non-empty string 'patch'")
 
-        changes = _parse_patch(patch, context)
-        for change in changes:
-            file_path = context.workspace.resolve_path(change.path)
-            if change.operation == "deleted":
-                file_path.unlink()
-            else:
-                assert change.content is not None
-                atomic_write_bytes(file_path, change.content.encode("utf-8"))
+        changes = _prepare_changes(patch, context)
+        if context.cancellation is not None and context.cancellation.cancelled:
+            raise AgentCancelled
+        files: list[JSONValue] = [
+            {"path": change.path, "operation": change.operation}
+            for change in changes
+        ]
+        # Once committing, finish the patch so cancellation cannot silently leave
+        # an unreported subset of its file changes applied.
+        for index, change in enumerate(changes):
+            try:
+                file_path = context.workspace.resolve_path(change.path)
+                if change.operation == "deleted":
+                    file_path.unlink()
+                else:
+                    assert change.content is not None
+                    write_file_bytes(file_path, change.content.encode("utf-8"))
+            except (OSError, ValueError) as error:
+                raise ToolExecutionError(ToolError(
+                    type="PatchApplyError",
+                    message=f"apply_patch failed for '{change.path}': {error}",
+                    details={
+                        "completed": files[:index],
+                        "failed": files[index],
+                        "pending": files[index + 1:],
+                        "cause": {"type": type(error).__name__, "message": str(error)},
+                    },
+                )) from error
 
-        return {
-            "files": [
-                {"path": change.path, "operation": change.operation}
-                for change in changes
-            ]
-        }
+        return {"files": files}
 
 
-def _parse_patch(
+def _prepare_changes(
     patch: str,
     context: ToolExecutionContext,
 ) -> list[_FileChange]:
@@ -103,7 +128,7 @@ def _parse_patch(
         del lines[-2]
 
     changes: list[_FileChange] = []
-    seen_paths: set[str] = set()
+    seen_paths: set[Path] = set()
     index = 1
     while index < len(lines) - 1:
         if not lines[index]:
@@ -116,11 +141,11 @@ def _parse_patch(
         display_path = path_for_comparison(file_path).relative_to(
             path_for_comparison(context.workspace.path)
         ).as_posix()
-        if display_path in seen_paths:
+        if file_path in seen_paths:
             raise ValueError(
                 f"apply_patch contains multiple operations for '{display_path}'"
             )
-        seen_paths.add(display_path)
+        seen_paths.add(file_path)
 
         body_start = index
         while index < len(lines) - 1 and not lines[index].startswith("*** "):
@@ -133,12 +158,7 @@ def _parse_patch(
                 raise ValueError(
                     f"apply_patch cannot add existing file '{display_path}'"
                 )
-            if not file_path.parent.is_dir():
-                raise FileNotFoundError(
-                    errno.ENOENT,
-                    os.strerror(errno.ENOENT),
-                    str(file_path.parent),
-                )
+            missing_parent_directories(file_path, context.workspace.path)
             if any(not line.startswith("+") for line in body):
                 raise ValueError(
                     f"apply_patch add lines for '{display_path}' must start with '+'"
@@ -153,13 +173,6 @@ def _parse_patch(
             raise ValueError(
                 f"apply_patch requires existing file '{display_path}'"
             )
-        try:
-            original = file_path.read_bytes().decode("utf-8")
-        except UnicodeDecodeError as error:
-            raise ValueError(
-                f"apply_patch requires UTF-8 file '{display_path}'"
-            ) from error
-
         if operation == "deleted":
             if body:
                 raise ValueError(
@@ -167,6 +180,13 @@ def _parse_patch(
                 )
             changes.append(_FileChange(operation, display_path))
             continue
+
+        try:
+            original = file_path.read_bytes().decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise ValueError(
+                f"apply_patch requires UTF-8 file '{display_path}'"
+            ) from error
 
         if not body or not body[0].startswith("@@"):
             raise ValueError(
@@ -177,6 +197,11 @@ def _parse_patch(
 
     if not changes:
         raise ValueError("apply_patch requires at least one file operation")
+    for file_path in seen_paths:
+        if any(parent in seen_paths for parent in file_path.parents):
+            raise ValueError(
+                f"apply_patch file path is also used as a parent: '{file_path}'"
+            )
     return changes
 
 
@@ -197,39 +222,44 @@ def _parse_file_header(header: str) -> tuple[str, str]:
 
 def _apply_hunks(original: str, body: list[str], path: str) -> str:
     source = _split_text_lines(original)
-    original_has_trailing_newline = bool(source and source[-1].ending)
+    trailing_newline = not source or bool(source[-1].ending)
     newline = _preferred_newline(source)
     result: list[_TextLine] = []
     source_index = 0
     index = 0
+    hunk_number = 0
     while index < len(body):
-        header = _parse_hunk_header(body[index], path)
+        hunk_number += 1
+        location = f"{path} (hunk {hunk_number})"
+        header = _parse_hunk_header(body[index], location)
         index += 1
         hunk: list[str] = []
         while index < len(body) and not body[index].startswith("@@"):
             line = body[index]
             if not line or line[0] not in " +-":
                 raise ValueError(
-                    f"apply_patch invalid hunk line in '{path}': {line!r}"
+                    f"apply_patch invalid hunk line in '{location}': {line!r}"
                 )
             hunk.append(line)
             index += 1
+        if not hunk:
+            raise ValueError(f"apply_patch empty hunk in '{location}'")
         old_lines = [line[1:] for line in hunk if line[0] != "+"]
         new_lines = [line[1:] for line in hunk if line[0] != "-"]
         if not old_lines and header is None:
             raise ValueError(
-                f"apply_patch update hunk for '{path}' needs context or removal"
+                f"apply_patch update hunk for '{location}' needs context or removal"
             )
         if header is not None:
             if len(old_lines) != header.old_count:
                 raise ValueError(
                     f"apply_patch old line count does not match hunk header "
-                    f"in '{path}'"
+                    f"in '{location}'"
                 )
             if len(new_lines) != header.new_count:
                 raise ValueError(
                     f"apply_patch new line count does not match hunk header "
-                    f"in '{path}'"
+                    f"in '{location}'"
                 )
             match_index = (
                 header.old_start - 1
@@ -245,16 +275,16 @@ def _apply_hunks(original: str, body: list[str], path: str) -> str:
             if header.new_start != expected_new_start:
                 raise ValueError(
                     f"apply_patch new start does not match hunk position "
-                    f"in '{path}'"
+                    f"in '{location}'"
                 )
             if match_index < source_index or not _lines_match(
                 source, old_lines, match_index
             ):
                 raise ValueError(
-                    f"apply_patch hunk range did not match '{path}'"
+                    f"apply_patch hunk range did not match '{location}'"
                 )
         else:
-            match_index = _find_hunk(source, old_lines, source_index, path)
+            match_index = _find_hunk(source, old_lines, source_index, location)
         result.extend(source[source_index:match_index])
         matched_index = match_index
         for line in hunk:
@@ -267,9 +297,13 @@ def _apply_hunks(original: str, body: list[str], path: str) -> str:
                 result.append(_TextLine(line[1:], newline))
         source_index = match_index + len(old_lines)
     result.extend(source[source_index:])
-    if result and not original_has_trailing_newline:
-        result[-1] = _TextLine(result[-1].text, "")
-    return "".join(line.text + line.ending for line in result)
+    return "".join(
+        line.text + (
+            (line.ending or newline)
+            if index < len(result) - 1 or trailing_newline else ""
+        )
+        for index, line in enumerate(result)
+    )
 
 
 def _split_patch_lines(patch: str) -> list[str]:
@@ -333,21 +367,28 @@ def _find_hunk(
     start: int,
     path: str,
 ) -> int:
-    matches = [
-        index
-        for index in range(start, len(source) - len(old_lines) + 1)
-        if _lines_match(source, old_lines, index)
-    ]
-    if not matches:
-        raise ValueError(f"apply_patch hunk did not match '{path}'")
-    if len(matches) > 1:
-        raise ValueError(f"apply_patch hunk is ambiguous in '{path}'")
-    return matches[0]
+    match: int | None = None
+    for index in range(start, len(source) - len(old_lines) + 1):
+        if _lines_match(source, old_lines, index):
+            if match is not None:
+                raise ValueError(
+                    f"apply_patch hunk is ambiguous in '{path}'; "
+                    "include more context or use a numbered range"
+                )
+            match = index
+    if match is None:
+        preview = [line[:120] for line in old_lines[:3]]
+        raise ValueError(
+            f"apply_patch hunk did not match '{path}'; expected context: {preview!r}"
+        )
+    return match
 
 
 def _lines_match(
     source: list[_TextLine], old_lines: list[str], start: int
 ) -> bool:
-    return [
-        line.text for line in source[start : start + len(old_lines)]
-    ] == old_lines
+    return (
+        0 <= start <= len(source)
+        and start + len(old_lines) <= len(source)
+        and all(source[start + index].text == text for index, text in enumerate(old_lines))
+    )

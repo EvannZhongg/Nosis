@@ -1,10 +1,6 @@
-import errno
-import os
-from pathlib import Path
-
-from ...atomic import atomic_write_bytes
 from ..base import JSONValue, Tool, ToolDefinition
 from ..context import ToolExecutionContext
+from ..files import missing_parent_directories, write_file_bytes
 from ...path_utils import path_for_comparison
 
 
@@ -68,7 +64,7 @@ class WriteFileTool(Tool):
                 "file already exists; use edit_file, or explicitly set overwrite=true"
             )
 
-        missing_parent_dirs = _missing_parent_directories(
+        missing_parent_dirs = missing_parent_directories(
             file_path,
             workspace.path,
         )
@@ -76,7 +72,7 @@ class WriteFileTool(Tool):
             directory.mkdir()
 
         data = content.encode("utf-8")
-        atomic_write_bytes(file_path, data)
+        write_file_bytes(file_path, data)
 
         workspace_path = path_for_comparison(workspace.path)
         return {
@@ -92,32 +88,3 @@ class WriteFileTool(Tool):
             ],
             "bytes_written": len(data),
         }
-
-
-def _missing_parent_directories(path: Path, workspace_path: Path) -> list[Path]:
-    """Validate the complete parent chain before returning directories to create."""
-    workspace_comparison = path_for_comparison(workspace_path)
-    missing: list[Path] = []
-    current = path.parent
-
-    while current != workspace_path:
-        try:
-            path_for_comparison(current).relative_to(workspace_comparison)
-        except ValueError as error:
-            raise ValueError(
-                "workspace path must stay within the workspace"
-            ) from error
-
-        if current.exists():
-            if not current.is_dir():
-                raise NotADirectoryError(
-                    errno.ENOTDIR,
-                    os.strerror(errno.ENOTDIR),
-                    str(current),
-                )
-            break
-        missing.append(current)
-        current = current.parent
-
-    missing.reverse()
-    return missing

@@ -40,6 +40,7 @@ from .paths import resolve_image, resolve_readable_path
 from .policy import (
     CompositeToolPolicy,
     ComputerApprovalPolicy,
+    FileWriteApprovalPolicy,
     McpApprovalPolicy,
     ShellApprovalPolicy,
 )
@@ -53,6 +54,7 @@ __all__ = [
     "ComputerScreenshotTool",
     "ComputerActionTool",
     "EditFileTool",
+    "FileWriteApprovalPolicy",
     "GenerateImageTool",
     "JSONValue",
     "ListDirectoryTool",

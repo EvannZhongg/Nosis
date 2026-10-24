@@ -27,6 +27,22 @@ from agent_core.tools.text import MAX_ARTIFACT_LINE_CHARS
 
 
 class ToolResultNormalizerTest(unittest.TestCase):
+    def test_error_artifact_retains_structured_failure_details(self) -> None:
+        from agent_core.tool_result import artifact_body
+
+        result = ToolResult("patch", "apply_patch", error=ToolError(
+            "PatchApplyError", "locked", {
+                "completed": [{"path": "a.txt", "operation": "updated"}],
+                "failed": {"path": "b.txt", "operation": "updated"},
+                "pending": [],
+            },
+        ))
+        body = artifact_body(result)
+        self.assertIn("locked", body)
+        self.assertIn('"completed"', body)
+        self.assertIn('"a.txt"', body)
+        self.assertIn('"b.txt"', body)
+
     def test_returns_small_result_unchanged(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Workspace(Path(directory))

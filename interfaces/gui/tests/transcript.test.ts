@@ -5,6 +5,15 @@ import { applyMessage, isTurnActivity, toMessages, turnProcessPartIndexes, type 
 const TOOL_CALL = { id: "call-1", name: "shell", arguments: { command: "ls" } };
 
 describe("process folding", () => {
+  it("preserves the file approval kind and tool identity", () => {
+    const approval = {
+      type: "approval_request" as const, turn_id: "t1", request_id: "t1:1",
+      command: "*** Update File: notes.txt", kind: "file" as const, tool_name: "apply_patch",
+    };
+    const direct = applyMessage([], approval);
+    expect(direct.approval).toMatchObject({ kind: "file", toolName: "apply_patch" });
+  });
+
   it("keeps hook feedback out of human message bubbles", () => {
     const items: TranscriptItem[] = [
       { role: "user", content: "work" },

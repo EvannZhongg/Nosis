@@ -9,6 +9,7 @@ from agent_core import (
     ExecutionAuthority, FULL_ACCESS_AUTHORITY, McpApprovalPolicy,
     PermissionPreset, SchedulerService, ShellApprovalPolicy,
     ComputerApprovalPolicy, Workspace,
+    FileWriteApprovalPolicy,
     UnitCompletedEvent,
 )
 
@@ -47,6 +48,7 @@ class RuntimeHost:
             self.config_directory, self.environment, runtime_callbacks,
             CompositeToolPolicy(
                 ShellApprovalPolicy(self.callbacks.request_permission),
+                FileWriteApprovalPolicy(self.callbacks.request_permission),
                 ComputerApprovalPolicy(self.callbacks.request_permission),
                 McpApprovalPolicy(
                     self._request_mcp_permission,

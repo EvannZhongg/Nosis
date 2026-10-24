@@ -334,10 +334,7 @@ def event_to_message(
             "ok": result.error is None,
             "error": None
             if result.error is None
-            else {
-                "type": result.error.type,
-                "message": result.error.message,
-            },
+            else result.error.to_dict(),
             "tool_index": event.tool_index,
             "tool_count": event.tool_count,
         }

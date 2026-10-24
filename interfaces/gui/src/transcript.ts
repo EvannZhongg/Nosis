@@ -1,5 +1,5 @@
 import type { ThreadMessageLike } from "@assistant-ui/react";
-import type { CacheUsage, ContextWindow, Incoming, PermissionPreset, UserQuestion } from "@nosis/protocol/internal";
+import type { ApprovalKind, CacheUsage, ContextWindow, Incoming, PermissionPreset, UserQuestion } from "@nosis/protocol/internal";
 import { attachmentDownloadUrl, type SessionItem } from "./api";
 
 /** A transcript item, plus the streaming state the live turn needs. */
@@ -18,7 +18,7 @@ export type Applied = {
   approval?: {
     requestId: string;
     command: string;
-    kind?: 'shell' | 'computer' | 'mcp';
+    kind?: ApprovalKind;
     server?: string;
     toolName?: string;
   } | null;

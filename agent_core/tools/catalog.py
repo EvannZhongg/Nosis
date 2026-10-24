@@ -9,6 +9,7 @@ from .base import (
     ToolCall,
     ToolDefinition,
     ToolError,
+    ToolExecutionError,
     ToolOutput,
     ToolPolicy,
     ToolResult,
@@ -158,9 +159,9 @@ class ToolSet:
             return ToolResult(
                 tool_call_id=call.id,
                 name=call.name,
-                error=ToolError(
-                    type=type(error).__name__,
-                    message=str(error),
+                error=(
+                    error.error if isinstance(error, ToolExecutionError)
+                    else ToolError(type=type(error).__name__, message=str(error))
                 ),
                 executed=executed,
                 hook_feedback=hook.feedback,

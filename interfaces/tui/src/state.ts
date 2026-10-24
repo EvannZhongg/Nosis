@@ -1,4 +1,5 @@
 import type {
+  ApprovalKind,
   Incoming,
   CacheUsage,
   ContextWindow,
@@ -65,7 +66,7 @@ export type State = {
   approval: {
     requestId: string;
     command: string;
-    kind?: 'shell' | 'computer' | 'mcp';
+    kind?: ApprovalKind;
     server?: string;
     toolName?: string;
     choice: ApprovalChoice;

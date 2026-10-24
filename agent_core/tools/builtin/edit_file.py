@@ -1,5 +1,6 @@
 from ..base import JSONValue, Tool, ToolDefinition
 from ..context import ToolExecutionContext
+from ..files import write_file_bytes
 from ...path_utils import path_for_comparison
 
 
@@ -66,7 +67,8 @@ class EditFileTool(Tool):
                 f"old_text appears {occurrences} times; it must be unique"
             )
 
-        file_path.write_bytes(
+        write_file_bytes(
+            file_path,
             content.replace(old_text, new_text, 1).encode("utf-8")
         )
         return {
