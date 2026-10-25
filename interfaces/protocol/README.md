@@ -1,6 +1,6 @@
 # @nosis/protocol
 
-公开契约见 [Bridge Public Client API, major 1](../../docs/bridge-protocol.md)，
+公开契约见 [Bridge Public Client API, major 2](../../docs/bridge-protocol.md)，
 现状审查与设计见 [设计文档](../../docs/bridge-api-design.md)。
 
 `@nosis/protocol` 导出稳定的 Incoming / Outgoing、PROTOCOL_VERSION、数据类型、

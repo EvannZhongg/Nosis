@@ -20,9 +20,9 @@ vi.mock('@nosis/client', () => ({
       if (autoReady && message.type === 'open_session') {
         setTimeout(() => {
             emit({
-              type: 'session_ready', protocol_version: 1,
+              type: 'session_ready', protocol_version: 2,
               session_id: 'sess-1234',
-              workspace: '/w',
+              workspace: message.workspace,
               provider: 'test',
               model: 'test/model',
               resumed: false,
@@ -274,7 +274,7 @@ describe('App', () => {
     expect(lastFrame()).toContain('wait for sync');
 
     emit({
-      type: 'session_ready', protocol_version: 1,
+      type: 'session_ready', protocol_version: 2,
       session_id: 'sess-1234',
       workspace: '/w',
       provider: 'test',
@@ -451,6 +451,206 @@ describe('App', () => {
     await waitFor(() => expect(lastFrame()).toContain('earlier question'));
     expect(lastFrame()).toContain('earlier answer');
     expect(turns()).toHaveLength(0);
+  });
+
+  it('opens a fresh workspace session, chats immediately, then resumes a session there', async () => {
+    const { stdin, lastFrame, unmount } = renderApp();
+    await waitForReady(lastFrame);
+    emit({ type: 'session_items', items: [{ role: 'user', content: 'old workspace history' }] });
+    await waitFor(() => expect(lastFrame()).toContain('old workspace history'));
+    await typeDraft(stdin, lastFrame, '/workspaces');
+    stdin.write('\r');
+    await waitFor(() => expect(sent.some((m) => m.type === 'list_workspaces')).toBe(true));
+    emit({ type: 'workspaces_listed', workspaces: ['/w', '/next'] });
+    await waitFor(() => expect(lastFrame()).toContain('❯ /w'));
+    stdin.write('\u001b[B');
+    await waitFor(() => expect(lastFrame()).toContain('❯ /next'));
+    autoReady = false;
+    stdin.write('\r');
+    await waitFor(() => expect(sent.filter((m) => m.type === 'open_session')).toHaveLength(2));
+    expect(sent.filter((m) => m.type === 'open_session')[1]).toEqual({
+      type: 'open_session', workspace: '/next', session_id: null,
+    });
+    expect(lastFrame()).toContain('old workspace history');
+
+    await typeDraft(stdin, lastFrame, 'hello new workspace');
+    stdin.write('\r');
+    await wait(30);
+    expect(turns()).toHaveLength(0);
+    emit({
+      type: 'session_ready', protocol_version: 2, session_id: 'fresh', workspace: '/next',
+      provider: 'test', model: 'test/model', resumed: false, message_count: 0,
+      permission_preset: 'ask_for_approval',
+    });
+    await waitFor(() => expect(sent.filter((m) => m.type === 'load_session')).toHaveLength(2));
+    await waitFor(() => expect(lastFrame()).not.toContain('old workspace history'));
+    stdin.write('\r');
+    await wait(30);
+    expect(turns()).toHaveLength(0);
+    const snapshot = {
+      type: 'runtime_state' as const, phase: 'inactive' as const, turn_id: null,
+      provider: 'test', workspace: '/next', permission_preset: 'ask_for_approval' as const,
+      context_window: null, cache_usage: null, jobs: [], approval: null, question: null, plan: null,
+    };
+    emit(snapshot);
+    await waitFor(() => expect(lastFrame()).not.toContain('opening session…'));
+    stdin.write('\r');
+    await waitFor(() => expect(turns()).toHaveLength(1));
+    expect(turns()[0].text).toBe('hello new workspace');
+
+    emit(snapshot);
+    emit({ type: 'turn_completed', turn_id: turns()[0].turn_id, usage: null });
+    await waitForReady(lastFrame);
+    await typeDraft(stdin, lastFrame, '/sessions');
+    stdin.write('\r');
+    await waitFor(() => expect(sent.some((m) => m.type === 'list_sessions')).toBe(true));
+    emit({ type: 'sessions_listed', sessions: [{ session_id: 'next-history', title: 'Next history' }] });
+    await waitFor(() => expect(lastFrame()).toContain('Next history'));
+    stdin.write('\r');
+    await waitFor(() => expect(sent.filter((m) => m.type === 'open_session')).toHaveLength(3));
+    expect(sent.filter((m) => m.type === 'open_session')[2]).toEqual({
+      type: 'open_session', workspace: '/next', session_id: 'next-history',
+    });
+    expect(sent.some((m) => m.type === 'workspace_set')).toBe(false);
+    expect(bridgeCount).toBe(1);
+    expect(shutdownCount).toBe(0);
+    unmount();
+  });
+
+  it('can close an empty workspace list without changing the session', async () => {
+    const { stdin, lastFrame, unmount } = renderApp();
+    await waitForReady(lastFrame);
+    await typeDraft(stdin, lastFrame, '/workspaces');
+    stdin.write('\r');
+    await waitFor(() => expect(lastFrame()).toContain('Workspaces'));
+    emit({ type: 'workspaces_listed', workspaces: [] });
+    await waitFor(() => expect(lastFrame()).toContain('No workspaces with conversation history.'));
+    stdin.write('\r');
+    await wait(30);
+    expect(sent.filter((m) => m.type === 'open_session')).toHaveLength(1);
+    stdin.write('\u001b');
+    await waitFor(() => expect(lastFrame()).toContain('ask anything…'));
+    expect(sent.filter((m) => m.type === 'open_session')).toHaveLength(1);
+    unmount();
+  });
+
+  it('starts new sessions on repeated selection of the same Windows workspace', async () => {
+    const { stdin, lastFrame, unmount } = renderApp();
+    await waitForReady(lastFrame);
+    for (let count = 2; count <= 3; count += 1) {
+      await typeDraft(stdin, lastFrame, '/workspaces');
+      stdin.write('\r');
+      await waitFor(() => expect(lastFrame()).toContain('Workspaces'));
+      emit({ type: 'workspaces_listed', workspaces: ['F:\\项目'] });
+      await waitFor(() => expect(lastFrame()).toContain('❯ F:\\项目'));
+      stdin.write('\r');
+      await waitFor(() => expect(sent.filter((m) => m.type === 'open_session')).toHaveLength(count));
+      expect(sent.filter((m) => m.type === 'open_session').at(-1)).toEqual({
+        type: 'open_session', workspace: 'F:/项目', session_id: null,
+      });
+      await waitFor(() => expect(lastFrame()).toContain('Nosis · F:/项目'));
+    }
+    expect(bridgeCount).toBe(1);
+    unmount();
+  });
+
+  it('returns to the workspace picker after a failed workspace open', async () => {
+    const { stdin, lastFrame, unmount } = renderApp();
+    await waitForReady(lastFrame);
+    emit({
+      type: 'session_open_failed', session_id: null,
+      error: { type: 'ValueError', message: 'workspace must be an existing directory: /deleted' },
+    });
+    await waitFor(() => expect(lastFrame()).toContain('workspace must be an existing directory'));
+    expect(sent.some((m) => m.type === 'list_workspaces')).toBe(true);
+    emit({ type: 'workspaces_listed', workspaces: ['/w'] });
+    await waitFor(() => expect(lastFrame()).toContain('❯ /w'));
+    stdin.write('\r');
+    await waitFor(() => expect(sent.filter((m) => m.type === 'open_session')).toHaveLength(2));
+    await waitForReady(lastFrame);
+    unmount();
+  });
+
+  it('can choose a workspace instead of retrying an occupied session', async () => {
+    const { stdin, lastFrame, unmount } = renderApp();
+    await waitForReady(lastFrame);
+    emit({
+      type: 'session_open_failed', session_id: 'occupied',
+      error: { type: 'SessionInUseError', message: 'occupied' },
+    });
+    await waitFor(() => expect(lastFrame()).toContain('in use in another window'));
+    stdin.write('\u001b');
+    await waitFor(() => expect(lastFrame()).toContain('ask anything…'));
+    await typeDraft(stdin, lastFrame, '/workspaces');
+    stdin.write('\r');
+    await waitFor(() => expect(sent.some((m) => m.type === 'list_workspaces')).toBe(true));
+    emit({ type: 'workspaces_listed', workspaces: ['/next'] });
+    await waitFor(() => expect(lastFrame()).toContain('❯ /next'));
+    stdin.write('\r');
+    await waitForReady(lastFrame);
+    expect(sent.filter((m) => m.type === 'open_session').at(-1)).toMatchObject({
+      workspace: '/next', session_id: null,
+    });
+    unmount();
+  });
+
+  it.each(['/sessions', '/workspaces'])('keeps %s from switching during a turn', async (command) => {
+    const { stdin, lastFrame, unmount } = renderApp();
+    await waitForReady(lastFrame);
+    emit({ type: 'assistant_delta', turn_id: 't1', text: 'working', model_call_index: 1 });
+    await waitFor(() => expect(lastFrame()).toContain('working'));
+    await typeDraft(stdin, lastFrame, command);
+    stdin.write('\r');
+    await wait(30);
+    expect(sent.some((m) => m.type === 'list_sessions' || m.type === 'list_workspaces')).toBe(false);
+    expect(sent.filter((m) => m.type === 'open_session')).toHaveLength(1);
+    expect(lastFrame()).toContain(command);
+    unmount();
+  });
+
+  it('continues the original session after selecting an occupied GUI session and pressing Escape', async () => {
+    const { stdin, lastFrame, unmount } = renderApp();
+    await waitForReady(lastFrame);
+    emit({ type: 'session_items', items: [{ role: 'user', content: 'original conversation' }] });
+    await waitFor(() => expect(lastFrame()).toContain('original conversation'));
+    const snapshot = {
+      type: 'runtime_state' as const, phase: 'idle' as const, turn_id: null,
+      provider: 'test', workspace: '/w', permission_preset: 'ask_for_approval' as const,
+      context_window: null, cache_usage: null, jobs: [], approval: null, question: null, plan: null,
+    };
+    autoReady = false;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      await typeDraft(stdin, lastFrame, '/sessions');
+      stdin.write('\r');
+      await waitFor(() => expect(lastFrame()).toContain('Sessions'));
+      emit({ type: 'sessions_listed', sessions: [{ session_id: 'gui-session', title: 'Open in GUI' }] });
+      await waitFor(() => expect(lastFrame()).toContain('Open in GUI'));
+      stdin.write('\r');
+      await waitFor(() => expect(sent.filter((m) => m.type === 'open_session')).toHaveLength(attempt + 1));
+      // Let the picker close before the failure reopens it, so Escape is not
+      // delivered to the handler of the previous frame.
+      await waitFor(() => expect(lastFrame()).not.toContain('↑/↓ select'));
+      emit({
+        type: 'session_open_failed', session_id: 'gui-session',
+        error: { type: 'SessionInUseError', message: 'occupied' }, runtime: snapshot,
+      });
+      await waitFor(() => expect(lastFrame()).toContain('↑/↓ select'));
+      expect(lastFrame()).toContain('in use in another window');
+      expect(lastFrame()).toContain('original conversation');
+      stdin.write('\u001b');
+      await waitFor(() => expect(lastFrame()).toContain('ask anything…'));
+      await typeDraft(stdin, lastFrame, `continue original ${attempt}`);
+      stdin.write('\r');
+      await waitFor(() => expect(turns()).toHaveLength(attempt));
+      expect(turns().at(-1).text).toBe(`continue original ${attempt}`);
+      emit(snapshot);
+      emit({ type: 'turn_completed', turn_id: turns().at(-1).turn_id, usage: null });
+      await waitForReady(lastFrame);
+    }
+    expect(sent.filter((m) => m.type === 'load_session')).toHaveLength(1);
+    expect(bridgeCount).toBe(1);
+    expect(shutdownCount).toBe(0);
+    unmount();
   });
 
   it('replays a long conversation without walking into the render limit', async () => {
@@ -797,7 +997,7 @@ describe('App', () => {
     ).toBe(2);
 
     emit({
-      type: 'session_ready', protocol_version: 1,
+      type: 'session_ready', protocol_version: 2,
       session_id: 'sess-1234',
       workspace: '/w',
       provider: 'test',

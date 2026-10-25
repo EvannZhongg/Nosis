@@ -26,6 +26,7 @@ from .protocol import (
     session_open_failed_message,
     session_items_message,
     sessions_listed_message,
+    workspaces_listed_message,
     session_title_updated_message,
     settings_snapshot_message,
     settings_update_failed_message,
@@ -95,6 +96,8 @@ class Bridge:
             state = None
             if type == "runtime_state":
                 state = message
+            elif type == "session_open_failed" and self.host.sessions.session is not None:
+                state = self._runtime_snapshot()
             elif type in {
                 "permission_changed", "provider_changed", "workspace_changed",
                 "plan_updated", "context_window", "model_completed", "compression_completed", "job_status", "fatal",
@@ -410,6 +413,15 @@ class Bridge:
         )
 
 
+    def _emit_workspaces(self) -> None:
+        if self.host.sessions.store is None:
+            raise RuntimeError("received 'list_workspaces' before 'open_session'")
+        self.emit(**workspaces_listed_message([
+            str(group["workspace"])
+            for group in self.host.sessions.store.list_sessions()
+        ]))
+
+
     def _emit_session_items(self) -> None:
         """Answer ``load_session`` with the conversation to render."""
         if self.host.sessions.session is None:
@@ -513,6 +525,9 @@ class Bridge:
 
             if message is None or message["type"] == "shutdown":
                 return
+            if message["type"] == "list_workspaces" and self.host.sessions.store is not None:
+                self._emit_workspaces()
+                continue
             if not opened or message["type"] == "open_session":
                 if message["type"] == "list_sessions" and self.host.sessions.workspace is not None:
                     self._emit_sessions()
@@ -529,10 +544,10 @@ class Bridge:
                     raise SystemExit(1)
                 try:
                     self.open_session(message)
-                except SessionInUseError as error:
-                    opened = False
-                    self._session_opened = False
-                    self.emit(**session_open_failed_message(error.session_id, str(error)))
+                except (SessionInUseError, ValueError, OSError) as error:
+                    opened = self.host.sessions.session is not None
+                    self._session_opened = opened
+                    self.emit(**session_open_failed_message(message.get("session_id"), error))
                     continue
                 opened = True
             elif message["type"] == "user_turn":

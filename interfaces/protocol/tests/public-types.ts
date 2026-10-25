@@ -18,7 +18,7 @@ function inspect(message: Incoming): void {
   void message.replayed;
   if (message.type === 'assistant_delta') console.log(message.text);
   if (message.type === 'session_ready') {
-    const major: 1 = message.protocol_version;
+    const major: 2 = message.protocol_version;
     console.log(major);
   }
 }

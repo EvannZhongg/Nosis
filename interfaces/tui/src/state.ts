@@ -53,6 +53,11 @@ export type UserQuestionState = {
   selectedIndex: number;
 };
 
+export type NavigationPicker = (
+  | { kind: 'sessions'; list: SessionSummary[] | null }
+  | { kind: 'workspaces'; list: string[] | null }
+) & { selectedIndex: number };
+
 export type State = {
   status: Status;
   sessionId: string | null;
@@ -72,8 +77,7 @@ export type State = {
     choice: ApprovalChoice;
   } | null;
   question: UserQuestionState | null;
-  /** Open session picker, filled once the bridge answers `list_sessions`. */
-  sessions: { list: SessionSummary[]; selectedIndex: number } | null;
+  picker: NavigationPicker | null;
   settings: SettingsSnapshot | null;
   turnId: string | null;
   usage: Usage | null;
@@ -92,12 +96,11 @@ export type Action =
   | { type: 'approval_resolved' }
   | { type: 'question_choice'; selectedIndex: number }
   | { type: 'question_resolved' }
-  | { type: 'sessions_opened' }
-  | { type: 'sessions_choice'; selectedIndex: number }
-  | { type: 'sessions_closed' }
+  | { type: 'picker_opened'; kind: NavigationPicker['kind'] }
+  | { type: 'picker_choice'; selectedIndex: number }
+  | { type: 'picker_closed' }
   | { type: 'settings_closed' }
-  /** Drops everything the previous runtime reported, for a new Session. */
-  | { type: 'restart' }
+  | { type: 'session_opening' }
   | { type: 'cancelling' }
   | { type: 'exited'; code: number | null };
 
@@ -112,7 +115,7 @@ export const initialState: State = {
   mcpStatus: null,
   approval: null,
   question: null,
-  sessions: null,
+  picker: null,
   settings: null,
   turnId: null,
   usage: null,
@@ -387,26 +390,25 @@ function reduceAction(state: State, action: Action): State {
     case 'question_resolved':
       return { ...state, status: 'running', question: null };
 
-    case 'sessions_opened':
-      return { ...state, sessions: { list: [], selectedIndex: 0 } };
+    case 'picker_opened':
+      return { ...state, picker: { kind: action.kind, list: null, selectedIndex: 0 } };
 
-    case 'sessions_choice':
-      return state.sessions === null
+    case 'picker_choice':
+      return state.picker === null
         ? state
         : {
             ...state,
-            sessions: { ...state.sessions, selectedIndex: action.selectedIndex },
+            picker: { ...state.picker, selectedIndex: action.selectedIndex },
           };
 
-    case 'sessions_closed':
-      return { ...state, sessions: null };
+    case 'picker_closed':
+      return { ...state, picker: null };
 
     case 'settings_closed':
       return { ...state, settings: null };
 
-    case 'restart':
-      // The next runtime reports its own workspace, model and preset.
-      return initialState;
+    case 'session_opening':
+      return { ...state, status: 'opening', picker: null };
 
     case 'cancelling':
       return state.status === 'idle' || state.status === 'fatal'
@@ -478,21 +480,27 @@ function applyMessage(state: State, message: Incoming): State {
         mcpStatus: `MCP ${message.server}: ${message.status}${message.tool_count === undefined ? '' : ` (${message.tool_count} tools)`}${message.error === undefined ? '' : ` — ${message.error}`}`,
       };
 
-    case 'session_open_failed':
+    case 'session_open_failed': {
+      const retained = message.runtime && state.sessionId !== null
+        ? applyMessage(state, message.runtime)
+        : { ...initialState, status: 'session_unavailable' as const, workspace: state.workspace };
       return {
-        ...initialState,
-        status: 'session_unavailable',
-        workspace: state.workspace,
-        sessions: { list: [], selectedIndex: 0 },
-        entries: [{
+        ...retained,
+        picker: { kind: message.error.type === 'SessionInUseError' ? 'sessions' : 'workspaces', list: null, selectedIndex: 0 },
+        entries: [...retained.entries, {
           kind: 'notice', id: nextId('notice'), level: 'warning',
-          text: 'This session is in use in another window. Select another session, or return to its current window.',
+          text: message.error.type === 'SessionInUseError'
+            ? retained.sessionId !== null
+              ? 'This session is in use in another window. Press Esc to continue the current conversation, or select another session.'
+              : 'This session is in use in another window. Select another session, or return to its current window.'
+            : message.error.message,
         }],
       };
+    }
 
     case 'session_ready':
       return {
-        ...state,
+        ...initialState,
         sessionId: message.session_id,
         usage: null,
         workspace: message.workspace,
@@ -501,7 +509,6 @@ function applyMessage(state: State, message: Incoming): State {
         permissionPreset: message.permission_preset,
         entries: message.resumed
           ? [
-              ...state.entries,
               {
                 kind: 'notice',
                 id: nextId('notice'),
@@ -509,7 +516,7 @@ function applyMessage(state: State, message: Incoming): State {
                 text: `Resumed session with ${message.message_count} message(s).`,
               },
             ]
-          : state.entries,
+          : [],
       };
 
     case 'assistant_delta':
@@ -700,20 +707,24 @@ function applyMessage(state: State, message: Incoming): State {
       return { ...state, usage: null };
 
     case 'sessions_listed':
-      return state.sessions === null
-        ? state
-        : { ...state, sessions: { list: message.sessions, selectedIndex: 0 } };
+      return state.picker?.kind === 'sessions'
+        ? { ...state, picker: { kind: 'sessions', list: message.sessions, selectedIndex: 0 } }
+        : state;
+
+    case 'workspaces_listed':
+      return state.picker?.kind === 'workspaces'
+        ? { ...state, picker: { kind: 'workspaces', list: message.workspaces, selectedIndex: 0 } }
+        : state;
 
     case 'session_title_updated':
-      return state.sessions === null ? state : {
+      return state.picker?.kind !== 'sessions' ? state : {
         ...state,
-        sessions: { ...state.sessions, list: state.sessions.list.map((item) =>
-          item.session_id === message.session_id ? { ...item, title: message.title } : item) },
+        picker: { ...state.picker, list: state.picker.list?.map((item) =>
+          item.session_id === message.session_id ? { ...item, title: message.title } : item) ?? null },
       };
 
     case 'session_items':
-      // Appended rather than prepended: the restart already emptied the
-      // transcript, so the resumed notice stays above the stored turns.
+      // session_ready cleared the previous transcript and added the resumed notice.
       return { ...state, entries: [...state.entries, ...historyEntries(message.items)] };
 
     case 'user_question': {

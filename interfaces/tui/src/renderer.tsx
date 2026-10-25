@@ -3,8 +3,8 @@ import { Box, Static, Text, useBoxMetrics } from 'ink';
 import type { DOMElement } from 'ink';
 import Spinner from 'ink-spinner';
 import { cacheHitPercent, formatArguments } from '@nosis/protocol';
-import type { ApprovalKind, PermissionPreset, PlanSnapshot, SessionSummary, SettingsSnapshot } from '@nosis/protocol/internal';
-import type { ApprovalChoice, Entry, State, UserQuestionState } from './state.js';
+import type { ApprovalKind, PermissionPreset, PlanSnapshot, SettingsSnapshot } from '@nosis/protocol/internal';
+import type { ApprovalChoice, Entry, NavigationPicker as NavigationPickerState, State, UserQuestionState } from './state.js';
 
 function EntryView({ entry }: { entry: Entry }): React.ReactElement {
   if (entry.kind === 'user') {
@@ -276,7 +276,7 @@ export function StatusBar({ state, elapsed }: { state: State; elapsed: number })
   if (state.status === 'session_unavailable') {
     return (
       <Box flexShrink={0} paddingX={1}>
-        <Text color="yellow"> session in use · /sessions to choose another conversation</Text>
+        <Text color="yellow"> session unavailable · /sessions or /workspaces to choose another conversation</Text>
       </Box>
     );
   }
@@ -439,13 +439,11 @@ export function PermissionPrompt({
   );
 }
 
-export function SessionPicker({
-  sessions,
-  selectedIndex,
-}: {
-  sessions: SessionSummary[];
-  selectedIndex: number;
-}): React.ReactElement {
+export function NavigationPicker({ picker }: { picker: NavigationPickerState }): React.ReactElement {
+  const workspaces = picker.kind === 'workspaces';
+  const items = picker.kind === 'sessions'
+    ? picker.list?.map((session) => ({ id: session.session_id, label: session.title }))
+    : picker.list?.map((workspace) => ({ id: workspace, label: workspace }));
   return (
     <Box
       marginTop={1}
@@ -454,15 +452,17 @@ export function SessionPicker({
       borderColor="cyan"
       paddingX={1}
     >
-      <Text color="cyan" bold>Sessions</Text>
+      <Text color="cyan" bold>{workspaces ? 'Workspaces' : 'Sessions'}</Text>
       <Box marginTop={1} flexDirection="column">
-        {sessions.length === 0 ? (
+        {items === undefined ? (
           <Text dimColor>Loading…</Text>
+        ) : items.length === 0 ? (
+          <Text dimColor>{workspaces ? 'No workspaces with conversation history.' : 'No conversations in this workspace.'}</Text>
         ) : (
-          sessions.map((session, index) => {
-            const selected = index === selectedIndex;
+          items.map((item, index) => {
+            const selected = index === picker.selectedIndex;
             return (
-              <Box key={session.session_id}>
+              <Box key={item.id}>
                 <Text
                   color={selected ? 'cyan' : undefined}
                   dimColor={!selected}
@@ -470,14 +470,14 @@ export function SessionPicker({
                   wrap="truncate-end"
                 >
                   {selected ? '❯ ' : '  '}
-                  {session.title}
+                  {item.label}
                 </Text>
               </Box>
             );
           })
         )}
       </Box>
-      <Text dimColor>↑/↓ select · enter switch · esc close</Text>
+      <Text dimColor>↑/↓ select · enter {workspaces ? 'new session' : 'switch'} · esc close</Text>
     </Box>
   );
 }

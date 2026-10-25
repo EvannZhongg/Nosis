@@ -64,7 +64,9 @@ export function applyMessage(
         items,
         feedback: {
           kind: "alert", id: "session-open", level: "warning",
-          text: "此会话正在其他窗口中使用。请从侧栏选择其他会话，或返回正在使用它的窗口。",
+          text: message.error.type === "SessionInUseError"
+            ? "此会话正在其他窗口中使用。请从侧栏选择其他会话，或返回正在使用它的窗口。"
+            : message.error.message,
         },
       };
 

@@ -85,6 +85,8 @@ stdio 的相对 cwd 基于 Workspace 解析，未配置时使用当前 Workspace
 
 此时不会创建 Provider、MCP、Tool 或 Agent。真正的执行面由首个 Turn 延迟创建。
 
+切换 Session 时先准备目标会话并取得 Journal 写入权，再由 `RuntimeHost` 释放原执行面的会话资源并提交新绑定。目标准备失败不会释放原会话的 Journal、权限、计划或执行状态；重新选择当前 Session 则复用已持有的 Journal 写者。
+
 `TurnRunner` 保证一个 Host 同时只有一个活动 Turn，并统一处理：
 
 - 尚在排队或已经运行的 steer

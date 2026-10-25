@@ -1,6 +1,6 @@
 import React, { useEffect, useReducer, useRef, useState } from 'react';
 import { Box, Text, useApp, useInput, useWindowSize } from 'ink';
-import type { Incoming, Outgoing, PermissionPreset, SessionSummary } from '@nosis/protocol/internal';
+import type { Incoming, Outgoing, PermissionPreset } from '@nosis/protocol/internal';
 import { BridgeClient } from '@nosis/client';
 import { COMMANDS, parseCommand } from './commands.js';
 import { Prompt } from './input.js';
@@ -10,7 +10,7 @@ import {
   PlanView,
   ModelPicker,
   ProviderOverview,
-  SessionPicker,
+  NavigationPicker,
   StatusBar,
   Transcript,
   UserQuestionPrompt,
@@ -20,6 +20,11 @@ import { initialState, reducer } from './state.js';
 export type AppProps = {
   python: string;
   workspace: string;
+};
+
+type SessionSelection = {
+  workspace: string;
+  sessionId: string | null;
 };
 
 const PERMISSION_PRESETS: PermissionPreset[] = [
@@ -50,7 +55,7 @@ export function App(props: AppProps): React.ReactElement {
   const [draft, setDraft] = useState('');
   const [questionDraft, setQuestionDraft] = useState('');
   const [permissionChoice, setPermissionChoice] = useState<PermissionPreset | null>(null);
-  const [selection, setSelection] = useState<{ sessionId: string | null }>({ sessionId: null });
+  const [selection, setSelection] = useState<SessionSelection>({ workspace: props.workspace, sessionId: null });
   const [settingsMode, setSettingsMode] = useState<'model' | 'provider' | null>(null);
   const [modelChoice, setModelChoice] = useState(0);
   const [elapsed, setElapsed] = useState(0);
@@ -71,7 +76,9 @@ export function App(props: AppProps): React.ReactElement {
         if (bridgeRef.current !== client) return;
         dispatch({ type: 'message', message });
         if (message.type === 'session_ready') client.send({ type: 'load_session' });
-        if (message.type === 'session_open_failed') client.send({ type: 'list_sessions' });
+        if (message.type === 'session_open_failed') {
+          client.send({ type: message.error.type === 'SessionInUseError' ? 'list_sessions' : 'list_workspaces' });
+        }
       },
       onExit: (code) => {
         if (bridgeRef.current !== client) return;
@@ -106,7 +113,7 @@ export function App(props: AppProps): React.ReactElement {
   useEffect(() => {
     bridgeRef.current?.send({
       type: 'open_session',
-      workspace: protocolPath(props.workspace),
+      workspace: protocolPath(selection.workspace),
       session_id: selection.sessionId,
     });
   }, [selection, props.python, props.workspace]);
@@ -240,43 +247,46 @@ export function App(props: AppProps): React.ReactElement {
     { isActive: permissionChoice !== null },
   );
 
-  /** Hands the runtime to another conversation in this workspace. */
-  const switchSession = (choice: SessionSummary): void => {
-    // `restart` also closes the picker and empties the transcript.
-    dispatch({ type: 'restart' });
-    setSelection({ sessionId: choice.session_id });
+  const openSession = (workspace: string, sessionId: string | null): void => {
+    dispatch({ type: 'session_opening' });
+    setSelection({ workspace, sessionId });
   };
 
   useInput(
     (_input, key) => {
-      const sessions = state.sessions;
-      if (sessions === null) return;
+      const picker = state.picker;
+      if (picker === null) return;
       if (key.escape) {
-        dispatch({ type: 'sessions_closed' });
+        dispatch({ type: 'picker_closed' });
         return;
       }
-      if (sessions.list.length === 0) return;
+      if (!picker.list?.length) return;
       if (key.upArrow || (key.tab && key.shift)) {
         dispatch({
-          type: 'sessions_choice',
+          type: 'picker_choice',
           selectedIndex:
-            (sessions.selectedIndex - 1 + sessions.list.length) % sessions.list.length,
+            (picker.selectedIndex - 1 + picker.list.length) % picker.list.length,
         });
         return;
       }
       if (key.downArrow || key.tab) {
         dispatch({
-          type: 'sessions_choice',
-          selectedIndex: (sessions.selectedIndex + 1) % sessions.list.length,
+          type: 'picker_choice',
+          selectedIndex: (picker.selectedIndex + 1) % picker.list.length,
         });
         return;
       }
       if (key.return) {
-        const choice = sessions.list[sessions.selectedIndex];
-        if (choice) switchSession(choice);
+        if (picker.kind === 'workspaces') {
+          const workspace = picker.list[picker.selectedIndex];
+          if (workspace) openSession(workspace, null);
+        } else {
+          const session = picker.list[picker.selectedIndex];
+          if (session) openSession(state.workspace || selection.workspace, session.session_id);
+        }
       }
     },
-    { isActive: state.sessions !== null },
+    { isActive: state.picker !== null },
   );
 
   useInput(
@@ -333,7 +343,7 @@ export function App(props: AppProps): React.ReactElement {
     {
       isActive:
         state.approval === null && state.question === null && permissionChoice === null
-        && state.sessions === null && settingsMode === null,
+        && state.picker === null && settingsMode === null,
     },
   );
 
@@ -344,8 +354,9 @@ export function App(props: AppProps): React.ReactElement {
     // while the Session opens, but do not let a command overtake its initial
     // execution snapshot and then get reset back to idle by that snapshot.
     if (state.status === 'opening') return;
-    if (state.status === 'session_unavailable' && text !== '/sessions') return;
+    if (state.status === 'session_unavailable' && text !== '/sessions' && text !== '/workspaces') return;
     const parsed = parseCommand(text);
+    if ((parsed?.command.name === '/sessions' || parsed?.command.name === '/workspaces') && inputBusy) return;
     if (parsed?.command.name === '/refresh' && inputBusy) return;
     if (!parsed && busy && state.turnId === null) return;
     setDraft('');
@@ -354,7 +365,10 @@ export function App(props: AppProps): React.ReactElement {
       if (parsed.command.name === '/permissions') setPermissionChoice(state.permissionPreset);
       else if (parsed.command.name === '/sessions') {
         bridgeRef.current?.send({ type: 'list_sessions' });
-        dispatch({ type: 'sessions_opened' });
+        dispatch({ type: 'picker_opened', kind: 'sessions' });
+      } else if (parsed.command.name === '/workspaces') {
+        bridgeRef.current?.send({ type: 'list_workspaces' });
+        dispatch({ type: 'picker_opened', kind: 'workspaces' });
       } else if (parsed.command.name === '/model') {
         if (busy) return;
         setSettingsMode('model');
@@ -418,12 +432,9 @@ export function App(props: AppProps): React.ReactElement {
             <PermissionPrompt selected={permissionChoice} />
           </Box>
         ) : null}
-        {state.sessions ? (
+        {state.picker ? (
           <Box flexShrink={0}>
-            <SessionPicker
-              sessions={state.sessions.list}
-              selectedIndex={state.sessions.selectedIndex}
-            />
+            <NavigationPicker picker={state.picker} />
           </Box>
         ) : null}
         {settingsMode === 'model' && state.settings ? <Box flexShrink={0}><ModelPicker settings={state.settings} selectedIndex={modelChoice} /></Box> : null}
@@ -435,7 +446,7 @@ export function App(props: AppProps): React.ReactElement {
         <Box flexShrink={0} marginTop={1}>
           <Text dimColor>Press Ctrl+C to exit.</Text>
         </Box>
-      ) : permissionChoice || state.sessions || settingsMode ? null : state.question && freeTextSelected ? (
+      ) : permissionChoice || state.picker || settingsMode ? null : state.question && freeTextSelected ? (
         <Prompt
           value={questionDraft}
           onChange={setQuestionDraft}
@@ -453,10 +464,10 @@ export function App(props: AppProps): React.ReactElement {
           value={draft}
           onChange={setDraft}
           onSubmit={submit}
-          focus={state.approval === null && permissionChoice === null && state.sessions === null && settingsMode === null}
+          focus={state.approval === null && permissionChoice === null && state.picker === null && settingsMode === null}
           busy={inputBusy}
           docked
-          commands={state.status === 'session_unavailable' ? COMMANDS.filter((command) => command.name === '/sessions') : COMMANDS}
+          commands={state.status === 'session_unavailable' ? COMMANDS.filter((command) => command.name === '/sessions' || command.name === '/workspaces') : COMMANDS}
           placeholder={inputBusy ? 'steer the current turn…' : undefined}
         />
       )}

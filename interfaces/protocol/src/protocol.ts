@@ -1,6 +1,6 @@
-// Public stdio Bridge protocol, major 1. Keep Python senders and the reference in sync.
+// Public stdio Bridge protocol, major 2. Keep Python senders and the reference in sync.
 
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 export type JSONValue =
   | string
@@ -202,7 +202,7 @@ export type Incoming = (
   | RuntimeState
   | {
       type: 'session_ready';
-      protocol_version: 1;
+      protocol_version: 2;
       session_id: string;
       workspace: string;
       provider: string;
@@ -281,6 +281,7 @@ export type Incoming = (
   | { type: 'runtime_refreshed'; provider: string; model: string }
   | { type: 'runtime_refresh_failed'; error: RuntimeFailure }
   | { type: 'sessions_listed'; sessions: SessionSummary[] }
+  | { type: 'workspaces_listed'; workspaces: string[] }
   | { type: 'session_title_updated'; session_id: string; title: string; title_source: 'initial' | 'generated' | 'manual' }
   | { type: 'session_items'; items: SessionItem[] }
   | { type: 'plan_updated'; plan: PlanSnapshot }
@@ -290,7 +291,7 @@ export type Incoming = (
   | { type: 'turn_cancelled'; turn_id: string }
   | { type: 'turn_failed'; turn_id: string; error: RuntimeFailure }
   | { type: 'fatal'; error: RuntimeFailure }
-  | { type: 'session_open_failed'; session_id: string; error: { type: 'SessionInUseError'; message: string } }
+  | { type: 'session_open_failed'; session_id: string | null; error: ProtocolError }
 ) & {
   event_sequence: number;
   runtime?: RuntimeState;
@@ -318,6 +319,7 @@ export type Outgoing =
   | { type: 'user_question_response'; request_id: string; option_id?: string; text?: string }
   // List stored conversations; control-plane-only Sessions can be absent.
   | { type: 'list_sessions' }
+  | { type: 'list_workspaces' }
   | { type: 'load_session' }
   | { type: 'shutdown' };
 

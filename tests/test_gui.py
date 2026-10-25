@@ -20,6 +20,7 @@ from agent_core import (
     MemoryDocument,
     MemoryStore,
     Session,
+    SessionInUseError,
     Workspace,
 )
 from agent_core.scheduler import IntervalTrigger, OneShotTrigger, SchedulerService
@@ -619,7 +620,7 @@ class GuiTest(unittest.TestCase):
         for selected in ("occupied", "another"):
             with self.subTest(selected=selected):
                 failed = FakeBridge(replies={"open_session": [
-                    bridge_protocol.session_open_failed_message("occupied", "Session is already in use"),
+                    bridge_protocol.session_open_failed_message("occupied", SessionInUseError("occupied")),
                 ]})
                 ready = FakeBridge(replies={"open_session": [
                     {"type": "session_ready", "session_id": selected},

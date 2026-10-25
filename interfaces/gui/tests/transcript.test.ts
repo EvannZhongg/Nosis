@@ -203,6 +203,16 @@ it("shows session occupancy as actionable feedback without changing the transcri
   expect(applied.finished).toBeUndefined();
 });
 
+it("shows workspace opening errors without reporting session occupancy", () => {
+  const items: TranscriptItem[] = [{ role: "user", content: "stored history" }];
+  const applied = applyMessage(items, {
+    type: "session_open_failed", session_id: null,
+    error: { type: "ValueError", message: "workspace must be an existing directory" },
+  });
+  expect(applied.items).toBe(items);
+  expect(applied.feedback?.text).toBe("workspace must be an existing directory");
+});
+
 describe("isTurnActivity", () => {
   it.each([
     { type: "assistant_delta", turn_id: "t1", text: "hi", model_call_index: 1 },
@@ -348,7 +358,7 @@ describe("applyMessage", () => {
 
   it("reports permission state from session readiness and later changes", () => {
     const ready = applyMessage([], {
-      type: "session_ready", protocol_version: 1,
+      type: "session_ready", protocol_version: 2,
       session_id: "s1",
       workspace: "/tmp/work",
       provider: "test",
@@ -758,7 +768,7 @@ describe("applyMessage", () => {
     for (const message of [
       {
         type: "session_ready" as const,
-        protocol_version: 1 as const,
+        protocol_version: 2 as const,
         session_id: "s1",
         workspace: "/tmp",
         provider: "test",

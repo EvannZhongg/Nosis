@@ -5,7 +5,7 @@ import { initialState, reducer, type State } from '../src/state.js';
 
 const READY = {
   type: 'session_ready' as const,
-  protocol_version: 1 as const,
+  protocol_version: 2 as const,
   session_id: 'abc12345-0000',
   workspace: '/tmp/work',
   provider: 'deepseek',
@@ -38,13 +38,13 @@ const RUNTIME_READY = {
 };
 
 it('updates a session picker title from a structured title event', () => {
-  const state = { ...initialState, sessions: {
+  const state: State = { ...initialState, picker: { kind: 'sessions',
     list: [{ session_id: 's', title: 'initial' }], selectedIndex: 0,
   } };
   const updated = reducer(state, { type: 'message', message: {
     type: 'session_title_updated', session_id: 's', title: 'Generated title', title_source: 'generated',
   } });
-  expect(updated.sessions?.list[0].title).toBe('Generated title');
+  expect(updated.picker).toMatchObject({ list: [{ title: 'Generated title' }] });
 });
 
 describe('plan', () => {
@@ -651,8 +651,8 @@ describe('sessions', () => {
   });
 
   it('fills the open picker with the workspace sessions', () => {
-    let state = reducer(ready(), { type: 'sessions_opened' });
-    expect(state.sessions).toEqual({ list: [], selectedIndex: 0 });
+    let state = reducer(ready(), { type: 'picker_opened', kind: 'sessions' });
+    expect(state.picker).toEqual({ kind: 'sessions', list: null, selectedIndex: 0 });
 
     state = reducer(state, {
       type: 'message',
@@ -664,16 +664,15 @@ describe('sessions', () => {
         ],
       },
     });
-    expect(state.sessions?.list.map((session) => session.session_id)).toEqual([
-      'newer',
-      'older',
-    ]);
+    expect(state.picker).toMatchObject({ list: [
+      { session_id: 'newer' }, { session_id: 'older' },
+    ] });
 
-    state = reducer(state, { type: 'sessions_choice', selectedIndex: 1 });
-    expect(state.sessions?.selectedIndex).toBe(1);
+    state = reducer(state, { type: 'picker_choice', selectedIndex: 1 });
+    expect(state.picker?.selectedIndex).toBe(1);
 
-    state = reducer(state, { type: 'sessions_closed' });
-    expect(state.sessions).toBeNull();
+    state = reducer(state, { type: 'picker_closed' });
+    expect(state.picker).toBeNull();
   });
 
   it('drops a listing that arrives after the picker closed', () => {
@@ -687,6 +686,17 @@ describe('sessions', () => {
         },
       }),
     ).toBe(state);
+  });
+
+  it('keeps late responses from replacing another picker and distinguishes an empty list', () => {
+    let state = reducer(ready(), { type: 'picker_opened', kind: 'workspaces' });
+    expect(reducer(state, { type: 'message', message: { type: 'sessions_listed', sessions: [] } })).toBe(state);
+    state = reducer(state, { type: 'message', message: { type: 'workspaces_listed', workspaces: [] } });
+    expect(state.picker).toEqual({ kind: 'workspaces', list: [], selectedIndex: 0 });
+    state = reducer(state, { type: 'picker_opened', kind: 'sessions' });
+    expect(reducer(state, { type: 'message', message: { type: 'workspaces_listed', workspaces: ['/other'] } })).toBe(state);
+    state = reducer(state, { type: 'picker_closed' });
+    expect(reducer(state, { type: 'message', message: { type: 'workspaces_listed', workspaces: ['/other'] } })).toBe(state);
   });
 
   it('keeps the resumed notice above the replayed conversation', () => {
@@ -794,15 +804,40 @@ describe('sessions', () => {
     ]);
   });
 
-  it('drops everything the previous runtime reported on a restart', () => {
+  it('preserves the current session until a new session is ready', () => {
     let state = reducer(ready(), {
       type: 'message',
       message: { type: 'assistant_delta', turn_id: 't1', text: 'partial', model_call_index: 1 },
     });
-    state = reducer(state, { type: 'sessions_opened' });
+    state = reducer(state, { type: 'picker_opened', kind: 'sessions' });
 
-    state = reducer(state, { type: 'restart' });
+    const original = state;
+    state = reducer(state, { type: 'session_opening' });
 
-    expect(state).toEqual(initialState);
+    expect(state).toEqual({ ...original, status: 'opening', picker: null });
+    state = reducer(state, { type: 'message', message: { ...READY, session_id: 'next' } });
+    expect(state.sessionId).toBe('next');
+    expect(state.status).toBe('opening');
+    expect(state.entries).toEqual([]);
+    expect(state.contextWindow).toBeNull();
+  });
+
+  it('keeps the current conversation usable when the bridge retains it after a failed switch', () => {
+    const original = reducer(ready(), { type: 'message', message: {
+      type: 'session_items', items: [{ role: 'user', content: 'original history' }],
+    } });
+    let state = reducer(original, { type: 'session_opening' });
+    state = reducer(state, { type: 'message', message: {
+      type: 'session_open_failed', session_id: 'occupied',
+      error: { type: 'SessionInUseError', message: 'occupied' }, runtime: RUNTIME_READY,
+    } });
+    expect(state.status).toBe('idle');
+    expect(state.sessionId).toBe(original.sessionId);
+    expect(state.entries[0]).toEqual(original.entries[0]);
+    expect(state.contextWindow).toEqual(original.contextWindow);
+    state = reducer(state, { type: 'picker_closed' });
+    expect(state.picker).toBeNull();
+    expect(state.status).toBe('idle');
+    expect(state.sessionId).toBe(original.sessionId);
   });
 });

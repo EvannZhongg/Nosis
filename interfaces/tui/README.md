@@ -35,9 +35,12 @@ TUI 在启动或切换 Session 时先发送 `open_session`，收到首个 `runti
 | --- | --- |
 | `/permissions` | 切换当前 Session 的权限 preset |
 | `/sessions` | 列出并切换当前 Workspace 的历史 Session |
+| `/workspaces` | 列出有历史会话的 Workspace，选择后在目标工作区新建 Session，可直接开始对话 |
 | `/model` | 切换当前 Session 的 Provider |
 | `/provider` | 查看 Provider、Skill、Plugin 与 MCP 配置概览 |
 | `/refresh` | 空闲时重新加载当前会话的配置、Prompt、Skill、Plugin 与 MCP 连接，保留对话和计划 |
+
+目标会话被其他窗口占用或打开失败时，保留当前会话；按 `Esc` 关闭选择列表后可继续原会话。首次打开失败时仍需选择可用的会话或工作区。
 
 常用按键：
 

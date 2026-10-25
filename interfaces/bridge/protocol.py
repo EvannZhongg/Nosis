@@ -30,12 +30,12 @@ from agent_core import (
 from agent_core.usage import cache_usage_to_dict, usage_to_dict
 
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 
 COMMAND_TYPES = frozenset({
     "open_session", "user_turn", "user_steer", "cancel", "approval_response",
     "user_question_response", "permission_set", "provider_set", "workspace_set",
-    "list_sessions", "load_session", "shutdown", "settings_get",
+    "list_sessions", "list_workspaces", "load_session", "shutdown", "settings_get",
     "settings_provider_save", "settings_agent_save", "settings_routing_save",
     "runtime_refresh",
 })
@@ -118,11 +118,11 @@ def session_ready_message(
     }
 
 
-def session_open_failed_message(session_id: str, message: str) -> dict[str, object]:
+def session_open_failed_message(session_id: str | None, error: Exception) -> dict[str, object]:
     return {
         "type": "session_open_failed",
         "session_id": session_id,
-        "error": {"type": "SessionInUseError", "message": message},
+        "error": {"type": type(error).__name__, "message": str(error)},
     }
 
 
@@ -198,6 +198,10 @@ def sessions_listed_message(
         "type": "sessions_listed",
         "sessions": sessions,
     }
+
+
+def workspaces_listed_message(workspaces: list[str]) -> dict[str, object]:
+    return {"type": "workspaces_listed", "workspaces": workspaces}
 
 
 def session_title_updated_message(

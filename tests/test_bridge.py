@@ -411,7 +411,7 @@ class ProtocolTest(unittest.TestCase):
             ),
             {
                 "type": "session_ready",
-                "protocol_version": 1,
+                "protocol_version": 2,
                 "session_id": "s1",
                 "workspace": "/tmp/work",
                 "provider": "test",
@@ -1151,6 +1151,54 @@ class BridgeUserQuestionTest(BridgeTestCase):
 
 
 class BridgeServeTest(BridgeTestCase):
+    def test_lists_workspaces_without_changing_the_open_session(self) -> None:
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        other = root / "other"
+        other.mkdir()
+        store = JsonlSessionStore(root / "sessions")
+        for workspace, session_id in ((root, "root-history"), (other, "other-history")):
+            session = Session(session_id)
+            session.add_item("user", session_id)
+            store.bind_workspace(session_id, workspace)
+            store.append_events(session_id, session.journal, workspace=workspace)
+        opening = open_session_message(root)
+        bridge, output = self.make_bridge([
+            json.dumps(opening),
+            json.dumps({"type": "list_workspaces"}),
+            json.dumps({"type": "list_sessions"}),
+            json.dumps({"type": "shutdown"}),
+        ], root)
+        bridge.serve()
+        messages = emitted(output)
+        self.assertEqual([message["type"] for message in messages], [
+            "session_ready", "runtime_state", "workspaces_listed", "sessions_listed",
+        ])
+        self.assertEqual(set(messages[2]["workspaces"]), {str(root.resolve()), str(other.resolve())})
+        self.assertEqual(messages[3]["sessions"], [{"session_id": "root-history", "title": "root-history"}])
+        self.assertEqual(bridge.host.sessions.workspace.path, root.resolve())
+        self.assertIsNone(bridge.host.planes.current)
+
+    def test_failed_workspace_open_allows_listing_and_opening_another_workspace(self) -> None:
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        opening = open_session_message(root, workspace=str(root / "deleted"))
+        bridge, output = self.make_bridge([
+            json.dumps(opening),
+            json.dumps({"type": "list_workspaces"}),
+            json.dumps({**opening, "workspace": str(root)}),
+            json.dumps({"type": "load_session"}),
+            json.dumps({"type": "shutdown"}),
+        ], root)
+        bridge.serve()
+        messages = emitted(output)
+        self.assertEqual([message["type"] for message in messages], [
+            "session_open_failed", "workspaces_listed", "session_ready", "runtime_state", "session_items",
+        ])
+        self.assertIsNone(messages[0]["session_id"])
+        self.assertEqual(messages[0]["error"]["type"], "ValueError")
+        self.assertEqual(messages[1]["workspaces"], [])
+        self.assertEqual(messages[2]["workspace"], str(root.resolve()))
+        self.assertEqual(messages[-1]["items"], [])
+
     def test_stops_on_shutdown(self) -> None:
         bridge, _ = self.make_bridge(['{"type": "shutdown"}'])
         bridge.serve()
@@ -1899,6 +1947,112 @@ class ScheduledTurnTest(unittest.TestCase):
 
 class BridgeSessionOpenTest(BridgeTestCase):
     """The bridge selects the provider the interface asked for."""
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows journal ownership")
+    def test_occupied_switch_keeps_original_writer_and_runtime_usable(self) -> None:
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        opening = open_session_message(root, session_id="gui-session")
+        gui, _ = self.make_bridge([], root)
+        gui.open_session(opening)
+        gui.host.sessions.session.add_item("user", "GUI history")
+        tui, output = self.make_bridge([], root)
+        tui.open_session({**opening, "session_id": "tui-session"})
+        original = tui.host.sessions.session
+        original.add_item("user", "TUI history")
+        tui.host.set_permission_preset(PermissionPreset.FULL_ACCESS)
+        tui.host.sessions.plan.update("original plan", (PlanStep("1", "first step", "pending"),))
+        plane = tui.host.planes.ensure(tui.host.sessions)
+        plane.agent = SuccessfulAgent(original)
+        tui._emit_runtime_state("idle")
+        permissions, plan = tui.host.sessions.permissions, tui.host.sessions.plan
+        with patch.object(plane.jobs, "close", wraps=plane.jobs.close) as close_jobs:
+            with patch.object(tui, "read_message", side_effect=[
+                opening, {"type": "load_session"},
+                {"type": "user_turn", "turn_id": "continued", "text": "continue TUI"}, None,
+            ]):
+                tui.serve()
+            close_jobs.assert_not_called()
+        failed = next(message for message in emitted(output) if message["type"] == "session_open_failed")
+        self.assertEqual(failed["runtime"]["phase"], "idle")
+        self.assertEqual(failed["runtime"]["permission_preset"], "full_access")
+        self.assertEqual(failed["runtime"]["plan"]["goal"], "original plan")
+        self.assertIs(tui.host.sessions.session, original)
+        self.assertIs(tui.host.sessions.permissions, permissions)
+        self.assertIs(tui.host.sessions.plan, plan)
+        self.assertIs(tui.host.planes.current, plane)
+        self.assertEqual(emitted(output)[-1]["type"], "turn_completed")
+        self.assertEqual([item.content for item in tui.host.sessions.store.load("tui-session").items],
+                         ["TUI history", "continue TUI", "done"])
+        self.assertEqual([item.content for item in gui.host.sessions.store.load("gui-session").items], ["GUI history"])
+        for session_id in ("gui-session", "tui-session"):
+            with self.assertRaises(SessionInUseError):
+                with JsonlSessionStore(root / "sessions").open_journal(session_id):
+                    pass
+
+    def test_failed_target_preparation_preserves_the_current_binding(self) -> None:
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        bridge, _ = self.make_bridge([], root)
+        opening = open_session_message(root, session_id="original")
+        bridge.open_session(opening)
+        original = bridge.host.sessions.session
+        original.add_item("user", "original history")
+        permissions, plan = bridge.host.sessions.permissions, bridge.host.sessions.plan
+        for change in ({"workspace": str(root / "missing")}, {"provider": "unknown"}):
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                bridge.open_session({**opening, "session_id": "target", **change})
+            self.assertIs(bridge.host.sessions.session, original)
+            self.assertIs(bridge.host.sessions.permissions, permissions)
+            self.assertIs(bridge.host.sessions.plan, plan)
+        with patch.object(JsonlSessionStore, "load", side_effect=ValueError("invalid target journal")):
+            with self.assertRaisesRegex(ValueError, "invalid target journal"):
+                bridge.open_session({**opening, "session_id": "target"})
+        self.assertIs(bridge.host.sessions.session, original)
+        with JsonlSessionStore(root / "sessions").open_journal("target"):
+            pass
+        original.add_item("user", "still writable")
+        self.assertEqual([item.content for item in bridge.host.sessions.store.load("original").items],
+                         ["original history", "still writable"])
+        bridge.open_session(opening)
+        self.assertEqual(bridge.host.sessions.session.session_id, "original")
+        bridge.host.sessions.session.add_item("user", "reselected current session")
+        self.assertEqual(len(bridge.host.sessions.store.load("original").items), 3)
+
+    def test_new_workspace_session_accepts_a_turn_and_preserves_both_workspaces_history(self) -> None:
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        other = root / "other"
+        other.mkdir()
+        opening = open_session_message(root)
+        bridge, output = self.make_bridge([], root)
+        bridge.open_session(opening)
+        original = bridge.host.sessions.session
+        original.add_item("user", "original history")
+        bridge.host.set_permission_preset(PermissionPreset.FULL_ACCESS)
+        bridge.host.sessions.plan.update("original plan", (PlanStep("1", "original step", "pending"),))
+        bridge.open_session({**opening, "workspace": str(other)})
+        fresh = bridge.host.sessions.session
+        self.assertNotEqual(fresh.session_id, original.session_id)
+        self.assertEqual(fresh.items, [])
+        self.assertEqual(fresh.permission_preset, PermissionPreset.ASK_FOR_APPROVAL)
+        self.assertIsNone(bridge.host.sessions.plan.snapshot)
+        self.assertEqual(bridge.host.sessions.store.workspace_for(original.session_id), str(root.resolve()))
+
+        plane = bridge.host.planes.ensure(bridge.host.sessions)
+        self.assertEqual(plane.agent._execution_context.workspace.path, other.resolve())
+        self.assertIs(plane.agent._execution_context.session, fresh)
+        plane.agent = SuccessfulAgent(fresh)
+        bridge.run_turn({"turn_id": "new-workspace-turn", "text": "hello new workspace"})
+        self.assertEqual(emitted(output)[-1]["type"], "turn_completed")
+        stored = bridge.host.sessions.store.load(fresh.session_id)
+        self.assertEqual(stored.workspace, str(other.resolve()))
+        self.assertEqual([item.content for item in stored.items], ["hello new workspace", "done"])
+        bridge._emit_sessions()
+        self.assertEqual(emitted(output)[-1]["sessions"][0]["session_id"], fresh.session_id)
+
+        bridge.open_session({**opening, "workspace": str(other), "session_id": original.session_id})
+        self.assertEqual(bridge.host.sessions.workspace.path, root.resolve())
+        self.assertEqual(bridge.host.sessions.session.items[0].content, "original history")
+        self.assertEqual(bridge.host.sessions.session.permission_preset, PermissionPreset.FULL_ACCESS)
+        self.assertEqual(bridge.host.sessions.plan.snapshot.goal, "original plan")
 
     def test_switching_sessions_reuses_resources_and_rebinds_all_session_state(self) -> None:
         root = Path(self.enterContext(tempfile.TemporaryDirectory()))

@@ -1,4 +1,4 @@
-# Public Bridge protocol, major 1
+# Public Bridge protocol, major 2
 
 This is the local client API for third-party frontends. Install `nosis-agent`,
 start **`nosis-bridge`** as a child process, and exchange UTF-8 newline-delimited
@@ -15,12 +15,14 @@ There is no fixed small line limit: checkpoints can contain the full transcript.
 
 ## Stability and scope
 
-Every `session_ready` advertises `protocol_version: 1`. Clients must check this
+Every `session_ready` advertises `protocol_version: 2`. Clients must check this
 before using the session. A breaking change to documented public fields or
 semantics increments this major and is recorded in this document. Additive fields
 and event kinds may appear within a major; ignore unknown fields/events. This is
 version identification, without version negotiation or a compatibility layer.
-The initial public release introduces major 1.
+Major 2 adds workspace discovery and generalizes `session_open_failed` to
+recoverable opening errors. Its `session_id` is now nullable for failed session
+creation, and its error type is no longer limited to `SessionInUseError`.
 
 The normative field definitions are `Incoming`, `Outgoing` and their referenced
 types in [`@nosis/protocol`](../interfaces/protocol/src/protocol.ts). Directions
@@ -75,10 +77,16 @@ provider credentials. Configure credentials in the installed provider config or
 its referenced environment variables before a model turn; this API does not
 prompt interactively or invent credentials.
 
-If another Runtime owns the session writer, `session_open_failed` contains
-`session_id` and `error: {type: "SessionInUseError", message}`. No ready/sync
-pair follows that failure. The process stays connected; `list_sessions` or
-another `open_session` is allowed. Other opening errors are fatal. A fresh
+Opening failures caused by a writer conflict, invalid workspace/configuration,
+or filesystem error emit `session_open_failed` with the requested `session_id`
+(null when creating a session) and `error: {type, message}`. Writer conflicts
+use `type: "SessionInUseError"`. No ready/sync pair follows that failure.
+The process stays connected; `list_workspaces` or another `open_session` is
+allowed. `list_sessions` is also allowed when a workspace browsing context
+exists. A failed rebind retains the previously opened session and execution
+state; the failure event includes its complete `runtime` snapshot and commands
+can continue against that session. An initial opening failure has no retained
+session or runtime snapshot. Unexpected opening errors are fatal. A fresh
 `open_session` on an idle Bridge rebinds it and produces a new ready/sync pair;
 the process's sequence continues. Do not pipeline a rebind with a turn.
 
@@ -141,6 +149,7 @@ turn: it is emitted before the terminal event. The process may have queued input
 | `provider_set` | Configured `provider`; `provider_changed` with `provider`, `model`, `runtime`. |
 | `workspace_set` | `workspace`; `workspace_changed` with actual path and `runtime`. |
 | `list_sessions` | `sessions_listed.sessions`: current workspace session summaries. |
+| `list_workspaces` | `workspaces_listed.workspaces`: absolute workspace paths with stored conversation history, most recently active first. |
 | `load_session` | `session_items.items`: currently bound conversation. |
 | `shutdown` | Routes cancellation and closes Runtime; process exit is completion. |
 
@@ -154,6 +163,11 @@ Use the opening checkpoint to display initial history; `load_session` is an
 explicit refresh, not a stream replay or cursor acknowledgment.
 The session listing contains stored conversations; a newly opened empty Session
 can be absent from that list.
+The workspace listing uses the same stored conversation groups; empty sessions
+do not register a workspace. Listing does not change the current binding. To
+start chatting in a listed workspace, send `open_session` with its path and
+`session_id: null`, then wait for the ready/sync pair before sending `user_turn`.
+`workspace_set` instead moves the current session into the specified workspace.
 
 Automatic naming may emit `session_title_updated` after the first completed
 assistant/Tool unit, independently of turn completion. It carries `session_id`,
@@ -275,7 +289,7 @@ invalid command arguments can produce other fatal error types. Interaction
 responses, steer and cancel require an opened Session; sending them before opening
 has no error-response guarantee. Only the documented commands are supported.
 
-`session_open_failed` is the recoverable writer-conflict exception described
+`session_open_failed` is the recoverable opening failure described
 above. SDK process errors (missing executable, broken pipe), framing errors,
 stderr and abnormal exit are transport diagnostics, not synthetic Agent events.
 An abrupt exit may occur without `fatal`; do not assume terminal events will arrive.
@@ -293,7 +307,7 @@ Forced termination cannot guarantee completed persistence.
 ```text
 spawn nosis-bridge (pipes)
 send open_session
-receive session_ready; check protocol_version == 1; apply checkpoint
+receive session_ready; check protocol_version == 2; apply checkpoint
 receive runtime_state; apply snapshot
 send user_turn with a fresh turn_id
 receive/render events; answer interactions by request_id

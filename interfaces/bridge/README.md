@@ -28,11 +28,15 @@ TUI 和 GUI 各自负责启动与附着 Bridge 子进程。`process.py` 提供�
 1. `session_ready`：Session、Workspace、Provider 和权限已恢复。
 2. `runtime_state`：当前执行面的权威快照，也是前端发送后续命令前的同步屏障。
 
-Windows Journal 写入权已被其他 Runtime 占用时，Bridge 返回 `session_open_failed`（`SessionInUseError`），保持协议连接并允许 `list_sessions` 或重新发送 `open_session`。前端在收到 `session_ready` 前不得请求历史记录；在初始 `runtime_state` 前不得提交执行命令。同一 GUI 宿主内打开已有会话会附着原 Bridge，模型或工作区变更通过显式协议消息执行，不另建 Session 写者。
+Journal 写入权被占用、工作区或配置无效、文件系统错误导致打开失败时，Bridge 返回 `session_open_failed`，保持协议连接并允许 `list_workspaces` 或重新发送 `open_session`；存在工作区浏览上下文时也允许 `list_sessions`。前端在收到 `session_ready` 前不得请求历史记录；在初始 `runtime_state` 前不得提交执行命令。同一 GUI 宿主内打开已有会话会附着原 Bridge，模型或工作区变更通过显式协议消息执行，不另建 Session 写者。
 
 Provider、MCP、Tool 和 Agent 仍由 Runtime 在首个 `user_turn` 到来时延迟初始化。
 
 空闲时可以再次发送 `open_session`，在同一个 Bridge 进程内切换会话。Runtime 释放旧会话的任务和 Journal，按装配输入决定是否复用重型资源；Bridge 重新发送 `session_ready` 和 `runtime_state` 同步新会话。
+
+切换前先取得目标会话的 Journal 并完成加载，成功后才释放原会话的任务与 Journal。切换失败时原会话及执行状态保持可用，`session_open_failed` 携带原会话的 `runtime` 快照；首次打开失败则没有可保留的会话与快照。
+
+`list_workspaces` 复用 Core 的历史会话分组，返回已有会话的工作区路径。选择工作区后发送该路径和 `session_id: null`，即可新建会话并在同步后直接对话；`list_sessions` 继续只列出当前工作区的历史会话。两种入口都通过 `open_session` 完成绑定，不使用会迁移当前会话的 `workspace_set`。
 
 Bridge 路由的输入包括：
 
