@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 from pathlib import Path
+from threading import Event
 
 from agent_core import (
     FilePart,
@@ -21,6 +22,7 @@ from agent_core import (
     TextPart,
 )
 from agent_core.session_paths import session_log_path, workspace_directory
+from agent_core import session_store as session_store_module
 
 
 def persist(store: JsonlSessionStore, workspace: Path, session: Session) -> None:
@@ -29,6 +31,101 @@ def persist(store: JsonlSessionStore, workspace: Path, session: Session) -> None
 
 
 class JsonlSessionStoreTest(unittest.TestCase):
+    def test_search_streams_only_until_the_extra_session_match(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = JsonlSessionStore(root / "sessions")
+            session = Session("streamed")
+            session.begin_turn("turn-1")
+            for index in range(80):
+                session.add_item("assistant", f"needle {index}")
+            persist(store, root, session)
+            read_records = []
+            read_journal = session_store_module._read_journal_records
+
+            def track_records(file, **kwargs):
+                for record in read_journal(file, **kwargs):
+                    read_records.append(record)
+                    yield record
+
+            with (
+                patch.object(store, "load", side_effect=AssertionError("search must not load a Session")),
+                patch.object(Session, "apply_event", side_effect=AssertionError("search must not replay events")),
+                patch.object(session_store_module, "_read_journal_records", track_records),
+            ):
+                matches = store.search_messages("needle", limit=50, per_session_limit=2)
+            self.assertEqual(len(read_records), 4)  # Turn start and three messages.
+            self.assertEqual([match["item_index"] for match in matches], [0, 1])
+            self.assertTrue(all(match["has_more_in_session"] for match in matches))
+
+    def test_search_cancellation_stops_inside_a_journal_and_discards_matches(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = JsonlSessionStore(root / "sessions")
+            session = Session("cancelled")
+            for index in range(80):
+                session.add_item("user", f"needle {index}")
+            persist(store, root, session)
+            stopped = Event()
+            decode = session_store_module.message_from_dict
+
+            def cancel_after_message(data):
+                message = decode(data)
+                stopped.set()
+                return message
+
+            with patch.object(session_store_module, "message_from_dict", side_effect=cancel_after_message) as read:
+                matches = store.search_messages(
+                    "needle", limit=50, per_session_limit=3, should_cancel=stopped.is_set,
+                )
+            self.assertEqual(matches, [])
+            self.assertEqual(read.call_count, 1)
+            with patch.object(Path, "iterdir", side_effect=AssertionError("cancelled search must not enumerate")):
+                self.assertEqual(store.search_messages(
+                    "needle", limit=50, per_session_limit=3, should_cancel=stopped.is_set,
+                ), [])
+
+    def test_search_cancellation_stops_session_enumeration(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = JsonlSessionStore(root / "sessions")
+            for session_id in ("first", "second"):
+                session = Session(session_id)
+                session.add_item("user", "needle")
+                persist(store, root, session)
+            stopped = Event()
+            read_metadata = session_store_module._session_metadata
+
+            def cancel_after_metadata(path):
+                metadata = read_metadata(path)
+                stopped.set()
+                return metadata
+
+            with patch.object(session_store_module, "_session_metadata", side_effect=cancel_after_metadata) as read:
+                self.assertEqual(store.search_messages(
+                    "needle", limit=50, per_session_limit=3, should_cancel=stopped.is_set,
+                ), [])
+            self.assertEqual(read.call_count, 1)
+
+    def test_search_and_load_share_incomplete_journal_record_handling(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = JsonlSessionStore(root / "sessions")
+            session = Session("incomplete")
+            session.add_item("user", "needle")
+            persist(store, root, session)
+            path = session_log_path(store.directory, root, session.session_id)
+            with path.open("a", encoding="utf-8") as file:
+                file.write('\n{"event_type":')
+            self.assertEqual(len(store.load(session.session_id).items), 1)
+            self.assertEqual(len(store.search_messages("needle", limit=50, per_session_limit=3)), 1)
+            with path.open("a", encoding="utf-8") as file:
+                file.write("\n")
+            with self.assertRaises(json.JSONDecodeError):
+                store.load(session.session_id)
+            with self.assertRaises(json.JSONDecodeError):
+                store.search_messages("needle", limit=50, per_session_limit=3)
+
     def test_search_caps_each_session_without_hiding_other_sessions(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

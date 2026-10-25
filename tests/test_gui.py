@@ -8,6 +8,7 @@ import time
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from threading import Event, Lock
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -416,6 +417,201 @@ class RuntimeSnapshotTest(unittest.IsolatedAsyncioTestCase):
 
         await _wait_for_async(lambda: runtime.event_sequence == 2)
         self.assertEqual(runtime.state["runtime_warnings"], [])
+
+@unittest.skipIf(TestClient is None, "Install the gui extra to test the GUI")
+class SessionSearchCancellationTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        self.store = JsonlSessionStore(root / "sessions")
+        self.app = server.create_app(Workspace(root), self.store, SettingsStore(root / "config"))
+        self.requests = []
+        self.releases = []
+
+    async def asyncTearDown(self) -> None:
+        for release in self.releases:
+            release.set()
+        for task in self.requests:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*self.requests, return_exceptions=True)
+
+    async def start_search(self, query):
+        incoming = asyncio.Queue()
+        incoming.put_nowait({"type": "http.request", "body": b"", "more_body": False})
+        receiving = asyncio.Event()
+        sent = []
+
+        async def receive():
+            message = await incoming.get()
+            receiving.set()
+            return message
+
+        async def send(message):
+            sent.append(message)
+
+        scope = {
+            "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
+            "method": "GET", "scheme": "http", "path": "/api/sessions/search",
+            "root_path": "", "query_string": f"q={query}&limit=50&per_session_limit=3".encode(),
+            "headers": [(b"host", b"127.0.0.1")],
+            "client": ("127.0.0.1", 12345), "server": ("127.0.0.1", 8737),
+        }
+        task = asyncio.create_task(self.app(scope, receive, send))
+        self.requests.append(task)
+        await asyncio.wait_for(receiving.wait(), 2)
+        return task, incoming, sent
+
+    async def test_search_limits_threads_and_cancels_running_and_queued_requests(self) -> None:
+        loop = asyncio.get_running_loop()
+        started = {query: asyncio.Event() for query in ("first", "second", "next")}
+        releases = {query: Event() for query in started}
+        self.releases.extend(releases.values())
+        stop_seen = asyncio.Event()
+        visited = []
+        lock = Lock()
+        active = 0
+        peak = 0
+
+        def search(query, *, limit, per_session_limit, should_cancel):
+            nonlocal active, peak
+            with lock:
+                visited.append(query)
+                active += 1
+                peak = max(peak, active)
+            try:
+                loop.call_soon_threadsafe(started[query].set)
+                if query == "first":
+                    while not should_cancel():
+                        if releases[query].wait(0.01):
+                            return []
+                    loop.call_soon_threadsafe(stop_seen.set)
+                if not releases[query].wait(3):
+                    raise AssertionError("search thread was not released")
+                return []
+            finally:
+                with lock:
+                    active -= 1
+
+        with patch.object(self.store, "search_messages", side_effect=search):
+            first, first_input, first_sent = await self.start_search("first")
+            second, _, second_sent = await self.start_search("second")
+            await asyncio.wait_for(started["first"].wait(), 2)
+            await asyncio.wait_for(started["second"].wait(), 2)
+
+            queued, queued_input, queued_sent = await self.start_search("queued")
+            queued_input.put_nowait({"type": "http.disconnect"})
+            await asyncio.wait_for(queued, 2)
+            self.assertEqual(queued_sent[0]["status"], 499)
+
+            next_request, _, next_sent = await self.start_search("next")
+            first_input.put_nowait({"type": "http.disconnect"})
+            await asyncio.wait_for(stop_seen.wait(), 2)
+            self.assertFalse(first.done())
+            self.assertEqual(set(visited), {"first", "second"})
+
+            releases["first"].set()
+            await asyncio.wait_for(first, 2)
+            self.assertEqual(first_sent[0]["status"], 499)
+            await asyncio.wait_for(started["next"].wait(), 2)
+            self.assertEqual(peak, 2)
+            releases["second"].set()
+            releases["next"].set()
+            await asyncio.wait_for(asyncio.gather(second, next_request), 2)
+            self.assertEqual(second_sent[0]["status"], 200)
+            self.assertEqual(next_sent[0]["status"], 200)
+            self.assertEqual(set(visited), {"first", "second", "next"})
+
+    async def test_search_handler_cancellation_stops_the_worker_and_releases_the_slot(self) -> None:
+        loop = asyncio.get_running_loop()
+        started = asyncio.Event()
+        stopped = asyncio.Event()
+        release = Event()
+        self.releases.append(release)
+
+        def search(query, *, limit, per_session_limit, should_cancel):
+            loop.call_soon_threadsafe(started.set)
+            while not should_cancel():
+                if release.wait(0.01):
+                    return []
+            loop.call_soon_threadsafe(stopped.set)
+            return []
+
+        with patch.object(self.store, "search_messages", side_effect=search):
+            task, _, _ = await self.start_search("cancelled")
+            await asyncio.wait_for(started.wait(), 2)
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await asyncio.wait_for(task, 2)
+            self.assertTrue(stopped.is_set())
+
+        with patch.object(self.store, "search_messages", return_value=[]):
+            requests = [await self.start_search(query) for query in ("first", "second")]
+            await asyncio.wait_for(asyncio.gather(*(request[0] for request in requests)), 2)
+            self.assertTrue(all(request[2][0]["status"] == 200 for request in requests))
+
+    async def test_repeated_handler_cancellation_keeps_the_slot_until_the_thread_exits(self) -> None:
+        loop = asyncio.get_running_loop()
+        started = asyncio.Queue()
+        stop_seen = asyncio.Event()
+        release_cancelled = Event()
+        release_others = Event()
+        self.releases.extend((release_cancelled, release_others))
+        lock = Lock()
+        active = 0
+        peak = 0
+
+        def search(query, *, limit, per_session_limit, should_cancel):
+            nonlocal active, peak
+            with lock:
+                active += 1
+                peak = max(peak, active)
+            try:
+                loop.call_soon_threadsafe(started.put_nowait, query)
+                if query == "cancelled":
+                    while not should_cancel():
+                        if release_cancelled.wait(0.01):
+                            return []
+                    loop.call_soon_threadsafe(stop_seen.set)
+                    release = release_cancelled
+                else:
+                    release = release_others
+                if not release.wait(3):
+                    raise AssertionError("search thread was not released")
+                return []
+            finally:
+                with lock:
+                    active -= 1
+
+        with patch.object(self.store, "search_messages", side_effect=search):
+            task, _, _ = await self.start_search("cancelled")
+            self.assertEqual(await asyncio.wait_for(started.get(), 2), "cancelled")
+            task.cancel()
+            await asyncio.wait_for(stop_seen.wait(), 2)
+            task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await task
+
+            first, _, _ = await self.start_search("first")
+            self.assertEqual(await asyncio.wait_for(started.get(), 2), "first")
+            second, _, _ = await self.start_search("second")
+            with self.assertRaises(TimeoutError):
+                await asyncio.wait_for(started.get(), 0.05)
+            release_cancelled.set()
+            self.assertEqual(await asyncio.wait_for(started.get(), 2), "second")
+            release_others.set()
+            await asyncio.wait_for(asyncio.gather(first, second), 2)
+            self.assertEqual(peak, 2)
+
+    async def test_failed_searches_release_their_slots(self) -> None:
+        with patch.object(self.store, "search_messages", side_effect=RuntimeError("scan failed")):
+            for query in ("first", "second", "third"):
+                task, _, sent = await self.start_search(query)
+                with self.assertRaisesRegex(RuntimeError, "scan failed"):
+                    await asyncio.wait_for(task, 2)
+                self.assertEqual(sent[0]["status"], 500)
+
 
 @unittest.skipIf(TestClient is None, "Install the gui extra to test the GUI")
 class GuiTest(unittest.TestCase):

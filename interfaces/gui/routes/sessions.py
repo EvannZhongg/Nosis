@@ -3,9 +3,10 @@
 import asyncio
 import json
 from pathlib import Path
+from threading import Event
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
 
 from agent_core import JsonlSessionStore, Workspace, message_to_dict, plan_snapshot_to_dict
@@ -53,6 +54,7 @@ def create_sessions_router(
     host: str,
 ) -> APIRouter:
     router = APIRouter()
+    search_slots = asyncio.Semaphore(2)
 
     @router.get("/api/active-sessions")
     async def list_active_sessions() -> list[dict[str, object]]:
@@ -85,12 +87,49 @@ def create_sessions_router(
         ]
 
     @router.get("/api/sessions/search")
-    def search_sessions(
+    async def search_sessions(
+        request: Request,
         q: str = Query(min_length=1, max_length=200),
         limit: int = Query(ge=1, le=100),
         per_session_limit: int = Query(ge=1, le=100),
     ) -> dict[str, object]:
-        matches = store.search_messages(q, limit=limit + 1, per_session_limit=per_session_limit)
+        stopped = Event()
+
+        async def scan() -> list[dict[str, object]]:
+            async with search_slots:
+                if stopped.is_set():
+                    return []
+                worker = asyncio.create_task(asyncio.to_thread(
+                    store.search_messages, q, limit=limit + 1,
+                    per_session_limit=per_session_limit, should_cancel=stopped.is_set,
+                ))
+                try:
+                    return await asyncio.shield(worker)
+                except asyncio.CancelledError:
+                    stopped.set()
+                    # Keep the slot until the thread has actually stopped.
+                    await worker
+                    raise
+
+        async def wait_for_disconnect() -> None:
+            while (await request.receive())["type"] != "http.disconnect":
+                pass
+            stopped.set()
+
+        search_task = asyncio.create_task(scan())
+        disconnect_task = asyncio.create_task(wait_for_disconnect())
+        try:
+            done, _ = await asyncio.wait(
+                (search_task, disconnect_task), return_when=asyncio.FIRST_COMPLETED,
+            )
+            if disconnect_task in done:
+                raise HTTPException(status_code=499, detail="Client disconnected")
+            matches = search_task.result()
+        finally:
+            stopped.set()
+            search_task.cancel()
+            disconnect_task.cancel()
+            await asyncio.shield(asyncio.gather(search_task, disconnect_task, return_exceptions=True))
         results = []
         for match in matches[:limit]:
             text = match["text"]

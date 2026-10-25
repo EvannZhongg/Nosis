@@ -6,7 +6,7 @@ import re
 import shutil
 from contextlib import contextmanager
 from pathlib import Path
-from typing import BinaryIO, Iterable, Iterator
+from typing import BinaryIO, Callable, Iterable, Iterator, TextIO
 
 from .atomic import atomic_write_text
 from .content import text_content
@@ -156,14 +156,20 @@ class JsonlSessionStore:
                     shutil.rmtree(target_directory)
                     raise
 
-    def list_sessions(self) -> list[dict[str, object]]:
+    def list_sessions(
+        self, *, should_cancel: Callable[[], bool] | None = None,
+    ) -> list[dict[str, object]]:
+        if should_cancel is not None and should_cancel():
+            return []
         if not self._directory.is_dir():
             return []
         groups: list[dict[str, object]] = []
         for workspace_dir in self._directory.iterdir():
+            if should_cancel is not None and should_cancel():
+                return []
             if not workspace_dir.is_dir():
                 continue
-            sessions = _scan_sessions(workspace_dir)
+            sessions = _scan_sessions(workspace_dir, should_cancel=should_cancel)
             if not sessions:
                 continue
             groups.append(
@@ -194,43 +200,63 @@ class JsonlSessionStore:
 
     def search_messages(
         self, query: str, *, limit: int, per_session_limit: int,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> list[dict[str, object]]:
-        """Find persisted conversation text without recovering runtime state."""
+        """Stream conversation text from Journals, discarding cancelled searches."""
         query = query.strip()
         if not query or limit <= 0 or per_session_limit <= 0:
             return []
         pattern = re.compile(re.escape(query), re.IGNORECASE)
         matches: list[dict[str, object]] = []
-        for group in self.list_sessions():
+        for group in self.list_sessions(should_cancel=should_cancel):
             for summary in group["sessions"]:
-                session = self.load(summary["session_id"], recover=False)
+                if should_cancel is not None and should_cancel():
+                    return []
+                session_id = summary["session_id"]
+                path = session_log_path(self._directory, group["workspace"], session_id)
                 session_matches: list[dict[str, object]] = []
-                for index, message in enumerate(session.items):
-                    if message.role not in {"user", "assistant"} or message.origin != "conversation":
+                with self._locked_session(session_id):
+                    if not path.is_file():
                         continue
-                    text = text_content(message.content)
-                    match = pattern.search(text) if text else None
-                    if match is None:
-                        continue
-                    if len(session_matches) == per_session_limit:
-                        for result in session_matches:
-                            result["has_more_in_session"] = True
-                        break
-                    session_matches.append({
-                        "session_id": session.session_id,
-                        "title": summary["title"],
-                        "workspace": session.workspace,
-                        "item_index": index,
-                        "role": message.role,
-                        "has_more_in_session": False,
-                        "text": text,
-                        "match_start": match.start(),
-                        "match_end": match.end(),
-                        "timestamp_utc": (
-                            _format_utc(message.timestamp_utc)
-                            if message.timestamp_utc is not None else None
-                        ),
-                    })
+                    with path.open(encoding="utf-8") as file:
+                        item_index = -1
+                        for record in _read_journal_records(file, should_cancel=should_cancel):
+                            if record["event_type"] != "message_appended":
+                                continue
+                            data = record["payload"].get("message")
+                            if not isinstance(data, dict):
+                                continue
+                            item_index += 1
+                            if data["role"] not in {"user", "assistant"}:
+                                continue
+                            message = message_from_dict(data)
+                            if message.origin != "conversation":
+                                continue
+                            text = text_content(message.content)
+                            match = pattern.search(text) if text else None
+                            if match is None:
+                                continue
+                            if len(session_matches) == per_session_limit:
+                                for result in session_matches:
+                                    result["has_more_in_session"] = True
+                                break
+                            session_matches.append({
+                                "session_id": session_id,
+                                "title": summary["title"],
+                                "workspace": group["workspace"],
+                                "item_index": item_index,
+                                "role": message.role,
+                                "has_more_in_session": False,
+                                "text": text,
+                                "match_start": match.start(),
+                                "match_end": match.end(),
+                                "timestamp_utc": (
+                                    _format_utc(message.timestamp_utc)
+                                    if message.timestamp_utc is not None else None
+                                ),
+                            })
+                if should_cancel is not None and should_cancel():
+                    return []
                 matches.extend(session_matches)
                 if len(matches) >= limit:
                     return matches[:limit]
@@ -268,17 +294,7 @@ class JsonlSessionStore:
         if path is None or not path.is_file():
             return session
         with path.open(encoding="utf-8") as file:
-            for line in file:
-                if not line.strip():
-                    continue
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError:
-                    # A process can die between writing a record and its
-                    # newline.  Earlier fsynced records remain authoritative.
-                    if not line.endswith("\n"):
-                        break
-                    raise
+            for record in _read_journal_records(file):
                 event = _event_from_dict(record)
                 session.apply_event(event)
                 session.journal.append(event)
@@ -605,6 +621,24 @@ def _editable_user_messages(session: Session) -> list[dict[str, object]]:
     return []
 
 
+def _read_journal_records(
+    file: TextIO, *, should_cancel: Callable[[], bool] | None = None,
+) -> Iterator[dict[str, object]]:
+    for line in file:
+        if should_cancel is not None and should_cancel():
+            return
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            # An interrupted append can leave an incomplete final record.
+            if not line.endswith("\n"):
+                return
+            raise
+        yield record
+
+
 def _event_from_dict(data: dict[str, object]) -> JournalEvent:
     return JournalEvent(
         seq=int(data["seq"]),
@@ -712,12 +746,16 @@ def _update_session_metadata(
         _write_session_metadata(directory, metadata)
 
 
-def _scan_sessions(directory: Path) -> list[tuple[int, str, dict[str, object]]]:
+def _scan_sessions(
+    directory: Path, *, should_cancel: Callable[[], bool] | None = None,
+) -> list[tuple[int, str, dict[str, object]]]:
     """List summaries from metadata; journal contents are never opened."""
     if not directory.is_dir():
         return []
     found = []
     for session_dir in directory.iterdir():
+        if should_cancel is not None and should_cancel():
+            return []
         path = session_dir / f"{session_dir.name}.jsonl"
         if not path.is_file():
             continue
