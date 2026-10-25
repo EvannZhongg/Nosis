@@ -13,9 +13,9 @@ from agent_core.tools import ROLE_TOOL_NAMES
 from agent_runtime.plane_manager import ExecutionPlaneManager
 from agent_core.mcp.manager import McpClientManager
 from agent_core.mcp.tool import McpTool
-from tests.test_agent import MockProvider
-from tests.test_bridge import BridgeTestCase, emitted, open_session_message
-from tests.test_plugins import write_agent, write_manifest, write_skill
+from tests.agent_fixtures import MockProvider
+from tests.bridge_fixtures import BridgeTestCase, emitted, open_session_message
+from tests.plugin_fixtures import write_agent, write_manifest, write_skill
 
 
 TOOL = "mcp__review-kit_analyzer__echo"
@@ -306,7 +306,12 @@ class PluginInteropTest(BridgeTestCase):
         planes = [bridge.host.planes.ensure(bridge.host.sessions) for bridge in (first, second)]
         identities = [plane.mcp.call_tool("review-kit:analyzer", "identity", {})["structured_content"] for plane in planes]
         self.assertNotEqual(identities[0]["pid"], identities[1]["pid"])
+        self.assertEqual([Path(identity["cwd"]) for identity in identities], [self.plugin, self.plugin])
+        thread = planes[0].mcp._thread
         first.close()
+        self.assertFalse(thread.is_alive())
+        with self.assertRaisesRegex(ConnectionError, "closed"):
+            planes[0].mcp.call_tool("review-kit:analyzer", "echo", {"text": "closed"})
         self.assertEqual(
             planes[1].mcp.call_tool("review-kit:analyzer", "echo", {"text": "still connected"})["structured_content"],
             {"echo": "still connected"},

@@ -27,6 +27,12 @@ dependencies = [
 
 [project.optional-dependencies]
 gui = ["fastapi>=0.115", "uvicorn>=0.30", "websockets>=13", "python-multipart>=0.0.9", "pywin32>=306; sys_platform == 'win32'"]
+test = ["pytest>=8", "pytest-xdist>=3", "pip>=24", "setuptools>=68"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["nosis-plugin-testkit"]
+addopts = "-n 4 --dist loadscope"
 
 [project.scripts]
 nosis = "interfaces.launch:main"

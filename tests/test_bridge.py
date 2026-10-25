@@ -1,19 +1,18 @@
 import io
 import json
-import shutil
 import subprocess
 import sys
 import tempfile
 import threading
 import time
 import unittest
-import weakref
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from tests.provider_fixtures import capabilities_stub, TEXT_MODEL, VISION_MODEL
+from tests.bridge_fixtures import BridgeTestCase, emitted, open_session_message
 
 from agent_core import (
     AgentRunResult,
@@ -496,59 +495,19 @@ class ProtocolTest(unittest.TestCase):
             decode('{"text": "hello"}')
 
 
-class BridgeTestCase(unittest.TestCase):
-    def make_bridge(
-        self,
-        lines: list[str],
-        config_directory: Path | None = None,
-    ) -> tuple[Bridge, io.StringIO]:
-        stdin = io.StringIO("".join(f"{line}\n" for line in lines))
-        stdout = io.StringIO()
-        if config_directory is None:
-            bridge = isolated_bridge(stdin, stdout)
-        else:
-            with patch(
-                "interfaces.bridge.bridge.default_config_directory",
-                return_value=config_directory,
-            ):
-                bridge = Bridge(stdin, stdout, start_scheduler=False)
-        self.addCleanup(bridge.close)
-        return bridge, stdout
-
-
-def isolated_bridge(stdin, stdout: io.StringIO) -> Bridge:
-    directory = tempfile.mkdtemp(prefix="nosis-bridge-test-")
-    scheduler = SchedulerService(Path(directory) / "schedule.jsonl")
-    bridge = Bridge(
-        stdin,
-        stdout,
-        scheduler=scheduler,
-        start_scheduler=False,
-    )
-    weakref.finalize(bridge, shutil.rmtree, directory, ignore_errors=True)
-    return bridge
-
-
-def emitted(stdout: io.StringIO) -> list[dict]:
-    return [
-        json.loads(line)
-        for line in stdout.getvalue().splitlines()
-        if line.strip()
-    ]
-
-
-class IsolatedBridgeTest(unittest.TestCase):
-    def test_scheduler_directory_survives_helper_return(self) -> None:
-        bridge = isolated_bridge(io.StringIO(), io.StringIO())
-        try:
-            self.assertTrue(bridge.host.scheduler.path.parent.is_dir())
-        finally:
-            bridge.close()
+class IsolatedBridgeTest(BridgeTestCase):
+    def test_bridges_own_distinct_configuration_and_scheduler_storage(self) -> None:
+        first, _ = self.make_bridge([])
+        second, _ = self.make_bridge([])
+        self.assertNotEqual(first.host.config_directory, second.host.config_directory)
+        for bridge in (first, second):
+            self.assertTrue(bridge.host.config_directory.is_dir())
+            self.assertEqual(bridge.host.scheduler.path.parent, bridge.host.config_directory)
 
 
 class PermissionProtocolTest(BridgeTestCase):
     def test_file_writers_use_bridge_approval_and_preserve_denied_files(self) -> None:
-        from tests.test_file_writes import write_call
+        from tests.file_write_fixtures import write_call
 
         for name in ("apply_patch", "edit_file", "write_file"):
             for approved in (True, False):
@@ -956,8 +915,7 @@ class BridgeApprovalTest(BridgeTestCase):
             ' "approved": true}' % index
             for index in range(1, approvals + 1)
         ]
-        stdout = io.StringIO()
-        bridge = isolated_bridge(_SlowStdin(responses), stdout)
+        bridge, stdout = self.make_bridge(_SlowStdin(responses))
         results: list[bool] = []
         lock = threading.Lock()
         barrier = threading.Barrier(approvals, timeout=5)
@@ -996,8 +954,8 @@ class BridgeApprovalTest(BridgeTestCase):
                 '{"type": "approval_response", "request_id": "t1:1", "approved": true}',
             ]
         )
-        stdout = io.StringIO()
-        bridge = isolated_bridge(stdin, stdout)
+        bridge, stdout = self.make_bridge(stdin)
+        self.addCleanup(stdin.release.set)
         control = TurnControl()
         bridge.host.turns.turn_id = "t1"
         bridge.host.turns.control = control
@@ -1018,7 +976,8 @@ class BridgeApprovalTest(BridgeTestCase):
             ]
         )
         bridge._start_reader()
-        time.sleep(0.02)
+        bridge._reader.join(2)
+        self.assertFalse(bridge._reader.is_alive())
 
         with self.assertRaises(Cancelled):
             bridge.request_permission("ls")
@@ -1033,7 +992,8 @@ class BridgeApprovalTest(BridgeTestCase):
 
         message = bridge.read_message()
         assert message is not None
-        time.sleep(0.02)
+        bridge._reader.join(2)
+        self.assertFalse(bridge._reader.is_alive())
 
         self.assertIn("t1", bridge.host.turns._pending_cancels)
         self.assertIn(
@@ -1309,86 +1269,6 @@ class BridgeServeTest(BridgeTestCase):
         self.assertEqual(snapshot["request_id"], "settings-1")
         self.assertEqual(snapshot["settings"]["default_provider"], "first")
         self.assertIsNone(bridge.host.planes.current)
-
-
-def open_session_message(
-    directory: Path,
-    agent_config: dict | None = None,
-    provider_config: dict | None = None,
-    **extra: object,
-) -> dict:
-    prompts = directory / "prompts"
-    prompts.mkdir(exist_ok=True)
-    for filename, content in {
-        "Soul.md": "Bridge system prompt for {{workspace}}",
-        "SubAgent.md": (
-            "Role {{role}}: {{role_description}} in {{workspace}}"
-        ),
-        "Consolidator.md": "Consolidate the conversation.",
-        "GlobalMemory.md": "Reconcile global memory as JSON.",
-        "WorkspaceMemory.md": "Reconcile workspace memory as JSON.",
-        "SessionTitle.md": "Name this conversation: {{conversation}}",
-    }.items():
-        path = prompts / filename
-        if not path.exists():
-            path.write_text(content, encoding="utf-8")
-    (directory / "provider_config.json").write_text(
-        json.dumps(
-            provider_config
-            if provider_config is not None
-            else {
-                "main_agent": {"provider": "first"},
-                "subagent": {"provider": ""},
-                "providers": {
-                    "first": {
-                        "model": "openai/first",
-                        "max_context_tokens": 1000,
-                    },
-                    "second": {
-                        "model": "openai/second",
-                        "max_context_tokens": 1000,
-                    },
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    (directory / "tool_config.json").write_text(
-        json.dumps({
-            "web_search": {"provider": "duckduckgo"},
-            "web_fetch": {"provider": "direct"},
-        }), encoding="utf-8",
-    )
-    resolved_agent_config = {
-        "generate_session_title": False,
-        "provider": {
-            "request_timeout_seconds": 300,
-            "max_retries": 2,
-        },
-        "skills": {
-            "global_paths": ["skills"],
-            "workspace_paths": [],
-        },
-        **(agent_config if agent_config is not None else {
-            "max_same_tool_calls": 5,
-            "output_reserve_tokens": 100,
-            "scratch_workspace_root": str(directory / "scratch"),
-            "workspace_instruction_files": ["CLAUDE.md", "AGENTS.md"],
-            "main_agent": {"tools": {name: False for name in TOOL_NAMES}},
-        }),
-    }
-    (directory / "agent_config.json").write_text(
-        json.dumps(
-            resolved_agent_config
-        ),
-        encoding="utf-8",
-    )
-    return {
-        "type": "open_session",
-        "workspace": str(directory),
-        "session_id": None,
-        **extra,
-    }
 
 
 class ScriptedAgent:

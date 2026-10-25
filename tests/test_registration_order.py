@@ -26,8 +26,8 @@ from agent_core.providers.base import _request_tools
 from agent_core.tools.config import TOOL_NAMES, load_tool_config
 from agent_runtime.config import configured_skill_sources
 from agent_runtime.plugins import PluginManager
-from tests.test_plugins import write_manifest
-from tests.test_skills import write_skill
+from tests.plugin_fixtures import write_manifest
+from tests.skill_fixtures import write_skill
 
 
 class RegistrationOrderTest(unittest.TestCase):

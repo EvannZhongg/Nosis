@@ -26,7 +26,7 @@ from agent_core.projection import project_context_units
 from agent_core.tools.builtin import ReadFileTool, ShellTool, WriteFileTool
 from agent_runtime.plugins import PluginManager
 from agent_core.mcp.tool import McpTool
-from tests.test_agent import AGENT_CONFIG, MockProvider
+from tests.agent_fixtures import AGENT_CONFIG, MockProvider
 
 
 FIXTURE = Path(__file__).with_name("nosis-plugin-testkit")

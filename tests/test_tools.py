@@ -2913,9 +2913,16 @@ class SearchFilesToolTest(unittest.TestCase):
             match = workspace.path / "match.txt"
             match.write_text("Nosis", encoding="utf-8")
 
-            with patch(
-                "agent_core.tools.builtin.search_files._iter_files",
-                return_value=iter([no_match] * 10_000 + [match]),
+            contents = {no_match: b"nothing", match: b"Nosis"}
+            sizes = {path: path.stat() for path in contents}
+            stat = Path.stat
+            # This is a scan-count boundary, not a filesystem throughput test.
+            with (
+                patch("agent_core.tools.builtin.search_files._iter_files",
+                      return_value=iter([no_match] * 10_000 + [match])),
+                patch.object(Path, "stat", lambda path, *args, **kwargs:
+                             sizes[path] if path in sizes else stat(path, *args, **kwargs)),
+                patch.object(Path, "read_bytes", lambda path: contents[path]),
             ):
                 result = _Bound(SearchFilesTool(), workspace).execute(
                     {"path": ".", "pattern": "Nosis"}

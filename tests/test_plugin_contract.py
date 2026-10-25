@@ -1,6 +1,5 @@
 """Keep the portable authoring tools aligned with Runtime's package contract."""
 
-import importlib.util
 import json
 import subprocess
 import sys
@@ -11,14 +10,7 @@ from pathlib import Path
 from agent_core import SkillLoader
 from agent_core.tools import ROLE_TOOL_NAMES
 from agent_runtime.plugins import PluginLoader, PluginManager
-from tests.test_plugins import write_agent, write_manifest, write_skill
-
-
-SCRIPTS = (Path(__file__).resolve().parents[1] / "agent_runtime" / "defaults"
-           / "skills" / "plugin-creator" / "scripts")
-spec = importlib.util.spec_from_file_location("plugin_validator", SCRIPTS / "validate_plugin.py")
-validator = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(validator)
+from tests.plugin_fixtures import SCRIPTS, validator, write_agent, write_manifest, write_skill
 
 
 class PluginContractTest(unittest.TestCase):

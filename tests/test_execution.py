@@ -173,6 +173,7 @@ class HostCommandExecutorTest(unittest.TestCase):
                 working_directory,
                 "import time\n"
                 "from pathlib import Path\n"
+                "Path('child-ready').touch()\n"
                 "time.sleep(3)\n"
                 "Path('child-output.txt').write_text('alive')\n",
             )
@@ -186,12 +187,19 @@ class HostCommandExecutorTest(unittest.TestCase):
 
             thread = threading.Thread(target=execute)
             thread.start()
-            time.sleep(0.2)
-            cancellation.cancel()
-            thread.join(2)
+            try:
+                deadline = time.monotonic() + 5
+                while not (working_directory / "child-ready").exists() and thread.is_alive():
+                    self.assertLess(time.monotonic(), deadline, "child process did not start")
+                    time.sleep(0.01)
+                self.assertTrue((working_directory / "child-ready").exists())
+            finally:
+                cancellation.cancel()
+                thread.join(5)
             time.sleep(3.2)
 
             self.assertFalse(thread.is_alive())
+            self.assertEqual(len(errors), 1)
             self.assertIsInstance(errors[0], CommandCancelled)
             self.assertFalse(
                 (working_directory / "child-output.txt").exists()

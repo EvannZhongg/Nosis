@@ -15,8 +15,8 @@ from agent_core.session_paths import session_log_path
 from agent_core.session_title import generate_session_title, initial_session_title
 from agent_runtime.plane_manager import ExecutionPlaneManager
 from interfaces.bridge.bridge import Bridge
-from tests.test_agent import EchoTool, make_agent
-from tests.test_bridge import emitted, open_session_message
+from tests.agent_fixtures import EchoTool, make_agent
+from tests.bridge_fixtures import emitted, open_session_message
 
 
 class TitleProvider(LLMProvider):

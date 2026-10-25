@@ -118,11 +118,13 @@ Python tests use a mock provider and need no real API key:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install -e ".[gui]"
-python -m unittest discover -s tests -v
+python -m pip install -e ".[gui,test]"
+python -m pytest --durations=20
 ```
 
 On Windows, activate the environment with `.venv\Scripts\Activate.ps1`.
+
+Pytest distributes test classes across four isolated worker processes. Use `-n 0` for a serial run or `-n 2` on smaller machines. The full suite includes package installation and real local MCP/sandbox processes; `--ignore=tests/test_bridge_client.py` omits the package installation check during iteration. The standalone plugin testkit has its own command in [docs/plugin-interop.md](docs/plugin-interop.md).
 
 The GUI extra includes FastAPI, Uvicorn, the WebSocket backend, and multipart support; Windows, macOS, and Linux use the same installation.
 

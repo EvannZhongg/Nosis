@@ -41,7 +41,7 @@ HTTP / WebSocket 路由按模块拆分：
 
 | 模块 | 路由范围 |
 | --- | --- |
-| `routes/sessions.py` | Session 查询、删除、fork、active session 与 `/api/session` WebSocket |
+| `routes/sessions.py` | Session 查询与历史搜索、删除、fork、active session 与 `/api/session` WebSocket |
 | `routes/workspace.py` | Workspace 选择、scratch 创建、文件树和打开文件夹 |
 | `routes/media.py` | 附件上传、签名图片和附件下载 |
 | `routes/settings.py` | 模型、设置、路由更新和长期记忆读取 |

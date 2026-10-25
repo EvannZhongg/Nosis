@@ -118,11 +118,13 @@ Python 测试使用 Mock Provider，不需要真实 API Key：
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install -e ".[gui]"
-python -m unittest discover -s tests -v
+python -m pip install -e ".[gui,test]"
+python -m pytest --durations=20
 ```
 
 在 Windows 上改用 `.venv\Scripts\Activate.ps1` 激活环境。
+
+Pytest 默认用 4 个独立进程按测试类并行运行；串行调试使用 `-n 0`，资源较少时使用 `-n 2`。完整测试包含安装包验证及真实本地 MCP/沙箱进程；日常迭代可用 `--ignore=tests/test_bridge_client.py` 跳过安装包验证。独立插件测试包的运行方式见 [docs/plugin-interop.md](docs/plugin-interop.md)。
 
 GUI extra 包含 FastAPI、Uvicorn、WebSocket 后端和 multipart 支持；Windows、macOS 与 Linux 使用相同的安装方式。
 

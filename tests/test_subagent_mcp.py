@@ -6,8 +6,8 @@ from unittest.mock import patch
 
 from agent_core import LLMResponse, ToolCall
 from agent_runtime.plane_manager import ExecutionPlaneManager
-from tests.test_agent import MockProvider
-from tests.test_bridge import BridgeTestCase, open_session_message
+from tests.agent_fixtures import MockProvider
+from tests.bridge_fixtures import BridgeTestCase, open_session_message
 
 
 class SubagentMcpTest(BridgeTestCase):

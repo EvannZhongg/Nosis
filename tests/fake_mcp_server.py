@@ -2,6 +2,7 @@ import os
 import time
 import asyncio
 import sys
+import socket
 from pathlib import Path
 
 from mcp.server.mcpserver import MCPServer
@@ -45,6 +46,15 @@ def hidden() -> str:
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:
-        server.run("streamable-http", host="127.0.0.1", port=int(sys.argv[1]))
+        import uvicorn
+
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen()
+            port_file = Path(sys.argv[1])
+            pending = port_file.with_suffix(".tmp")
+            pending.write_text(str(listener.getsockname()[1]), encoding="ascii")
+            pending.replace(port_file)
+            uvicorn.Server(uvicorn.Config(server.streamable_http_app(), log_level="error")).run(sockets=[listener])
     else:
         server.run("stdio")

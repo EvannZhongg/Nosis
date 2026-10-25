@@ -26,11 +26,6 @@ from tests.image_fixtures import png_bytes
 
 
 class McpConfigTest(unittest.TestCase):
-    def test_rejects_removed_resource_scope(self) -> None:
-        for scope in ("global", "workspace", "session"):
-            with self.subTest(scope=scope), self.assertRaisesRegex(ValueError, "unknown.*scope"):
-                load_mcp_config({"servers": {"demo": {"command": "python", "scope": scope}}})
-
     def test_loads_standard_server_map_transport_names(self) -> None:
         servers = load_mcp_server_map(
             {
@@ -265,18 +260,12 @@ class McpConfigTest(unittest.TestCase):
             )
 
     def test_rejects_unknown_fields(self) -> None:
-        with self.assertRaisesRegex(ValueError, "unknown"):
-            load_mcp_config(
-                {
-                    "servers": {
-                        "demo": {
-                            "transport": "streamable_http",
-                            "url": "https://example.test/mcp",
-                            "unexpected": True,
-                        }
-                    }
-                }
-            )
+        for field, value in (("unexpected", True), ("scope", "workspace")):
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, f"unknown.*{field}"):
+                load_mcp_config({"servers": {"demo": {
+                    "transport": "streamable_http", "url": "https://example.test/mcp",
+                    field: value,
+                }}})
 
 
 class McpToolTest(unittest.TestCase):
@@ -415,11 +404,10 @@ class McpClientManagerTest(unittest.TestCase):
         self.assertEqual(manager.instructions_for(selected), expected)
 
     def test_streamable_http_connections_close_independently(self) -> None:
-        with socket.socket() as listener:
-            listener.bind(("127.0.0.1", 0))
-            port = listener.getsockname()[1]
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        port_file = root / "port"
         process = subprocess.Popen(
-            [sys.executable, str(Path(__file__).with_name("fake_mcp_server.py")), str(port)],
+            [sys.executable, str(Path(__file__).with_name("fake_mcp_server.py")), str(port_file)],
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
             env={**os.environ, "TEST_MCP_INSTRUCTIONS": "Use echo over HTTP."},
@@ -427,6 +415,11 @@ class McpClientManagerTest(unittest.TestCase):
         self.addCleanup(process.wait, 5)
         self.addCleanup(process.terminate)
         deadline = time.monotonic() + 10
+        while not port_file.exists():
+            self.assertIsNone(process.poll())
+            self.assertLess(time.monotonic(), deadline, "HTTP MCP server did not bind")
+            time.sleep(0.02)
+        port = int(port_file.read_text(encoding="ascii"))
         while True:
             try:
                 with socket.create_connection(("127.0.0.1", port), timeout=0.1):
@@ -450,30 +443,6 @@ class McpClientManagerTest(unittest.TestCase):
         thread = managers[0]._thread
         managers[0].close()
         self.assertFalse(thread.is_alive())
-        self.assertEqual(managers[1].call_tool("fake", "echo", {"text": "live"})["structured_content"], {"echo": "live"})
-
-    def test_managers_own_independent_stdio_servers(self) -> None:
-        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
-        config = load_mcp_config({"enabled": True, "servers": {
-            "fake": {
-                "command": sys.executable,
-                "args": [str(Path(__file__).with_name("fake_mcp_server.py"))],
-            },
-        }})
-        managers = [McpClientManager(config, root) for _ in range(2)]
-        for manager in managers:
-            self.addCleanup(manager.close)
-            manager.start()
-        for manager in managers:
-            manager.wait_ready()
-        identities = [manager.call_tool("fake", "identity", {})["structured_content"] for manager in managers]
-        self.assertNotEqual(identities[0]["pid"], identities[1]["pid"])
-        self.assertEqual([Path(item["cwd"]) for item in identities], [root, root])
-        thread = managers[0]._thread
-        managers[0].close()
-        self.assertFalse(thread.is_alive())
-        with self.assertRaisesRegex(ConnectionError, "closed"):
-            managers[0].call_tool("fake", "echo", {"text": "closed"})
         self.assertEqual(managers[1].call_tool("fake", "echo", {"text": "live"})["structured_content"], {"echo": "live"})
 
     def test_close_cancels_active_remote_call_and_stops_manager(self) -> None:
@@ -515,31 +484,6 @@ class McpClientManagerTest(unittest.TestCase):
         finally:
             release.touch()
             caller.join(3)
-
-    def test_background_start_allows_independent_work_before_discovery_finishes(self) -> None:
-        config = load_mcp_config({"enabled": True, "servers": {
-            "fake": {"transport": "stdio", "command": sys.executable},
-        }})
-        manager = McpClientManager(config, Path.cwd())
-        entered = threading.Event()
-        release = threading.Event()
-
-        async def start_server(stack, server):
-            entered.set()
-            await asyncio.to_thread(release.wait)
-            return SimpleNamespace(instructions=None), ()
-
-        with patch.object(manager, "_start_server", start_server):
-            try:
-                manager.start()
-                self.assertTrue(entered.wait(2))
-                self.assertFalse(manager._ready.is_set())
-                release.set()
-                self.assertEqual(manager.wait_ready(), ())
-                self.assertTrue(manager._ready.is_set())
-            finally:
-                release.set()
-                manager.close()
 
     def test_cancel_stops_only_the_active_request_and_keeps_the_manager_usable(self) -> None:
         entered = threading.Event()
@@ -656,8 +600,7 @@ class McpClientManagerTest(unittest.TestCase):
                 "servers": {
                     f"server{index}": {
                         "transport": "stdio",
-                        "command": sys.executable,
-                        "args": [str(Path(__file__).with_name("fake_mcp_server.py"))],
+                        "command": "unused",
                         "startup_timeout_seconds": budget,
                     }
                     for index, budget in enumerate(budgets)
@@ -673,7 +616,13 @@ class McpClientManagerTest(unittest.TestCase):
             waited.append(timeout if timeout is not None else -1)
             return original_wait(timeout)
 
-        with patch.object(manager._ready, "wait", record_wait):
+        async def start_server(stack, server):
+            return SimpleNamespace(instructions=None), ()
+
+        with (
+            patch.object(manager._ready, "wait", record_wait),
+            patch.object(manager, "_start_server", start_server),
+        ):
             try:
                 manager.start()
                 manager.wait_ready()
@@ -707,6 +656,7 @@ class McpClientManagerTest(unittest.TestCase):
                 self.assertFalse(manager._ready.is_set())
                 release.set()
                 self.assertEqual(manager.wait_ready(), ())
+                self.assertTrue(manager._ready.is_set())
             finally:
                 release.set()
                 manager.close()

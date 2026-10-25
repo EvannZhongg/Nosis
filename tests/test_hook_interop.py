@@ -16,9 +16,9 @@ from agent_core import (
 from agent_runtime.plane_manager import ExecutionPlaneManager
 from agent_runtime.plugins import PluginManager
 from agent_runtime.scheduled_runner import ScheduledTurnRunner
-from tests.test_agent import MockProvider
-from tests.test_bridge import BridgeTestCase, emitted, open_session_message
-from tests.test_plugin_contract import validator
+from tests.agent_fixtures import MockProvider
+from tests.bridge_fixtures import BridgeTestCase, emitted, open_session_message
+from tests.plugin_fixtures import validator
 
 
 def calls(*items):

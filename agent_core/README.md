@@ -57,7 +57,7 @@ interfaces → agent_runtime → agent_core
 
 ## Session、计划与持久化
 
-`Session` 是执行状态的事实来源。对话、Tool 执行、Job、计划和恢复所需状态以 append-only Journal Event 表示；`JsonlSessionStore` 负责 JSONL 持久化、元数据、Session 列表与恢复。
+`Session` 是执行状态的事实来源。对话、Tool 执行、Job、计划和恢复所需状态以 append-only Journal Event 表示；`JsonlSessionStore` 负责 JSONL 持久化、元数据、Session 列表、跨 Session 对话全文搜索与恢复。
 
 Runtime 通过 `JsonlSessionStore.open_journal()` 持有当前 Session 的写入句柄，Session 关闭或切换时释放；子 Agent 在执行期间持有自己的句柄。Windows 句柄仅共享读取，阻止同用户子进程删除、重命名或覆盖打开的 Journal，Runtime 继续通过原句柄追加并 fsync。保护不覆盖已关闭的 Session、其他 Session 文件、POSIX 删除语义或能够终止 Runtime 的进程，不等同于独立权限的审计存储。
 
@@ -68,7 +68,7 @@ Runtime 通过 `JsonlSessionStore.open_journal()` 持有当前 Session 的写入
 | 模块 | 职责 |
 | --- | --- |
 | `session.py` | Message、Turn、Tool / Job Execution 和 Journal Event |
-| `session_store.py` | append-only JSONL、Session 元数据、查询与恢复 |
+| `session_store.py` | append-only JSONL、Session 元数据、列表与全文搜索、恢复 |
 | `session_paths.py` | Session 与 Workspace 存储路径规则 |
 | `plan.py` | 计划状态、更新与序列化 |
 | `tool_result.py` | Tool 输出预算、预览和 Artifact 落盘 |

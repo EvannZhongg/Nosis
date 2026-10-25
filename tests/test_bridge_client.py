@@ -91,22 +91,40 @@ class ExternalBridgeClientTest(unittest.TestCase):
         cls.site = cls.root / "python-site"
         cls.external = cls.root / "external-app"
         cls.external.mkdir()
+        source = cls.root / "source"
+        source.mkdir()
+        shutil.copyfile(ROOT / "pyproject.toml", source / "pyproject.toml")
+        for directory in ("agent_core", "agent_runtime", "interfaces"):
+            shutil.copytree(
+                ROOT / directory, source / directory,
+                ignore=shutil.ignore_patterns("node_modules", "__pycache__", ".DS_Store"),
+            )
 
-        def run(args, cwd=ROOT):
+        def run(args, cwd=source):
             result = subprocess.run(args, cwd=cwd, capture_output=True, text=True,
-                                    encoding="utf-8", timeout=120)
+                                    encoding="utf-8", timeout=120, env={
+                                        **os.environ,
+                                        "PATH": str(ROOT / "node_modules/.bin") + os.pathsep + os.environ["PATH"],
+                                    })
             if result.returncode:
                 raise AssertionError(f"{args}:\n{result.stdout}\n{result.stderr}")
             return result
 
         run([sys.executable, "-m", "pip", "wheel", "--no-deps", "--no-build-isolation",
-             "--wheel-dir", str(cls.root), str(ROOT)])
+             "--wheel-dir", str(cls.root), str(source)])
         wheel = next(cls.root.glob("nosis_agent-*.whl"))
         run([sys.executable, "-m", "pip", "install", "--no-deps", "--no-compile",
              "--target", str(cls.site), str(wheel)])
         cls.command = next(cls.site.rglob("nosis-bridge.exe" if os.name == "nt" else "nosis-bridge"))
-        for package in ("@nosis/protocol", "@nosis/client"):
-            run([NPM, "pack", "--workspace", package, "--pack-destination", str(cls.root)])
+        # Pack from private sources: prepack must not race frontend builds in
+        # the checkout. Only the client's type dependencies are needed here.
+        for package in ("@types/node", "undici-types"):
+            shutil.copytree(ROOT / "node_modules" / package, source / "node_modules" / package)
+        for package in ("protocol", "client"):
+            package_source = source / "interfaces" / package
+            run([NPM, "pack", "--pack-destination", str(cls.root)], cwd=package_source)
+            if package == "protocol":
+                shutil.copytree(package_source, source / "node_modules/@nosis/protocol")
         (cls.external / "package.json").write_text('{"private":true,"type":"module"}', encoding="utf-8")
         run([NPM, "install", "--ignore-scripts", "--no-audit", "--no-fund", "--offline",
              *(str(path) for path in sorted(cls.root.glob("*.tgz")))], cwd=cls.external)
