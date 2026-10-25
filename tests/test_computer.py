@@ -9,6 +9,7 @@ from PIL import Image
 
 from agent_core import Workspace
 from agent_runtime.computer import (
+    DesktopCapability,
     DesktopComputer,
     _normalize_hotkey_keys,
     _paste_text,
@@ -362,6 +363,43 @@ class DesktopComputerTest(unittest.TestCase):
             [call("new text"), call("old clipboard")],
         )
         self.pyautogui.press.assert_called_once_with("enter")
+
+
+class DesktopCapabilityTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.workspace = Mock()
+
+    def test_builds_the_desktop_on_first_use_and_reuses_it(self) -> None:
+        with patch("agent_runtime.computer.DesktopComputer") as computer_class:
+            capability = DesktopCapability(self.workspace, input_enabled=True)
+            computer_class.assert_not_called()
+            shot = Path("shot.png")
+            computer_class.return_value.capture.return_value = shot
+
+            self.assertEqual(capability.capture("desktop"), shot)
+            capability.control({"action": "wait"})
+
+        computer_class.assert_called_once_with(self.workspace, input_enabled=True)
+        computer_class.return_value.capture.assert_called_once_with("desktop")
+        computer_class.return_value.control.assert_called_once_with(
+            {"action": "wait"}
+        )
+
+    def test_close_does_not_build_an_unused_desktop(self) -> None:
+        with patch("agent_runtime.computer.DesktopComputer") as computer_class:
+            DesktopCapability(self.workspace, input_enabled=False).close()
+
+        computer_class.assert_not_called()
+
+    def test_close_closes_a_desktop_built_on_demand(self) -> None:
+        with patch("agent_runtime.computer.DesktopComputer") as computer_class:
+            capability = DesktopCapability(self.workspace, input_enabled=True)
+            capability.capture("desktop")
+
+            capability.close()
+            capability.close()
+
+        computer_class.return_value.close.assert_called_once_with()
 
 
 if __name__ == "__main__":

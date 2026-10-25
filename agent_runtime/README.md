@@ -33,7 +33,7 @@ RuntimeHost
 
 - 创建主 Provider、`fast_model` 对应的辅助模型 Provider、视觉 Provider 和图片生成 Provider
 - 建立宿主与平台沙箱执行器，并施加 Runtime authority 上限
-- 装配桌面截图与输入能力
+- 装配桌面截图与输入能力；PyAutoGUI、PyScreeze、OpenCV、NumPy 等原生依赖在首次使用桌面 Tool 时才加载
 - 从内置 Catalog 按主 Agent 和子 Agent 角色选择 Tool
 - 注入 Session、Plan、Memory、Scheduler、权限、图片和用户交互能力
 - 加载 standalone Skill、Plugin Skill、Plugin Agent 与 MCP Server

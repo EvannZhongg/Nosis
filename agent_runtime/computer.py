@@ -471,6 +471,43 @@ class DesktopComputer:
         return path
 
 
+class DesktopCapability:
+    """Desktop capture and input that loads its native stack on first use.
+
+    Importing PyAutoGUI also imports PyScreeze, OpenCV and NumPy, mapping over
+    a hundred megabytes of native libraries. Plane assembly runs while MCP
+    servers start and before the first model request, so a turn that never
+    observes or operates the desktop must not pay that cost there.
+    """
+
+    def __init__(self, workspace: Workspace, *, input_enabled: bool) -> None:
+        self._workspace = workspace
+        self._input_enabled = input_enabled
+        self._lock = threading.Lock()
+        self._computer: DesktopComputer | None = None
+
+    def capture(self, label: str) -> Path:
+        return self._desktop().capture(label)
+
+    def control(self, arguments: dict[str, JSONValue]) -> Path:
+        return self._desktop().control(arguments)
+
+    def close(self) -> None:
+        with self._lock:
+            computer, self._computer = self._computer, None
+        if computer is not None:
+            computer.close()
+
+    def _desktop(self) -> DesktopComputer:
+        with self._lock:
+            if self._computer is None:
+                self._computer = DesktopComputer(
+                    self._workspace,
+                    input_enabled=self._input_enabled,
+                )
+            return self._computer
+
+
 def _coordinate(arguments: dict[str, JSONValue], name: str) -> int:
     value = arguments.get(name)
     if not isinstance(value, int) or isinstance(value, bool) or value < 0:

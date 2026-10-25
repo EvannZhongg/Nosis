@@ -54,7 +54,7 @@ from .plugins import PluginAgent, PluginManager
 from .role_tools import resolve_role_tools
 from .settings import EnvironmentReloader, configuration_fingerprint
 from .callbacks import RuntimeCallbacks
-from .computer import DesktopComputer
+from .computer import DesktopCapability
 from .session_controller import SessionRuntimeController
 from .session_title import SessionTitleTask
 
@@ -145,7 +145,7 @@ class ExecutionPlaneManager:
         workspace_executor: SandboxedCommandExecutor | None = None
         host_executor: HostCommandExecutor | None = None
         execution_router: ExecutionRouter | None = None
-        desktop: DesktopComputer | None = None
+        desktop: DesktopCapability | None = None
         try:
             mcp.start()
             skills = SkillLoader().load(
@@ -185,7 +185,7 @@ class ExecutionPlaneManager:
                 computer_tools
                 and "image" in main_provider.capabilities.input_modalities
             ):
-                desktop = DesktopComputer(
+                desktop = DesktopCapability(
                     workspace,
                     input_enabled="computer_action" in computer_tools,
                 )

@@ -20,7 +20,7 @@ from agent_core.image_generation import ImageGenerator
 from agent_core.tools.config import ToolSettings
 from agent_core.hooks import HookRunner
 
-from .computer import DesktopComputer
+from .computer import DesktopCapability
 
 if TYPE_CHECKING:
     from .session_title import SessionTitleTask
@@ -57,7 +57,7 @@ class ExecutionPlane:
     agent: Agent | None = None
     jobs: JobManager | None = None
     context_window: ContextWindow | None = None
-    computer: DesktopComputer | None = None
+    computer: DesktopCapability | None = None
     runtime_warnings: tuple[str, ...] = ()
 
     def matches(
