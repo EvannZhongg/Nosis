@@ -7,14 +7,14 @@ import { Transcript } from "../src/chat/Transcript";
 import { applyMessage, toMessages, type TranscriptItem } from "../src/transcript";
 import type { Incoming } from "@nosis/protocol/internal";
 
-function TestTranscript({ items, running }: { items: TranscriptItem[]; running: boolean }) {
+function TestTranscript({ items, running, navigation }: { items: TranscriptItem[]; running: boolean; navigation?: { requestId: string; messageId?: string } }) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const messages = toMessages(items);
   const runtime = useExternalStoreRuntime({
     messages, convertMessage: (message) => message, isRunning: running, onNew: async () => {},
   });
   return <AssistantRuntimeProvider runtime={runtime}><ThreadPrimitive.Root>
-    <Transcript previews={messages.filter((message) => message.role === "user").map(() => "prompt")} viewportRef={viewportRef} active />
+    <Transcript previews={messages.filter((message) => message.role === "user").map(() => "prompt")} viewportRef={viewportRef} active navigation={navigation} />
   </ThreadPrimitive.Root></AssistantRuntimeProvider>;
 }
 
@@ -22,6 +22,7 @@ describe("process folding in the live transcript", () => {
   let container: HTMLDivElement;
   let root: Root;
   let items: TranscriptItem[];
+  let navigation: { requestId: string; messageId?: string } | undefined;
   const scrollIntoView = vi.fn(function (this: HTMLElement) {
     const viewport = this.closest(".thread-viewport")!;
     viewport.scrollTop = 0;
@@ -51,6 +52,7 @@ describe("process folding in the live transcript", () => {
     document.body.append(container);
     root = createRoot(container);
     items = [{ role: "user", content: "prompt" }];
+    navigation = undefined;
   });
 
   afterEach(async () => {
@@ -62,7 +64,7 @@ describe("process folding in the live transcript", () => {
 
   async function render(running = true) {
     await act(async () => {
-      root.render(<TestTranscript items={items} running={running} />);
+      root.render(<TestTranscript items={items} running={running} navigation={navigation} />);
     });
     // Native details toggle events and navigation frames are asynchronous.
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)); });
@@ -72,6 +74,39 @@ describe("process folding in the live transcript", () => {
     items = applyMessage(items, message).items;
     await render(running);
   }
+
+  it("opens search history at the target without initializing at the bottom and can repeat the jump", async () => {
+    items.push({ role: "assistant", content: "earlier answer" }, { role: "user", content: "later prompt" });
+    navigation = { requestId: "search-1", messageId: "1" };
+    await render(false);
+    expect(scrollIntoView.mock.instances.at(-1)).toBe(container.querySelector('[data-message-id="1"]'));
+    expect(scrollIntoView).toHaveBeenLastCalledWith({ block: "center" });
+    expect(container.querySelector('[data-message-id="1"]')!.classList.contains("search-message-highlight")).toBe(true);
+    expect(scrollTo).not.toHaveBeenCalled();
+    scrollIntoView.mockClear();
+    await render(false);
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    navigation = { requestId: "search-2", messageId: "1" };
+    await render(false);
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for the target to load and preserves search position during streaming until the next turn", async () => {
+    navigation = { requestId: "search-1" };
+    await render(true);
+    expect(scrollIntoView).not.toHaveBeenCalled();
+    items.push({ role: "assistant", content: "earlier answer" }, { role: "user", content: "later prompt" }, { role: "assistant", content: "streaming", streaming: true });
+    navigation = { requestId: "search-1", messageId: "1" };
+    await render(true);
+    expect(scrollIntoView.mock.instances.at(-1)).toBe(container.querySelector('[data-message-id="1"]'));
+    scrollTo.mockClear();
+    await receive(text(" continues"));
+    expect(scrollTo).not.toHaveBeenCalled();
+    await render(false);
+    items.push({ role: "user", content: "next prompt" });
+    await receive(text("new answer"));
+    expect(scrollTo).toHaveBeenCalled();
+  });
 
   const processes = () => Array.from(container.querySelectorAll<HTMLDetailsElement>(".turn-process"));
   const reasoning = (text: string): Incoming => ({ type: "reasoning_delta", turn_id: "t1", text, model_call_index: 1 });

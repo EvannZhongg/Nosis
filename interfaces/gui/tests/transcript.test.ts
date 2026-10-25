@@ -5,6 +5,18 @@ import { applyMessage, isTurnActivity, toMessages, turnProcessPartIndexes, type 
 const TOOL_CALL = { id: "call-1", name: "shell", arguments: { command: "ls" } };
 
 describe("process folding", () => {
+  it("maps merged assistant source items to one rendered message without mapping hidden feedback", () => {
+    const messages = toMessages([
+      { role: "user", content: "prompt" },
+      { role: "assistant", content: "first answer" },
+      { role: "tool", tool_call_id: "call-1", content: "{}" },
+      { role: "user", origin: "hook_feedback", content: "hidden" },
+      { role: "assistant", content: "second answer" },
+      { role: "user", content: "next prompt" },
+    ]);
+    expect(messages.map((message) => [message.id, message.metadata?.custom?.itemIndexes]))
+      .toEqual([["0", [0]], ["1", [1, 4]], ["5", [5]]]);
+  });
   it("preserves the file approval kind and tool identity", () => {
     const approval = {
       type: "approval_request" as const, turn_id: "t1", request_id: "t1:1",

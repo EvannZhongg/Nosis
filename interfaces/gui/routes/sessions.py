@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.encoders import jsonable_encoder
 
 from agent_core import JsonlSessionStore, Workspace, message_to_dict, plan_snapshot_to_dict
@@ -83,6 +83,30 @@ def create_sessions_router(
             }
             for group in store.list_sessions()
         ]
+
+    @router.get("/api/sessions/search")
+    def search_sessions(
+        q: str = Query(min_length=1, max_length=200),
+        limit: int = Query(ge=1, le=100),
+        per_session_limit: int = Query(ge=1, le=100),
+    ) -> dict[str, object]:
+        matches = store.search_messages(q, limit=limit + 1, per_session_limit=per_session_limit)
+        results = []
+        for match in matches[:limit]:
+            text = match["text"]
+            start = max(0, match["match_start"] - 60)
+            end = min(len(text), max(start + 180, match["match_end"]))
+            results.append({
+                **{key: value for key, value in match.items() if key != "text"},
+                "snippet": text[start:end],
+                # Browser string offsets count UTF-16 code units.
+                "match_start": len(text[start:match["match_start"]].encode("utf-16-le")) // 2,
+                "match_end": len(text[start:match["match_end"]].encode("utf-16-le")) // 2,
+                "prefix_omitted": start > 0,
+                "suffix_omitted": end < len(text),
+                "scratch": is_scratch_workspace(str(match["workspace"])),
+            })
+        return {"matches": results, "has_more": len(matches) > limit}
 
     @router.get("/api/sessions/{session_id}")
     async def get_session(session_id: str) -> object:

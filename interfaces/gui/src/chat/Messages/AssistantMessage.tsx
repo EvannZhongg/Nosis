@@ -62,11 +62,12 @@ function AssistantParts() {
 }
 
 export function AssistantMessage() {
+  const messageId = useAuiState((state) => state.message.id);
   const running = useAuiState((state) => state.message.status?.type === "running");
   const hasText = useAuiState((state) => state.message.parts.some((part) => part.type === "text" && part.text.length > 0));
   const copied = useAuiState((state) => state.message.isCopied);
 
-  return <MessagePrimitive.Root className="assistant-message">
+  return <MessagePrimitive.Root className="assistant-message" data-message-id={messageId}>
     <div className="assistant-label"><span className="assistant-avatar"><img src="/nosis-avatar-128.png" alt="" /></span>Nosis</div>
     <div className="assistant-content"><AssistantParts /><div className="assistant-message-meta"><MessageTimestamp />{!running && hasText && <ActionBarPrimitive.Copy className="copy-button message-copy-button" aria-label={copied ? "已复制完整回答" : "复制完整回答"} title={copied ? "已复制" : "复制完整回答"} copiedDuration={2000}>{copied ? <Check size={13} /> : <Copy size={13} />}</ActionBarPrimitive.Copy>}</div></div>
   </MessagePrimitive.Root>;

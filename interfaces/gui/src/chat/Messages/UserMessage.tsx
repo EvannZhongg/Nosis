@@ -45,7 +45,7 @@ export function UserMessage() {
     }
   }
 
-  return <MessagePrimitive.Root className="user-turn">
+  return <MessagePrimitive.Root className="user-turn" data-message-id={String(itemIndex)}>
     <MessageTimestamp className="turn-timestamp" />
     {editing && !previewing
       ? <div className="user-message user-message-editor">

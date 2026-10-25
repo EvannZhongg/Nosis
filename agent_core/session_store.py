@@ -2,12 +2,14 @@
 
 import json
 import os
+import re
 import shutil
 from contextlib import contextmanager
 from pathlib import Path
 from typing import BinaryIO, Iterable, Iterator
 
 from .atomic import atomic_write_text
+from .content import text_content
 from .permissions import PermissionPreset
 from .session import JournalEvent, JournalSink, Session, message_from_dict
 from .session_title import initial_session_title
@@ -189,6 +191,50 @@ class JsonlSessionStore:
                 workspace_directory(self._directory, workspace)
             )
         ]
+
+    def search_messages(
+        self, query: str, *, limit: int, per_session_limit: int,
+    ) -> list[dict[str, object]]:
+        """Find persisted conversation text without recovering runtime state."""
+        query = query.strip()
+        if not query or limit <= 0 or per_session_limit <= 0:
+            return []
+        pattern = re.compile(re.escape(query), re.IGNORECASE)
+        matches: list[dict[str, object]] = []
+        for group in self.list_sessions():
+            for summary in group["sessions"]:
+                session = self.load(summary["session_id"], recover=False)
+                session_matches: list[dict[str, object]] = []
+                for index, message in enumerate(session.items):
+                    if message.role not in {"user", "assistant"} or message.origin != "conversation":
+                        continue
+                    text = text_content(message.content)
+                    match = pattern.search(text) if text else None
+                    if match is None:
+                        continue
+                    if len(session_matches) == per_session_limit:
+                        for result in session_matches:
+                            result["has_more_in_session"] = True
+                        break
+                    session_matches.append({
+                        "session_id": session.session_id,
+                        "title": summary["title"],
+                        "workspace": session.workspace,
+                        "item_index": index,
+                        "role": message.role,
+                        "has_more_in_session": False,
+                        "text": text,
+                        "match_start": match.start(),
+                        "match_end": match.end(),
+                        "timestamp_utc": (
+                            _format_utc(message.timestamp_utc)
+                            if message.timestamp_utc is not None else None
+                        ),
+                    })
+                matches.extend(session_matches)
+                if len(matches) >= limit:
+                    return matches[:limit]
+        return matches
 
     def load(
         self,

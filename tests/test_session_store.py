@@ -4,6 +4,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from agent_core import (
@@ -17,6 +18,7 @@ from agent_core import (
     Session,
     SessionInUseError,
     ToolCall,
+    TextPart,
 )
 from agent_core.session_paths import session_log_path, workspace_directory
 
@@ -27,6 +29,72 @@ def persist(store: JsonlSessionStore, workspace: Path, session: Session) -> None
 
 
 class JsonlSessionStoreTest(unittest.TestCase):
+    def test_search_caps_each_session_without_hiding_other_sessions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = JsonlSessionStore(root / "sessions")
+            other = Session("other")
+            other.add_item("user", "needle in another session")
+            persist(store, root, other)
+            frequent = Session("frequent")
+            for index in range(80):
+                frequent.add_item("assistant", f"needle {index}")
+            persist(store, root, frequent)
+            matches = store.search_messages("needle", limit=5, per_session_limit=2)
+            previews = [match for match in matches if match["session_id"] == "frequent"]
+            self.assertEqual([match["item_index"] for match in previews], [0, 1])
+            self.assertTrue(all(match["has_more_in_session"] for match in previews))
+            other_matches = [match for match in matches if match["session_id"] == "other"]
+            self.assertEqual(len(other_matches), 1)
+            self.assertFalse(other_matches[0]["has_more_in_session"])
+            expanded = store.search_messages("needle", limit=10, per_session_limit=5)
+            self.assertEqual(len([match for match in expanded if match["session_id"] == "frequent"]), 5)
+
+    def test_searches_conversation_text_across_workspaces_with_original_indexes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = JsonlSessionStore(root / "sessions")
+            first = Session("first")
+            first.add_item("user", "Find Needle in history")
+            first.add_item("tool", "needle in tool output", tool_call_id="call-1")
+            first.add_item("assistant", None, reasoning="needle in reasoning")
+            first.add_item("user", "needle in injected feedback", origin="hook_feedback")
+            first.add_item("user", "needle in interaction", origin="user_interaction")
+            first.add_item("assistant", "The NEEDLE is here")
+            persist(store, root / "project", first)
+            second = Session("second")
+            second.add_item("user", (ImagePart(path="needle.png", filename="needle.png"), TextPart("中文 needle 正文")))
+            persist(store, root / "another", second)
+
+            matches = store.search_messages(" needle ", limit=50, per_session_limit=3)
+            self.assertEqual(
+                {(match["session_id"], match["item_index"]) for match in matches},
+                {("first", 0), ("first", 5), ("second", 0)},
+            )
+            for match in matches:
+                self.assertEqual(match["text"][match["match_start"]:match["match_end"]].lower(), "needle")
+            self.assertEqual(len(store.search_messages("needle", limit=1, per_session_limit=3)), 1)
+            self.assertEqual(store.search_messages("  ", limit=50, per_session_limit=3), [])
+            self.assertEqual(store.search_messages("not present", limit=50, per_session_limit=3), [])
+
+    def test_search_preserves_archived_history_and_does_not_recover_or_write_journal(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            store = JsonlSessionStore(root / "sessions")
+            session = Session("active")
+            with store.open_journal(session.session_id, root) as sink:
+                session.attach_journal_sink(sink)
+                session.begin_turn("turn-1")
+                session.add_item("user", "a literal [needle].*")
+                session.set_archived_summary("compressed", 1)
+                path = session_log_path(store.directory, root, session.session_id)
+                before = path.read_bytes()
+                with patch.object(Session, "recover", side_effect=AssertionError("search must not recover")):
+                    matches = store.search_messages("[needle].*", limit=50, per_session_limit=3)
+                self.assertEqual(len(matches), 1)
+                self.assertEqual(matches[0]["item_index"], 0)
+                self.assertEqual(path.read_bytes(), before)
+
     @unittest.skipUnless(os.name == "nt", "Windows journal ownership")
     def test_second_writer_reports_session_in_use_without_changing_journal(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

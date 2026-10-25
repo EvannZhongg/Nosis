@@ -322,6 +322,7 @@ type OpenMessage = {
   role: ThreadMessageLike["role"];
   content: Part[];
   createdAt?: Date;
+  metadata: { custom: { itemIndexes: number[] } };
 };
 
 /** The parts one transcript item contributes, in the order the model emitted them. */
@@ -417,6 +418,7 @@ export function toMessages(items: TranscriptItem[], sessionId?: string): ThreadM
 
     if (item.role === "assistant" && open) {
       open.content.push(...parts);
+      open.metadata.custom.itemIndexes.push(index);
       // The timestamp belongs to the finished turn, so the newest item wins.
       if (item.timestamp_utc) open.createdAt = new Date(item.timestamp_utc);
       return;
@@ -426,6 +428,7 @@ export function toMessages(items: TranscriptItem[], sessionId?: string): ThreadM
       id: String(index),
       role: item.role,
       content: parts,
+      metadata: { custom: { itemIndexes: [index] } },
       createdAt: item.timestamp_utc
         ? new Date(item.timestamp_utc)
         : undefined,

@@ -1803,6 +1803,55 @@ class GuiTest(unittest.TestCase):
             }],
         })
 
+    def test_searches_history_with_bounded_snippets_and_browser_offsets(self) -> None:
+        session = Session("searchable")
+        session.add_item("user", "before " * 30 + "🙂 中文 NEEDLE " + "after " * 40)
+        session.add_item("assistant", "another needle")
+        self.store.bind_workspace(session.session_id, self.root)
+        self.store.append_events(session.session_id, session.journal, workspace=self.root)
+        with self.client() as client:
+            response = client.get("/api/sessions/search", params={"q": "needle", "limit": 1, "per_session_limit": 2})
+            self.assertEqual(response.status_code, 200)
+            data = response.json()
+            self.assertTrue(data["has_more"])
+            self.assertEqual(len(data["matches"]), 1)
+            match = data["matches"][0]
+            self.assertEqual(match["session_id"], session.session_id)
+            self.assertEqual(match["item_index"], 0)
+            self.assertFalse(match["scratch"])
+            self.assertTrue(match["prefix_omitted"])
+            self.assertTrue(match["suffix_omitted"])
+            self.assertNotIn("text", match)
+            snippet = match["snippet"].encode("utf-16-le")
+            self.assertEqual(snippet[match["match_start"] * 2:match["match_end"] * 2].decode("utf-16-le"), "NEEDLE")
+            self.assertLessEqual(len(match["snippet"]), 180)
+            self.assertEqual(client.get("/api/sessions/search", params={"q": "missing", "limit": 50, "per_session_limit": 2}).json(), {"matches": [], "has_more": False})
+            for params in [
+                {"q": "needle", "limit": 0, "per_session_limit": 2},
+                {"q": "needle", "limit": 50, "per_session_limit": 0},
+                {"q": "x" * 201, "limit": 50, "per_session_limit": 2},
+                {"q": "needle", "limit": 50},
+                {"q": "needle", "per_session_limit": 2},
+            ]:
+                self.assertEqual(client.get("/api/sessions/search", params=params).status_code, 422)
+
+    def test_search_returns_limited_session_previews_with_more_indicator(self) -> None:
+        session = Session("frequent-matches")
+        for index in range(10):
+            session.add_item("assistant", f"needle {index}")
+        self.store.bind_workspace(session.session_id, self.root)
+        self.store.append_events(session.session_id, session.journal, workspace=self.root)
+        with self.client() as client:
+            data = client.get("/api/sessions/search", params={"q": "needle", "limit": 50, "per_session_limit": 2}).json()
+            expanded = client.get("/api/sessions/search", params={"q": "needle", "limit": 50, "per_session_limit": 5}).json()
+            limited = client.get("/api/sessions/search", params={"q": "needle", "limit": 1, "per_session_limit": 5}).json()
+        self.assertEqual([match["item_index"] for match in data["matches"]], [0, 1])
+        self.assertTrue(all(match["has_more_in_session"] for match in data["matches"]))
+        self.assertFalse(data["has_more"])
+        self.assertEqual([match["item_index"] for match in expanded["matches"]], [0, 1, 2, 3, 4])
+        self.assertEqual(len(limited["matches"]), 1)
+        self.assertTrue(limited["has_more"])
+
     def test_reads_history_written_by_the_tui(self) -> None:
         self.store.bind_workspace("from-tui", self.root)
         session = Session("from-tui")

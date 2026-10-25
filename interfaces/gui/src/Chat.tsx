@@ -10,6 +10,7 @@ import { useSessionRuntime } from "./chat/useSessionRuntime";
 export function Chat({
   session,
   selected,
+  searchTarget,
   forkPreview,
   contextWindow,
   workspaceOptions = [],
@@ -29,6 +30,7 @@ export function Chat({
 }: {
   session: Session;
   selected: boolean;
+  searchTarget?: { itemIndex: number; requestId: string };
   forkPreview?: { itemIndex: number; text: string };
   contextWindow: ContextWindow | null;
   workspaceOptions?: string[];
@@ -74,12 +76,16 @@ export function Chat({
     previewing: Boolean(forkPreview),
     submit: onEditMessage,
   }), [forkPreview, onEditMessage, runtime.sessionRunning, session.editable_user_messages]);
+  const targetMessage = searchTarget && runtime.messages.find((message) => {
+    const indexes = message.metadata?.custom?.itemIndexes;
+    return Array.isArray(indexes) && indexes.includes(searchTarget.itemIndex);
+  });
 
   return <SessionIdContext.Provider value={session.session_id}>
     <UserMessageEditContext.Provider value={editContext}>
       <AssistantRuntimeProvider runtime={runtime.assistantRuntime}>
         <ThreadPrimitive.Root className="thread">
-          <Transcript previews={runtime.turnPreviews} viewportRef={viewportRef} active={selected || Boolean(forkPreview)} />
+          <Transcript previews={runtime.turnPreviews} viewportRef={viewportRef} active={selected || Boolean(forkPreview)} navigation={searchTarget && { requestId: searchTarget.requestId, messageId: targetMessage?.id }} />
           <Composer runtime={runtime} />
         </ThreadPrimitive.Root>
       </AssistantRuntimeProvider>

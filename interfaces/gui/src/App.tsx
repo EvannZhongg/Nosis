@@ -3,6 +3,7 @@ import { Bot, Boxes, Brain, CalendarClock, ChevronDown, ChevronRight, GitFork, K
 import { Chat } from "./Chat";
 import { Settings, type SettingsSection } from "./Settings";
 import { Workspace } from "./Workspace";
+import { SessionSearch } from "./SessionSearch";
 import { runtimeIsActive, type ContextWindow, type RuntimePhase } from "@nosis/protocol";
 import { deleteSession, forkSession, get, sessionUrl, type ModelOption, type ModelOptions, type Session, type WorkspaceSessions } from "./api";
 
@@ -39,6 +40,7 @@ export function App() {
   const [workspaceCollapsed, setWorkspaceCollapsed] = useState(false);
   const [initialPrompts, setInitialPrompts] = useState<Record<string, string>>({});
   const [pendingFork, setPendingFork] = useState<{ sessionId: string; itemIndex: number; text: string } | null>(null);
+  const [searchTarget, setSearchTarget] = useState<{ sessionId: string; itemIndex: number; requestId: string } | null>(null);
   const settingsMenuRef = useRef<HTMLDivElement>(null);
   const updatedTitlesRef = useRef(new Map<string, string>());
 
@@ -155,12 +157,13 @@ export function App() {
   }, [selectedProjectWorkspace]);
 
   async function selectSession(id: string) {
+    setSearchTarget(null);
     setSettingsSection(null);
     setSettingsMenuOpen(false);
     if (chatSessions.some((item) => item.session_id === id)) {
       setSelectedSessionId(id);
       setError("");
-      return;
+      return true;
     }
     setLoadingSessionId(id);
     setError("");
@@ -174,14 +177,17 @@ export function App() {
         setContextBySession((all) => ({ ...all, [id]: loaded.context_window ?? null }));
       }
       setSelectedSessionId(id);
+      return true;
     } catch (error) {
       setError(String(error));
+      return false;
     } finally {
       setLoadingSessionId(null);
     }
   }
 
   function createNewChat(workspace?: string) {
+    setSearchTarget(null);
     const fresh = newSession(workspace);
     // Add the new chat to the stable mounted set before making it visible.
     setChatSessions((all) => [...all, fresh]);
@@ -276,15 +282,26 @@ export function App() {
   return (
     <div className={`app-shell ${sessionsCollapsed ? "sessions-collapsed" : ""} ${workspaceCollapsed ? "workspace-collapsed" : ""}`}>
       <aside className={`sessions-panel ${sessionsCollapsed ? "collapsed" : ""}`} aria-label="Sessions">
+        <div className={`sessions-header ${sessionsCollapsed ? "rail" : "brand"}`}>
+          {sessionsCollapsed
+            ? <button className="sidebar-rail-logo" aria-label="展开会话栏" title="展开会话栏" onClick={() => setSessionsCollapsed(false)}><img src="/nosis-avatar-128.png" alt="" /></button>
+            : <span>Nosis<span className="brand-dot">.</span></span>}
+          <div className="sessions-header-actions">
+            <SessionSearch collapsed={sessionsCollapsed} onSelect={async (match) => {
+              if (!await selectSession(match.session_id)) return false;
+              setSearchTarget({ sessionId: match.session_id, itemIndex: match.item_index, requestId: crypto.randomUUID() });
+              return true;
+            }} />
+            {!sessionsCollapsed && <button className="sidebar-collapse-button" aria-label="收起会话栏" title="收起会话栏" onClick={() => { setSessionsCollapsed(true); setSettingsMenuOpen(false); }}><PanelLeftClose size={17} /></button>}
+          </div>
+        </div>
         {sessionsCollapsed ? <>
-          <button className="sidebar-rail-logo" aria-label="展开会话栏" title="展开会话栏" onClick={() => setSessionsCollapsed(false)}><img src="/nosis-avatar-128.png" alt="" /></button>
           <button className="sidebar-rail-button" aria-label="新建会话" title="New chat" onClick={() => createNewChat()}><Plus size={19} /></button>
           <div className="settings-menu-wrap rail" ref={settingsMenuRef}>
             {settingsPopover}
             <button className={`sidebar-rail-button ${settingsSection ? "selected" : ""}`} aria-label="设置" title="Settings" aria-expanded={settingsMenuOpen} onClick={() => setSettingsMenuOpen((open) => !open)}><SettingsIcon size={17} /></button>
           </div>
         </> : <>
-          <div className="brand"><span>Nosis<span className="brand-dot">.</span></span><button className="sidebar-collapse-button" aria-label="收起会话栏" title="收起会话栏" onClick={() => { setSessionsCollapsed(true); setSettingsMenuOpen(false); }}><PanelLeftClose size={17} /></button></div>
           <div className="new-chat-actions">
             <button className="new-chat" onClick={() => createNewChat()}><Plus size={17} /> New chat</button>
           </div>
@@ -325,7 +342,7 @@ export function App() {
         {!restoringSession && chatSessions.map((current) => {
           const provider = providerBySession[current.session_id] ?? defaultProvider;
           const forkPreview = pendingFork?.sessionId === current.session_id ? pendingFork : undefined;
-          return <div key={current.session_id} style={{ display: current.session_id === selectedSessionId ? "contents" : "none" }}><Chat session={current} selected={!pendingFork && current.session_id === selectedSessionId} forkPreview={forkPreview} contextWindow={current.session_id === selectedSessionId ? contextWindow : contextBySession[current.session_id] ?? current.context_window ?? null} workspaceOptions={sessionGroups.map((group) => group.workspace)} backgroundActive={Boolean(busyBySession[current.session_id])}
+          return <div key={current.session_id} style={{ display: current.session_id === selectedSessionId ? "contents" : "none" }}><Chat session={current} selected={!pendingFork && current.session_id === selectedSessionId} searchTarget={searchTarget?.sessionId === current.session_id ? searchTarget : undefined} forkPreview={forkPreview} contextWindow={current.session_id === selectedSessionId ? contextWindow : contextBySession[current.session_id] ?? current.context_window ?? null} workspaceOptions={sessionGroups.map((group) => group.workspace)} backgroundActive={Boolean(busyBySession[current.session_id])}
             providers={providers} provider={provider} onProviderChange={(value) => setProviderBySession((all) => ({ ...all, [current.session_id]: value }))} onBusyChange={(value) => {
               setBusyBySession((all) => ({ ...all, [current.session_id]: value }));
             }} onContextWindowChange={(value) => setContextBySession((all) => ({ ...all, [current.session_id]: value }))} onTurnEnd={() => {

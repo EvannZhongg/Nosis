@@ -613,6 +613,7 @@ export function useSessionRuntime({
 
   return {
     assistantRuntime,
+    messages,
     turnPreviews,
     running,
     runtimePhase,

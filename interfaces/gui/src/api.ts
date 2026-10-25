@@ -17,6 +17,22 @@ export type Session = {
 };
 export type EditableUserMessage = { anchor_id: string; item_index: number };
 export type WorkspaceSessions = { workspace: string; scratch?: boolean; sessions: SessionSummary[] };
+export type SessionSearchMatch = {
+  session_id: string;
+  title: string;
+  workspace: string;
+  scratch: boolean;
+  item_index: number;
+  role: "user" | "assistant";
+  has_more_in_session: boolean;
+  timestamp_utc: string | null;
+  snippet: string;
+  match_start: number;
+  match_end: number;
+  prefix_omitted: boolean;
+  suffix_omitted: boolean;
+};
+export type SessionSearchResults = { matches: SessionSearchMatch[]; has_more: boolean };
 export type ScheduleTrigger =
   | { type: "once"; at: string }
   | { type: "interval"; seconds: number; start_at?: string | null }
@@ -62,8 +78,8 @@ export type Directory = {
   next_cursor: string | null;
 };
 
-export async function get<T>(path: string): Promise<T> {
-  const response = await fetch(path);
+export async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
+  const response = await fetch(path, { signal });
   if (!response.ok) {
     const error = await response.json();
     throw new Error(error.detail ?? `请求失败 (${response.status})`);
