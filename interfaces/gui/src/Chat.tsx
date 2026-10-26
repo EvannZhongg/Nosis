@@ -1,7 +1,7 @@
 import { useMemo, useRef } from "react";
 import { AssistantRuntimeProvider, ThreadPrimitive } from "@assistant-ui/react";
 import type { ContextWindow } from "@nosis/protocol";
-import type { ModelOption, Session } from "./api";
+import type { ModelOption, Session, WorkspaceOption } from "./api";
 import { Composer } from "./chat/Composer";
 import { SessionIdContext, UserMessageEditContext } from "./chat/Messages";
 import { Transcript } from "./chat/Transcript";
@@ -33,7 +33,7 @@ export function Chat({
   searchTarget?: { itemIndex: number; requestId: string };
   forkPreview?: { itemIndex: number; text: string };
   contextWindow: ContextWindow | null;
-  workspaceOptions?: string[];
+  workspaceOptions?: WorkspaceOption[];
   backgroundActive?: boolean;
   providers: ModelOption[];
   provider?: string;

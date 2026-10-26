@@ -222,13 +222,15 @@ pre { overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-famil
 .message-file { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; margin: 4px 0; padding: 8px 10px; border: 1px solid #dfe4ed; border-radius: 8px; color: inherit; text-decoration: none; background: #f7f8fb; }
 .message-file:hover { border-color: #cbd3e1; background: #f1f3f7; }
 .message-file span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.workspace-menu { position: absolute; z-index: 5; left: 0; bottom: calc(100% - 2px); width: 280px; max-width: min(280px, calc(100vw - 48px)); padding: 8px; border: 1px solid #dfe4ed; border-radius: 9px; background: #fff; box-shadow: 0 8px 24px #20385c18; }
-.workspace-menu-heading { padding: 3px 8px 7px; color: #9aa3b1; font-size: 10px; }
-.workspace-option { display: flex; align-items: center; width: 100%; padding: 7px 8px; border: 0; border-radius: 5px; background: transparent; color: #687387; text-align: left; cursor: pointer; }
+.workspace-menu { position: absolute; z-index: 5; left: 0; bottom: 100%; display: flex; flex-direction: column; width: 320px; height: max-content; padding: 8px; overflow: hidden; border: 1px solid #dfe4ed; border-radius: 12px; background: #fff; box-shadow: 0 8px 24px #20385c18; }
+.workspace-menu-list { min-height: 0; max-height: 280px; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #cbd2df transparent; }
+.workspace-menu-group + .workspace-menu-group { margin-top: 6px; padding-top: 6px; border-top: 1px solid #edf0f4; }
+.workspace-menu-heading { padding: 5px 10px 7px; color: #9aa3b1; font-size: 10px; }
+.workspace-option { display: flex; align-items: center; gap: 9px; width: 100%; padding: 9px 10px; border: 0; border-radius: 7px; background: transparent; color: #687387; text-align: left; cursor: pointer; }
 .workspace-option:hover, .workspace-option.selected { background: #f1f3f8; color: #40568a; }
-.workspace-option-path { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
-.workspace-menu-divider { height: 1px; margin: 7px 3px; background: #edf0f4; }
-.workspace-new-option { width: 100%; padding: 7px 8px; border: 0; border-radius: 5px; background: transparent; color: #7b879b; text-align: left; font-size: 11px; cursor: pointer; }
+.workspace-option-path { display: block; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.workspace-menu-divider { flex-shrink: 0; height: 1px; margin: 7px 3px; background: #edf0f4; }
+.workspace-new-option { display: flex; flex-shrink: 0; align-items: center; gap: 9px; width: 100%; padding: 8px 10px; border: 0; border-radius: 7px; background: transparent; color: #7b879b; text-align: left; font-size: 11px; cursor: pointer; }
 .workspace-new-option:hover { background: #f5f6f9; color: #53688f; }
 .attachment-button { display: grid; place-items: center; width: 27px; height: 27px; border: 0; border-radius: 6px; background: transparent; color: #8b96a9; cursor: pointer; }
 .attachment-button:hover { background: #f1f3f7; color: #5d709e; }

@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useRef, useState, useEffect } from "react";
 import { useExternalStoreRuntime, type AppendMessage } from "@assistant-ui/react";
 import { runtimeIsActive, type CacheUsage, type ContextWindow, type PermissionPreset, type PlanSnapshot, type RuntimePhase, type UserQuestion } from "@nosis/protocol";
-import { createScratchWorkspace, releaseActiveSession, selectWorkspace, uploadAttachments, type ModelOption, type Session, type UserAttachment } from "../api";
+import { createScratchWorkspace, releaseActiveSession, selectWorkspace, uploadAttachments, type ModelOption, type Session, type UserAttachment, type WorkspaceOption } from "../api";
 import { SessionSocket } from "../session";
 import { applyMessage, isTurnActivity, toMessages, type Feedback, type TranscriptItem } from "../transcript";
 import { composerConnectionGate } from "./composerState";
@@ -12,7 +12,7 @@ export type SessionRuntimeOptions = {
   selected: boolean;
   forkPreview?: { itemIndex: number; text: string };
   contextWindow: ContextWindow | null;
-  workspaceOptions: string[];
+  workspaceOptions: WorkspaceOption[];
   backgroundActive: boolean;
   providers: ModelOption[];
   provider?: string;
@@ -70,6 +70,7 @@ export function useSessionRuntime({
   const [uploadingAttachments, setUploadingAttachments] = useState(false);
   const [initialPromptDraft, setInitialPromptDraft] = useState<string | null>(null);
   const [workspaceDraft, setWorkspaceDraft] = useState(session.workspace ?? "");
+  const [scratchWorkspace, setScratchWorkspace] = useState<string | null>(null);
   const [pendingWorkspace, setPendingWorkspace] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const socketRef = useRef<SessionSocket | null>(null);
@@ -590,7 +591,9 @@ export function useSessionRuntime({
 
   async function chooseScratchWorkspace() {
     try {
-      await saveWorkspace(await createScratchWorkspace(session.session_id));
+      const workspace = await createScratchWorkspace(session.session_id);
+      setScratchWorkspace(workspace);
+      await saveWorkspace(workspace);
     } catch (error) {
       showAlert({ kind: "alert", id: "scratch-workspace", level: "error", text: String(error) });
     }
@@ -643,7 +646,9 @@ export function useSessionRuntime({
     controlsDisabled,
     sessionRunning,
     workspaceSelected,
-    availableWorkspaces: Array.from(new Set([...workspaceOptions, displayedWorkspace].filter(Boolean))),
+    availableWorkspaces: displayedWorkspace && !workspaceOptions.some((option) => option.workspace === displayedWorkspace)
+      ? [...workspaceOptions, { workspace: displayedWorkspace, scratch: displayedWorkspace === scratchWorkspace }]
+      : workspaceOptions,
     addPendingFiles: (files: File[]) => setPendingFiles((current) => [...current, ...files]),
     removePendingFile: (index: number) => setPendingFiles((current) => current.filter((_, itemIndex) => itemIndex !== index)),
     notifyRunningAttachmentBlocked: () => showToast({ kind: "toast", level: "info", text: "任务运行中不能发送附件；待发送内容已保留，请停止或等待当前任务结束。" }),

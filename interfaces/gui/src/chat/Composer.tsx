@@ -1,6 +1,6 @@
-import { useEffect, useId, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent } from "react";
 import { ComposerPrimitive, unstable_useComposerInput } from "@assistant-ui/react";
-import { AlertTriangle, ArrowUp, ChevronDown, LoaderCircle, MessageCircleQuestion, Paperclip, RefreshCw, ShieldCheck, X } from "lucide-react";
+import { AlertTriangle, ArrowUp, Check, ChevronDown, Folder, LoaderCircle, MessageCircleQuestion, Paperclip, Plus, RefreshCw, ShieldCheck, X } from "lucide-react";
 import type { PermissionPreset } from "@nosis/protocol";
 import { shouldBlockRunningAttachmentSubmit, shouldSubmitAttachmentOnly, shouldSubmitComposerEnter } from "./composerState";
 import { PendingAttachment } from "./Messages/Attachments";
@@ -15,6 +15,12 @@ export function Composer({ runtime }: { runtime: SessionRuntime }) {
   const refreshDisabled = !runtime.workspaceSelected || runtime.controlsDisabled || runtime.sessionRunning
     || runtime.attaching || runtime.providerSaving || runtime.workspaceSaving || runtime.permissionSaving || runtime.refreshing;
   const [workspaceEditing, setWorkspaceEditing] = useState(false);
+  const [workspaceMenuBounds, setWorkspaceMenuBounds] = useState({ maxHeight: 360, maxWidth: 320 });
+  const workspaceMenuId = useId();
+  const workspaceGroups = [
+    { label: "正式工作区", options: runtime.availableWorkspaces.filter((option) => !option.scratch) },
+    { label: "临时工作区", options: runtime.availableWorkspaces.filter((option) => option.scratch) },
+  ];
   const workspacePickerRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const compositionEndTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -27,6 +33,23 @@ export function Composer({ runtime }: { runtime: SessionRuntime }) {
   function runRefreshCommand() {
     if (runtime.refreshRuntime()) setComposerText("");
   }
+
+  useLayoutEffect(() => {
+    if (!workspaceEditing) return;
+    const picker = workspacePickerRef.current!;
+    const updateBounds = () => {
+      const bounds = picker.getBoundingClientRect();
+      setWorkspaceMenuBounds({ maxHeight: Math.max(0, bounds.top - 12), maxWidth: window.innerWidth - bounds.left - 12 });
+    };
+    updateBounds();
+    const observer = new ResizeObserver(updateBounds);
+    observer.observe(picker.closest(".composer-area")!);
+    window.addEventListener("resize", updateBounds);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", updateBounds);
+    };
+  }, [workspaceEditing]);
 
   useEffect(() => {
     if (!workspaceEditing) return;
@@ -169,17 +192,30 @@ export function Composer({ runtime }: { runtime: SessionRuntime }) {
           <kbd>Enter</kbd>
         </button>
       </div>}
-      <div ref={workspacePickerRef} className="workspace-picker-wrap">
-        <button type="button" className="workspace-picker" onClick={() => setWorkspaceEditing((value) => !value)} disabled={runtime.controlsDisabled || runtime.sessionRunning} aria-expanded={workspaceEditing}>
+      <div ref={workspacePickerRef} className="workspace-picker-wrap" onKeyDown={(event) => {
+        if (event.key === "Escape" && workspaceEditing) {
+          event.preventDefault();
+          setWorkspaceEditing(false);
+          workspacePickerRef.current?.querySelector("button")?.focus();
+        }
+      }}>
+        <button type="button" className="workspace-picker" onClick={() => setWorkspaceEditing((value) => !value)} disabled={runtime.controlsDisabled || runtime.sessionRunning} aria-expanded={workspaceEditing} aria-haspopup="menu" aria-controls={workspaceEditing ? workspaceMenuId : undefined}>
           <span className="workspace-picker-icon">⌂</span><span className="workspace-picker-value">{runtime.displayedWorkspace || "选择项目"}</span>
           {runtime.workspaceSaving ? <LoaderCircle size={14} className="spin" aria-label="正在切换工作区" /> : <ChevronDown size={14} />}
         </button>
-        {workspaceEditing && <div className="workspace-menu" role="menu">
-          <div className="workspace-menu-heading">选择工作区</div>
-          {runtime.availableWorkspaces.map((path) => <button type="button" role="menuitem" className={`workspace-option ${path === runtime.displayedWorkspace ? "selected" : ""}`} key={path} onClick={() => { void runtime.saveWorkspace(path); setWorkspaceEditing(false); }} disabled={runtime.controlsDisabled || runtime.sessionRunning || runtime.workspaceSaving} title={path}><span className="workspace-option-path">{path}</span></button>)}
+        {workspaceEditing && <div className="workspace-menu" id={workspaceMenuId} role="menu" aria-label="选择工作区" style={workspaceMenuBounds}>
+          <div className="workspace-menu-list">
+            {workspaceGroups.filter((group) => group.options.length > 0).map((group) => <div className="workspace-menu-group" role="group" aria-label={group.label} key={group.label}>
+              <div className="workspace-menu-heading">{group.label}</div>
+              {group.options.map(({ workspace }) => <button type="button" role="menuitem" className={`workspace-option ${workspace === runtime.displayedWorkspace ? "selected" : ""}`} key={workspace} onClick={() => { void runtime.saveWorkspace(workspace); setWorkspaceEditing(false); }} disabled={runtime.controlsDisabled || runtime.sessionRunning || runtime.workspaceSaving} title={workspace}>
+                <Folder size={16} /><span className="workspace-option-path">{workspace.split(/[\\/]/).pop() || workspace}</span>
+                {workspace === runtime.displayedWorkspace && <Check size={14} />}
+              </button>)}
+            </div>)}
+          </div>
           <div className="workspace-menu-divider" />
-          <button type="button" role="menuitem" className="workspace-new-option" onClick={() => { setWorkspaceEditing(false); void runtime.chooseNewWorkspace(); }} disabled={runtime.controlsDisabled || runtime.sessionRunning || runtime.workspaceSaving}>＋ 新建工作区</button>
-          <button type="button" role="menuitem" className="workspace-new-option" onClick={() => { setWorkspaceEditing(false); void runtime.chooseScratchWorkspace(); }} disabled={runtime.controlsDisabled || runtime.sessionRunning || runtime.workspaceSaving}>＋ 临时工作区</button>
+          <button type="button" role="menuitem" className="workspace-new-option" onClick={() => { setWorkspaceEditing(false); void runtime.chooseNewWorkspace(); }} disabled={runtime.controlsDisabled || runtime.sessionRunning || runtime.workspaceSaving}><Plus size={16} />新建工作区</button>
+          <button type="button" role="menuitem" className="workspace-new-option" onClick={() => { setWorkspaceEditing(false); void runtime.chooseScratchWorkspace(); }} disabled={runtime.controlsDisabled || runtime.sessionRunning || runtime.workspaceSaving}><Plus size={16} />临时工作区</button>
         </div>}
       </div>
       <ComposerPrimitive.Input
