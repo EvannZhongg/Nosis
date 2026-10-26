@@ -48,6 +48,11 @@ class ProviderCapabilities:
 
 class LLMProvider(ABC):
     @property
+    def token_counting_identity(self) -> object:
+        """JSON identity of the route and counting policy for usage anchors."""
+        return [type(self).__module__, type(self).__qualname__, self.model_name]
+
+    @property
     def model_name(self) -> str | None:
         """Model identifier, when supplied by the provider."""
         return None

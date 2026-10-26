@@ -1,3 +1,4 @@
+import hashlib
 import json
 import re
 from dataclasses import dataclass, replace
@@ -16,6 +17,7 @@ from .plan import plan_snapshot_to_dict
 from .projection import ContextUnit, project_context_units
 from .session import Message, Session, UserAnchor
 from .tools import ToolDefinition
+from .usage import InputTokenEstimate
 
 if TYPE_CHECKING:
     from .jobs import JobManager
@@ -150,6 +152,21 @@ class ContextManager:
             compression_summary=self._session.archived_summary,
         )
 
+    def _token_fingerprint(self, request: LLMRequest) -> str:
+        envelope = [self._provider.token_counting_identity, request.system_prompt,
+                    [(tool.name, tool.description, tool.parameters) for tool in request.tools],
+                    str(request.media_root)]
+        return hashlib.sha256(json.dumps(envelope, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+
+    def measure_input_tokens(self, request: LLMRequest) -> InputTokenEstimate:
+        local = self._provider.count_input_tokens(request)
+        fingerprint = self._token_fingerprint(request)
+        anchor = self._session.input_token_anchor
+        tokens = local
+        if anchor is not None and anchor.fingerprint == fingerprint:
+            tokens = max(0, anchor.input_tokens + local - anchor.local_tokens)
+        return InputTokenEstimate(fingerprint, local, tokens)
+
     def build_request(
         self,
         tools: Iterable[ToolDefinition] = (),
@@ -228,7 +245,7 @@ class ContextManager:
                 if attempt > 0 and validation_error is not None
                 else request
             )
-            input_tokens = self._provider.count_input_tokens(attempt_request)
+            input_tokens = self.measure_input_tokens(attempt_request).tokens
             if input_tokens > self.hard_limit:
                 raise ContextWindowExceededError(
                     input_tokens, self._provider.max_context_tokens,

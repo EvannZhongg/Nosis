@@ -482,8 +482,6 @@ class ExecutionPlaneManager:
     ) -> LLMProvider | None:
         if config is None:
             return None
-        from agent_core.providers import LiteLLMProvider, OpenAIProvider
-
         arguments = dict(
             model=config.model,
             base_url=config.url,
@@ -498,13 +496,8 @@ class ExecutionPlaneManager:
             reasoning_parameters=config.reasoning_parameters,
         )
         if config.api is not None:
-            return OpenAIProvider(**arguments, api=config.api)
-        route, separator, wire_model = config.model.partition("/")
-        if not separator or route == "openai":
-            return OpenAIProvider(
-                **arguments, wire_model=wire_model if separator else config.model,
-            )
-        return LiteLLMProvider(**arguments)
+            arguments["api"] = config.api
+        return config.provider_class(**arguments)
 
 
     def _subagent_runtime(

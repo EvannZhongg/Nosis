@@ -297,7 +297,7 @@ class LiteLLMProviderTest(unittest.TestCase):
             release.set()
             thread.join(2)
 
-    @patch("agent_core.providers.base.get_model_info", return_value={"supports_vision": True})
+    @patch("agent_core.providers.litellm_provider.get_model_info", return_value={"supports_vision": True})
     @patch("agent_core.providers.litellm_provider.completion")
     def test_resolves_relative_image_against_explicit_media_root(
         self,
@@ -438,7 +438,7 @@ class LiteLLMProviderTest(unittest.TestCase):
         self.assertNotIn("analyze_image", without[1]["content"])
         self.assertIn("use analyze_image", with_tool[1]["content"])
 
-    @patch("agent_core.providers.base.get_model_info", return_value={"supports_vision": True})
+    @patch("agent_core.providers.litellm_provider.get_model_info", return_value={"supports_vision": True})
     @patch("agent_core.providers.litellm_provider.completion")
     def test_missing_image_from_another_workspace_becomes_text_notice(
         self,
@@ -469,7 +469,7 @@ class LiteLLMProviderTest(unittest.TestCase):
         self.assertEqual(sent[0]["type"], "text")
         self.assertIn("unavailable", sent[0]["text"])
 
-    @patch("agent_core.providers.base.token_counter")
+    @patch("agent_core.providers.litellm_provider.token_counter")
     @patch("agent_core.providers.litellm_provider.completion")
     def test_passes_configured_model_url_key_and_output_limit(
         self,
@@ -1280,7 +1280,7 @@ class LiteLLMProviderTest(unittest.TestCase):
         self.assertEqual(raised.exception.details["reason"], "conflicting_id")
 
     @patch(
-        "agent_core.providers.base.token_counter",
+        "agent_core.providers.litellm_provider.token_counter",
         return_value=42,
     )
     def test_counts_tools_as_part_of_input(
@@ -1334,7 +1334,7 @@ class LiteLLMProviderTest(unittest.TestCase):
             ],
         )
 
-    @patch("agent_core.providers.base.get_model_info")
+    @patch("agent_core.providers.litellm_provider.get_model_info")
     def test_uses_litellm_context_limit_when_not_configured(
         self,
         get_model_info_mock,
@@ -1356,7 +1356,7 @@ class LiteLLMProviderTest(unittest.TestCase):
             api_base="https://example.com/v1",
         )
 
-    @patch("agent_core.providers.base.get_model_info")
+    @patch("agent_core.providers.litellm_provider.get_model_info")
     def test_configured_context_limit_skips_litellm_metadata(
         self,
         get_model_info_mock,
@@ -1376,7 +1376,7 @@ class LiteLLMProviderTest(unittest.TestCase):
                 max_context_tokens=0,
             )
 
-    @patch("agent_core.providers.base.get_model_info")
+    @patch("agent_core.providers.litellm_provider.get_model_info")
     def test_requires_config_for_model_without_context_metadata(
         self,
         get_model_info_mock,
@@ -1389,7 +1389,7 @@ class LiteLLMProviderTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             LiteLLMProvider(model="custom/model")
 
-    @patch("agent_core.providers.base.get_model_info")
+    @patch("agent_core.providers.litellm_provider.get_model_info")
     def test_requires_config_when_model_metadata_lookup_fails(
         self,
         get_model_info_mock,
@@ -1402,7 +1402,7 @@ class LiteLLMProviderTest(unittest.TestCase):
         ):
             LiteLLMProvider(model="custom/model")
 
-    @patch("agent_core.providers.base.get_model_info")
+    @patch("agent_core.providers.litellm_provider.get_model_info")
     def test_unknown_output_limit_is_none(
         self,
         get_model_info_mock,

@@ -4,6 +4,13 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
+class InputTokenAnchor:
+    fingerprint: str
+    local_tokens: int
+    input_tokens: int
+
+
+@dataclass(frozen=True)
 class TokenUsage:
     # Input totals include cache reads and writes; cache fields are breakdowns.
     input_tokens: int | None
@@ -12,6 +19,18 @@ class TokenUsage:
     # None means unreported; zero means the provider reported no cache activity.
     cache_read_tokens: int | None
     cache_write_tokens: int | None
+
+
+@dataclass(frozen=True)
+class InputTokenEstimate:
+    fingerprint: str
+    local_tokens: int
+    tokens: int
+
+    def anchor(self, usage: TokenUsage | None) -> InputTokenAnchor | None:
+        if usage is None or usage.input_tokens is None:
+            return None
+        return InputTokenAnchor(self.fingerprint, self.local_tokens, usage.input_tokens)
 
 
 @dataclass(frozen=True)

@@ -118,6 +118,7 @@ class SessionJournalTest(unittest.TestCase):
         self.assertEqual([event.turn_id for event in calls], ["t", "t", "t"])
         self.assertEqual(calls[0].payload, {
             "model_call_index": 1, "has_tool_calls": True,
+            "input_token_anchor": None,
             "usage": {
                 "input_tokens": 12000, "output_tokens": 300, "total_tokens": 12300,
                 "cache_read_tokens": 10000, "cache_write_tokens": 1000,

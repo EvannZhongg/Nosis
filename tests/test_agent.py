@@ -1596,7 +1596,7 @@ class AgentTest(unittest.TestCase):
                 ),
                 LLMResponse(content="tool completed", provider_data={"native_state": "final"},
                             usage=TokenUsage(1100, 30, 1130, 1000, None)),
-            ]
+            ], max_context_tokens=4000,
         )
         session = Session(session_id="session-1")
         agent = make_agent(
@@ -1631,7 +1631,8 @@ class AgentTest(unittest.TestCase):
             index for index, event in enumerate(events) if isinstance(event, ToolBatchStartedEvent)
         ))
         calls = [event for event in session.journal if event.event_type == "model_completed"]
-        self.assertEqual([event.payload for event in calls], [
+        self.assertEqual([{key: value for key, value in event.payload.items() if key != "input_token_anchor"}
+                          for event in calls], [
             {"model_call_index": 1, "has_tool_calls": True, "usage": {
                 "input_tokens": 1000, "output_tokens": 20, "total_tokens": 1020,
                 "cache_read_tokens": 800, "cache_write_tokens": 100,

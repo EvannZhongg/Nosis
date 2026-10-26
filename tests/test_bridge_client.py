@@ -131,7 +131,11 @@ class ExternalBridgeClientTest(unittest.TestCase):
         shutil.copyfile(ROOT / "tests/bridge_client/integration.mjs", cls.external / "integration.mjs")
 
     def setUp(self):
-        self.home = self.root / self._testMethodName
+        # A fixed, short home keeps journal paths clear of the Windows
+        # 260-character limit; each test starts from an empty one.
+        self.home = self.root / "home"
+        if self.home.exists():
+            shutil.rmtree(self.home)
         self.home.mkdir()
         self.env = {
             **os.environ, "HOME": str(self.home), "USERPROFILE": str(self.home),
@@ -152,6 +156,29 @@ class ExternalBridgeClientTest(unittest.TestCase):
         self.assertEqual(ready["protocol_version"], 2)
         self.assertEqual(peer.until("runtime_state")["phase"], "inactive")
         return ready
+
+    def test_installed_native_estimator_uses_packaged_resources_without_litellm(self):
+        result = subprocess.run(
+            [sys.executable, "-c", """
+import json, socket, sys
+from pathlib import Path
+def reject_network(*args, **kwargs):
+    raise AssertionError('estimator accessed the network')
+socket.socket.connect = reject_network
+from agent_core import LLMRequest
+from agent_core.providers import OpenAIProvider
+import agent_core.providers.openai_tokens as local_tokens
+counts = [OpenAIProvider(model).count_input_tokens(LLMRequest('Hello 世界', ()))
+          for model in ('gpt-5', 'gpt-6-astra')]
+assert 'litellm' not in sys.modules
+print(json.dumps({'file': str(Path(local_tokens.__file__).resolve()), 'counts': counts}))
+"""],
+            cwd=self.external, env=self.env, capture_output=True, text=True, timeout=15,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertTrue(Path(report["file"]).is_relative_to(self.site))
+        self.assertTrue(all(value > 0 for value in report["counts"]))
 
     def test_installed_cli_first_use_rebind_resume_and_eof(self):
         # Verify imports resolve to the wheel, rather than an editable checkout.

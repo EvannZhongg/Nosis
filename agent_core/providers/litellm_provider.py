@@ -1,19 +1,39 @@
 from typing import Callable
+from importlib.metadata import version
 
-from litellm import completion
+from litellm import completion, get_model_info, token_counter
 from litellm.exceptions import MidStreamFallbackError
 
 from agent_core.errors import ProviderStreamError
 from agent_core.llm import LLMRequest, LLMResponse
 from agent_core.usage import TokenUsage
 
-from .base import ModelProvider, _cancellable_chunks, _request_messages, _request_tools, _text_from_content
+from .base import ModelProvider, _cancellable_chunks, _media_tokens, _request_messages, _request_tools, _text_from_content
 from ._utils import get_field
 from .reasoning import reasoning_arguments
 from .tool_call_stream import ToolCallStreamAssembler
 
 
+TOKEN_COUNTING_IDENTITY = ("litellm", version("litellm"), version("tiktoken"))
+
+
 class LiteLLMProvider(ModelProvider):
+    @property
+    def token_counting_identity(self) -> object:
+        return [super().token_counting_identity, TOKEN_COUNTING_IDENTITY]
+
+    @classmethod
+    def model_info_for(cls, model: str, base_url: str | None = None) -> dict[str, object]:
+        return get_model_info(model=model, api_base=base_url)
+
+    def count_input_tokens(self, request: LLMRequest) -> int:
+        text_tokens = token_counter(
+            model=self._model,
+            messages=_request_messages(request, self, encode_media=False),
+            tools=_request_tools(request) or None,
+        )
+        return text_tokens + _media_tokens(request, self)
+
     def _stream(
         self,
         request: LLMRequest,

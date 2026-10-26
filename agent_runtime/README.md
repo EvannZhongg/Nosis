@@ -32,6 +32,7 @@ RuntimeHost
 装配阶段负责：
 
 - 创建主 Provider、`fast_model` 对应的辅助模型 Provider、视觉 Provider 和图片生成 Provider
+- 按选中的协议与模型路由导入对应适配器；原生 OpenAI 和 DeepSeek 模型的装配和视觉校验不导入 LiteLLM
 - 建立宿主与平台沙箱执行器，并施加 Runtime authority 上限
 - 装配桌面截图与输入能力；PyAutoGUI、PyScreeze、OpenCV、NumPy 等原生依赖在首次使用桌面 Tool 时才加载
 - 从内置 Catalog 按主 Agent 和子 Agent 角色选择 Tool
@@ -148,7 +149,7 @@ Provider 路由按以下链解析：
 ```
 
 空字符串表示继续继承。`fast_model` 是独立的一路，只服务长期记忆合并，不参与上面的子 Agent 链；未配置时沿用当前选中的主模型，主 Agent 与子 Agent 的记忆合并共享这个 Provider。上下文压缩始终使用当前 Agent 自己的 LLM，复用原请求前缀。压缩和记忆调用直接写入所属 Session 的 JSONL Journal，记录实际模型、任务、状态、耗时和用量，不进入对话上下文；子 Agent 调用保存在子 Session 中。图片生成使用独立 `image_generation` 配置；模型请求超时和额外重试次数来自 `agent_config.json` 的 `provider` 字段。
-每个 `provider_config.json` 的 `providers.<name>` 条目可以配置 `api: "responses"` 或 `api: "chat_completions"`，按协议选择原生 OpenAI SDK；与中转域名无关，也不在失败后切换协议。显式选择协议时，`model` 是原样发送的服务端模型 ID，例如 `gpt-6-astra` 或 `openai/gpt-5`（后者适用于要求该 ID 的网关）。省略 `api` 时，无路由前缀或使用 `openai/` 前缀的模型默认使用 Responses，移除路由前缀 `openai/`；其他带前缀的服务商路由使用 LiteLLM。协议选择不依赖联网模型目录。主 Agent、视觉和子 Agent 共用同一装配入口。
+每个 `provider_config.json` 的 `providers.<name>` 条目可以配置 `api: "responses"` 或 `api: "chat_completions"`，按协议选择原生 OpenAI SDK；与中转域名无关，也不在失败后切换协议。显式选择协议时，除 `deepseek/` 路由前缀会移除外，`model` 是原样发送的服务端模型 ID，例如 `gpt-6-astra` 或 `openai/gpt-5`（后者适用于要求该 ID 的网关）。省略 `api` 时，无路由前缀（已知 DeepSeek 模型名除外）或使用 `openai/` 前缀的模型默认使用 Responses，移除路由前缀 `openai/`；`deepseek/` 路由和已知的 DeepSeek 无前缀模型名默认使用原生 Chat Completions，移除 `deepseek/` 前缀；其他带前缀的服务商路由使用 LiteLLM。DeepSeek Flash 和 V4 Pro 使用本地发布资料，不查询 LiteLLM 元数据；未知 DeepSeek 模型要求显式上下文上限，不映射旧别名。协议选择不依赖联网模型目录。主 Agent、视觉和子 Agent 共用同一装配入口。
 
 可选的 `reasoning_effort` 值为 `none`、`minimal`、`low`、`medium`、`high`、`xhigh` 或 `max`；具体模型只支持其中的子集。原生 Responses 发送 `reasoning.effort`，原生 Chat Completions 发送 `reasoning_effort`，其他路由保留其参数映射。省略该字段时使用上游默认值。`reasoning_parameters` 可以覆盖推理参数，`extra_body` 用于网关扩展字段，例如 `{"extra_body": {"enable_thinking": true}}`；原生 Chat 的额外推理字段也通过 SDK 的扩展 body 发送。
 

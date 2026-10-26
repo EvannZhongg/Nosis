@@ -4,6 +4,7 @@ import shutil
 from dataclasses import dataclass, field
 from importlib.resources import files
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from agent_core import AgentConfig, DirectorySkillSource
 from agent_core.memory import MemoryStore
@@ -19,6 +20,9 @@ from agent_core.providers import (
     normalize_semantic_effort,
     validate_reasoning_parameters,
 )
+
+if TYPE_CHECKING:
+    from agent_core.providers.base import ModelProvider
 
 
 DEFAULT_CONFIG_FILENAMES = (
@@ -45,6 +49,17 @@ class ModelConfig:
     reasoning_effort: str | None = None
     reasoning_parameters: dict[str, object] = field(default_factory=dict)
     api: str | None = None
+
+    @property
+    def provider_class(self) -> "type[ModelProvider]":
+        route, separator, _ = self.model.partition("/")
+        if self.api is not None or not separator or route in {"openai", "deepseek"}:
+            from agent_core.providers import OpenAIProvider
+
+            return OpenAIProvider
+        from agent_core.providers import LiteLLMProvider
+
+        return LiteLLMProvider
 
 
 @dataclass(frozen=True)
@@ -554,9 +569,7 @@ def load_image_generation_config(
 
 
 def _is_vision_capable(config: ModelConfig) -> bool:
-    from agent_core.providers import ModelProvider
-
-    return "image" in ModelProvider.capabilities_for_model(
+    return "image" in config.provider_class.capabilities_for_model(
         config.model,
         config.url,
     ).input_modalities

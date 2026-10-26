@@ -23,9 +23,7 @@ def image_edge_limit(model: str, base_url: str | None, image_count: int) -> int 
         service = route
 
     # https://api-docs.deepseek.com/zh-cn/guides/vision/#限制
-    if service == "deepseek" and name in {
-        "deepseek-flash", "deepseek-v4-flash-vision-exp",
-    }:
+    if service == "deepseek" and name == "deepseek-flash":
         return 4096 if image_count >= 15 else 8192
     # https://platform.claude.com/docs/en/build-with-claude/vision#request-limits
     if service == "anthropic" and name.startswith("claude-"):

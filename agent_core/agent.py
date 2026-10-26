@@ -199,7 +199,7 @@ class Agent:
 
     def context_window(self) -> ContextWindow:
         request = self._context.build_request(self._tools.definitions)
-        return self._context.window(self._provider.count_input_tokens(request))
+        return self._context.window(self._context.measure_input_tokens(request).tokens)
 
     def run(
         self,
@@ -296,7 +296,8 @@ class Agent:
             continuation.raise_if_cancelled()
             continuation.apply_jobs()
             request = self._context.build_request(self._tools.definitions)
-            input_tokens = self._provider.count_input_tokens(request)
+            token_estimate = self._context.measure_input_tokens(request)
+            input_tokens = token_estimate.tokens
             if on_event is not None:
                 on_event(ContextWindowEvent(self._context.window(input_tokens)))
             if self._context.should_archive(input_tokens):
@@ -353,6 +354,7 @@ class Agent:
                 model_call_index,
                 usage=response.usage,
                 has_tool_calls=bool(response.tool_calls),
+                input_token_anchor=token_estimate.anchor(response.usage),
             )
             if on_event is not None:
                 on_event(ModelCompletedEvent(model_call_index, response.usage, self._session.cache_usage))

@@ -7,11 +7,6 @@ from threading import Event, Thread
 from types import GeneratorType
 from typing import Callable, Iterable, Iterator
 
-from litellm import (
-    get_model_info,
-    token_counter,
-)
-
 from agent_core.llm import (
     LLMProvider,
     LLMRequest,
@@ -36,6 +31,12 @@ from .reasoning import normalize_semantic_effort, validate_reasoning_parameters
 
 class ModelProvider(LLMProvider):
     _CANCEL_POLL_SECONDS = 0.1
+
+    @property
+    def token_counting_identity(self) -> object:
+        return [super().token_counting_identity, self._base_url,
+                self._reasoning_effort, self._reasoning_parameters,
+                str(self._media_root), "input-estimate-v1"]
 
     @property
     def model_name(self) -> str:
@@ -94,7 +95,7 @@ class ModelProvider(LLMProvider):
                 model_info = self._get_model_info()
             except Exception as error:
                 raise ValueError(
-                    f"LiteLLM has no context limit metadata for model "
+                    f"No context limit metadata for model "
                     f"'{model}'; configure 'max_context_tokens' for this "
                     "provider"
                 ) from error
@@ -121,12 +122,11 @@ class ModelProvider(LLMProvider):
     ) -> ProviderCapabilities:
         modalities = {"text"}
         try:
-            info = get_model_info(model=model, api_base=base_url)
+            info = cls.model_info_for(model, base_url)
             if info.get("supports_vision") is True:
                 modalities.add("image")
         except Exception:
-            # Capability discovery must not prevent text-only providers
-            # from being used when LiteLLM has no model metadata.
+            # Unknown metadata must not prevent text-only providers being used.
             pass
         return ProviderCapabilities(frozenset(modalities))
 
@@ -151,32 +151,15 @@ class ModelProvider(LLMProvider):
 
     def _get_model_info(self) -> dict[str, object]:
         if not self._model_info_loaded:
-            self._model_info = get_model_info(
-                model=self._model,
-                api_base=self._base_url,
-            )
+            self._model_info = self.model_info_for(self._model, self._base_url)
             self._model_info_loaded = True
         assert self._model_info is not None
         return self._model_info
 
-    def count_input_tokens(self, request: LLMRequest) -> int:
-        """Price the request without encoding any image.
-
-        Images are counted from their pixel dimensions and the text is
-        counted by the tokenizer, so a context check reads image headers
-        rather than whole files.  Encoding here would cost a full read
-        and a base64 pass per image on every iteration of the agent
-        loop, and the tokenizer does not inspect a data URL anyway: it
-        prices one by a flat per-image constant regardless of size.
-        """
-        messages = _request_messages(request, self, encode_media=False)
-        tools = _request_tools(request)
-        text_tokens = token_counter(
-            model=self._model,
-            messages=messages,
-            tools=tools or None,
-        )
-        return text_tokens + _media_tokens(request, self)
+    @classmethod
+    @abstractmethod
+    def model_info_for(cls, model: str, base_url: str | None = None) -> dict[str, object]:
+        raise NotImplementedError
 
     def stream(
         self,
@@ -383,7 +366,7 @@ def _get_model_max_context_tokens(
         or max_context_tokens < 1
     ):
         raise ValueError(
-            f"LiteLLM has no context limit metadata for model '{model}'; "
+            f"No context limit metadata for model '{model}'; "
             "configure 'max_context_tokens' for this provider"
         )
     return max_context_tokens

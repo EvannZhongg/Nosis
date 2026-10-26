@@ -29,6 +29,17 @@ class ProviderSelectionTest(unittest.TestCase):
                     self.assertEqual(provider._wire_model, "gpt-6-astra")
                     self.assertEqual(provider._base_url, url)
 
+    def test_direct_provider_owns_model_id_normalization(self):
+        for model, wire_model, api in (
+            ("openai/gpt-5", "gpt-5", None),
+            ("openai/gpt-5", "openai/gpt-5", "chat_completions"),
+            ("deepseek/deepseek-flash", "deepseek-flash", None),
+            ("deepseek/deepseek-flash", "deepseek-flash", "responses"),
+        ):
+            with self.subTest(model=model, api=api):
+                provider = OpenAIProvider(model, api=api)
+                self.assertEqual(provider._wire_model, wire_model)
+
     def test_explicit_protocol_supports_arbitrary_model_ids_without_inference(self):
         with patch("litellm.get_llm_provider") as infer:
             for api in ("responses", "chat_completions"):
@@ -40,13 +51,20 @@ class ProviderSelectionTest(unittest.TestCase):
             infer.assert_not_called()
 
     def test_unprefixed_model_does_not_require_a_catalog_entry_to_select_protocol(self):
-        with patch("agent_core.providers.base.get_model_info", side_effect=ValueError("unknown model")):
+        with patch("agent_core.providers.openai_provider.model_info", side_effect=ValueError("unknown model")):
             provider = self.select("custom-alias", "https://relay.example/v1")
         self.assertIsInstance(provider, OpenAIProvider)
         self.assertEqual(provider._api, "responses")
         self.assertEqual(provider._wire_model, "custom-alias")
 
     def test_other_provider_routes_still_use_existing_adapter(self):
-        for model in ("anthropic/claude-sonnet-4-5", "gemini/gemini-2.5-flash", "deepseek/deepseek-flash"):
+        for model in ("anthropic/claude-sonnet-4-5", "gemini/gemini-2.5-flash"):
             with self.subTest(model=model):
                 self.assertIsInstance(self.select(model, None), LiteLLMProvider)
+
+    def test_deepseek_uses_native_chat_and_wire_model(self):
+        for api in (None, "chat_completions"):
+            provider = self.select("deepseek/deepseek-flash", "https://api.deepseek.com", api)
+            self.assertIsInstance(provider, OpenAIProvider)
+            self.assertEqual(provider._api, "chat_completions")
+            self.assertEqual(provider._wire_model, "deepseek-flash")

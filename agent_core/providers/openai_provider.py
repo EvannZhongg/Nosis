@@ -10,7 +10,10 @@ from agent_core.llm import LLMRequest, LLMResponse
 from agent_core.tools import ToolCall
 from agent_core.usage import TokenUsage
 
-from .base import ModelProvider, _cancellable_chunks, _request_messages, _request_tools
+from .base import ModelProvider, _cancellable_chunks, _media_tokens, _request_messages, _request_tools
+from .openai_models import model_info, model_name
+from .openai_tokens import TokenCounter
+from .deepseek_models import is_deepseek, model_info as deepseek_model_info
 from ._utils import get_field
 from .reasoning import reasoning_arguments
 from .tool_call_stream import ToolCallStreamAssembler
@@ -18,12 +21,40 @@ from . import OPENAI_APIS
 
 
 class OpenAIProvider(ModelProvider):
-    def __init__(self, *args, api: str = "responses", wire_model: str | None = None, **kwargs) -> None:
-        if api not in OPENAI_APIS:
+    @classmethod
+    def model_info_for(cls, model: str, base_url: str | None = None) -> dict[str, object]:
+        if is_deepseek(model):
+            return deepseek_model_info(model)
+        name = model_name(model)
+        if name is None:
+            from .litellm_provider import LiteLLMProvider
+
+            return LiteLLMProvider.model_info_for(model, base_url)
+        return model_info(name)
+
+    def __init__(self, *args, api: str | None = None, **kwargs) -> None:
+        if api is not None and api not in OPENAI_APIS:
             raise ValueError("api must be responses or chat_completions")
         super().__init__(*args, **kwargs)
-        self._api = api
-        self._wire_model = wire_model if wire_model is not None else self._model
+        self._deepseek = is_deepseek(self._model)
+        self._api = api or ("chat_completions" if self._deepseek else "responses")
+        self._wire_model = self._model
+        if self._deepseek:
+            self._wire_model = self._model.removeprefix("deepseek/")
+        elif api is None:
+            self._wire_model = self._model.removeprefix("openai/")
+        self._token_counter = TokenCounter(self._model) if self._deepseek or model_name(self._model) is not None else None
+        if self._token_counter is not None:
+            self._counter_identity = self._token_counter.identity
+        else:
+            from .litellm_provider import TOKEN_COUNTING_IDENTITY
+
+            self._counter_identity = TOKEN_COUNTING_IDENTITY
+
+    @property
+    def token_counting_identity(self) -> object:
+        return [super().token_counting_identity, self._api, self._wire_model,
+                self._counter_identity]
 
     def _stream(
         self,
@@ -55,8 +86,9 @@ class OpenAIProvider(ModelProvider):
             "input": _responses_input(request, self),
             "stream": True,
             "store": False,
-            "include": ["reasoning.encrypted_content"],
         }
+        if not self._deepseek:
+            arguments["include"] = ["reasoning.encrypted_content"]
         reasoning = reasoning_arguments(
             "openai/" + self._wire_model,
             self._reasoning_effort,
@@ -171,16 +203,36 @@ class OpenAIProvider(ModelProvider):
         )
 
     def count_input_tokens(self, request: LLMRequest) -> int:
-        tokens = super().count_input_tokens(request)
-        if self._api == "responses":
+        messages = _request_messages(request, self, encode_media=False)
+        tools = _request_tools(request)
+        # Only the Chat serializer replays the display summary in
+        # reasoning_content; Responses replays native reasoning items instead.
+        # DeepSeek Chat counts past thinking only when the request has tools.
+        retains_reasoning = self._api == "chat_completions" and (
+            not self._deepseek or bool(tools)
+        )
+        if not retains_reasoning:
+            messages = [{key: value for key, value in message.items() if key != "reasoning_content"}
+                        for message in messages]
+        if self._token_counter is None:
+            from .litellm_provider import token_counter
+
+            tokens = token_counter(model=self._model, messages=messages, tools=tools or None)
+        else:
+            tokens = self._token_counter.count(messages, tools)
+        tokens += _media_tokens(request, self)
+        if self._api == "responses" and not self._deepseek:
             # Encrypted reasoning cannot be counted by a text tokenizer.
             tokens += sum(message.provider_data.get("openai_reasoning_tokens", 0)
-                          for message in request.messages)
+                          for message in request.messages
+                          if any(item.get("encrypted_content")
+                                 for item in message.provider_data.get("openai_responses", ())))
         return tokens
 
     def _chat(self, client, request, on_text_delta, on_reasoning_delta, check_cancelled):
         reasoning = reasoning_arguments(
-            "openai/" + self._wire_model, self._reasoning_effort, self._reasoning_parameters,
+            ("deepseek/" if self._deepseek else "openai/") + self._wire_model,
+            self._reasoning_effort, self._reasoning_parameters,
         )
         # Nonstandard fields use the SDK's extension body for any relay.
         extra_body = reasoning.pop("extra_body", {})
@@ -200,7 +252,7 @@ class OpenAIProvider(ModelProvider):
         if tools:
             arguments["tools"] = tools
         if request.max_generation_tokens is not None:
-            arguments["max_completion_tokens"] = request.max_generation_tokens
+            arguments["max_tokens" if self._deepseek else "max_completion_tokens"] = request.max_generation_tokens
         content = ""
         reasoning_text = ""
         calls = ToolCallStreamAssembler(self._model)

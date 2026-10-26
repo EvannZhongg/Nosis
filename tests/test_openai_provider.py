@@ -60,13 +60,6 @@ def chat_chunk(delta=None, finish=None, usage=None):
 
 
 class OpenAIProviderTest(unittest.TestCase):
-    def setUp(self):
-        metadata = patch("agent_core.providers.base.get_model_info", return_value={
-            "max_input_tokens": 922000, "max_output_tokens": 128000, "supports_vision": True,
-        })
-        metadata.start()
-        self.addCleanup(metadata.stop)
-
     def provider(self, api="responses", **kwargs):
         return OpenAIProvider(model="gpt-6-astra", base_url="https://relay.example/v1",
                               api_key="test-key", api=api, max_retries=0, **kwargs)
@@ -381,14 +374,14 @@ class OpenAIProviderTest(unittest.TestCase):
                 self.provider().stream_cancellable(self.request(), lambda _: None, None, cancel)
         self.assertTrue(closed.is_set())
 
-    def test_keeps_live_model_metadata_and_token_estimation(self):
+    def test_uses_local_model_metadata_and_token_estimation(self):
         provider = self.provider()
         self.assertEqual(provider.max_context_tokens, 922000)
         self.assertEqual(provider.max_output_tokens, 128000)
         self.assertIn("image", provider.capabilities.input_modalities)
-        with patch("agent_core.providers.base.token_counter", return_value=10) as counter:
+        with patch.object(provider._token_counter, "count", return_value=10) as counter:
             self.assertEqual(provider.count_input_tokens(self.request()), 10)
-        self.assertEqual(counter.call_args.kwargs["model"], "gpt-6-astra")
+        self.assertEqual(counter.call_count, 1)
 
     def test_counts_native_reasoning_tokens_in_retained_context(self):
         with self.transport([response_event([{"id": "rs_1", "type": "reasoning", "summary": [],
@@ -396,6 +389,13 @@ class OpenAIProviderTest(unittest.TestCase):
             result = self.provider().stream(self.request(), lambda _: None)
         message = Message("assistant", result.content, provider_data=result.provider_data)
         request = LLMRequest("Test", (message,))
-        with patch("agent_core.providers.base.token_counter", return_value=10):
+        with patch("agent_core.providers.openai_provider.TokenCounter.count", return_value=10):
             self.assertEqual(self.provider().count_input_tokens(request), 12)
             self.assertEqual(self.provider(api="chat_completions").count_input_tokens(request), 10)
+
+    def test_responses_display_reasoning_is_not_counted_as_replayed_input(self):
+        provider = self.provider()
+        request = LLMRequest("Test", (Message("assistant", "OK", reasoning="summary " * 100,
+                                              provider_data={"openai_reasoning_tokens": 500}),))
+        plain = LLMRequest("Test", (Message("assistant", "OK"),))
+        self.assertEqual(provider.count_input_tokens(request), provider.count_input_tokens(plain))

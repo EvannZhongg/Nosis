@@ -15,6 +15,7 @@ dependencies = [
     "httpx2>=2.5",
     "litellm>=1.105",
     "openai>=2.0",
+    "tiktoken>=0.14.0",
     "python-dotenv>=1.0",
     "pyyaml>=6.0",
     "tzdata>=2022.1",
@@ -46,6 +47,7 @@ include = ["agent_core*", "agent_runtime*", "interfaces*"]
 namespaces = false
 
 [tool.setuptools.package-data]
+"agent_core.providers" = ["data/tokenizers/*"]
 "interfaces" = ["tui/dist/app.js"]
 "agent_runtime" = [
     "defaults/*.json",

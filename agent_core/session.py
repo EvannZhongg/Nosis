@@ -1,5 +1,5 @@
 """Runtime session state and append-only journal semantics."""
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Callable, Literal
 from threading import Lock
@@ -13,7 +13,7 @@ from .errors import (
 from .permissions import PermissionPreset
 from .plan import PlanSnapshot, plan_snapshot_from_dict, plan_snapshot_to_dict
 from .tools import ToolCall
-from .usage import CacheUsage, TokenUsage, usage_to_dict
+from .usage import CacheUsage, InputTokenAnchor, TokenUsage, usage_to_dict
 from .tools.base import JSONValue
 from .time_utils import format_utc as _format_utc, parse_utc as _parse_utc
 
@@ -143,6 +143,7 @@ class Session:
     permission_preset: PermissionPreset = PermissionPreset.ASK_FOR_APPROVAL
     plan: PlanSnapshot | None = None
     cache_usage: CacheUsage | None = field(default=None, init=False)
+    input_token_anchor: InputTokenAnchor | None = field(default=None, init=False)
     journal: list[JournalEvent] = field(default_factory=list, repr=False)
     turns: dict[str, Turn] = field(default_factory=dict, repr=False)
     tool_executions: dict[str, ToolExecution] = field(default_factory=dict, repr=False)
@@ -187,6 +188,9 @@ class Session:
                     )
                 )
         elif event.event_type in {"model_completed", "compression_completed"}:
+            if event.event_type == "model_completed":
+                anchor = payload.get("input_token_anchor")
+                self.input_token_anchor = InputTokenAnchor(**anchor) if anchor is not None else None
             usage = payload["usage"]
             if usage is not None:
                 input_tokens = usage["input_tokens"]
@@ -312,6 +316,7 @@ class Session:
                     else None
                 )
         elif event.event_type == "context_archived":
+            self.input_token_anchor = None
             self.archived_summary = (
                 payload.get("summary")
                 if isinstance(payload.get("summary"), str)
@@ -448,6 +453,7 @@ class Session:
         *,
         usage: TokenUsage | None,
         has_tool_calls: bool,
+        input_token_anchor: InputTokenAnchor | None = None,
     ) -> None:
         self._event(
             "model_completed",
@@ -456,6 +462,7 @@ class Session:
                 "model_call_index": model_call_index,
                 "has_tool_calls": has_tool_calls,
                 "usage": usage_to_dict(usage),
+                "input_token_anchor": asdict(input_token_anchor) if input_token_anchor is not None else None,
             },
         )
 

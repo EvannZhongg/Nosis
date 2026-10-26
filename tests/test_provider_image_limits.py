@@ -63,7 +63,7 @@ class ProviderImageLimitsTest(unittest.TestCase):
         for model, url, count, edge in (
             ("deepseek/deepseek-flash", None, 14, 8192),
             ("deepseek/deepseek-flash", None, 15, 4096),
-            ("deepseek-v4-flash-vision-exp", "https://api.deepseek.com/v1", 15, 4096),
+            ("deepseek-flash", "https://api.deepseek.com/v1", 15, 4096),
             ("anthropic/claude-sonnet-4-5", None, 20, 8000),
             ("anthropic/claude-sonnet-4-5", None, 21, 2000),
             ("claude-opus-4-1", "https://api.anthropic.com", 1, 8000),
@@ -191,7 +191,7 @@ class ProviderImageLimitsTest(unittest.TestCase):
                     for encode in (False, True):
                         with self.assertRaisesRegex(UnsupportedImageError, error):
                             _request_messages(request, provider, encode_media=encode)
-                    with patch("agent_core.providers.base.token_counter", return_value=0):
+                    with patch("agent_core.providers.litellm_provider.token_counter", return_value=0):
                         with self.assertRaisesRegex(UnsupportedImageError, error):
                             provider.count_input_tokens(request)
                     with patch("agent_core.providers.litellm_provider.completion") as call:

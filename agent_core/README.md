@@ -143,9 +143,13 @@ Shell 通过 `ExecutionRouter` 根据 `ExecutionScope` 和当前 `ExecutionAutho
 
 `usage.py` 统一定义 `TokenUsage` 和序列化：`input_tokens` 包含缓存部分，`cache_read_tokens` 与 `cache_write_tokens` 记录其读取、写入明细，未报告时为 `None`，明确报告无缓存活动时为 `0`。普通模型、压缩尝试和记忆调用分别以 `model_completed`、`compression_completed`、`memory_completed` 事件写入所属 Session 的同一份 Journal；辅助调用记录实际模型、scope、尝试次数、状态、耗时、用量和错误，不进入对话上下文。Session 在应用普通模型和压缩事件时累计 `CacheUsage`，只计入同时报告输入和缓存读取 token 的调用，包括格式校验失败的压缩尝试；记忆调用单独记录，不计入该口径。会话缓存命中率为 `Σcache_read_tokens / Σinput_tokens`，Journal 重载时恢复，跨 Turn、模型与工作区切换保持累计。每次调用落盘后，`ModelCompletedEvent` 经 Bridge 推送本次用量和会话累计快照，`CompressionCompletedEvent` 只推送会话累计缓存快照，两个前端立即更新，无需等待工具执行、压缩重试或 Turn 结束。`runtime_state.cache_usage` 与 GUI 历史读取提供相同累计快照，事件重放不会重复计数。Bridge 的 `turn_completed.usage` 表示最后一次普通模型调用的用量，不是整个 Turn 的累计用量。
 
-`ModelProvider` 共享媒体序列化、token 估算、模型信息和可取消的流读取。模型上下文窗口、输出限制和视觉能力仍从 LiteLLM 的模型目录取得：保留其联网更新及库内置目录，未知模型必须显式配置 `max_context_tokens`，不猜测窗口大小。
+`ModelProvider` 共享媒体序列化、模型信息缓存和可取消的流读取。原生 OpenAI 模型的输入上限、输出上限和视觉能力来自 `providers/openai_models.py` 的本地资料，token 估算使用 `tiktoken` 与随包分发的词表，不联网下载或导入 LiteLLM。工具 schema 按完整 JSON 计入，图片沿用共享尺寸估算，加密推理沿用服务端 usage。未知模型必须显式配置 `max_context_tokens`，不猜测窗口大小；未知别名和上游尚未公布 tokenizer 映射的 GPT-6 使用 `cl100k_base` 做本地估算，不能视为服务端精确计数。资料表与词表随软件发布维护。
 
-图片在共享请求序列化阶段按 `providers/image_limits.py` 的内部策略处理，覆盖用户附件、Tool 图片及历史重发。DeepSeek Flash（含 `deepseek-v4-flash-vision-exp` 别名）单边最多 8192 像素，请求包含至少 15 张图片时降为 4096；Claude 单边最多 8000 像素，超过 20 张时降为 2000。策略识别官方端点；未指定端点时使用模型路由，未知端点和未覆盖的服务保持原有发送行为。OpenAI、Gemini 等服务端的推理缩放尺寸不作为客户端上传限制。超限图片仅在内存中等比缩小，发送时附带原图尺寸和坐标换算；原始附件与 Journal 不变。编码缓存包含目标尺寸上限，token 估算使用发送尺寸且不解码图片。
+原生文本计数器按内容缓存最近请求的消息与工具 schema，保留完整 JSON 工具估算。ContextManager 使用最近一次成功普通模型调用的输入 usage，加上当前请求与锚点请求的本地估算差量；压缩判断和上下文展示共享这个值。锚点随 `model_completed` 写入 Journal，可恢复；压缩事件直接清除锚点，不将压缩状态重复写入指纹；端点、模型、协议、推理参数、系统提示、工具定义、计数策略或压缩状态变化时失效。缓存 token 已包含在输入 usage 中，不再相加；压缩、记忆和标题等辅助调用不替换普通请求锚点。首次请求及失效后的请求仍为本地估算，增量误差仍可能累积。DeepSeek 原生 Chat 在无工具时忽略历史 reasoning；Responses 只回传原生 reasoning 项，展示摘要不计入输入，加密 reasoning 按原生回传状态和 usage 计入。
+
+DeepSeek Flash 与 V4 Pro 共用原生 OpenAI SDK 的 Chat Completions 传输，本地模型资料与文本计数不依赖 LiteLLM；其他服务商的具名前缀（如 `anthropic/`）继续使用 LiteLLM 元数据与计数，即使显式选择原生 OpenAI 兼容协议也保持这一路径。图片生成仍使用 LiteLLM。只有装配的主模型、辅助模型、视觉模型和子 Agent 模型都走原生 OpenAI 或 DeepSeek 模型路径，且未启用图片生成时，首个模型请求才完全不需要导入 LiteLLM。
+
+图片在共享请求序列化阶段按 `providers/image_limits.py` 的内部策略处理，覆盖用户附件、Tool 图片及历史重发。DeepSeek Flash单边最多 8192 像素，请求包含至少 15 张图片时降为 4096；Claude 单边最多 8000 像素，超过 20 张时降为 2000。策略识别官方端点；未指定端点时使用模型路由，未知端点和未覆盖的服务保持原有发送行为。OpenAI、Gemini 等服务端的推理缩放尺寸不作为客户端上传限制。超限图片仅在内存中等比缩小，发送时附带原图尺寸和坐标换算；原始附件与 Journal 不变。编码缓存包含目标尺寸上限，token 估算使用发送尺寸且不解码图片。
 
 所有视觉 Provider 在 token 估算和发送阶段都使用相同的格式探测和 5 MiB 字节上限检查。缺失图片以文本提示替代，不计图片 token；存在但为空、格式不可识别或超出字节上限的图片直接报错，不按 0 token 忽略，也不发送给上游。路径越界等调用错误同样直接报错。未知服务仅不应用尺寸缩放规则，仍受统一图片校验约束。
 
@@ -156,7 +160,10 @@ Responses 工具参数从 `response.completed` 的完整 output 读取，推理�
 | 模块 | 职责 |
 | --- | --- |
 | `llm.py` | Provider 抽象、请求、响应与能力类型 |
-| `providers/base.py` | 模型元数据、token 估算、媒体与取消机制 |
+| `providers/base.py` | 模型信息缓存、媒体与取消机制 |
+| `providers/openai_models.py` | 原生 OpenAI 模型的本地上限与视觉能力 |
+| `providers/deepseek_models.py` | DeepSeek 当前模型的本地上限与视觉能力 |
+| `providers/openai_tokens.py` | 使用随包词表的本地请求 token 估算 |
 | `providers/openai_provider.py` | 原生 Responses 与 Chat Completions 协议 |
 | `providers/litellm_provider.py` | LiteLLM 文本和视觉适配 |
 | `providers/image_limits.py` | 已知服务的图片上传尺寸限制 |
