@@ -56,15 +56,16 @@ class OpenAIStartupTest(unittest.TestCase):
     def test_local_limits_and_vision_do_not_depend_on_endpoint_hostname(self):
         for model in ("gpt-6-astra", "openai/gpt-6-astra", "gpt-6.1-sol"):
             provider = OpenAIProvider(model, base_url="https://relay.example/v1")
-            self.assertEqual(provider.max_context_tokens, 922000)
+            self.assertEqual(provider.max_context_tokens, 1050000)
             self.assertEqual(provider.max_output_tokens, 128000)
             self.assertIn("image", provider.capabilities.input_modalities)
-        self.assertEqual(model_info("gpt-4o-2024-05-13")["max_output_tokens"], 4096)
+        self.assertEqual(model_info("gpt-4o-2024-05-13"), {})
         self.assertEqual(model_info("gpt-4o")["max_output_tokens"], 16384)
 
     def test_unknown_alias_requires_context_and_remains_text_only(self):
-        with self.assertRaisesRegex(ValueError, "configure 'max_context_tokens'"):
-            OpenAIProvider("custom-alias")
+        for model in ("custom-alias", "gpt-4o-2024-05-13"):
+            with self.subTest(model=model), self.assertRaisesRegex(ValueError, "configure 'max_context_tokens'"):
+                OpenAIProvider(model)
         provider = OpenAIProvider("custom-alias", max_context_tokens=32000)
         self.assertEqual(provider.max_context_tokens, 32000)
         self.assertIsNone(provider.max_output_tokens)

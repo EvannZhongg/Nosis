@@ -376,7 +376,7 @@ class OpenAIProviderTest(unittest.TestCase):
 
     def test_uses_local_model_metadata_and_token_estimation(self):
         provider = self.provider()
-        self.assertEqual(provider.max_context_tokens, 922000)
+        self.assertEqual(provider.max_context_tokens, 1050000)
         self.assertEqual(provider.max_output_tokens, 128000)
         self.assertIn("image", provider.capabilities.input_modalities)
         with patch.object(provider._token_counter, "count", return_value=10) as counter:

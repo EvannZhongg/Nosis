@@ -1,6 +1,7 @@
 from typing import Callable
 from importlib.metadata import version
 
+import tiktoken
 from litellm import completion, get_model_info, token_counter
 from litellm.exceptions import MidStreamFallbackError
 
@@ -14,7 +15,7 @@ from .reasoning import reasoning_arguments
 from .tool_call_stream import ToolCallStreamAssembler
 
 
-TOKEN_COUNTING_IDENTITY = ("litellm", version("litellm"), version("tiktoken"))
+TOKEN_COUNTING_IDENTITY = ("litellm", version("litellm"), tiktoken.__version__)
 
 
 class LiteLLMProvider(ModelProvider):

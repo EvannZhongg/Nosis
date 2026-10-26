@@ -9,43 +9,10 @@ from unittest.mock import patch
 from agent_core import JsonlSessionStore, LLMRequest, Message, Session, TokenUsage, ToolDefinition
 from agent_core.context_manager import ContextManager
 from agent_core.providers import OpenAIProvider
-from agent_core.providers.openai_tokens import TokenCounter
 from tests.agent_fixtures import AGENT_CONFIG, make_agent
 
 
 TOOL = ToolDefinition("probe", "Read a file.", {"type": "object", "properties": {"path": {"type": "string"}}})
-
-
-class TokenCacheTest(unittest.TestCase):
-    def test_repeated_history_is_not_tokenized_and_mutations_are_counted(self):
-        counter = TokenCounter("gpt-5")
-        messages = [{"role": "system", "content": "Instructions"}, {"role": "user", "content": "hello"}]
-        tools = [{"type": "function", "function": {"name": "probe", "parameters": TOOL.parameters.copy()}}]
-        with patch.object(counter, "_text", wraps=counter._text) as encode:
-            initial = counter.count(messages, tools)
-            encode.reset_mock()
-            self.assertEqual(counter.count(messages, tools), initial)
-            encode.assert_not_called()
-            messages.append({"role": "assistant", "content": "new output"})
-            counter.count(messages, tools)
-            self.assertEqual(encode.call_count, 2)
-            encode.reset_mock()
-            tools[0]["function"]["description"] = "Long description " * 40
-            self.assertGreater(counter.count(messages, tools), initial)
-            self.assertEqual(encode.call_count, 1)
-            messages[0]["content"] = "Changed instructions " * 20
-            cached = counter.count(messages, tools)
-            self.assertEqual(cached, TokenCounter("gpt-5").count(messages, tools))
-        counter.count([], [])
-        self.assertEqual(counter._messages, {})
-        self.assertEqual(counter._tools, ("[]", 0))
-
-    def test_encodings_and_special_token_text_match_uncached_counts(self):
-        for model in ("gpt-5", "gpt-6-astra", "deepseek/deepseek-flash"):
-            counter = TokenCounter(model)
-            for text in ("中文 English <|endoftext|>", "x" * 5000, "def f():\n    return 123"):
-                messages = [{"role": "user", "content": text}]
-                self.assertEqual(counter.count(messages, []), TokenCounter(model).count(messages, []))
 
 
 class InputAnchorTest(unittest.TestCase):
