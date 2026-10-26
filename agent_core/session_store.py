@@ -120,10 +120,13 @@ class JsonlSessionStore:
 
             workspace = self._workspace_for_unlocked(source_session_id)
             metadata = _session_metadata(source_directory)
-            metadata.update(title="", title_source="initial", has_activity=False)
+            metadata["has_activity"] = False
             metadata["forked_from"] = source_session_id
             metadata["fork_anchor_id"] = anchor_id
             prefix = tuple(source.journal[:turn_start])
+            # Editing the first message starts a new conversation to be named.
+            if not any(event.event_type == "message_appended" for event in prefix):
+                metadata.update(title="", title_source="initial")
 
             with self._locked_session(new_session_id):
                 if self._find_session_directory(new_session_id) is not None:

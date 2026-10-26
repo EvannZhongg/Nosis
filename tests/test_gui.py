@@ -2109,6 +2109,7 @@ class GuiTest(unittest.TestCase):
             session.journal,
             workspace=self.root,
         )
+        self.store.set_title("source", "Generated conversation title", "generated")
 
         with self.client() as client:
             source = client.get("/api/sessions/source").json()
@@ -2135,6 +2136,12 @@ class GuiTest(unittest.TestCase):
             for item in groups[0]["sessions"]
         }
         self.assertIn("source", summaries)
+        self.assertEqual(summaries["source"]["title"], "Generated conversation title")
+        self.assertEqual(
+            summaries[forked["session_id"]]["title"],
+            "Generated conversation title",
+        )
+        self.assertEqual(self.store.title_source_for(forked["session_id"]), "generated")
         self.assertEqual(
             summaries[forked["session_id"]]["forked_from"],
             "source",

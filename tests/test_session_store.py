@@ -462,6 +462,50 @@ class JsonlSessionStoreTest(unittest.TestCase):
                 ["source"],
             )
 
+    def test_fork_preserves_titles_only_when_conversation_is_retained(self) -> None:
+        for title_source in ("initial", "generated", "manual"):
+            for edit_first in (False, True):
+                with self.subTest(title_source=title_source, edit_first=edit_first):
+                    with tempfile.TemporaryDirectory() as directory:
+                        workspace = Path(directory)
+                        store = JsonlSessionStore(workspace / "sessions")
+                        session = Session("source")
+                        session.begin_turn("turn-1")
+                        session.add_item("user", "first question")
+                        session.add_item("assistant", "first answer")
+                        session.finish_turn("completed")
+                        if not edit_first:
+                            session.begin_turn("turn-2")
+                            session.add_item("user", "edit this question")
+                            session.add_item("assistant", "discard this answer")
+                            session.finish_turn("completed")
+                        persist(store, workspace, session)
+                        store.set_title("source", "source title", title_source)
+                        anchor = store.editable_user_messages("source")[0]["anchor_id"]
+
+                        forked = store.fork_session("source", "forked", str(anchor))
+                        cursor = len(forked.journal)
+                        forked.begin_turn("edited-turn")
+                        forked.add_item("user", "edited question")
+                        forked.add_item("assistant", "new answer")
+                        forked.finish_turn("completed")
+                        store.append_events("forked", forked.journal[cursor:])
+
+                        summaries = {
+                            item["session_id"]: item
+                            for item in store.list_workspace_sessions(workspace)
+                        }
+                        self.assertEqual(summaries["source"]["title"], "source title")
+                        self.assertEqual(store.title_source_for("source"), title_source)
+                        self.assertEqual(
+                            summaries["forked"]["title"],
+                            "edited question" if edit_first else "source title",
+                        )
+                        self.assertEqual(
+                            store.title_source_for("forked"),
+                            "initial" if edit_first else title_source,
+                        )
+
     def test_lists_sessions_by_workspace_and_first_user_message(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
