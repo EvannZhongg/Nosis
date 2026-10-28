@@ -1,11 +1,13 @@
 from typing import Callable
 from importlib.metadata import version
 
+import httpx
 import tiktoken
 from litellm import completion, get_model_info, token_counter
 from litellm.exceptions import MidStreamFallbackError
+from openai import APIConnectionError, APIError
 
-from agent_core.errors import ProviderStreamError
+from agent_core.errors import ProviderRequestError, ProviderStreamError
 from agent_core.llm import LLMRequest, LLMResponse
 from agent_core.usage import TokenUsage
 
@@ -107,33 +109,47 @@ class LiteLLMProvider(ModelProvider):
                             on_reasoning_delta(value)
                 tool_calls.add_batch(get_field(delta, "tool_calls") or [])
         except MidStreamFallbackError as error:
-            raise ProviderStreamError(
-                "provider stream ended before the response completed: " + str(error),
-                details={
-                    "phase": "response_stream",
-                    "model": self._model,
-                    "reason": "mid_stream_disconnect",
-                    "partial_content_length": len(content),
-                    "partial_reasoning_length": len(reasoning_text),
-                    "argument_chunk_count": tool_calls.argument_fragment_count,
-                },
+            raise self._stream_error(
+                "mid_stream_disconnect", message=str(error),
+                partial_content_length=len(content),
+                partial_reasoning_length=len(reasoning_text),
+                argument_chunk_count=tool_calls.argument_fragment_count,
             ) from error
+        except (APIConnectionError, httpx.TransportError) as error:
+            raise self._stream_error("stream_transport_error", message=str(error)) from error
+        except APIError as error:
+            status_code = get_field(error, "status_code")
+            if isinstance(status_code, int) and 400 <= status_code < 600:
+                raise ProviderRequestError(
+                    f"provider request failed (HTTP {status_code}): {error}",
+                    details={
+                        "phase": "provider_request", "model": self._model,
+                        "reason": "http_error", "status_code": status_code,
+                        "request_id": get_field(error, "request_id"),
+                        "message": str(error), "error": error.body,
+                    },
+                ) from error
+            raise self._stream_error("api_error", message=str(error), error=error.body) from error
         finally:
             chunks.close()
         if finish_reason not in {"stop", "tool_calls"}:
             reason = "missing_finish_reason" if finish_reason is None else "incomplete_response"
-            raise ProviderStreamError(
-                f"provider stream did not complete: {reason}",
-                details={
-                    "phase": "response_stream", "model": self._model,
-                    "reason": reason, "finish_reason": finish_reason,
-                },
-            )
+            raise self._stream_error(reason, finish_reason=finish_reason)
         return LLMResponse(
             content=content or None,
             reasoning=reasoning_text or None,
             tool_calls=tool_calls.finish(),
             usage=_token_usage(usage),
+        )
+
+    def _stream_error(self, reason: str, **details: object) -> ProviderStreamError:
+        message = f"provider stream did not complete: {reason}"
+        if details.get("message"):
+            message += f": {details['message']}"
+        return ProviderStreamError(
+            message,
+            details={"phase": "response_stream", "model": self._model,
+                     "reason": reason, **details},
         )
 
 

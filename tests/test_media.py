@@ -3,6 +3,7 @@
 import os
 import tempfile
 import unittest
+import warnings
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
@@ -103,6 +104,37 @@ class ProbeImageTest(unittest.TestCase):
 
         with self.assertRaisesRegex(UnsupportedImageError, "exceeding"):
             probe_image(path)
+
+    def test_pixel_limit_rejects_images_before_loading_even_without_byte_limit(self) -> None:
+        path = self.write("large.png", png_bytes(11, 10))
+        for max_bytes in (MAX_IMAGE_BYTES, None):
+            for warning_action in ("always", "error"):
+                with self.subTest(max_bytes=max_bytes, warning_action=warning_action):
+                    with patch.object(Image, "MAX_IMAGE_PIXELS", 100), warnings.catch_warnings(record=True):
+                        warnings.simplefilter(warning_action, Image.DecompressionBombWarning)
+                        with patch("PIL.PngImagePlugin.PngImageFile.load") as load:
+                            with self.assertRaisesRegex(UnsupportedImageError, "pixels"):
+                                probe_image(path, max_bytes=max_bytes)
+                        load.assert_not_called()
+
+    def test_pixel_limit_accepts_the_boundary(self) -> None:
+        path = self.write("boundary.png", png_bytes(10, 10))
+        with patch.object(Image, "MAX_IMAGE_PIXELS", 100):
+            self.assertEqual(probe_image(path).width, 10)
+
+    def test_pixel_limit_rejects_a_larger_later_gif_frame(self) -> None:
+        path = self.root / "animated.gif"
+        with Image.new("RGB", (8, 8), "red") as first, Image.new("RGB", (8, 8), "blue") as second:
+            first.save(path, format="GIF", save_all=True, append_images=[second], optimize=False)
+        # A later frame can expand the canvas beyond the logical screen size.
+        data = bytearray(path.read_bytes())
+        descriptor = data.rindex(b"\x2c\x00\x00\x00\x00\x08\x00\x08\x00")
+        data[descriptor + 5:descriptor + 9] = b"\x0b\x00\x0a\x00"
+        path.write_bytes(data)
+        with patch.object(Image, "MAX_IMAGE_PIXELS", 100), warnings.catch_warnings(record=True):
+            warnings.simplefilter("always", Image.DecompressionBombWarning)
+            with self.assertRaisesRegex(UnsupportedImageError, "pixels"):
+                probe_image(path)
 
     def test_the_size_limit_can_be_lifted_for_display(self) -> None:
         """The ceiling bounds what is sent to a model, not what is shown."""

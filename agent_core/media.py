@@ -121,8 +121,15 @@ def probe_image(path: Path, max_bytes: int | None = MAX_IMAGE_BYTES) -> ImageInf
             width, height = image.size
             # Loading only the first frame can accept a broken animated image.
             for frame in ImageSequence.Iterator(image):
+                pixels = frame.width * frame.height
+                if Image.MAX_IMAGE_PIXELS is not None and pixels > Image.MAX_IMAGE_PIXELS:
+                    raise Image.DecompressionBombError(
+                        f"image is {pixels} pixels, exceeding the maximum of "
+                        f"{Image.MAX_IMAGE_PIXELS} pixels"
+                    )
                 frame.load()
-    except (OSError, ValueError, SyntaxError, Image.DecompressionBombError) as error:
+    except (OSError, ValueError, SyntaxError,
+            Image.DecompressionBombError, Image.DecompressionBombWarning) as error:
         raise UnsupportedImageError(
             f"image is not a supported image or cannot be fully decoded: {path}: {error}"
         ) from error

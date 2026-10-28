@@ -5,8 +5,11 @@ import threading
 from pathlib import Path
 from unittest.mock import patch
 
+import httpx
+from litellm import exceptions as litellm_errors
 from litellm.exceptions import MidStreamFallbackError
 from litellm.types.utils import Usage
+from openai import APIError
 
 from agent_core import (
     AgentCancelled,
@@ -15,6 +18,7 @@ from agent_core import (
     LLMRequest,
     ProviderCapabilities,
     ProviderProtocolError,
+    ProviderRequestError,
     ProviderStreamError,
     Message,
     TokenUsage,
@@ -22,8 +26,10 @@ from agent_core import (
     ToolDefinition,
     TextPart,
     TurnControl,
+    Session,
 )
 from agent_core.providers import LiteLLMProvider
+from tests.agent_fixtures import make_agent
 from tests.image_fixtures import png_bytes
 
 
@@ -65,6 +71,92 @@ USAGE = type(
 
 
 class LiteLLMProviderTest(unittest.TestCase):
+    @patch("agent_core.providers.litellm_provider.completion")
+    def test_http_errors_have_structured_details_at_request_and_stream_time(self, completion_mock):
+        request = httpx.Request("POST", "https://relay.example/v1/chat/completions")
+        classes = (
+            (litellm_errors.BadRequestError, 400),
+            (litellm_errors.AuthenticationError, 401),
+            (litellm_errors.RateLimitError, 429),
+            (litellm_errors.InternalServerError, 500),
+            (litellm_errors.APIError, 502),
+        )
+        for error_class, status in classes:
+            for midstream in (False, True):
+                kwargs = {"status_code": status} if error_class is litellm_errors.APIError else {
+                    "response": httpx.Response(status, request=request, headers={"x-request-id": "req_test"}),
+                }
+                failure = error_class(message="Unsupported image", model="test-model", llm_provider="openai", **kwargs)
+
+                def broken_stream():
+                    yield chunk(content="partial")
+                    raise failure
+
+                completion_mock.reset_mock(side_effect=True)
+                if midstream:
+                    completion_mock.return_value = broken_stream()
+                else:
+                    completion_mock.side_effect = failure
+                provider = LiteLLMProvider(model="openai/test-model", max_context_tokens=1000)
+                deltas = []
+                with self.subTest(error=error_class.__name__, midstream=midstream):
+                    with self.assertRaises(ProviderRequestError) as raised:
+                        provider.stream(LLMRequest("Test", (Message("user", "hello"),)), deltas.append)
+                    error = raised.exception
+                    self.assertIs(error.__cause__, failure)
+                    self.assertIn(str(status), str(error))
+                    self.assertIn("Unsupported image", str(error))
+                    self.assertEqual(error.details["phase"], "provider_request")
+                    self.assertEqual(error.details["reason"], "http_error")
+                    self.assertEqual(error.details["status_code"], status)
+                    self.assertEqual(error.details["model"], "openai/test-model")
+                    self.assertEqual(error.details["request_id"], None if error_class is litellm_errors.APIError else "req_test")
+                    self.assertEqual(deltas, ["partial"] if midstream else [])
+                    completion_mock.assert_called_once()
+
+    @patch("agent_core.providers.litellm_provider.completion")
+    def test_connection_errors_are_not_http_errors_despite_synthetic_status(self, completion_mock):
+        for failure in (
+            litellm_errors.APIConnectionError(message="Connection closed", model="test-model", llm_provider="openai"),
+            litellm_errors.Timeout(message="Timed out", model="test-model", llm_provider="openai"),
+            httpx.ReadError("Connection closed"),
+        ):
+            completion_mock.side_effect = failure
+            provider = LiteLLMProvider(model="openai/test-model", max_context_tokens=1000)
+            with self.subTest(error=type(failure).__name__):
+                with self.assertRaises(ProviderStreamError) as raised:
+                    provider.stream(LLMRequest("Test", (Message("user", "hello"),)), lambda _: None)
+                self.assertEqual(raised.exception.details["reason"], "stream_transport_error")
+                self.assertIs(raised.exception.__cause__, failure)
+                self.assertIn(str(failure), str(raised.exception))
+
+    @patch("agent_core.providers.litellm_provider.completion")
+    def test_api_error_without_http_failure_is_a_stream_error(self, completion_mock):
+        failure = APIError("Generation failed", request=httpx.Request("POST", "https://relay.example"),
+                           body={"code": "server_error"})
+        completion_mock.side_effect = failure
+        provider = LiteLLMProvider(model="openai/test-model", max_context_tokens=1000)
+        with self.assertRaises(ProviderStreamError) as raised:
+            provider.stream(LLMRequest("Test", (Message("user", "hello"),)), lambda _: None)
+        self.assertEqual(raised.exception.details["reason"], "api_error")
+        self.assertEqual(raised.exception.details["error"], {"code": "server_error"})
+
+    @patch("agent_core.providers.litellm_provider.completion")
+    def test_http_error_details_survive_agent_journaling(self, completion_mock):
+        failure = litellm_errors.BadRequestError("Unsupported image", llm_provider="openai", model="test-model")
+        completion_mock.side_effect = failure
+        provider = LiteLLMProvider(model="openai/test-model", max_context_tokens=1000)
+        session = Session("test-session")
+        agent = make_agent(provider=provider, session=session)
+        with patch.object(provider, "count_input_tokens", return_value=1):
+            with self.assertRaises(ProviderRequestError):
+                agent.run("hello", turn_id="turn-1")
+        error = session.turns["turn-1"].error
+        self.assertEqual(error.type, "ProviderRequestError")
+        self.assertEqual(error.details["status_code"], 400)
+        self.assertEqual(error.details["model_call_index"], 1)
+        self.assertEqual(session.journal[-1].payload["error"]["details"], error.details)
+
     @patch("agent_core.providers.litellm_provider.completion")
     def test_final_usage_chunk_preserves_normalized_cache_details(self, completion_mock):
         cases = (
