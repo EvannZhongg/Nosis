@@ -2,6 +2,9 @@
 
 import struct
 import zlib
+from io import BytesIO
+
+from PIL import Image
 
 
 def png_bytes(width: int, height: int) -> bytes:
@@ -24,14 +27,6 @@ def png_bytes(width: int, height: int) -> bytes:
 
 
 def jpeg_bytes(width: int, height: int) -> bytes:
-    # SOI, an APP0 segment, then the baseline start-of-frame that
-    # carries the dimensions.
-    app0 = b"\xff\xe0" + struct.pack(">H", 16) + b"JFIF\x00" + b"\x00" * 9
-    sof = (
-        b"\xff\xc0"
-        + struct.pack(">H", 11)
-        + b"\x08"
-        + struct.pack(">HH", height, width)
-        + b"\x01\x01\x11\x00"
-    )
-    return b"\xff\xd8" + app0 + sof + b"\xff\xd9"
+    with Image.new("RGB", (width, height)) as image, BytesIO() as buffer:
+        image.save(buffer, format="JPEG")
+        return buffer.getvalue()

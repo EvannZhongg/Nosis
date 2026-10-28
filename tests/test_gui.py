@@ -2593,10 +2593,11 @@ class GuiTest(unittest.TestCase):
     def test_the_signed_image_route_serves_a_large_image(self) -> None:
         """The 5 MiB ceiling bounds model delivery, not display."""
         from agent_core.media import MAX_IMAGE_BYTES
+        from tests.image_fixtures import png_bytes
 
         path = self.root / "huge.png"
         path.write_bytes(
-            b"\x89PNG\r\n\x1a\n" + b"\x00" * (MAX_IMAGE_BYTES + 1024)
+            png_bytes(8, 8) + b"\x00" * (MAX_IMAGE_BYTES + 1024)
         )
         with self.client() as client:
             signed = client.post(
@@ -2689,6 +2690,17 @@ class GuiTest(unittest.TestCase):
         )
         self.assertTrue(attachment["path"].endswith(".custom"))
         self.assertEqual((self.root / attachment["path"]).read_bytes(), b"Hello Nosis")
+
+    def test_upload_does_not_treat_a_broken_image_as_image_input(self) -> None:
+        from tests.image_fixtures import png_bytes
+
+        with self.client() as client:
+            response = client.post(
+                "/api/attachments",
+                files=[("files", ("broken.png", png_bytes(40, 25)[:45], "image/png"))],
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["attachments"][0]["type"], "file")
 
     def test_rejects_foreign_origins_and_hosts(self) -> None:
         with self.client(FakeBridge()) as client:

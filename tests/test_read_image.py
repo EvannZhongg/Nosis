@@ -140,6 +140,16 @@ class ReadImageToolTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             ReadImageTool().execute({"paths": ["notes.txt"]}, self.context())
 
+    def test_broken_image_is_reported_without_becoming_an_attachment(self) -> None:
+        self.write_image("good.png")
+        (self.root / "broken.png").write_bytes(png_bytes(40, 25)[:45])
+        result = ReadImageTool().execute(
+            {"paths": ["broken.png", "good.png"]}, self.context(),
+        )
+        self.assertEqual([part.path for part in result.attachments], ["good.png"])
+        self.assertEqual(result.output["failed"][0]["path"], "broken.png")
+        self.assertIn("fully decoded", result.output["failed"][0]["error"])
+
     def test_reads_several_images_in_one_call(self) -> None:
         self.write_image("a.png")
         self.write_image("b.png")

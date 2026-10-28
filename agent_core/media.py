@@ -5,7 +5,7 @@ Images travel through the runtime as paths, never as bytes: a
 provider request turns it into a data URL.  This module owns the three
 operations that need the file itself:
 
-* :func:`probe_image` reads a bounded header prefix to learn the real
+* :func:`probe_image` fully decodes every frame to validate the real
   media type and pixel size.  The declared extension is never trusted,
   because a provider that receives ``image/png`` holding JPEG bytes
   rejects the request.
@@ -24,21 +24,17 @@ from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
 
+from PIL import Image, ImageSequence
+
 
 #: Largest image accepted for inline delivery.  Base64 inflates payloads
 #: by 4/3, so this keeps a single attachment under the ~7 MiB that
 #: mainstream vision APIs accept for one encoded image.
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 
-#: Bytes read to identify a format and its dimensions.  A JPEG's frame
-#: header follows any EXIF thumbnail, which is itself capped at 64 KiB,
-#: so this prefix reaches the dimensions of real-world files without
-#: loading the whole image.
-_PROBE_BYTES = 512 * 1024
-
 #: Canonical extension per supported image type.  A stored copy of an
-#: image is named from the type that :func:`probe_image` read out of the
-#: bytes, never from the name or the media type its sender claimed.
+#: image is named from the decoded format, never from the name or the
+#: media type its sender claimed.
 _IMAGE_EXTENSIONS: dict[str, str] = {
     "image/png": ".png",
     "image/jpeg": ".jpg",
@@ -65,12 +61,6 @@ _TILE_TOKENS = 170
 _AREA_MAX_EDGE = 1568
 _AREA_PIXELS_PER_TOKEN = 750
 
-#: Conservative pixel size for a file whose format is recognized but whose
-#: dimensions are not in the probed prefix.  It is priced at the ceiling
-#: rather than at some middling guess, because an unknown image that
-#: turns out to be large must not be the reason a turn overflows.
-_ASSUMED_DIMENSION = _AREA_MAX_EDGE
-
 
 class UnsupportedImageError(ValueError):
     """Raised for a file that is not an image this runtime can send."""
@@ -91,15 +81,15 @@ class ImageInfo:
 def probe_image(path: Path, max_bytes: int | None = MAX_IMAGE_BYTES) -> ImageInfo:
     """Identify *path* as a supported image and measure it.
 
-    The format comes from the file's magic bytes rather than its name,
+    The format comes from decoding the file rather than its name,
     and the size limit is enforced here so every caller that is about to
     spend context on an image rejects the same set of files.  Pass
     ``max_bytes=None`` when the image is only being displayed rather
     than sent to a model, so a large file stays viewable.
 
     Results are memoized on the file's identity: counting context calls
-    this for every image on every pass of the agent loop, and re-reading
-    a header each time would be pure waste.
+    this for every image on every pass of the agent loop, and decoding
+    it each time would be pure waste.
     """
     if not path.is_file():
         raise UnsupportedImageError(f"image does not exist: {path}")
@@ -125,17 +115,17 @@ def probe_image(path: Path, max_bytes: int | None = MAX_IMAGE_BYTES) -> ImageInf
             f"image is {size_bytes} bytes, exceeding the maximum of "
             f"{max_bytes} bytes for inline delivery"
         )
-    with path.open("rb") as file:
-        header = file.read(_PROBE_BYTES)
-
-    probed = _probe_header(header)
-    if probed is None:
+    try:
+        with Image.open(path, formats=("PNG", "JPEG", "GIF", "WEBP")) as image:
+            mime_type = Image.MIME[image.format]
+            width, height = image.size
+            # Loading only the first frame can accept a broken animated image.
+            for frame in ImageSequence.Iterator(image):
+                frame.load()
+    except (OSError, ValueError, SyntaxError, Image.DecompressionBombError) as error:
         raise UnsupportedImageError(
-            "file is not a supported image; expected one of "
-            + ", ".join(SUPPORTED_IMAGE_MIME_TYPES)
-        )
-    mime_type, size = probed
-    width, height = size or (_ASSUMED_DIMENSION, _ASSUMED_DIMENSION)
+            f"image is not a supported image or cannot be fully decoded: {path}: {error}"
+        ) from error
     info = ImageInfo(
         mime_type=mime_type,
         width=width,
@@ -211,7 +201,7 @@ def fit_image_size(width: int, height: int, max_edge: int | None) -> tuple[int, 
     return max(1, int(width * scale)), max(1, int(height * scale))
 
 
-def encode_data_url(path: Path, mime_type: str, *, max_edge: int | None = None) -> str:
+def encode_data_url(path: Path, *, max_edge: int | None = None) -> str:
     """Return ``data:<mime>;base64,<payload>`` for *path*, memoized.
 
     A turn sends its images on every model call, and a tool-heavy turn
@@ -221,6 +211,8 @@ def encode_data_url(path: Path, mime_type: str, *, max_edge: int | None = None) 
     changing image limit cannot reuse a stale encoding. Resized images
     are encoded in memory; the original file stays unchanged.
     """
+    info = probe_image(path)
+    mime_type = info.mime_type
     stat = path.stat()
     key = (str(path), stat.st_mtime_ns, stat.st_size, mime_type, max_edge)
     with _cache_lock:
@@ -236,13 +228,10 @@ def encode_data_url(path: Path, mime_type: str, *, max_edge: int | None = None) 
     # one redundant pass and keeps the lock uncontended.
     size = None
     if max_edge is not None:
-        info = probe_image(path)
         target = fit_image_size(info.width, info.height, max_edge)
         if target != (info.width, info.height):
             size = target
     if size is not None:
-        from PIL import Image
-
         with Image.open(path) as image:
             has_alpha = "A" in image.getbands() or "transparency" in image.info
             with image.convert("RGBA" if has_alpha else "RGB") as pixels:
@@ -312,100 +301,3 @@ _probe_cache: "OrderedDict[tuple[str, int, int], ImageInfo]" = OrderedDict()
 #: Running total of ``_encoded_cache`` value lengths, maintained on
 #: insert and eviction so a write never has to re-sum the whole map.
 _encoded_bytes = 0
-
-
-def _probe_header(
-    header: bytes,
-) -> tuple[str, tuple[int, int] | None] | None:
-    if header.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "image/png", _png_size(header)
-    if header.startswith(b"\xff\xd8\xff"):
-        return "image/jpeg", _jpeg_size(header)
-    if header.startswith((b"GIF87a", b"GIF89a")):
-        return "image/gif", _gif_size(header)
-    if (
-        len(header) >= 12
-        and header.startswith(b"RIFF")
-        and header[8:12] == b"WEBP"
-    ):
-        return "image/webp", _webp_size(header)
-    return None
-
-
-def _png_size(header: bytes) -> tuple[int, int] | None:
-    # An IHDR chunk always leads a PNG: length, type, then width/height.
-    if len(header) < 24 or header[12:16] != b"IHDR":
-        return None
-    return (
-        int.from_bytes(header[16:20], "big"),
-        int.from_bytes(header[20:24], "big"),
-    )
-
-
-def _jpeg_size(header: bytes) -> tuple[int, int] | None:
-    # Walk the segment chain to the start-of-frame, which carries the
-    # dimensions.  Everything before it is metadata of variable length.
-    index = 2
-    total = len(header)
-    while index + 3 < total:
-        if header[index] != 0xFF:
-            index += 1
-            continue
-        marker = header[index + 1]
-        if marker == 0xFF:
-            index += 1
-            continue
-        if marker in (0x01, 0xD8) or 0xD0 <= marker <= 0xD7:
-            index += 2
-            continue
-        if marker == 0xD9 or marker == 0xDA:
-            return None
-        segment_length = int.from_bytes(header[index + 2 : index + 4], "big")
-        is_start_of_frame = 0xC0 <= marker <= 0xCF and marker not in (
-            0xC4,
-            0xC8,
-            0xCC,
-        )
-        if is_start_of_frame:
-            if index + 9 > total:
-                return None
-            return (
-                int.from_bytes(header[index + 7 : index + 9], "big"),
-                int.from_bytes(header[index + 5 : index + 7], "big"),
-            )
-        if segment_length < 2:
-            return None
-        index += 2 + segment_length
-    return None
-
-
-def _gif_size(header: bytes) -> tuple[int, int] | None:
-    if len(header) < 10:
-        return None
-    return (
-        int.from_bytes(header[6:8], "little"),
-        int.from_bytes(header[8:10], "little"),
-    )
-
-
-def _webp_size(header: bytes) -> tuple[int, int] | None:
-    chunk = header[12:16]
-    if chunk == b"VP8X" and len(header) >= 30:
-        width = int.from_bytes(header[24:27], "little") + 1
-        height = int.from_bytes(header[27:30], "little") + 1
-        return width, height
-    if chunk == b"VP8 " and len(header) >= 30:
-        # Lossy: a 3-byte frame tag, a sync sequence, then 14-bit sizes.
-        if header[23:26] != b"\x9d\x01\x2a":
-            return None
-        width = int.from_bytes(header[26:28], "little") & 0x3FFF
-        height = int.from_bytes(header[28:30], "little") & 0x3FFF
-        return width, height
-    if chunk == b"VP8L" and len(header) >= 25:
-        if header[20] != 0x2F:
-            return None
-        bits = int.from_bytes(header[21:25], "little")
-        width = (bits & 0x3FFF) + 1
-        height = ((bits >> 14) & 0x3FFF) + 1
-        return width, height
-    return None

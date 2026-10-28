@@ -30,6 +30,7 @@ from agent_core import (
     LLMResponse,
     Message,
     ProviderProtocolError,
+    ProviderRequestError,
     ProviderStreamError,
     PlanManager,
     ReasoningDeltaEvent,
@@ -1374,6 +1375,24 @@ class AgentTest(unittest.TestCase):
         self.assertEqual(error.type, "ProviderProtocolError")
         self.assertEqual(error.details["phase"], "tool_call_assembly")
         self.assertEqual(error.details["model_call_index"], 1)
+
+    def test_persists_http_error_with_model_call_index(self) -> None:
+        provider = MockProvider([])
+        session = Session(session_id="session-1")
+        agent = make_agent(provider=provider, session=session, now=clock(REQUEST_TIME))
+        failure = ProviderRequestError(
+            "chat_completions request failed: HTTP 400: Unsupported image",
+            details={"phase": "provider_request", "reason": "http_error", "status_code": 400},
+        )
+        with patch.object(provider, "stream", side_effect=failure):
+            with self.assertRaises(ProviderRequestError):
+                agent.run("hello", turn_id="turn-1")
+        error = session.turns["turn-1"].error
+        self.assertEqual(error.type, "ProviderRequestError")
+        self.assertIn("Unsupported image", error.message)
+        self.assertEqual(error.details["status_code"], 400)
+        self.assertEqual(error.details["model_call_index"], 1)
+        self.assertEqual(session.journal[-1].payload["error"]["details"], error.details)
 
     def test_persists_stream_error_with_model_call_index(self) -> None:
         provider = StreamFailingProvider([])

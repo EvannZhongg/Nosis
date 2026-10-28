@@ -1,11 +1,13 @@
 """Image probing, token estimation, and encode memoization."""
 
 import os
-import struct
 import tempfile
 import unittest
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
+
+from PIL import Image
 
 from tests.image_fixtures import jpeg_bytes, png_bytes
 
@@ -21,23 +23,15 @@ from agent_core.media import (
 
 
 def gif_bytes(width: int, height: int) -> bytes:
-    return b"GIF89a" + struct.pack("<HH", width, height) + b"\x00" * 8
+    with Image.new("RGB", (width, height)) as image, BytesIO() as buffer:
+        image.save(buffer, format="GIF")
+        return buffer.getvalue()
 
 
-def webp_vp8x_bytes(width: int, height: int) -> bytes:
-    payload = (
-        b"VP8X"
-        + struct.pack("<I", 10)
-        + b"\x00\x00\x00\x00"
-        + (width - 1).to_bytes(3, "little")
-        + (height - 1).to_bytes(3, "little")
-    )
-    return (
-        b"RIFF"
-        + struct.pack("<I", 4 + len(payload))
-        + b"WEBP"
-        + payload
-    )
+def webp_bytes(width: int, height: int) -> bytes:
+    with Image.new("RGB", (width, height)) as image, BytesIO() as buffer:
+        image.save(buffer, format="WEBP")
+        return buffer.getvalue()
 
 
 class ProbeImageTest(unittest.TestCase):
@@ -56,7 +50,7 @@ class ProbeImageTest(unittest.TestCase):
             ("png", png_bytes, 40, 25, "image/png"),
             ("jpg", jpeg_bytes, 64, 32, "image/jpeg"),
             ("gif", gif_bytes, 12, 7, "image/gif"),
-            ("webp", webp_vp8x_bytes, 30, 20, "image/webp"),
+            ("webp", webp_bytes, 30, 20, "image/webp"),
         ):
             with self.subTest(extension=extension):
                 info = probe_image(self.write(f"a.{extension}", make_bytes(width, height)))
@@ -81,6 +75,28 @@ class ProbeImageTest(unittest.TestCase):
         with self.assertRaises(UnsupportedImageError):
             probe_image(self.root / "absent.png")
 
+    def test_rejects_images_with_valid_headers_but_broken_pixels(self) -> None:
+        for extension, make_bytes in (
+            ("png", png_bytes), ("jpg", jpeg_bytes),
+            ("gif", gif_bytes), ("webp", webp_bytes),
+        ):
+            with self.subTest(extension=extension):
+                data = make_bytes(40, 25)
+                path = self.write(f"broken.{extension}", data[:len(data) // 2])
+                with self.assertRaisesRegex(UnsupportedImageError, "fully decoded"):
+                    probe_image(path)
+
+    def test_rejects_a_gif_with_a_broken_later_frame(self) -> None:
+        path = self.root / "animated.gif"
+        with Image.new("RGB", (40, 25), "red") as first, Image.new("RGB", (40, 25), "blue") as second:
+            first.save(path, format="GIF", save_all=True, append_images=[second])
+        data = path.read_bytes()
+        path.write_bytes(data[:-10])
+        with Image.open(path) as image:
+            image.load()
+        with self.assertRaisesRegex(UnsupportedImageError, "fully decoded"):
+            probe_image(path)
+
     def test_rejects_an_oversized_image(self) -> None:
         path = self.write("big.png", png_bytes(4, 4))
         path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * MAX_IMAGE_BYTES)
@@ -92,7 +108,7 @@ class ProbeImageTest(unittest.TestCase):
         """The ceiling bounds what is sent to a model, not what is shown."""
         path = self.write("big.png", b"")
         path.write_bytes(
-            b"\x89PNG\r\n\x1a\n" + b"\x00" * (MAX_IMAGE_BYTES + 1024)
+            png_bytes(4, 4) + b"\x00" * (MAX_IMAGE_BYTES + 1024)
         )
 
         self.assertEqual(
@@ -105,7 +121,7 @@ class ProbeImageTest(unittest.TestCase):
         """A display probe must not smuggle a huge image past the limit."""
         path = self.write("big.png", b"")
         path.write_bytes(
-            b"\x89PNG\r\n\x1a\n" + b"\x00" * (MAX_IMAGE_BYTES + 1024)
+            png_bytes(4, 4) + b"\x00" * (MAX_IMAGE_BYTES + 1024)
         )
         probe_image(path, max_bytes=None)
 
@@ -168,11 +184,17 @@ class ImageCacheTestCase(unittest.TestCase):
 
 
 class EncodeDataUrlTest(ImageCacheTestCase):
+    def test_rejects_broken_pixels_before_encoding(self) -> None:
+        path = self.root / "broken.png"
+        path.write_bytes(png_bytes(40, 25)[:45])
+        with self.assertRaisesRegex(UnsupportedImageError, "fully decoded"):
+            encode_data_url(path)
+
     def test_produces_a_data_url(self) -> None:
         path = self.root / "a.png"
         path.write_bytes(png_bytes(4, 4))
 
-        url = encode_data_url(path, "image/png")
+        url = encode_data_url(path)
 
         self.assertTrue(url.startswith("data:image/png;base64,"))
 
@@ -187,49 +209,41 @@ class EncodeDataUrlTest(ImageCacheTestCase):
         original = png_bytes(4, 4)
         path.write_bytes(original)
         stat = path.stat()
-        first = encode_data_url(path, "image/png")
+        first = encode_data_url(path)
 
         replacement = bytearray(original)
         replacement[-1] ^= 0xFF
         path.write_bytes(bytes(replacement))
         os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns))
 
-        self.assertEqual(encode_data_url(path, "image/png"), first)
+        self.assertEqual(encode_data_url(path), first)
 
     def test_an_edited_image_is_encoded_again(self) -> None:
         path = self.root / "a.png"
         path.write_bytes(png_bytes(4, 4))
-        first = encode_data_url(path, "image/png")
+        first = encode_data_url(path)
 
         path.write_bytes(png_bytes(8, 8))
         stat = path.stat()
         # Guarantee a distinct mtime on a coarse-grained filesystem.
         os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000))
 
-        self.assertNotEqual(encode_data_url(path, "image/png"), first)
+        self.assertNotEqual(encode_data_url(path), first)
 
 
 class ProbeMemoizationTest(ImageCacheTestCase):
     """Counting context probes every image on every agent-loop pass."""
 
-    def test_the_header_is_read_once_for_repeated_probes(self) -> None:
+    def test_the_image_is_decoded_once_for_repeated_probes(self) -> None:
         path = self.root / "a.png"
         path.write_bytes(png_bytes(40, 30))
-        real_open = Path.open
-        reads = []
-
-        def counting_open(inner, *args, **kwargs):
-            if inner.name == "a.png":
-                reads.append(inner.name)
-            return real_open(inner, *args, **kwargs)
-
-        with patch.object(Path, "open", counting_open):
+        with patch("PIL.Image.open", wraps=Image.open) as image_open:
             sizes = [
                 (probe_image(path).width, probe_image(path).height)
                 for _ in range(5)
             ]
 
-        self.assertEqual(len(reads), 1)
+        self.assertEqual(image_open.call_count, 1)
         self.assertEqual(set(sizes), {(40, 30)})
 
     def test_an_edited_image_is_probed_again(self) -> None:
@@ -243,6 +257,14 @@ class ProbeMemoizationTest(ImageCacheTestCase):
 
         self.assertEqual(probe_image(path).width, 11)
 
+    def test_cached_image_is_revalidated_after_corruption(self) -> None:
+        path = self.root / "a.gif"
+        path.write_bytes(gif_bytes(40, 25))
+        probe_image(path)
+        path.write_bytes(path.read_bytes()[:-10])
+        with self.assertRaises(UnsupportedImageError):
+            probe_image(path)
+
 
 class EncodedCacheBoundsTest(ImageCacheTestCase):
     """The cache exists to spare work inside a turn, not to grow forever."""
@@ -251,7 +273,7 @@ class EncodedCacheBoundsTest(ImageCacheTestCase):
         for index in range(media._CACHE_MAX_ENTRIES * 2):
             path = self.root / f"i{index}.png"
             path.write_bytes(png_bytes(8, 8))
-            encode_data_url(path, "image/png")
+            encode_data_url(path)
 
         self.assertLessEqual(
             len(media._encoded_cache), media._CACHE_MAX_ENTRIES
@@ -262,7 +284,7 @@ class EncodedCacheBoundsTest(ImageCacheTestCase):
         for index in range(media._CACHE_MAX_ENTRIES + 5):
             path = self.root / f"i{index}.png"
             path.write_bytes(png_bytes(8, 8))
-            encode_data_url(path, "image/png")
+            encode_data_url(path)
 
         self.assertEqual(
             media._encoded_bytes,
@@ -272,12 +294,12 @@ class EncodedCacheBoundsTest(ImageCacheTestCase):
     def test_re_encoding_the_same_path_does_not_double_count(self) -> None:
         path = self.root / "a.png"
         path.write_bytes(png_bytes(8, 8))
-        encode_data_url(path, "image/png")
+        encode_data_url(path)
 
         path.write_bytes(png_bytes(16, 16))
         stat = path.stat()
         os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000))
-        encode_data_url(path, "image/png")
+        encode_data_url(path)
 
         self.assertEqual(
             media._encoded_bytes,

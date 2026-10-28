@@ -3,9 +3,9 @@
 from typing import Callable
 
 import httpx
-from openai import APIError, OpenAI
+from openai import APIConnectionError, APIError, APIStatusError, OpenAI
 
-from agent_core.errors import ProviderProtocolError, ProviderStreamError
+from agent_core.errors import ProviderProtocolError, ProviderRequestError, ProviderStreamError
 from agent_core.llm import LLMRequest, LLMResponse
 from agent_core.tools import ToolCall
 from agent_core.usage import TokenUsage
@@ -65,19 +65,34 @@ class OpenAIProvider(ModelProvider):
         check_cancelled: Callable[[], None],
     ) -> LLMResponse:
         # Client and stream belong to this call, so cancellation releases both.
-        with OpenAI(
-            api_key=self._api_key,
-            base_url=self._base_url,
-            timeout=self._request_timeout_seconds,
-            max_retries=self._max_retries,
-        ) as client:
-            if self._api == "responses":
-                return self._responses(
+        try:
+            with OpenAI(
+                api_key=self._api_key,
+                base_url=self._base_url,
+                timeout=self._request_timeout_seconds,
+                max_retries=self._max_retries,
+            ) as client:
+                if self._api == "responses":
+                    return self._responses(
+                        client, request, on_text_delta, on_reasoning_delta, check_cancelled,
+                    )
+                return self._chat(
                     client, request, on_text_delta, on_reasoning_delta, check_cancelled,
                 )
-            return self._chat(
-                client, request, on_text_delta, on_reasoning_delta, check_cancelled,
-            )
+        except APIStatusError as error:
+            raise ProviderRequestError(
+                f"{self._api} request failed: {error}",
+                details={
+                    "phase": "provider_request", "model": self._model,
+                    "api": self._api, "reason": "http_error",
+                    "status_code": error.status_code, "request_id": error.request_id,
+                    "message": str(error), "error": error.body,
+                },
+            ) from error
+        except (APIConnectionError, httpx.TransportError) as error:
+            raise self._stream_error("stream_transport_error", message=str(error)) from error
+        except APIError as error:
+            raise self._stream_error("api_error", message=str(error), error=error.body) from error
 
     def _responses(self, client, request, on_text_delta, on_reasoning_delta, check_cancelled):
         arguments = {
@@ -141,8 +156,6 @@ class OpenAIProvider(ModelProvider):
                     )
                 elif event.type == "error":
                     raise self._stream_error("api_error", code=event.code, message=event.message)
-        except (APIError, httpx.TransportError) as error:
-            raise self._stream_error("stream_transport_error", message=str(error)) from error
         finally:
             chunks.close()
         if completed is None:
@@ -283,8 +296,6 @@ class OpenAIProvider(ModelProvider):
                     if on_reasoning_delta is not None:
                         on_reasoning_delta(text)
                 calls.add_batch(choice.delta.tool_calls or [])
-        except (APIError, httpx.TransportError) as error:
-            raise self._stream_error("stream_transport_error", message=str(error)) from error
         finally:
             chunks.close()
         if not finished:
@@ -303,8 +314,11 @@ class OpenAIProvider(ModelProvider):
         )
 
     def _stream_error(self, reason: str, **details: object) -> ProviderStreamError:
+        message = f"{self._api} stream did not complete: {reason}"
+        if details.get("message"):
+            message += f": {details['message']}"
         return ProviderStreamError(
-            f"{self._api} stream did not complete: {reason}",
+            message,
             details={"phase": "response_stream", "model": self._model,
                      "api": self._api, "reason": reason, **details},
         )

@@ -8,11 +8,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 import httpx
-from openai import OpenAI
+from openai import APIConnectionError, APIStatusError, OpenAI
 
 from agent_core import (
     AgentCancelled, ImagePart, JsonlSessionStore, LLMRequest, Message,
-    ProviderProtocolError, ProviderStreamError, Session, TextPart,
+    ProviderProtocolError, ProviderRequestError, ProviderStreamError, Session, TextPart,
     TokenUsage, ToolCall, ToolDefinition,
 )
 from agent_core.providers import OpenAIProvider
@@ -76,6 +76,10 @@ class OpenAIProviderTest(unittest.TestCase):
         def handle(request):
             requests.append(request)
             body = next(remaining)
+            if isinstance(body, BaseException):
+                raise body
+            if isinstance(body, httpx.Response):
+                return body
             options = {"content": sse(body)} if isinstance(body, list) else {"stream": body}
             return httpx.Response(200, headers={"content-type": "text/event-stream"}, **options)
 
@@ -314,24 +318,74 @@ class OpenAIProviderTest(unittest.TestCase):
                 result = self.provider(api=api).stream(self.request(), lambda _: None)
             self.assertIsNone(result.usage)
 
+    def test_http_errors_preserve_status_and_upstream_message(self):
+        body = {"error": {"message": "Unsupported image", "type": "invalid_request_error",
+                          "code": "invalid_image", "param": "messages[0]"}}
+        for api in ("responses", "chat_completions"):
+            for status in (400, 401, 429, 500, 502, 503):
+                response = httpx.Response(status, json=body, headers={"x-request-id": "req_test"})
+                with self.subTest(api=api, status=status), self.transport(response) as requests:
+                    with self.assertRaises(ProviderRequestError) as raised:
+                        self.provider(api=api).stream(self.request(), lambda _: None)
+                error = raised.exception
+                self.assertIsInstance(error.__cause__, APIStatusError)
+                self.assertIn(str(status), str(error))
+                self.assertIn("Unsupported image", str(error))
+                self.assertEqual(error.details["phase"], "provider_request")
+                self.assertEqual(error.details["reason"], "http_error")
+                self.assertEqual(error.details["status_code"], status)
+                self.assertEqual(error.details["request_id"], "req_test")
+                self.assertEqual(error.details["api"], api)
+                self.assertEqual(error.details["model"], "gpt-6-astra")
+                self.assertEqual(error.details["error"], body["error"])
+                self.assertEqual(len(requests), 1)
+
+    def test_connection_errors_and_timeouts_remain_transport_errors(self):
+        for api in ("responses", "chat_completions"):
+            for failure in (httpx.ConnectError("connection refused"), httpx.ReadTimeout("timed out")):
+                with self.subTest(api=api, failure=type(failure).__name__), self.transport(failure) as requests:
+                    with self.assertRaises(ProviderStreamError) as raised:
+                        self.provider(api=api).stream(self.request(), lambda _: None)
+                error = raised.exception
+                self.assertIsInstance(error.__cause__, APIConnectionError)
+                self.assertEqual(error.details["reason"], "stream_transport_error")
+                self.assertIn(error.details["message"], str(error))
+                self.assertEqual(len(requests), 1)
+
+    def test_api_error_in_stream_is_not_a_transport_error(self):
+        for api in ("responses", "chat_completions"):
+            events = [{"error": {"message": "Upstream generation failed", "code": "server_error"}}]
+            with self.subTest(api=api), self.transport(events) as requests:
+                with self.assertRaises(ProviderStreamError) as raised:
+                    self.provider(api=api).stream(self.request(), lambda _: None)
+            self.assertEqual(raised.exception.details["reason"], "api_error")
+            self.assertIn("Upstream generation failed", str(raised.exception))
+            self.assertEqual(len(requests), 1)
+
     def test_midstream_transport_failure_is_not_retried(self):
         class BrokenStream(httpx.SyncByteStream):
             closed = False
 
             def __iter__(self):
-                yield sse([{"type": "response.output_text.delta", "delta": "partial"}])
+                yield sse(events)
                 raise httpx.ReadError("disconnected")
 
             def close(self):
                 self.closed = True
 
-        stream, text = BrokenStream(), []
-        with self.transport(stream) as requests:
-            with self.assertRaises(ProviderStreamError):
-                self.provider().stream(self.request(), text.append)
-        self.assertTrue(stream.closed)
-        self.assertEqual(text, ["partial"])
-        self.assertEqual(len(requests), 1)
+        for api, events in (
+            ("responses", [{"type": "response.output_text.delta", "delta": "partial"}]),
+            ("chat_completions", [chat_chunk({"content": "partial"})]),
+        ):
+            stream, text = BrokenStream(), []
+            with self.subTest(api=api), self.transport(stream) as requests:
+                with self.assertRaises(ProviderStreamError) as raised:
+                    self.provider(api=api).stream(self.request(), text.append)
+            self.assertEqual(raised.exception.details["reason"], "stream_transport_error")
+            self.assertIn("disconnected", str(raised.exception))
+            self.assertTrue(stream.closed)
+            self.assertEqual(text, ["partial"])
+            self.assertEqual(len(requests), 1)
 
     def test_completed_response_finishes_before_connection_disconnects(self):
         class CompletedStream(httpx.SyncByteStream):

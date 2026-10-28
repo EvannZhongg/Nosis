@@ -20,6 +20,10 @@ class ProviderProtocolError(ProviderError):
     """A provider stream violated the Tool Call protocol."""
 
 
+class ProviderRequestError(ProviderError):
+    """A provider rejected a request with an HTTP error response."""
+
+
 class ProviderStreamError(ProviderError):
     """A provider response stream ended before it could be completed."""
 

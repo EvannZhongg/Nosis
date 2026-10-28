@@ -59,6 +59,7 @@ from .execution import (
 from .errors import (
     ProviderError,
     ProviderProtocolError,
+    ProviderRequestError,
     ProviderStreamError,
     RuntimeErrorInfo,
     runtime_error_info,
@@ -310,6 +311,7 @@ __all__ = [
     "ProviderError",
     "ProviderRequestConfig",
     "ProviderProtocolError",
+    "ProviderRequestError",
     "ProviderStreamError",
     "ProcessIsolation",
     "ReadFileTool",

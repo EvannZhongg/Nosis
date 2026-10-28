@@ -490,7 +490,7 @@ def _content_to_provider_format(
                 {
                     "type": "image_url",
                     "image_url": {
-                        "url": encode_data_url(path, part.mime_type, max_edge=max_image_edge)
+                        "url": encode_data_url(path, max_edge=max_image_edge)
                     },
                 }
             )

@@ -19,6 +19,7 @@ from agent_core.providers import LiteLLMProvider, OpenAIProvider
 from agent_core.providers.base import _media_tokens, _request_messages
 from agent_core.providers.image_limits import image_edge_limit
 from agent_core.providers.openai_provider import _responses_input
+from tests.image_fixtures import png_bytes
 
 
 class ProviderImageLimitsTest(unittest.TestCase):
@@ -138,10 +139,11 @@ class ProviderImageLimitsTest(unittest.TestCase):
                 self.assertEqual(base64.b64decode(data_url.split(",", 1)[1]), (self.root / part.path).read_bytes())
                 self.assertEqual(len(messages[1]["content"]), 2)
 
-    def test_counting_uses_sent_size_and_notice_without_decoding(self):
+    def test_counting_reuses_decoded_image_metadata(self):
         part = self.image((1000, 8200))
         request = self.request(part, 21)
         provider = self.provider("anthropic/claude-sonnet-4-5")
+        _media_tokens(request, provider)
         with patch("PIL.Image.open", side_effect=AssertionError("counting must not decode images")):
             messages = _request_messages(request, provider, encode_media=False)
             tokens = _media_tokens(request, provider)
@@ -151,21 +153,21 @@ class ProviderImageLimitsTest(unittest.TestCase):
     def test_cached_resize_preserves_alpha_and_invalidates_after_edit(self):
         part = self.image((100, 9000), mode="RGBA")
         path = self.root / part.path
-        first = encode_data_url(path, part.mime_type, max_edge=8192)
+        first = encode_data_url(path, max_edge=8192)
         with patch("PIL.Image.open", side_effect=AssertionError("cached image must not be decoded")):
-            self.assertEqual(encode_data_url(path, part.mime_type, max_edge=8192), first)
+            self.assertEqual(encode_data_url(path, max_edge=8192), first)
         with Image.open(BytesIO(base64.b64decode(first.split(",", 1)[1]))) as image:
             self.assertEqual(image.mode, "RGBA")
             self.assertEqual(image.getpixel((0, 0))[3], 0)
         self.image((100, 8500), mode="RGBA")
-        second = encode_data_url(path, part.mime_type, max_edge=8192)
+        second = encode_data_url(path, max_edge=8192)
         self.assertNotEqual(first, second)
 
     def test_jpeg_resize_stays_jpeg_and_does_not_enlarge_short_edge(self):
         for size, expected in (((2, 9000), (1, 8000)), ((9000, 2), (8000, 1))):
             with self.subTest(size=size):
                 part = self.image(size, name=f"photo-{size[0]}.jpg", format="JPEG")
-                url = encode_data_url(self.root / part.path, part.mime_type, max_edge=8000)
+                url = encode_data_url(self.root / part.path, max_edge=8000)
                 self.assertTrue(url.startswith("data:image/jpeg;base64,"))
                 self.assertEqual(self.decoded_size(url), expected)
 
@@ -173,6 +175,7 @@ class ProviderImageLimitsTest(unittest.TestCase):
         for payload, error in (
             (b"", "empty"),
             (b"not an image", "not a supported image"),
+            (png_bytes(40, 25)[:45], "fully decoded"),
             (b"x" * (MAX_IMAGE_BYTES + 1), "exceeding"),
         ):
             part = self.image((10, 10))

@@ -9,6 +9,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from PIL import Image
+
 from agent_core.content import ImagePart, TextPart
 from agent_core.llm import LLMRequest
 from agent_core.media import clear_encoded_cache, estimate_image_tokens
@@ -135,7 +137,7 @@ class ImageEncodingTest(ImageRequestTestCase):
             )
         )
 
-    def test_header_and_payload_are_each_read_once_across_repeated_sends(self) -> None:
+    def test_decode_and_encoding_are_cached_across_repeated_sends(self) -> None:
         """A tool-heavy turn calls the model many times with one image."""
         (self.root / "a.png").write_bytes(png_bytes(8, 8))
         image = ImagePart(path="a.png", mime_type="image/png")
@@ -150,12 +152,12 @@ class ImageEncodingTest(ImageRequestTestCase):
                 reads.append(self.name)
             return real_open(self, *args, **kwargs)
 
-        with patch.object(Path, "open", counting_open):
+        with patch.object(Path, "open", counting_open), patch("PIL.Image.open", wraps=Image.open) as image_open:
             for _ in range(4):
                 _request_messages(request, provider)
 
-        # One bounded header probe and one payload encoding; both are cached.
-        self.assertEqual(len(reads), 2)
+        self.assertEqual(image_open.call_count, 1)
+        self.assertEqual(len(reads), 1)
 
     def test_counting_then_sending_still_sends_the_bytes(self) -> None:
         """The count path must not poison the cache with a placeholder."""
