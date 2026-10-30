@@ -1,6 +1,6 @@
-// Public stdio Bridge protocol, major 2. Keep Python senders and the reference in sync.
+// Public stdio Bridge protocol, major 3. Keep Python senders and the reference in sync.
 
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 export type JSONValue =
   | string
@@ -202,7 +202,7 @@ export type Incoming = (
   | RuntimeState
   | {
       type: 'session_ready';
-      protocol_version: 2;
+      protocol_version: 3;
       session_id: string;
       workspace: string;
       provider: string;
@@ -321,7 +321,19 @@ export type Outgoing =
   | { type: 'list_sessions' }
   | { type: 'list_workspaces' }
   | { type: 'load_session' }
+  | { type: 'session_snapshot' };
+
+/** A channel owns one independent Runtime, including its event cursors. */
+export type BridgeRequest<Command = Outgoing> =
+  | { type: 'channel_command'; channel_id: string; command: Command }
+  | { type: 'close_channel'; channel_id: string }
   | { type: 'shutdown' };
+
+export type BridgeEvent<Event = Incoming> =
+  | { type: 'bridge_ready'; protocol_version: number }
+  | { type: 'channel_event'; channel_id: string; event: Event }
+  | { type: 'channel_closed'; channel_id: string }
+  | { type: 'fatal'; error: RuntimeFailure };
 
 export { MessageDecoder } from './decoder.js';
 

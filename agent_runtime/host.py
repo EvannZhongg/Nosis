@@ -17,7 +17,7 @@ from .callbacks import RuntimeCallbacks
 from .config import load_model_options
 from .plane_manager import ExecutionPlaneManager
 from .session_controller import SessionRuntimeController
-from .settings import EnvironmentReloader, SettingsStore
+from .services import RuntimeServices
 from .turn_runner import TurnResult, TurnRunner
 
 
@@ -29,17 +29,19 @@ class RuntimeHost:
         callbacks: RuntimeCallbacks | None = None,
         scheduler: SchedulerService | None = None,
         start_scheduler: bool = True,
+        services: RuntimeServices | None = None,
         execution_authority_limit: ExecutionAuthority = FULL_ACCESS_AUTHORITY,
     ) -> None:
         self.config_directory = config_directory.resolve()
         self.callbacks = callbacks or RuntimeCallbacks()
         runtime_callbacks = replace(self.callbacks, on_event=self.publish_event)
-        self.environment = EnvironmentReloader(self.config_directory / ".env")
-        self.settings = SettingsStore(self.config_directory, self.environment)
-        self._owns_scheduler = scheduler is None
-        self.scheduler = scheduler or SchedulerService(
-            self.config_directory / "schedule.jsonl",
+        self._owns_services = services is None
+        self.services = services or RuntimeServices(
+            self.config_directory, scheduler=scheduler, start_scheduler=start_scheduler,
         )
+        self.environment = self.services.environment
+        self.settings = self.services.settings
+        self.scheduler = self.services.scheduler
         self.planes = ExecutionPlaneManager(
             self.config_directory, self.environment, self.scheduler,
             runtime_callbacks, execution_authority_limit,
@@ -60,13 +62,6 @@ class RuntimeHost:
             ),
         )
         self.turns = TurnRunner(runtime_callbacks)
-        from .scheduled_runner import ScheduledTurnRunner
-
-        self.scheduler.runner = ScheduledTurnRunner(
-            self.config_directory, self.scheduler
-        )
-        if self._owns_scheduler and start_scheduler:
-            self.scheduler.start()
 
     def _require_idle(self) -> None:
         if self.turns.turn_id is not None:
@@ -143,7 +138,9 @@ class RuntimeHost:
         input_source: str = "user",
     ) -> TurnResult:
         return self.turns.run_turn(
-            turn_id, text, lambda: self.planes.ensure(self.sessions), attachments, input_source,
+            turn_id, text,
+            lambda: self.planes.ensure(self.sessions, cancellation=self.turns.control),
+            attachments, input_source,
         )
 
     def close(self) -> None:
@@ -154,5 +151,5 @@ class RuntimeHost:
             try:
                 self.sessions.close()
             finally:
-                if self._owns_scheduler:
-                    self.scheduler.close()
+                if self._owns_services:
+                    self.services.close()

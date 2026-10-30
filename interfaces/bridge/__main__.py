@@ -6,10 +6,12 @@ otherwise corrupt the newline-delimited JSON stream.
 """
 
 import json
+import argparse
 import os
 import signal
 import sys
 from typing import TextIO
+from pathlib import Path
 
 
 def _interrupt(_signum: int, _frame: object) -> None:
@@ -22,7 +24,10 @@ def _claim_stdout() -> TextIO:
     return os.fdopen(protocol_fd, "w", encoding="utf-8", buffering=1)
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(prog="nosis-bridge")
+    parser.add_argument("--config-directory", type=Path, default=None)
+    args = parser.parse_args(argv)
     # Node writes the protocol as UTF-8.  On Windows Python may inherit a
     # locale-specific (for example GBK) stdin encoding, which corrupts
     # non-ASCII paths before JSON decoding.
@@ -37,10 +42,11 @@ def main() -> None:
     try:
         from agent_runtime.config import default_config_directory, initialize_config_directory
 
-        initialize_config_directory(default_config_directory().resolve())
-        from .bridge import Bridge
+        directory = (args.config_directory or default_config_directory()).resolve()
+        initialize_config_directory(directory)
+        from .server import BridgeServer
 
-        bridge = Bridge(sys.stdin, protocol_out)
+        bridge = BridgeServer(sys.stdin, protocol_out, config_directory=directory)
         bridge.serve()
     except KeyboardInterrupt:
         return
@@ -58,14 +64,6 @@ def main() -> None:
         if bridge is not None:
             bridge.emit(**message)
         else:
-            from .protocol import runtime_state_message
-
-            message["event_sequence"] = 1
-            message["resume_after"] = 0
-            message["runtime"] = runtime_state_message(
-                phase="failed", approval=None, question=None, provider=None,
-                permission_preset="ask_for_approval", context_window=None, jobs=[], cache_usage=None,
-            )
             protocol_out.write(json.dumps(message, ensure_ascii=False) + "\n")
         raise SystemExit(1)
     finally:

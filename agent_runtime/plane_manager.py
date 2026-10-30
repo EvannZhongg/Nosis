@@ -35,6 +35,7 @@ from agent_core.prompting import render_system_prompt
 from agent_core.llm import LLMProvider
 from agent_core.tools import ROLE_TOOL_NAMES
 from agent_core.hooks import HookRunner
+from agent_core.execution.process import CancellationSignal
 
 from .config import (
     configured_skill_sources,
@@ -74,6 +75,7 @@ class ExecutionPlaneManager:
 
     def ensure(
         self, session: SessionRuntimeController, *, force: bool = False,
+        cancellation: CancellationSignal | None = None,
     ) -> ExecutionPlane:
         if (
             session.session is None
@@ -212,7 +214,7 @@ class ExecutionPlaneManager:
             # One catalog of stateless Tool instances is shared by the main
             # Agent and by every sub-agent role.
             catalog = builtin_catalog()
-            catalog = catalog.extend(mcp.wait_ready())
+            catalog = catalog.extend(mcp.wait_ready(cancellation))
             role_tools = {}
             if agent_config.tools.is_enabled("subagent"):
                 for name, role in agent_config.subagent_roles.items():

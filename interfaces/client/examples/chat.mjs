@@ -20,13 +20,13 @@ const client = new BridgeClient({
     }
     if (message.type === 'runtime_state' && opened && !submitted) {
       submitted = true;
-      client.send({ type: 'user_turn', turn_id: randomUUID(), text });
+      client.send({ type: 'user_turn', turn_id: randomUUID(), text }, 'main');
     }
     if (message.type === 'assistant_delta') process.stdout.write(message.text);
     if (message.type === 'approval_request') {
-      client.send({ type: 'approval_response', request_id: message.request_id, approved: false });
+      client.send({ type: 'approval_response', request_id: message.request_id, approved: false }, 'main');
     }
-    if (message.type === 'user_question' && message.turn_id) client.cancel(message.turn_id);
+    if (message.type === 'user_question' && message.turn_id) client.cancel(message.turn_id, 'main');
     if (message.type === 'fatal' || message.type === 'turn_failed' || message.type === 'session_open_failed') {
       console.error(message.error);
       process.exitCode = 1;
@@ -41,5 +41,5 @@ const client = new BridgeClient({
   onProtocolError(error) { console.error(error); process.exitCode = 1; },
   onExit(code, signal) { if (code !== 0 || signal) process.exitCode = 1; },
 });
-client.send({ type: 'open_session', workspace: resolve(workspace), session_id: null });
+client.send({ type: 'open_session', workspace: resolve(workspace), session_id: null }, 'main');
 await client.closed;

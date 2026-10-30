@@ -1,6 +1,6 @@
 # @nosis/protocol
 
-公开契约见 [Bridge Public Client API, major 2](../../docs/bridge-protocol.md)，
+公开契约见 [Bridge Public Client API, major 3](../../docs/bridge-protocol.md)，
 现状审查与设计见 [设计文档](../../docs/bridge-api-design.md)。
 
 `@nosis/protocol` 导出稳定的 Incoming / Outgoing、PROTOCOL_VERSION、数据类型、
@@ -20,7 +20,7 @@ MessageDecoder 接收已经按 UTF-8 流式解码的字符串，校验 JSON 对�
 
 ## 连接约定
 
-连接必须以 `open_session` 开始：
+进程先发送 `bridge_ready`。stdio 使用 `BridgeRequest` / `BridgeEvent` 包装会话命令和事件，每个 `channel_id` 对应一个独立 Runtime；会话通道必须以 `open_session` 开始：
 
 ```text
 open_session

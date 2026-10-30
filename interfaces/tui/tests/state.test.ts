@@ -5,7 +5,7 @@ import { initialState, reducer, type State } from '../src/state.js';
 
 const READY = {
   type: 'session_ready' as const,
-  protocol_version: 2 as const,
+  protocol_version: 3 as const,
   session_id: 'abc12345-0000',
   workspace: '/tmp/work',
   provider: 'deepseek',

@@ -15,6 +15,11 @@ RuntimeHost
 
 交互式 Bridge 和无人值守的 Scheduled Runner 都通过这套装配进入 Core。前端不自行创建 Agent、执行 Tool 或维护另一套授权状态。
 
+`RuntimeServices` 持有一个进程内共享的 EnvironmentReloader、SettingsStore 和
+SchedulerService。常驻 Bridge 为每个通道创建独立 RuntimeHost 并传入同一个 services；
+Host 关闭只释放自身执行面与 Journal，由进程宿主在全部 Host 关闭后释放共享服务。
+默认 Provider 的代码、tokenizer 与 TLS 信任上下文在进程启动时预热，不发送模型请求。
+
 ## Execution Plane
 
 `ExecutionPlane` 持有一次完整执行所需的对象：

@@ -9,17 +9,21 @@ from agent_core import (
 )
 
 from .host import RuntimeHost
+from .services import RuntimeServices
 
 
 class ScheduledTurnRunner:
-    def __init__(self, config_directory: Path, scheduler: SchedulerService) -> None:
+    def __init__(self, config_directory: Path, scheduler: SchedulerService, *,
+                 services: RuntimeServices | None = None) -> None:
         self.config_directory = config_directory
         self.scheduler = scheduler
+        self.services = services
 
     def __call__(self, schedule: Schedule, run: ScheduledRun) -> None:
         worker = RuntimeHost(
             self.config_directory,
             scheduler=self.scheduler,
+            services=self.services,
             execution_authority_limit=(
                 FULL_ACCESS_AUTHORITY
                 if schedule.execution_scope is ExecutionScope.HOST

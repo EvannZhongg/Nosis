@@ -4,31 +4,48 @@ import { render } from 'ink-testing-library';
 import type { ApprovalKind, Incoming } from '@nosis/protocol/internal';
 
 const sent: any[] = [];
-let emit: (message: Incoming) => void = () => {};
+let emit: (message: Incoming, channelId?: string) => void = () => {};
 let autoReady = true;
 let bridgeCount = 0;
 let shutdownCount = 0;
+const sentChannels: string[] = [];
+const closedChannels: string[] = [];
+let activeMockChannel = 'session-1';
+const readyByChannel = new Map<string, any>();
+const stateByChannel = new Map<string, any>();
 
 vi.mock('@nosis/client', () => ({
   BridgeClient: class {
-    constructor(options: any) {
-      emit = options.onMessage;
+    constructor(private options: any) {
+      emit = (message, channelId = activeMockChannel) => {
+        if (message.type === 'session_ready') readyByChannel.set(channelId, message);
+        if (message.type === 'runtime_state') stateByChannel.set(channelId, message);
+        options.onMessage(message, channelId);
+      };
       bridgeCount += 1;
     }
-    send(message: any) {
+    send(message: any, channelId: string) {
+      activeMockChannel = channelId;
       sent.push(message);
+      sentChannels.push(channelId);
+      if (autoReady && message.type === 'session_snapshot') {
+        setTimeout(() => {
+          emit({ ...readyByChannel.get(channelId), resumed: true }, channelId);
+          emit(stateByChannel.get(channelId), channelId);
+        }, 10);
+      }
       if (autoReady && message.type === 'open_session') {
         setTimeout(() => {
             emit({
-              type: 'session_ready', protocol_version: 2,
-              session_id: 'sess-1234',
+              type: 'session_ready', protocol_version: 3,
+              session_id: message.session_id ?? (channelId === 'session-1' ? 'sess-1234' : `sess-${channelId}`),
               workspace: message.workspace,
               provider: 'test',
               model: 'test/model',
               resumed: false,
               message_count: 0,
               permission_preset: 'ask_for_approval',
-            });
+            }, channelId);
             emit({
               type: 'runtime_state', cache_usage: null,
               phase: 'inactive',
@@ -40,12 +57,17 @@ vi.mock('@nosis/client', () => ({
               approval: null,
               question: null,
               plan: null,
-            });
+            }, channelId);
           }, 10);
       }
     }
-    cancel(turnId: string) {
+    cancel(turnId: string, channelId: string) {
       sent.push({ type: '__cancel', turn_id: turnId });
+      sentChannels.push(channelId);
+    }
+    closeChannel(channelId: string) {
+      closedChannels.push(channelId);
+      this.options.onChannelClosed?.(channelId);
     }
     shutdown() { shutdownCount += 1; }
     diagnostics() {
@@ -164,6 +186,11 @@ describe('App', () => {
 
   beforeEach(() => {
     sent.length = 0;
+    sentChannels.length = 0;
+    closedChannels.length = 0;
+    readyByChannel.clear();
+    stateByChannel.clear();
+    activeMockChannel = 'session-1';
     bridgeCount = 0;
     shutdownCount = 0;
     autoReady = true;
@@ -274,7 +301,7 @@ describe('App', () => {
     expect(lastFrame()).toContain('wait for sync');
 
     emit({
-      type: 'session_ready', protocol_version: 2,
+      type: 'session_ready', protocol_version: 3,
       session_id: 'sess-1234',
       workspace: '/w',
       provider: 'test',
@@ -453,6 +480,48 @@ describe('App', () => {
     expect(turns()).toHaveLength(0);
   });
 
+  it('keeps independent runtime channels and snapshots the original when switching back', async () => {
+    const { stdin, lastFrame, unmount } = renderApp();
+    await waitForReady(lastFrame);
+    const firstChannel = sentChannels[sent.findIndex(message => message.type === 'open_session')];
+    await typeDraft(stdin, lastFrame, '/sessions');
+    stdin.write('\r');
+    await waitFor(() => expect(lastFrame()).toContain('Sessions'));
+    emit({ type: 'sessions_listed', sessions: [{ session_id: 'second', title: 'Second runtime' }] });
+    await waitFor(() => expect(lastFrame()).toContain('Second runtime'));
+    stdin.write('\r');
+    await waitFor(() => expect(sent.filter(message => message.type === 'open_session')).toHaveLength(2));
+    await waitForReady(lastFrame);
+    const secondIndex = sent.findIndex(message => message.type === 'open_session' && message.session_id === 'second');
+    const secondChannel = sentChannels[secondIndex];
+    expect(secondChannel).not.toBe(firstChannel);
+    emit({ type: 'assistant_delta', turn_id: 'background', text: 'hidden first session', model_call_index: 1 }, firstChannel);
+    await wait(30);
+    expect(lastFrame()).not.toContain('hidden first session');
+
+    await typeDraft(stdin, lastFrame, '/sessions');
+    stdin.write('\r');
+    await waitFor(() => expect(lastFrame()).toContain('Sessions'));
+    emit({ type: 'sessions_listed', sessions: [{ session_id: 'sess-1234', title: 'Original runtime' }] });
+    await waitFor(() => expect(lastFrame()).toContain('Original runtime'));
+    stdin.write('\r');
+    await waitFor(() => expect(sent.some(message => message.type === 'session_snapshot')).toBe(true));
+    await waitForReady(lastFrame);
+    const snapshotIndex = sent.findIndex(message => message.type === 'session_snapshot');
+    expect(sentChannels[snapshotIndex]).toBe(firstChannel);
+    expect(sent.filter(message => message.type === 'open_session')).toHaveLength(2);
+    expect(closedChannels).toEqual([]);
+    emit({ type: 'assistant_delta', turn_id: 'background', text: 'hidden second session', model_call_index: 1 }, secondChannel);
+    await typeDraft(stdin, lastFrame, 'continue original runtime');
+    stdin.write('\r');
+    await waitFor(() => expect(turns()).toHaveLength(1));
+    expect(sentChannels[sent.findIndex(message => message.type === 'user_turn')]).toBe(firstChannel);
+    expect(lastFrame()).not.toContain('hidden second session');
+    expect(bridgeCount).toBe(1);
+    unmount();
+    expect(shutdownCount).toBe(1);
+  });
+
   it('opens a fresh workspace session, chats immediately, then resumes a session there', async () => {
     const { stdin, lastFrame, unmount } = renderApp();
     await waitForReady(lastFrame);
@@ -478,7 +547,7 @@ describe('App', () => {
     await wait(30);
     expect(turns()).toHaveLength(0);
     emit({
-      type: 'session_ready', protocol_version: 2, session_id: 'fresh', workspace: '/next',
+      type: 'session_ready', protocol_version: 3, session_id: 'fresh', workspace: '/next',
       provider: 'test', model: 'test/model', resumed: false, message_count: 0,
       permission_preset: 'ask_for_approval',
     });
@@ -632,7 +701,7 @@ describe('App', () => {
       await waitFor(() => expect(lastFrame()).not.toContain('↑/↓ select'));
       emit({
         type: 'session_open_failed', session_id: 'gui-session',
-        error: { type: 'SessionInUseError', message: 'occupied' }, runtime: snapshot,
+        error: { type: 'SessionInUseError', message: 'occupied' },
       });
       await waitFor(() => expect(lastFrame()).toContain('↑/↓ select'));
       expect(lastFrame()).toContain('in use in another window');
@@ -643,6 +712,7 @@ describe('App', () => {
       stdin.write('\r');
       await waitFor(() => expect(turns()).toHaveLength(attempt));
       expect(turns().at(-1).text).toBe(`continue original ${attempt}`);
+      expect(sentChannels[sent.lastIndexOf(turns().at(-1))]).toBe('session-1');
       emit(snapshot);
       emit({ type: 'turn_completed', turn_id: turns().at(-1).turn_id, usage: null });
       await waitForReady(lastFrame);
@@ -997,7 +1067,7 @@ describe('App', () => {
     ).toBe(2);
 
     emit({
-      type: 'session_ready', protocol_version: 2,
+      type: 'session_ready', protocol_version: 3,
       session_id: 'sess-1234',
       workspace: '/w',
       provider: 'test',

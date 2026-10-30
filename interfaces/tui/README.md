@@ -18,7 +18,7 @@ nosis --temporary
 
 TUI 在启动或切换 Session 时先发送 `open_session`，收到首个 `runtime_state` 后才允许提交命令。普通消息通过 `user_turn` 发送；Turn 执行中提交的新输入转为 `user_steer`。
 
-一个 TUI 持有一个 Bridge 进程。切换 Session 使用已有协议连接，由 Runtime 重新绑定会话，并在装配输入未改变时复用 MCP 等资源。关闭 TUI 时，由 Runtime 关闭其执行面及 MCP 连接。
+一个 TUI 持有一个常驻 Bridge 进程。每个已打开的 Session 分配独立通道与 Runtime，切换界面不会关闭其他会话的执行面或 MCP。切回已打开会话时使用 `session_snapshot` 取得原 Runtime 的权威快照，不重绑 Session 或重建 Agent；仅把当前通道的事件渲染到界面。关闭 TUI 时统一关闭进程及所有 Runtime。
 
 界面由结构化协议状态驱动，展示：
 

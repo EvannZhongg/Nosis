@@ -3,7 +3,7 @@
 from typing import Callable
 
 import httpx
-from openai import APIConnectionError, APIError, APIStatusError, OpenAI
+from openai import APIConnectionError, APIError, APIStatusError, DefaultHttpxClient, OpenAI
 
 from agent_core.errors import ProviderProtocolError, ProviderRequestError, ProviderStreamError
 from agent_core.llm import LLMRequest, LLMResponse
@@ -18,6 +18,7 @@ from ._utils import get_field
 from .reasoning import reasoning_arguments
 from .tool_call_stream import ToolCallStreamAssembler
 from . import OPENAI_APIS
+from .http import shared_ssl_context
 
 
 class OpenAIProvider(ModelProvider):
@@ -31,6 +32,23 @@ class OpenAIProvider(ModelProvider):
 
             return LiteLLMProvider.model_info_for(model, base_url)
         return model_info(name)
+
+    @classmethod
+    def warm(cls, model: str, api: str | None = None) -> None:
+        """Load the code and vocabulary this model needs, without credentials."""
+        deepseek = is_deepseek(model)
+        if deepseek or model_name(model) is not None:
+            TokenCounter(model)
+        resolved = api or ("chat_completions" if deepseek else "responses")
+        with OpenAI(
+            api_key="nosis-warmup",
+            http_client=DefaultHttpxClient(verify=shared_ssl_context()),
+        ) as client:
+            # Resource properties import wire schemas but send no request.
+            if resolved == "chat_completions":
+                client.chat.completions
+            else:
+                client.responses
 
     def __init__(self, *args, api: str | None = None, **kwargs) -> None:
         if api is not None and api not in OPENAI_APIS:
@@ -71,6 +89,7 @@ class OpenAIProvider(ModelProvider):
                 base_url=self._base_url,
                 timeout=self._request_timeout_seconds,
                 max_retries=self._max_retries,
+                http_client=DefaultHttpxClient(verify=shared_ssl_context()),
             ) as client:
                 if self._api == "responses":
                     return self._responses(

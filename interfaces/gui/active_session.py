@@ -2,6 +2,7 @@
 
 import asyncio
 from collections import deque
+from pathlib import Path
 
 from fastapi.encoders import jsonable_encoder
 
@@ -9,7 +10,7 @@ from agent_core import JsonlSessionStore, Workspace, plan_snapshot_to_dict
 from interfaces.bridge.protocol import attachment_replaced_message, runtime_state_message
 from interfaces.bridge.event_stream import runtime_is_active
 
-from .bridge_process import BridgeProcess
+from .bridge_process import BridgeChannel, BridgeProcess
 
 
 EVENT_REPLAY_LIMIT = 512
@@ -20,7 +21,7 @@ class SessionRunningError(RuntimeError):
 
 
 class ActiveSession:
-    """One bridge process whose lifetime is independent of a WebSocket."""
+    """One runtime channel whose lifetime is independent of a WebSocket."""
 
     def __init__(
         self,
@@ -28,7 +29,7 @@ class ActiveSession:
         provider: str | None,
         workspace: str,
         items: list[object],
-        bridge: BridgeProcess,
+        bridge: BridgeChannel,
     ) -> None:
         self.session_id = session_id
         self.bridge = bridge
@@ -174,6 +175,10 @@ class ActiveSession:
                         message if message["type"] == "runtime_state"
                         else message.get("runtime")
                     )
+                    if message["type"] == "fatal" and state is None:
+                        state = {**self.state, "phase": "failed", "turn_id": None,
+                                 "approval": None, "question": None, "jobs": []}
+                        message = {**message, "runtime": state}
                     if state is not None:
                         self.state = {
                             key: value for key, value in state.items()
@@ -214,10 +219,23 @@ class ActiveSessionRegistry:
     def __init__(
         self,
         store: JsonlSessionStore,
+        workspace: Workspace,
+        config_directory: Path,
     ) -> None:
         self._store = store
         self._sessions: dict[str, ActiveSession] = {}
         self._lock = asyncio.Lock()
+        self._workspace = workspace
+        self._config_directory = config_directory
+        self._bridge: BridgeProcess | None = None
+        self._closing: dict[str, asyncio.Task[None]] = {}
+
+    async def start(self) -> None:
+        if self._bridge is not None and not self._bridge.available:
+            await self._bridge.close()
+            self._bridge = None
+        if self._bridge is None:
+            self._bridge = await BridgeProcess.spawn(self._workspace, self._config_directory)
 
     async def open_or_attach(
         self,
@@ -227,38 +245,45 @@ class ActiveSessionRegistry:
         attach_only: bool,
     ) -> tuple[ActiveSession | None, bool]:
         session_id = str(opening_message["session_id"])
-        async with self._lock:
-            current = self._sessions.get(session_id)
-            if current is not None and current.done and current.failure_pending:
-                return current, False
-            provider = opening_message.get("provider")
-            selected_provider = provider if isinstance(provider, str) else None
-            selected_workspace = str(workspace.path)
-            if current is not None and not current.done:
-                # Opening a view attaches to its existing Runtime. Explicit
-                # provider/workspace messages change that Runtime's settings.
-                return current, False
-            if current is not None:
-                self._sessions.pop(session_id, None)
-            if attach_only:
-                return None, False
-            bridge = await BridgeProcess.spawn(workspace)
-            stored = self._store.load(session_id, recover=False)
-            runtime = ActiveSession(
-                session_id,
-                selected_provider,
-                selected_workspace,
-                jsonable_encoder(stored.items),
-                bridge,
-            )
-            runtime.state["plan"] = (
-                plan_snapshot_to_dict(stored.plan)
-                if stored.plan is not None
-                else None
-            )
-            self._sessions[session_id] = runtime
-            bridge.send(opening_message)
-            return runtime, True
+        while True:
+            async with self._lock:
+                closing = self._closing.get(session_id)
+                if closing is None:
+                    current = self._sessions.get(session_id)
+                    if current is not None and current.done and current.failure_pending:
+                        return current, False
+                    provider = opening_message.get("provider")
+                    selected_provider = provider if isinstance(provider, str) else None
+                    selected_workspace = str(workspace.path)
+                    if current is not None and not current.done:
+                        # Opening a view attaches to its existing Runtime. Explicit
+                        # provider/workspace messages change that Runtime's settings.
+                        return current, False
+                    if current is not None:
+                        self._sessions.pop(session_id, None)
+                    if attach_only:
+                        return None, False
+                    await self.start()
+                    assert self._bridge is not None
+                    stored = self._store.load(session_id, recover=False)
+                    bridge = self._bridge.open_channel(session_id)
+                    runtime = ActiveSession(
+                        session_id,
+                        selected_provider,
+                        selected_workspace,
+                        jsonable_encoder(stored.items),
+                        bridge,
+                    )
+                    runtime.state["plan"] = (
+                        plan_snapshot_to_dict(stored.plan)
+                        if stored.plan is not None
+                        else None
+                    )
+                    self._sessions[session_id] = runtime
+                    bridge.send(opening_message)
+                    return runtime, True
+            await asyncio.shield(closing)
+
 
     async def get(self, session_id: str) -> ActiveSession | None:
         async with self._lock:
@@ -293,8 +318,11 @@ class ActiveSessionRegistry:
             if runtime.running:
                 raise SessionRunningError("session is running")
             self._sessions.pop(session_id, None)
-            await runtime.close()
-            return True
+            closing = asyncio.create_task(runtime.close())
+            self._closing[session_id] = closing
+            closing.add_done_callback(lambda task: self._closing.pop(session_id, None))
+        await asyncio.shield(closing)
+        return True
 
     async def remove_if_finished(self, runtime: ActiveSession) -> None:
         if runtime.attachable:
@@ -307,7 +335,8 @@ class ActiveSessionRegistry:
         async with self._lock:
             sessions = tuple(self._sessions.values())
             self._sessions.clear()
-        await asyncio.gather(
-            *(runtime.close() for runtime in sessions),
-            return_exceptions=True,
-        )
+            closing = tuple(self._closing.values())
+        if self._bridge is not None:
+            await self._bridge.close()
+            self._bridge = None
+        await asyncio.gather(*(runtime.close() for runtime in sessions), *closing)

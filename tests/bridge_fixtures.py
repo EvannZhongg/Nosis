@@ -9,7 +9,80 @@ from typing import TextIO
 from unittest.mock import patch
 
 from agent_core.tools.config import TOOL_NAMES
-from interfaces.bridge.bridge import Bridge
+from threading import Lock, Thread
+from interfaces.bridge.bridge import Bridge as SessionBridge
+from interfaces.bridge.protocol import decode, encode
+from agent_runtime.config import default_config_directory
+from agent_runtime.services import RuntimeServices
+
+
+class Bridge(SessionBridge):
+    """Feed session-adapter unit tests without a process transport."""
+
+    def __init__(self, stdin, stdout, *, scheduler=None, start_scheduler=True):
+        self._stdin = stdin
+        self._reader = None
+        self._reader_lock = Lock()
+        self._test_services = RuntimeServices(
+            default_config_directory(), scheduler=scheduler, start_scheduler=start_scheduler,
+        )
+        super().__init__(services=self._test_services, send=lambda event: stdout.write(encode(event) + "\n"))
+
+    def read_message(self):
+        self._start_reader()
+        return super().read_message()
+
+    def _register_interaction(self, request_id, turn_id):
+        waiter = super()._register_interaction(request_id, turn_id)
+        self._start_reader()
+        return waiter
+
+    def close(self):
+        try:
+            super().close()
+        finally:
+            self._test_services.close()
+
+    def _start_reader(self) -> None:
+        with self._reader_lock:
+            if self._reader is not None:
+                return
+            self._reader = Thread(
+                target=self._read_stdin,
+                name="bridge-input-reader",
+                daemon=True,
+            )
+            self._reader.start()
+
+
+    def _read_stdin(self) -> None:
+        assert self._stdin is not None
+        first_message = not self._session_opened
+        while True:
+            try:
+                line = self._stdin.readline()
+                if not line:
+                    self._route_shutdown()
+                    return
+                stripped = line.strip()
+                if stripped:
+                    packet = json.loads(stripped)
+                    if isinstance(packet, dict) and packet.get("type") == "shutdown":
+                        self.stop()
+                        return
+                    message = decode(stripped)
+                    if first_message:
+                        first_message = False
+                        if message["type"] == "open_session":
+                            self._messages.put(message)
+                        else:
+                            self.submit(message)
+                    else:
+                        self.submit(message)
+            except ValueError as error:
+                self._messages.put(error)
+                self._route_shutdown(notify_commands=False)
+                return
 
 
 class BridgeTestCase(unittest.TestCase):
@@ -23,7 +96,7 @@ class BridgeTestCase(unittest.TestCase):
         if config_directory is None:
             config_directory = Path(self.enterContext(tempfile.TemporaryDirectory()))
         with patch(
-            "interfaces.bridge.bridge.default_config_directory",
+            "tests.bridge_fixtures.default_config_directory",
             return_value=config_directory,
         ):
             bridge = Bridge(stdin, stdout, start_scheduler=False)

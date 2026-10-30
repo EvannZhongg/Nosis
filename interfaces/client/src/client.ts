@@ -1,5 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
-import { MessageDecoder, type Incoming, type Outgoing } from '@nosis/protocol';
+import { MessageDecoder, PROTOCOL_VERSION, type BridgeEvent, type Incoming, type Outgoing } from '@nosis/protocol';
 
 export type BridgeExit = { code: number | null; signal: NodeJS.Signals | null };
 
@@ -9,7 +9,9 @@ export type BridgeOptions<Message = Incoming> = {
   args?: readonly string[];
   cwd?: string;
   env?: NodeJS.ProcessEnv;
-  onMessage: (message: Message) => void;
+  onMessage: (message: Message, channelId: string) => void;
+  onReady?: () => void;
+  onChannelClosed?: (channelId: string) => void;
   onExit: (code: number | null, signal: NodeJS.Signals | null) => void;
   onProtocolError: (error: Error) => void;
   onProcessError: (error: Error) => void;
@@ -18,7 +20,7 @@ export type BridgeOptions<Message = Incoming> = {
 /** Stdio transport only. Session/Runtime synchronization belongs to the caller. */
 export class BridgeClient<Received = Incoming, Sent = Outgoing> {
   private child: ChildProcessWithoutNullStreams;
-  private decoder = new MessageDecoder<Received>();
+  private decoder = new MessageDecoder<BridgeEvent<Received>>();
   private stderr: string[] = [];
   private closing = false;
   private ended = false;
@@ -38,14 +40,22 @@ export class BridgeClient<Received = Incoming, Sent = Outgoing> {
     this.child.stdout.setEncoding('utf8');
     this.child.stdout.on('data', (chunk: string) => {
       if (this.protocolFailed) return;
-      let messages: Received[];
+      let messages: BridgeEvent<Received>[];
       try {
         messages = this.decoder.push(chunk);
       } catch (error) {
         this.protocolError(error as Error);
         return;
       }
-      for (const message of messages) options.onMessage(message);
+      for (const message of messages) {
+        if (message.type === 'channel_event') options.onMessage(message.event, message.channel_id);
+        else if (message.type === 'channel_closed') options.onChannelClosed?.(message.channel_id);
+        else if (message.type === 'bridge_ready' && message.protocol_version === PROTOCOL_VERSION) options.onReady?.();
+        else {
+          this.protocolError(new Error(message.type === 'fatal' ? message.error.message : 'Unsupported Bridge event or protocol version'));
+          return;
+        }
+      }
     });
     this.child.stdout.on('end', () => {
       if (this.protocolFailed) return;
@@ -73,15 +83,23 @@ export class BridgeClient<Received = Incoming, Sent = Outgoing> {
     });
   }
 
-  send(message: Sent): void {
+  send(message: Sent, channelId: string): void {
+    this.write({ type: 'channel_command', channel_id: channelId, command: message });
+  }
+
+  closeChannel(channelId: string): void {
+    this.write({ type: 'close_channel', channel_id: channelId });
+  }
+
+  private write(message: unknown): void {
     if (this.closing || this.ended || !this.child.stdin.writable) {
       throw new Error('Bridge input is closed');
     }
     this.child.stdin.write(`${JSON.stringify(message)}\n`);
   }
 
-  cancel(turnId: string): void {
-    this.send({ type: 'cancel', turn_id: turnId } as Sent);
+  cancel(turnId: string, channelId: string): void {
+    this.send({ type: 'cancel', turn_id: turnId } as Sent, channelId);
   }
 
   shutdown(): Promise<BridgeExit> {

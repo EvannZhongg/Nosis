@@ -3,6 +3,11 @@
 import json
 import gzip
 import hashlib
+import os
+import ssl
+import tempfile
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 import subprocess
 import sys
 import unittest
@@ -13,9 +18,36 @@ from agent_core import LLMRequest, Message, ToolCall, ToolDefinition
 from agent_core.providers import OpenAIProvider
 from agent_core.providers.openai_models import model_info
 from agent_core.providers.openai_tokens import _encoding
+from agent_core.providers.http import shared_ssl_context, _context
 
 
 class OpenAIStartupTest(unittest.TestCase):
+    def test_tls_cache_keeps_verification_and_reloads_changed_trust_files(self):
+        import certifi
+
+        with patch.dict(os.environ):
+            os.environ.pop("SSL_CERT_FILE", None)
+            os.environ.pop("SSL_CERT_DIR", None)
+            _context.cache_clear()
+            with ThreadPoolExecutor(max_workers=8) as workers:
+                contexts = list(workers.map(lambda _: shared_ssl_context(), range(16)))
+            self.assertEqual(len({id(context) for context in contexts}), 1)
+            self.assertEqual(contexts[0].verify_mode, ssl.CERT_REQUIRED)
+            self.assertTrue(contexts[0].check_hostname)
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "trust.pem"
+                path.write_bytes(Path(certifi.where()).read_bytes())
+                os.environ["SSL_CERT_FILE"] = str(path)
+                first = shared_ssl_context()
+                self.assertIsNot(first, contexts[0])
+                self.assertTrue(first.check_hostname)
+                path.write_bytes(path.read_bytes() + b"\n")
+                self.assertIsNot(shared_ssl_context(), first)
+                path.write_text("invalid trust certificate", encoding="utf-8")
+                with self.assertRaises(ssl.SSLError):
+                    shared_ssl_context()
+        _context.cache_clear()
+
     def test_native_runtime_reaches_first_request_with_litellm_import_forbidden(self):
         result = subprocess.run(
             [sys.executable, "-m", "tests.openai_startup_probe", "--block-litellm"],

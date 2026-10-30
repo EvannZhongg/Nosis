@@ -1,6 +1,6 @@
 # GUI
 
-`interfaces/gui` 是 Nosis 的图形交互层，由 FastAPI 服务和 React + assistant-ui 前端组成。FastAPI 管理浏览器连接、文件与设置 API，并为每个活动 Session 托管独立 Bridge 进程；浏览器不直接运行 Agent 或 Tool。
+`interfaces/gui` 是 Nosis 的图形交互层，由 FastAPI 服务和 React + assistant-ui 前端组成。FastAPI 管理浏览器连接、文件与设置 API，并托管一个常驻 Bridge 进程，每个活动 Session 使用独立 Runtime 通道；浏览器不直接运行 Agent 或 Tool。
 
 GUI 依赖是可选依赖。使用项目环境启动前先安装 GUI extra：
 
@@ -25,7 +25,7 @@ nosis-gui --workspace ~/projects/my-project
 `server.py` 组装应用和路由。服务端职责包括：
 
 - 列出、读取和删除按 Workspace 分组的 Session
-- 为活动 Session 创建、复用和关闭 Bridge 子进程
+- 在应用启动时创建常驻 Bridge，并为活动 Session 创建、复用和关闭通道
 - 通过 WebSocket 双向转发共享协议
 - 管理单 Session 的页面附着、事件续传和显式 takeover
 - 选择普通 Workspace，创建与回收 scratch Workspace
@@ -52,7 +52,7 @@ HTTP / WebSocket 路由按模块拆分：
 | 模块 | 职责 |
 | --- | --- |
 | `active_session.py` | 活动 Session 注册表、页面附着与事件续传 |
-| `bridge_process.py` | 单 Session 的 Bridge 子进程生命周期与消息流 |
+| `bridge_process.py` | 常驻 Bridge 进程生命周期、通道收发与故障广播 |
 | `windows_folders.py` | 通过 Windows Explorer 定位并打开 Workspace 文件夹 |
 
 服务端只直接复用 Core 的只读 Session / Workspace 能力和 Runtime 的设置服务，唯一的 Session 写入是 fork：Session Store 复制锚点所在 Turn 之前的 Journal 生成新 Session，并记录来源和锚点，不经过 Bridge，也不改写源 Session。所有会改变 Session 或 Workspace 执行状态的 Agent 操作仍经 Bridge 协议完成。
@@ -61,7 +61,7 @@ HTTP / WebSocket 路由按模块拆分：
 
 React 应用提供可折叠的 Session 列表、对话区和 Workspace 文件树。多个 Session 会稳定挂载，因此可以并行执行并在页面内切换。编辑历史用户消息不会改写原会话：GUI 以该消息为锚点创建分支 Session，先在源会话中预览待提交的内容，创建成功后再切换过去。
 
-切换到其他会话时，只断开空闲会话的 WebSocket，保留其 Bridge、Provider 和 MCP；返回后附着已有 Runtime。离开浏览器页面时释放该页面持有的空闲会话，删除会话和关闭 GUI 宿主也会释放资源。因此浏览过的会话会在页面存续期间占用进程与内存，新建会话仍有独立执行面。
+切换到其他会话时，只断开空闲会话的 WebSocket，保留其 Bridge、Provider 和 MCP；返回后附着已有 Runtime。离开浏览器页面时释放该页面持有的空闲会话，删除会话和关闭 GUI 宿主也会释放资源。关闭会话通道不会结束常驻 Bridge；新会话复用已加载的 SDK、tokenizer 和 TLS 上下文，仍有独立执行面。GUI 宿主退出时才关闭进程及全部通道。
 
 对话层由 `useSessionRuntime` 统一管理：
 

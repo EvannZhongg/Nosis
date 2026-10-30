@@ -93,20 +93,22 @@ class EnvironmentReloader:
         self.path = path
         self._original: dict[str, str | None] = {}
         self._loaded: set[str] = set()
+        self._lock = RLock()
 
     def reload(self) -> None:
-        values = _dotenv_values(self.path)
-        for name in self._loaded - set(values):
-            original = self._original[name]
-            if original is None:
-                os.environ.pop(name, None)
-            else:
-                os.environ[name] = original
-        for name, value in values.items():
-            if name not in self._original:
-                self._original[name] = os.environ.get(name)
-            os.environ[name] = value
-        self._loaded = set(values)
+        with self._lock:
+            values = _dotenv_values(self.path)
+            for name in self._loaded - set(values):
+                original = self._original[name]
+                if original is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = original
+            for name, value in values.items():
+                if name not in self._original:
+                    self._original[name] = os.environ.get(name)
+                os.environ[name] = value
+            self._loaded = set(values)
 
     @property
     def loaded_names(self) -> frozenset[str]:

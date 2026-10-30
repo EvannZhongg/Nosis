@@ -34,19 +34,19 @@ function handleMessage(message) {
   if (message.type === 'runtime_state' && ready && !synchronized) {
     synchronized = true;
     stage = 'complete';
-    client.send({ type: 'user_turn', turn_id: 'complete', text: 'External 中文 client' });
+    client.send({ type: 'user_turn', turn_id: 'complete', text: 'External 中文 client' }, 'main');
   }
   if (message.type === 'approval_request') {
     assert.equal(message.turn_id, 'complete');
     assert.equal(message.kind, 'shell');
-    client.send({ type: 'approval_response', request_id: 'stale', approved: true });
-    client.send({ type: 'approval_response', request_id: message.request_id, approved: false });
+    client.send({ type: 'approval_response', request_id: 'stale', approved: true }, 'main');
+    client.send({ type: 'approval_response', request_id: message.request_id, approved: false }, 'main');
   }
   if (message.type === 'user_question') {
     if (stage === 'complete') {
-      client.send({ type: 'user_steer', turn_id: 'complete', steer_id: 'steer-1', text: 'Use this answer' });
-      client.send({ type: 'user_question_response', request_id: message.request_id, option_id: 'yes' });
-    } else if (stage === 'cancel') client.cancel('cancel');
+      client.send({ type: 'user_steer', turn_id: 'complete', steer_id: 'steer-1', text: 'Use this answer' }, 'main');
+      client.send({ type: 'user_question_response', request_id: message.request_id, option_id: 'yes' }, 'main');
+    } else if (stage === 'cancel') client.cancel('cancel', 'main');
   }
   if (message.type === 'turn_completed') {
     assert.equal(stage, 'complete');
@@ -54,7 +54,7 @@ function handleMessage(message) {
     assert.ok(message.transcript.items.some(item => item.role === 'assistant' && item.content === '完成🙂'));
     assert.ok(messages.some(item => item.type === 'user_steer_applied' && item.steer_id === 'steer-1'));
     stage = 'cancel';
-    client.send({ type: 'user_turn', turn_id: 'cancel', text: 'Wait for cancellation' });
+    client.send({ type: 'user_turn', turn_id: 'cancel', text: 'Wait for cancellation' }, 'main');
   }
   if (message.type === 'turn_cancelled') {
     assert.equal(message.turn_id, 'cancel');
@@ -64,7 +64,7 @@ function handleMessage(message) {
     client.send({
       type: 'user_turn', turn_id: 'failure', text: 'Invalid local attachment',
       attachments: [{ type: 'file', path: 'missing.txt', filename: 'missing.txt', mime_type: 'text/plain', size_bytes: 1 }],
-    });
+    }, 'main');
   }
   if (message.type === 'turn_failed') {
     assert.equal(stage, 'failure');
@@ -73,7 +73,7 @@ function handleMessage(message) {
     assert.equal(typeof message.error.details, 'object');
     assert.equal(message.runtime.phase, 'idle');
     stage = 'history';
-    client.send({ type: 'load_session' });
+    client.send({ type: 'load_session' }, 'main');
   }
   if (message.type === 'session_items' && stage === 'history') {
     assert.ok(message.items.some(item => item.role === 'user'));
@@ -89,7 +89,7 @@ const timeout = setTimeout(() => {
   console.error(JSON.stringify({ stage, messages, diagnostics: client.diagnostics() }));
   void client.shutdown();
 }, 45000);
-client.send({ type: 'open_session', workspace: process.cwd(), session_id: null, provider: 'fixture' });
+client.send({ type: 'open_session', workspace: process.cwd(), session_id: null, provider: 'fixture' }, 'main');
 const result = await client.closed;
 clearTimeout(timeout);
 assert.equal(stage, 'done', JSON.stringify({ stage, messages, diagnostics: client.diagnostics() }));

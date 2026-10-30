@@ -5,7 +5,8 @@
 ```text
 TUI / GUI host
   └─ python -m interfaces.bridge
-       └─ RuntimeHost ── agent_core
+       ├─ channel A ── RuntimeHost A ── agent_core
+       └─ channel B ── RuntimeHost B ── agent_core
 ```
 
 Bridge 作为独立 Python 进程运行，通过 stdin/stdout 交换每行一个 JSON 对象的 newline-delimited JSON。它不装配 Provider、Tool、MCP 或 Agent，也不包含 Agent Loop。
@@ -19,11 +20,11 @@ Bridge，无需了解内部模块路径。入口在保留协议 stdout 后调用
 
 `__main__.py` 在 import Provider 相关模块前保留专用 stdout 协议通道，并把普通 `print()` 和第三方库输出重定向到 stderr，防止日志破坏 JSON 消息流。它也统一处理 UTF-8 stdin、启动期中断和无法进入协议循环时的 `fatal` 错误。
 
-TUI 和 GUI 各自负责启动与附着 Bridge 子进程。`process.py` 提供启动期或失联时的进程组取消辅助，确保 Bridge 的子进程一并退出。
+TUI 和 GUI 宿主各自管理一个常驻 Bridge 进程。宿主通过协议关闭通道或整个进程，强制退出时终止进程树。
 
 ## 连接与路由
 
-每个连接的第一条消息必须是 `open_session`。Bridge 调用 `RuntimeHost.open_session()` 建立轻量 Session 控制面，然后依次发送：
+进程预热默认 Provider SDK、tokenizer 与 TLS 信任上下文后发送 `bridge_ready`，不解析凭据或调用模型。每条会话命令以 `channel_command` 携带 `channel_id` 与 `command`，事件以 `channel_event` 携带同一通道 ID 与 `event`。每个通道的第一条命令必须是 `open_session`。Bridge 调用 `RuntimeHost.open_session()` 建立轻量 Session 控制面，然后依次发送：
 
 1. `session_ready`：Session、Workspace、Provider 和权限已恢复。
 2. `runtime_state`：当前执行面的权威快照，也是前端发送后续命令前的同步屏障。
@@ -32,7 +33,9 @@ Journal 写入权被占用、工作区或配置无效、文件系统错误导致
 
 Provider、MCP、Tool 和 Agent 仍由 Runtime 在首个 `user_turn` 到来时延迟初始化。
 
-空闲时可以再次发送 `open_session`，在同一个 Bridge 进程内切换会话。Runtime 释放旧会话的任务和 Journal，按装配输入决定是否复用重型资源；Bridge 重新发送 `session_ready` 和 `runtime_state` 同步新会话。
+每个通道持有独立 RuntimeHost、命令队列、事件序号与审批等待者，不同通道并发执行。空闲时可以再次发送 `open_session`，在同一个通道内切换会话。Runtime 释放旧会话的任务和 Journal，按装配输入决定是否复用重型资源；Bridge 重新发送 `session_ready` 和 `runtime_state` 同步新会话。
+
+GUI、TUI 和 SDK 都使用这一常驻服务端。TUI 为访问过的会话保留独立通道，切回时发送 `session_snapshot`，由 Bridge 返回该 Runtime 的 ready/snapshot 对，不释放 Agent、Jobs、Journal 或 MCP。SDK 的发送与取消接口必须显式携带通道 ID。
 
 切换前先取得目标会话的 Journal 并完成加载，成功后才释放原会话的任务与 Journal。切换失败时原会话及执行状态保持可用，`session_open_failed` 携带原会话的 `runtime` 快照；首次打开失败则没有可保留的会话与快照。
 
@@ -45,7 +48,7 @@ Bridge 路由的输入包括：
 - `permission_set`、`provider_set` 和 `workspace_set`
 - Session 列表与历史加载
 - 设置读取及 Provider、Agent、路由更新
-- `shutdown`
+- 进程级 `close_channel` 与 `shutdown`，分别关闭一个或全部 Runtime
 
 Bridge 把 Core 的 `AgentEvent`、Runtime phase、计划、MCP 状态和结束结果转换为协议消息。普通模型调用结束时立即推送 `model_completed`（本次用量与会话累计缓存快照），每次压缩尝试结束时推送 `compression_completed`（会话累计缓存快照），不等待 Tool 执行、压缩重试或 Turn 结束。实时 Tool 事件只包含执行状态；会话检查点包含 Core 已规范化的对话内容与 Artifact 引用，大输出仍由 Core 落盘。
 
@@ -68,10 +71,10 @@ Bridge 维护的是协议侧投影，而不是另一套 Runtime 状态。它负�
 | 模块 | 职责 |
 | --- | --- |
 | `__main__.py` | 独立进程入口和协议 stdout 隔离 |
-| `bridge.py` | 消息路由、Runtime 回调、交互等待和状态投影 |
+| `server.py` | 进程协议、多通道分发与工作线程生命周期 |
+| `bridge.py` | 单通道消息路由、Runtime 回调、交互等待和状态投影 |
 | `protocol.py` | Python 端编解码与 Core event → 协议消息转换 |
 | `event_stream.py` | 事件序号、会话检查点与续传游标 |
-| `process.py` | Bridge 进程组取消 |
 | `managed_workspaces.py` | scratch Workspace 生命周期辅助 |
 
 TypeScript 消息类型位于 [`interfaces/protocol`](../protocol/README.md)。修改消息结构时必须同步 Python 定义、TypeScript 类型、前端处理和相关测试。

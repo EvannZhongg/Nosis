@@ -44,6 +44,7 @@ def handle(request):
                          content=("data: " + json.dumps(event) + "\n\n").encode())
 
 def client(**kwargs):
+    kwargs.pop("http_client").close()
     return OpenAI(**kwargs, http_client=httpx.Client(transport=httpx.MockTransport(handle)))
 
 with tempfile.TemporaryDirectory() as directory:

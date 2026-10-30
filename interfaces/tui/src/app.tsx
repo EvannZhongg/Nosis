@@ -15,7 +15,7 @@ import {
   Transcript,
   UserQuestionPrompt,
 } from './renderer.js';
-import { initialState, reducer } from './state.js';
+import { initialState, reducer, type State } from './state.js';
 
 export type AppProps = {
   python: string;
@@ -25,6 +25,7 @@ export type AppProps = {
 type SessionSelection = {
   workspace: string;
   sessionId: string | null;
+  channelId: string;
 };
 
 const PERMISSION_PRESETS: PermissionPreset[] = [
@@ -55,29 +56,51 @@ export function App(props: AppProps): React.ReactElement {
   const [draft, setDraft] = useState('');
   const [questionDraft, setQuestionDraft] = useState('');
   const [permissionChoice, setPermissionChoice] = useState<PermissionPreset | null>(null);
-  const [selection, setSelection] = useState<SessionSelection>({ workspace: props.workspace, sessionId: null });
+  const [selection, setSelection] = useState<SessionSelection>({ workspace: props.workspace, sessionId: null, channelId: 'session-1' });
   const [settingsMode, setSettingsMode] = useState<'model' | 'provider' | null>(null);
   const [modelChoice, setModelChoice] = useState(0);
   const [elapsed, setElapsed] = useState(0);
   const bridgeRef = useRef<BridgeClient<Incoming, Outgoing> | null>(null);
+  const activeChannel = useRef('session-1');
+  const channelCounter = useRef(1);
+  const sessionChannels = useRef(new Map<string, string>());
+  const previousView = useRef<{ channelId: string; state: State } | null>(null);
+  const currentState = useRef(state);
+  currentState.current = state;
   const turnCounter = useRef(0);
   const steerCounter = useRef(0);
   const startedAt = useRef<number | null>(null);
 
   /**
-   * The TUI owns one Bridge process; open_session changes its Session binding.
+   * The TUI owns one resident Bridge; each visited Session keeps its own Runtime channel.
    */
   useEffect(() => {
     const client = new BridgeClient<Incoming, Outgoing>({
       command: props.python,
       args: ['-m', 'interfaces.bridge'],
       cwd: props.workspace,
-      onMessage: (message) => {
-        if (bridgeRef.current !== client) return;
+      onMessage: (message, channelId) => {
+        if (bridgeRef.current !== client || channelId !== activeChannel.current) return;
+        if (message.type === 'session_ready') {
+          sessionChannels.current.set(message.session_id, channelId);
+          previousView.current = null;
+        }
+        if (message.type === 'session_open_failed' && previousView.current) {
+          const retained = previousView.current;
+          previousView.current = null;
+          activeChannel.current = retained.channelId;
+          dispatch({ type: 'session_restored', state: retained.state });
+          client.closeChannel(channelId);
+        }
         dispatch({ type: 'message', message });
-        if (message.type === 'session_ready') client.send({ type: 'load_session' });
+        if (message.type === 'session_ready') client.send({ type: 'load_session' }, channelId);
         if (message.type === 'session_open_failed') {
-          client.send({ type: message.error.type === 'SessionInUseError' ? 'list_sessions' : 'list_workspaces' });
+          client.send({ type: message.error.type === 'SessionInUseError' ? 'list_sessions' : 'list_workspaces' }, activeChannel.current);
+        }
+      },
+      onChannelClosed: (channelId) => {
+        for (const [sessionId, channel] of sessionChannels.current) {
+          if (channel === channelId) sessionChannels.current.delete(sessionId);
         }
       },
       onExit: (code) => {
@@ -111,12 +134,22 @@ export function App(props: AppProps): React.ReactElement {
   }, [props.python, props.workspace]);
 
   useEffect(() => {
-    bridgeRef.current?.send({
-      type: 'open_session',
-      workspace: protocolPath(selection.workspace),
-      session_id: selection.sessionId,
-    });
+    const client = bridgeRef.current;
+    if (!client) return;
+    if (selection.sessionId && sessionChannels.current.get(selection.sessionId) === selection.channelId) {
+      client.send({ type: 'session_snapshot' }, selection.channelId);
+    } else {
+      client.send({
+        type: 'open_session',
+        workspace: protocolPath(selection.workspace),
+        session_id: selection.sessionId,
+      }, selection.channelId);
+    }
   }, [selection, props.python, props.workspace]);
+
+  function send(message: Outgoing): void {
+    bridgeRef.current?.send(message, activeChannel.current);
+  }
 
   const busy =
     state.status === 'starting' ||
@@ -142,7 +175,7 @@ export function App(props: AppProps): React.ReactElement {
 
   const answerApproval = (approved: boolean): void => {
     if (!state.approval) return;
-    bridgeRef.current?.send({
+    send({
       type: 'approval_response',
       request_id: state.approval.requestId,
       approved,
@@ -152,7 +185,7 @@ export function App(props: AppProps): React.ReactElement {
 
   const answerQuestion = (answer: { option_id: string } | { text: string }): void => {
     if (!state.question) return;
-    bridgeRef.current?.send({
+    send({
       type: 'user_question_response',
       request_id: state.question.requestId,
       ...answer,
@@ -179,7 +212,7 @@ export function App(props: AppProps): React.ReactElement {
     (_input, key) => {
       if (!state.question) return;
       if ((key.ctrl && _input === 'c') || key.escape) {
-        if (state.turnId) bridgeRef.current?.cancel(state.turnId);
+        if (state.turnId) bridgeRef.current?.cancel(state.turnId, activeChannel.current);
         dispatch({ type: 'cancelling' });
         return;
       }
@@ -238,7 +271,7 @@ export function App(props: AppProps): React.ReactElement {
         return;
       }
       if (key.return && permissionChoice) {
-        bridgeRef.current?.send({ type: 'permission_set', preset: permissionChoice });
+        send({ type: 'permission_set', preset: permissionChoice });
         setPermissionChoice(null);
         return;
       }
@@ -248,8 +281,17 @@ export function App(props: AppProps): React.ReactElement {
   );
 
   const openSession = (workspace: string, sessionId: string | null): void => {
+    const current = currentState.current;
+    if (current.sessionId !== null) {
+      previousView.current = { channelId: activeChannel.current, state: current };
+    } else {
+      bridgeRef.current?.closeChannel(activeChannel.current);
+    }
+    const existing = sessionId ? sessionChannels.current.get(sessionId) : undefined;
+    const channelId = existing ?? `session-${++channelCounter.current}`;
+    activeChannel.current = channelId;
     dispatch({ type: 'session_opening' });
-    setSelection({ workspace, sessionId });
+    setSelection({ workspace, sessionId, channelId });
   };
 
   useInput(
@@ -305,7 +347,7 @@ export function App(props: AppProps): React.ReactElement {
         setModelChoice((index) => (index + 1) % state.settings!.providers.length);
       } else if (key.return) {
         const choice = state.settings.providers[modelChoice];
-        if (choice) bridgeRef.current?.send({ type: 'provider_set', provider: choice.id });
+        if (choice) send({ type: 'provider_set', provider: choice.id });
         setSettingsMode(null);
         dispatch({ type: 'settings_closed' });
       }
@@ -318,7 +360,7 @@ export function App(props: AppProps): React.ReactElement {
     (input, key) => {
       if (key.ctrl && input === 'c') {
         if (busy) {
-          if (state.turnId) bridgeRef.current?.cancel(state.turnId);
+          if (state.turnId) bridgeRef.current?.cancel(state.turnId, activeChannel.current);
           dispatch({ type: 'cancelling' });
         } else if (draft === '') {
           exit();
@@ -330,7 +372,7 @@ export function App(props: AppProps): React.ReactElement {
 
       if (key.escape) {
         if (busy) {
-          if (state.turnId) bridgeRef.current?.cancel(state.turnId);
+          if (state.turnId) bridgeRef.current?.cancel(state.turnId, activeChannel.current);
           dispatch({ type: 'cancelling' });
         } else {
           setDraft('');
@@ -364,29 +406,29 @@ export function App(props: AppProps): React.ReactElement {
     if (parsed) {
       if (parsed.command.name === '/permissions') setPermissionChoice(state.permissionPreset);
       else if (parsed.command.name === '/sessions') {
-        bridgeRef.current?.send({ type: 'list_sessions' });
+        send({ type: 'list_sessions' });
         dispatch({ type: 'picker_opened', kind: 'sessions' });
       } else if (parsed.command.name === '/workspaces') {
-        bridgeRef.current?.send({ type: 'list_workspaces' });
+        send({ type: 'list_workspaces' });
         dispatch({ type: 'picker_opened', kind: 'workspaces' });
       } else if (parsed.command.name === '/model') {
         if (busy) return;
         setSettingsMode('model');
         setModelChoice(0);
-        bridgeRef.current?.send({ type: 'settings_get' });
+        send({ type: 'settings_get' });
       } else if (parsed.command.name === '/provider') {
         setSettingsMode('provider');
-        bridgeRef.current?.send({ type: 'settings_get' });
+        send({ type: 'settings_get' });
       } else if (parsed.command.name === '/refresh') {
         dispatch({ type: 'refresh_submitted' });
-        bridgeRef.current?.send({ type: 'runtime_refresh' });
+        send({ type: 'runtime_refresh' });
       }
       return;
     }
     if (busy && state.turnId !== null) {
       steerCounter.current += 1;
       dispatch({ type: 'steer_submitted' });
-      bridgeRef.current?.send({
+      send({
         type: 'user_steer',
         turn_id: state.turnId,
         steer_id: `steer-${steerCounter.current}`,
@@ -401,7 +443,7 @@ export function App(props: AppProps): React.ReactElement {
     turnCounter.current += 1;
     const turnId = `turn-${turnCounter.current}`;
     dispatch({ type: 'submit', turnId, text });
-    bridgeRef.current?.send({ type: 'user_turn', turn_id: turnId, text });
+    send({ type: 'user_turn', turn_id: turnId, text });
   };
 
   return (

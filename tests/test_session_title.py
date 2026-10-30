@@ -14,7 +14,7 @@ from agent_core.content import text_content
 from agent_core.session_paths import session_log_path
 from agent_core.session_title import generate_session_title, initial_session_title
 from agent_runtime.plane_manager import ExecutionPlaneManager
-from interfaces.bridge.bridge import Bridge
+from tests.bridge_fixtures import Bridge
 from tests.agent_fixtures import EchoTool, make_agent
 from tests.bridge_fixtures import emitted, open_session_message
 
@@ -151,7 +151,7 @@ class SessionTitleRuntimeTest(unittest.TestCase):
             "providers": {"main": {"model": "openai/main"}, "fast": {"model": "openai/fast"}},
         })
         output = io.StringIO()
-        with patch("interfaces.bridge.bridge.default_config_directory", return_value=root):
+        with patch("tests.bridge_fixtures.default_config_directory", return_value=root):
             bridge = Bridge(io.StringIO(), output, start_scheduler=False)
         self.addCleanup(bridge.close)
         bridge.open_session(opening)

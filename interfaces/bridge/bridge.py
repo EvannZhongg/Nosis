@@ -1,22 +1,21 @@
-"""Newline-delimited JSON adapter for the shared application runtime."""
+"""One session channel's protocol adapter for the shared application runtime."""
 
 from itertools import count
 from pathlib import Path
 from queue import Queue
-from threading import Lock, RLock, Thread
-from typing import TextIO, TYPE_CHECKING
+from threading import Lock, RLock
+from typing import Callable, TYPE_CHECKING
 
-from agent_core import AgentCancelled as Cancelled, AgentEvent, PermissionPreset, SchedulerService, SessionInUseError, message_to_dict, runtime_error_info
+from agent_core import AgentCancelled as Cancelled, AgentEvent, PermissionPreset, SessionInUseError, message_to_dict, runtime_error_info
 from agent_core.usage import cache_usage_to_dict, usage_to_dict
 if TYPE_CHECKING:
     from agent_core.mcp.manager import McpServerStatus
 from agent_runtime.host import RuntimeHost
 from agent_runtime.callbacks import RuntimeCallbacks
 from agent_runtime.attachments import parse_attachments
-from agent_runtime.config import default_config_directory, load_model_options
+from agent_runtime.config import load_model_options
+from agent_runtime.services import RuntimeServices
 from .protocol import (
-    decode,
-    encode,
     event_to_message,
     context_window_to_dict,
     runtime_state_message,
@@ -36,15 +35,11 @@ from .event_stream import EventStream
 
 
 class Bridge:
-    def __init__(self, stdin: TextIO, stdout: TextIO, *,
-                 scheduler: SchedulerService | None = None,
-                 start_scheduler: bool = True) -> None:
-        self._stdin = stdin
-        self._stdout = stdout
-        self._stdout_lock = RLock()
+    def __init__(self, *, services: RuntimeServices,
+                 send: Callable[[dict[str, object]], None]) -> None:
+        self._send = send
+        self._event_lock = RLock()
         self._messages: Queue[dict[str, object] | BaseException | None] = Queue()
-        self._reader: Thread | None = None
-        self._reader_lock = Lock()
         self._router_lock = Lock()
         self._waiters: dict[
             str, tuple[str | None, Queue[dict[str, object] | BaseException]]
@@ -62,9 +57,8 @@ class Bridge:
         self._jobs: dict[str, dict[str, object]] = {}
         self._checkpoint_turn: str | None = None
         self.host = RuntimeHost(
-            default_config_directory().resolve(),
-            scheduler=scheduler,
-            start_scheduler=start_scheduler,
+            services.config_directory,
+            services=services,
             callbacks=RuntimeCallbacks(
                 on_event=self._emit_agent_event,
                 on_phase=lambda phase, warnings: self._emit_runtime_state(phase, runtime_warnings=warnings),
@@ -79,7 +73,7 @@ class Bridge:
         )
 
     def emit(self, type: str, **fields: object) -> None:
-        with self._stdout_lock:
+        with self._event_lock:
             message = {"type": type, **fields}
             if type == "job_status":
                 job_id = str(fields["job_id"])
@@ -113,60 +107,22 @@ class Bridge:
                 if session is not None:
                     items = [message_to_dict(item, include_provider_data=False) for item in session.items]
                 self._checkpoint_turn = None
-            self._stdout.write(encode(self._stream.publish(
+            published = self._stream.publish(
                 message, state=state, items=items,
-            )) + "\n")
+            )
+            self._send(published)
 
 
     def read_message(self) -> dict[str, object] | None:
-        """Return the next command routed by the sole stdin reader."""
-        self._start_reader()
+        """Return the next command routed by the process transport."""
         message = self._messages.get()
         if isinstance(message, BaseException):
             raise message
         return message
 
 
-    def _start_reader(self) -> None:
-        with self._reader_lock:
-            if self._reader is not None:
-                return
-            self._reader = Thread(
-                target=self._read_stdin,
-                name="bridge-input-reader",
-                daemon=True,
-            )
-            self._reader.start()
-
-
-    def _read_stdin(self) -> None:
-        first_message = not self._session_opened
-        while True:
-            try:
-                line = self._stdin.readline()
-                if not line:
-                    self._route_shutdown()
-                    return
-                stripped = line.strip()
-                if stripped:
-                    message = decode(stripped)
-                    if first_message:
-                        first_message = False
-                        if message["type"] == "open_session":
-                            self._messages.put(message)
-                        else:
-                            self._route_message(message)
-                    else:
-                        self._route_message(message)
-                    if message["type"] == "shutdown":
-                        return
-            except ValueError as error:
-                self._messages.put(error)
-                self._route_shutdown(notify_commands=False)
-                return
-
-
-    def _route_message(self, message: dict[str, object]) -> None:
+    def submit(self, message: dict[str, object]) -> None:
+        """Route one decoded command without blocking the process transport."""
         message_type = message["type"]
         if message_type in {"approval_response", "user_question_response"}:
             request_id = message.get("request_id")
@@ -189,15 +145,15 @@ class Bridge:
         if message_type == "cancel":
             self._route_cancel(message)
             return
-        if message_type == "shutdown":
-            self._route_shutdown()
-            return
         if message_type == "user_turn":
             turn_id = message.get("turn_id")
             if isinstance(turn_id, str):
                 self.host.turns.enqueue(turn_id)
                 self.emit(**user_turn_received_message(turn_id))
         self._messages.put(message)
+
+    def stop(self) -> None:
+        self._route_shutdown()
 
 
     def _route_steer(self, message: dict[str, object]) -> None:
@@ -258,7 +214,6 @@ class Bridge:
                 )
             ):
                 waiter.put(Cancelled())
-        self._start_reader()
         return waiter
 
 
@@ -366,7 +321,7 @@ class Bridge:
         *,
         runtime_warnings: tuple[str, ...] = (),
     ) -> None:
-        with self._stdout_lock:
+        with self._event_lock:
             self._phase = phase
             self._runtime_warnings = runtime_warnings
             self.emit(**self._runtime_snapshot())
@@ -523,7 +478,7 @@ class Bridge:
                 )
                 raise SystemExit(1)
 
-            if message is None or message["type"] == "shutdown":
+            if message is None:
                 return
             if message["type"] == "list_workspaces" and self.host.sessions.store is not None:
                 self._emit_workspaces()
@@ -564,6 +519,8 @@ class Bridge:
                 self._emit_sessions()
             elif message["type"] == "load_session":
                 self._emit_session_items()
+            elif message["type"] == "session_snapshot":
+                self._emit_session_snapshot(resumed=True)
             elif message["type"] == "settings_get":
                 self._emit_settings(message)
             elif message["type"] == "settings_provider_save":
@@ -580,13 +537,16 @@ class Bridge:
             session_id=message.get("session_id"),
             provider=message.get("provider"),
         )
-        state = self.host.sessions
         self._phase = "inactive"
         self._approval = self._question = None
         self._runtime_warnings = ()
         self._jobs.clear()
         self._checkpoint_turn = None
         self._session_opened = True
+        self._emit_session_snapshot(resumed=resumed)
+
+    def _emit_session_snapshot(self, *, resumed: bool) -> None:
+        state = self.host.sessions
         self.emit(**session_ready_message(
             session_id=state.session.session_id,
             workspace=str(state.workspace.path),
@@ -596,7 +556,7 @@ class Bridge:
             message_count=len(state.session.items),
             permission_preset=state.session.permission_preset.value,
         ))
-        self._emit_runtime_state("inactive")
+        self.emit(**self._runtime_snapshot())
 
     def _set_permission_preset(self, message: dict[str, object]) -> None:
         preset = PermissionPreset(str(message.get("preset")))

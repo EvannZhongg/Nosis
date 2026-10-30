@@ -101,6 +101,7 @@ export type Action =
   | { type: 'picker_closed' }
   | { type: 'settings_closed' }
   | { type: 'session_opening' }
+  | { type: 'session_restored'; state: State }
   | { type: 'cancelling' }
   | { type: 'exited'; code: number | null };
 
@@ -410,6 +411,9 @@ function reduceAction(state: State, action: Action): State {
     case 'session_opening':
       return { ...state, status: 'opening', picker: null };
 
+    case 'session_restored':
+      return action.state;
+
     case 'cancelling':
       return state.status === 'idle' || state.status === 'fatal'
         ? state
@@ -481,8 +485,8 @@ function applyMessage(state: State, message: Incoming): State {
       };
 
     case 'session_open_failed': {
-      const retained = message.runtime && state.sessionId !== null
-        ? applyMessage(state, message.runtime)
+      const retained = state.sessionId !== null
+        ? message.runtime ? applyMessage(state, message.runtime) : state
         : { ...initialState, status: 'session_unavailable' as const, workspace: state.workspace };
       return {
         ...retained,

@@ -1,7 +1,6 @@
 import asyncio
 import json
 import os
-import signal
 import subprocess
 import tempfile
 import time
@@ -9,8 +8,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Event, Lock
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, patch
 
 from tests.filesystem_fixtures import symlinks_available
 
@@ -130,93 +128,62 @@ class FakeBridge:
         self.closed = True
 
 
-@unittest.skipIf(TestClient is None, "Install the gui extra to test the GUI")
-class BridgeProcessTest(unittest.TestCase):
-    def test_cancel_does_not_interrupt_an_idle_starting_bridge(self) -> None:
-        process = SimpleNamespace(returncode=None)
-        process.send_signal = Mock()
-        bridge = bridge_process.BridgeProcess(process)
+class FakeBridgeProcess:
+    available = True
 
-        bridge.cancel_turn()
+    def __init__(self) -> None:
+        self.channels = []
 
-        process.send_signal.assert_not_called()
+    def track(self, channel):
+        self.channels.append(channel)
+        return channel
 
-    def test_cancel_routes_to_a_requested_turn(self) -> None:
-        stdin = SimpleNamespace(
-            is_closing=lambda: False,
-            write=Mock(),
-        )
-        process = SimpleNamespace(returncode=None, stdin=stdin)
-        process.send_signal = Mock()
-        bridge = bridge_process.BridgeProcess(process)
+    def open_channel(self, channel_id):
+        return self.track(FakeBridge())
 
-        bridge.send({"type": "user_turn", "turn_id": "t1", "text": "hi"})
-        bridge.cancel_turn()
-
-        process.send_signal.assert_not_called()
-        self.assertEqual(
-            json.loads(stdin.write.call_args.args[0].decode("utf-8")),
-            {"type": "cancel", "turn_id": "t1"},
-        )
-
-    @unittest.skipIf(os.name == "nt", "POSIX process groups only")
-    def test_forced_close_kills_the_bridge_process_group(self) -> None:
-        process = SimpleNamespace(returncode=None, pid=123)
-        bridge = bridge_process.BridgeProcess(process)
-
-        with patch("interfaces.gui.bridge_process.os.killpg") as killpg:
-            bridge._kill()
-
-        killpg.assert_called_once_with(123, signal.SIGKILL)
-
-
-@unittest.skipIf(TestClient is None, "Install the gui extra to test the GUI")
-class BridgeProcessSpawnTest(unittest.IsolatedAsyncioTestCase):
-    async def test_reads_a_large_utf8_checkpoint_followed_by_another_event(self) -> None:
-        reader = asyncio.StreamReader()
-        checkpoint = {
-            "type": "session_ready", "event_sequence": 1,
-            "transcript": {"items": [{"role": "user", "content": "续传" * 40000}],
-                           "event_sequence": 1},
-        }
-        following = {"type": "turn_completed", "turn_id": "t1"}
-        payload = (json.dumps(checkpoint, ensure_ascii=False) + "\n" +
-                   json.dumps(following) + "\n").encode("utf-8")
-        for start in range(0, len(payload), 4093):
-            reader.feed_data(payload[start:start + 4093])
-        reader.feed_eof()
-        process = SimpleNamespace(stdout=reader, wait=AsyncMock())
-        bridge = bridge_process.BridgeProcess(process)
-        self.assertEqual(await bridge.read(), checkpoint)
-        self.assertEqual(await bridge.read(), following)
-        self.assertIsNone(await bridge.read())
-
-    async def test_spawn_creates_a_private_process_group(self) -> None:
-        process = SimpleNamespace()
-        spawn = AsyncMock(return_value=process)
-
-        with patch(
-            "interfaces.gui.bridge_process.asyncio.create_subprocess_exec",
-            spawn,
-        ):
-            await bridge_process.BridgeProcess.spawn(Workspace(Path.cwd()))
-
-        self.assertEqual(
-            spawn.call_args.kwargs["creationflags"],
-            (
-                subprocess.CREATE_NEW_PROCESS_GROUP
-                if os.name == "nt"
-                else 0
-            ),
-        )
-        self.assertEqual(
-            spawn.call_args.kwargs["start_new_session"],
-            os.name != "nt",
-        )
+    async def close(self):
+        for channel in self.channels:
+            await channel.close()
 
 
 @unittest.skipIf(TestClient is None, "Install the gui extra to test the GUI")
 class ActiveSessionTest(unittest.IsolatedAsyncioTestCase):
+    async def test_cancelled_release_keeps_same_session_waiting_without_blocking_other_sessions(self):
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        class ClosingChannel(FakeBridge):
+            async def close(self):
+                entered.set()
+                await release.wait()
+                await super().close()
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            process = FakeBridgeProcess()
+            channels = [ClosingChannel(), FakeBridge(), FakeBridge()]
+            with patch.object(process, "open_channel", side_effect=lambda key: process.track(channels.pop(0))):
+                registry = active_session.ActiveSessionRegistry(JsonlSessionStore(root / "sessions"), Workspace(root), root)
+                registry._bridge = process
+                opening = {"type": "open_session", "session_id": "one", "workspace": str(root)}
+                await registry.open_or_attach(opening, Workspace(root), attach_only=False)
+                closing = asyncio.create_task(registry.release_idle("one"))
+                await asyncio.wait_for(entered.wait(), 2)
+                closing.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await closing
+                reopening = asyncio.create_task(registry.open_or_attach(opening, Workspace(root), attach_only=False))
+                other, created = await asyncio.wait_for(registry.open_or_attach(
+                    {**opening, "session_id": "two"}, Workspace(root), attach_only=False,
+                ), 2)
+                self.assertTrue(created)
+                self.assertEqual(other.session_id, "two")
+                self.assertFalse(reopening.done())
+                release.set()
+                restored, created = await asyncio.wait_for(reopening, 2)
+                self.assertTrue(created)
+                self.assertEqual(restored.session_id, "one")
+                await registry.close_all()
+
     async def test_refresh_is_busy_until_the_bridge_publishes_state(self) -> None:
         bridge = FakeBridge()
         runtime = active_session.ActiveSession("s1", "first", "/tmp", [], bridge)
@@ -627,10 +594,10 @@ class GuiTest(unittest.TestCase):
                 ]})
                 pending = [failed, ready]
 
-                async def spawn(cls: object, workspace: Workspace) -> FakeBridge:
+                def open_channel(self, channel_id: str) -> FakeBridge:
                     return pending.pop(0)
 
-                with patch.object(bridge_process.BridgeProcess, "spawn", classmethod(spawn)), self.client() as client:
+                with patch.object(FakeBridgeProcess, "open_channel", open_channel), self.client() as client:
                     with client.websocket_connect("/api/session") as socket:
                         socket.send_json({"type": "open_session", "session_id": "occupied", "attachment_id": "page"})
                         message = socket.receive_json()
@@ -734,15 +701,12 @@ class GuiTest(unittest.TestCase):
             base_url="http://127.0.0.1",
             headers={"host": "127.0.0.1"},
         )
+        process = FakeBridgeProcess()
+        patcher = patch.object(bridge_process.BridgeProcess, "spawn", AsyncMock(return_value=process))
+        patcher.start()
+        self.addCleanup(patcher.stop)
         if bridge is not None:
-            async def spawn(cls: object, workspace: Workspace) -> FakeBridge:
-                return bridge
-
-            patcher = patch.object(
-                bridge_process.BridgeProcess,
-                "spawn",
-                classmethod(spawn),
-            )
+            patcher = patch.object(process, "open_channel", side_effect=lambda channel_id: process.track(bridge))
             patcher.start()
             self.addCleanup(patcher.stop)
         return client
@@ -1768,14 +1732,14 @@ class GuiTest(unittest.TestCase):
         second = FakeBridge(replies={"open_session": [{"type": "session_ready", "session_id": "s1"}]})
         bridges = [first, second]
 
-        async def spawn(cls: object, workspace: Workspace) -> FakeBridge:
+        def open_channel(self, channel_id: str) -> FakeBridge:
             return bridges.pop(0)
 
         with (
             patch.object(
-                bridge_process.BridgeProcess,
-                "spawn",
-                classmethod(spawn),
+                FakeBridgeProcess,
+                "open_channel",
+                open_channel,
             ),
             self.client() as client,
         ):
@@ -1834,18 +1798,17 @@ class GuiTest(unittest.TestCase):
         """Two pages on different sessions must not block each other."""
         bridges: list[FakeBridge] = []
 
-        async def spawn(cls: object, workspace: Workspace) -> FakeBridge:
-            # Every connection drives its own agent process, so hand
-            # each one a separate fake rather than a shared queue.
+        def open_channel(self, channel_id: str) -> FakeBridge:
+            # Each channel has an independent message queue.
             bridge = FakeBridge(replies={"open_session": [{"type": "session_ready"}]})
             bridges.append(bridge)
             return bridge
 
         with (
             patch.object(
-                bridge_process.BridgeProcess,
-                "spawn",
-                classmethod(spawn),
+                FakeBridgeProcess,
+                "open_channel",
+                open_channel,
             ),
             self.client() as client,
         ):

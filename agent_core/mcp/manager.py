@@ -1,21 +1,23 @@
+from __future__ import annotations
+
 import asyncio
 import json
 import queue
 import threading
+import time
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterable
-
-from mcp import ClientSession
-from mcp.types import PaginatedRequestParams
+from typing import Any, Callable, Iterable, TYPE_CHECKING
 
 from ..tools import JSONValue, Tool
 from ..execution.process import CancellationSignal
 from ..turn_control import AgentCancelled
 from .config import McpConfig, McpServerConfig
-from .connection import McpConnection
 from .tool import McpTool
+
+if TYPE_CHECKING:
+    from mcp import ClientSession
 
 
 # Room for the manager thread and interpreter imports to reach the first
@@ -124,7 +126,7 @@ class McpClientManager:
         )
         self._thread.start()
 
-    def wait_ready(self) -> tuple[Tool, ...]:
+    def wait_ready(self, cancellation: CancellationSignal | None = None) -> tuple[Tool, ...]:
         if not self._servers:
             return ()
         if self._thread is None:
@@ -134,9 +136,16 @@ class McpClientManager:
             config.startup_timeout_seconds
             for config in self._servers.values()
         )
-        if not self._ready.wait(budget + _STARTUP_SLACK_SECONDS):
-            self.close()
-            raise TimeoutError("MCP servers did not finish starting")
+        deadline = time.monotonic() + budget + _STARTUP_SLACK_SECONDS
+        while not self._ready.is_set():
+            if cancellation is not None and cancellation.cancelled:
+                self.close()
+                raise AgentCancelled()
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                self.close()
+                raise TimeoutError("MCP servers did not finish starting")
+            self._ready.wait(min(remaining, 0.05) if cancellation is not None else remaining)
         if self._startup_error is not None:
             error = self._startup_error
             self.close()
@@ -292,6 +301,8 @@ class McpClientManager:
         config: McpServerConfig,
     ) -> tuple[ClientSession, tuple[McpTool, ...]]:
         """Connect one server and discover its tools under one budget."""
+        from .connection import McpConnection
+
         connection = McpConnection(config, self._workspace)
         stack.push_async_callback(connection.close)
         try:
@@ -306,6 +317,8 @@ class McpClientManager:
         session: ClientSession,
         config: McpServerConfig,
     ) -> tuple[McpTool, ...]:
+        from mcp.types import PaginatedRequestParams
+
         discovered: list[McpTool] = []
         cursor: str | None = None
         while True:

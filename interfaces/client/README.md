@@ -34,19 +34,40 @@ node node_modules/@nosis/client/examples/chat.mjs /path/to/workspace "Hello"
 - `command` (default `nosis-bridge`), optional `args`, `cwd`, `env`: explicit
   process inputs. An absolute executable path can select a Python environment.
   Supplying `env` replaces the child environment; spread `process.env` to extend it.
-- `onMessage`: decoded `Incoming` messages, including any unknown additive events.
+- `onMessage(message, channelId)`: decoded channel events, including unknown additive session events.
+- `onReady()`: process warmup completed and the protocol major was checked.
+- `onChannelClosed(channelId)`: the runtime and its Journal writer have closed.
 - `onProtocolError`: invalid JSON/envelope or output truncated before newline;
   the SDK initiates shutdown. Unknown event kinds are delivered unchanged.
 - `onProcessError`: spawn or stdin errors. These are not Agent failures.
 - `onExit(code, signal)`: called after stdout/stderr drain, following any final messages.
 
-`send(Outgoing)` writes one message without synchronization, retries or synthetic
+`send(Outgoing, channelId)` wraps one channel command and writes it without synchronization, retries or synthetic
 responses. It throws after shutdown/input close; asynchronous pipe errors go to
-`onProcessError`. `cancel(turnId)` sends turn-addressed cancellation.
+`onProcessError`. `cancel(turnId, channelId)` sends cancellation only to that runtime.
+`closeChannel(channelId)` closes one runtime; completion is `onChannelClosed`.
+One client/process can host multiple concurrent channels. Callers keep session
+snapshots and event cursors separately for each channel.
+The channel ID is required; there is no implicit default session. Revisit an open
+runtime with `send({type: 'session_snapshot'}, channelId)`: this returns its
+`session_ready` and authoritative `runtime_state` without rebinding the Session,
+reconstructing the Agent or disconnecting MCP.
+
+```js
+client.send({ type: 'open_session', workspace: '/project/a', session_id: null }, 'chat-a');
+client.send({ type: 'open_session', workspace: '/project/b', session_id: null }, 'chat-b');
+// After each channel's initial runtime_state:
+client.send({ type: 'user_turn', turn_id: 'turn-1', text: 'Inspect A' }, 'chat-a');
+client.send({ type: 'user_turn', turn_id: 'turn-1', text: 'Inspect B' }, 'chat-b');
+client.cancel('turn-1', 'chat-a');
+client.closeChannel('chat-a'); // chat-b and the process continue.
+```
+
 `shutdown()` is idempotent and returns the same completion promise as `closed`:
 `{code, signal}` after process close. It sends shutdown, ends stdin and enforces
 the 2-second cleanup bound. `diagnostics()` returns the last 50 stderr chunks.
-Callbacks must not throw. Consume `fatal` as an event and process exit separately.
+Callbacks must not throw. Channel `fatal` is an event; top-level process failures
+are reported to `onProtocolError` and followed by process shutdown.
 
 The generic receive/send type parameters permit first-party transport consumers
 to use the internal message superset without another process implementation;

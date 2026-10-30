@@ -66,7 +66,8 @@ from agent_core.projection import project_context_units
 from agent_core.providers import ModelProvider
 from agent_core.subagent import vision_aware_tool_names
 from agent_core.tools.config import ROLE_TOOL_NAMES, TOOL_NAMES
-from interfaces.bridge.bridge import Bridge, Cancelled
+from interfaces.bridge.bridge import Cancelled
+from tests.bridge_fixtures import Bridge
 from agent_runtime.attachments import parse_attachments as _parse_attachments
 from agent_runtime.host import RuntimeHost
 from agent_runtime.plane_manager import ExecutionPlaneManager
@@ -411,7 +412,7 @@ class ProtocolTest(unittest.TestCase):
             ),
             {
                 "type": "session_ready",
-                "protocol_version": 2,
+                "protocol_version": 3,
                 "session_id": "s1",
                 "workspace": "/tmp/work",
                 "provider": "test",
@@ -1059,17 +1060,17 @@ class BridgeCancellationTest(BridgeTestCase):
                 unrelated = first._register_interaction("other:1", "other")
                 other_session = second._register_interaction("t1:1", "t1")
                 first.host.turns.enqueue("queued")
-                first._route_message({"type": "cancel", "turn_id": "queued"})
-                first._route_message({"type": "cancel", "turn_id": "stale"})
+                first.submit({"type": "cancel", "turn_id": "queued"})
+                first.submit({"type": "cancel", "turn_id": "stale"})
                 self.assertTrue(current.empty())
-                first._route_message({"type": "cancel", "turn_id": "t1"})
+                first.submit({"type": "cancel", "turn_id": "t1"})
                 self.assertIsInstance(current.get_nowait(), Cancelled)
                 self.assertTrue(unrelated.empty())
                 self.assertTrue(other_session.empty())
                 self.assertFalse(second.host.turns.control.cancelled)
                 late = first._register_interaction("t1:2", "t1")
                 self.assertIsInstance(late.get_nowait(), Cancelled)
-                second._route_message({
+                second.submit({
                     "type": "approval_response", "request_id": "t1:1", "approved": True,
                 })
                 self.assertTrue(second._wait_for_interaction(other_session)["approved"])
@@ -1821,7 +1822,7 @@ class ScheduledTurnTest(unittest.TestCase):
                 raise RuntimeError("stop after capturing worker authority")
 
             with patch(
-                "interfaces.bridge.bridge.default_config_directory",
+                "tests.bridge_fixtures.default_config_directory",
                 return_value=root,
             ), patch.object(RuntimeHost, "open_session", open_session):
                 bridge = Bridge(
@@ -1880,7 +1881,7 @@ class ScheduledTurnTest(unittest.TestCase):
                     self.session.finish_turn("completed")
                     return AgentRunResult("scheduled answer")
 
-            def execution_plane(manager, state) -> object:
+            def execution_plane(manager, state, **kwargs) -> object:
                 assert state.session is not None
                 return type(
                     "Plane",
@@ -1894,7 +1895,7 @@ class ScheduledTurnTest(unittest.TestCase):
                 )()
 
             with patch(
-                "interfaces.bridge.bridge.default_config_directory",
+                "tests.bridge_fixtures.default_config_directory",
                 return_value=root,
             ), patch.object(ExecutionPlaneManager, "ensure", execution_plane):
                 bridge = Bridge(

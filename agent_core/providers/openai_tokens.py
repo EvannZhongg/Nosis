@@ -5,8 +5,12 @@ import gzip
 import json
 from functools import lru_cache
 from importlib.resources import files
+from threading import Lock
 
 import tiktoken
+
+
+_encoding_lock = Lock()
 
 
 @lru_cache(maxsize=2)
@@ -30,7 +34,9 @@ class TokenCounter:
         except KeyError:
             name = "cl100k_base"
         self.identity = [name, tiktoken.__version__]
-        self._encoding = _encoding(name)
+        # Concurrent sessions must not build the same vocabulary in parallel.
+        with _encoding_lock:
+            self._encoding = _encoding(name)
 
     def _text(self, text: str) -> int:
         return len(self._encoding.encode_ordinary(text))

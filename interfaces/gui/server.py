@@ -1,6 +1,6 @@
 """FastAPI application assembly for the GUI.
 
-The server owns the lifecycle of bridge processes while WebSockets only
+The server owns one resident Bridge process while WebSockets only
 attach browsers to them. Agent semantics remain inside the bridge/core.
 """
 
@@ -32,13 +32,16 @@ def create_app(
     store: JsonlSessionStore,
     settings: SettingsStore,
 ) -> FastAPI:
-    active_sessions = ActiveSessionRegistry(store)
+    active_sessions = ActiveSessionRegistry(store, workspace, settings.directory)
     workspace_resolver = WorkspaceResolver(workspace, store)
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
-        yield
-        await active_sessions.close_all()
+        await active_sessions.start()
+        try:
+            yield
+        finally:
+            await active_sessions.close_all()
 
     app = FastAPI(
         title="Nosis",

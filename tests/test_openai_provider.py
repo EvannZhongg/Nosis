@@ -84,6 +84,7 @@ class OpenAIProviderTest(unittest.TestCase):
             return httpx.Response(200, headers={"content-type": "text/event-stream"}, **options)
 
         def client(**kwargs):
+            kwargs.pop("http_client").close()
             return OpenAI(**kwargs, http_client=httpx.Client(transport=httpx.MockTransport(handle)))
 
         with patch("agent_core.providers.openai_provider.OpenAI", side_effect=client):

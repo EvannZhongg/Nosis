@@ -1,4 +1,4 @@
-# Public Bridge protocol, major 2
+# Public Bridge protocol, major 3
 
 This is the local client API for third-party frontends. Install `nosis-agent`,
 start **`nosis-bridge`** as a child process, and exchange UTF-8 newline-delimited
@@ -15,14 +15,56 @@ There is no fixed small line limit: checkpoints can contain the full transcript.
 
 ## Stability and scope
 
-Every `session_ready` advertises `protocol_version: 2`. Clients must check this
+Every `session_ready` advertises `protocol_version: 3`. Clients must check this
 before using the session. A breaking change to documented public fields or
 semantics increments this major and is recorded in this document. Additive fields
 and event kinds may appear within a major; ignore unknown fields/events. This is
 version identification, without version negotiation or a compatibility layer.
-Major 2 adds workspace discovery and generalizes `session_open_failed` to
-recoverable opening errors. Its `session_id` is now nullable for failed session
-creation, and its error type is no longer limited to `SessionInUseError`.
+Major 3 replaces the one-session process stream with independent runtime channels.
+There is no support for earlier wire formats. Every command and event belongs to
+an explicit channel, except process startup, fatal transport errors and shutdown.
+
+## Process transport
+
+The process initializes configuration and warms the default provider SDK, tokenizer
+and TLS trust context once, without resolving credentials or calling a model. It
+then emits `{"type":"bridge_ready","protocol_version":3}`. A host can start this
+process during application startup and keep it alive across session creation.
+
+Create a channel by sending its first command:
+
+```json
+{"type":"channel_command","channel_id":"chat-1","command":{"type":"open_session","workspace":"/absolute/workspace","session_id":null}}
+```
+
+All subsequent session commands use that same `channel_command` envelope. Session
+events are returned as:
+
+```json
+{"type":"channel_event","channel_id":"chat-1","event":{"type":"runtime_state","event_sequence":2,"phase":"inactive"}}
+```
+
+The event above is abbreviated; actual snapshots carry all fields defined by
+`Incoming`. Each channel owns an independent RuntimeHost, command queue, event
+sequence, approvals, cancellation, Journal writer, execution plane and MCP clients.
+Channels execute concurrently. Request and turn IDs need only be unique within
+their channel; one channel waiting on HTTP, MCP or user input does not block others.
+GUI, TUI and SDK hosts use this same server and lifecycle. The TUI retains a
+separate channel for each visited Session. `session_snapshot` returns an existing
+channel's ready/snapshot pair without rebinding or rebuilding its Runtime.
+
+Send `{"type":"close_channel","channel_id":"chat-1"}` to cancel and close only
+that runtime. Wait for `{"type":"channel_closed","channel_id":"chat-1"}` before
+reusing the channel ID or opening the same Journal elsewhere. Closing a channel
+keeps the process and the other channels alive. Shared process resources include
+configuration services, one scheduler, imported modules, tokenizer vocabularies
+and TLS trust contexts; mutable execution state is not shared.
+
+Send `{"type":"shutdown"}` or close stdin to cancel all channels and close the
+process. `BridgeRequest` / `BridgeEvent` define these process envelopes. The
+`Outgoing` / `Incoming` definitions below describe the nested channel payloads.
+All JSON examples in the remaining sections are channel payloads unless stated
+otherwise; raw stdio clients must wrap them.
 
 The normative field definitions are `Incoming`, `Outgoing` and their referenced
 types in [`@nosis/protocol`](../interfaces/protocol/src/protocol.ts). Directions
@@ -81,14 +123,14 @@ Opening failures caused by a writer conflict, invalid workspace/configuration,
 or filesystem error emit `session_open_failed` with the requested `session_id`
 (null when creating a session) and `error: {type, message}`. Writer conflicts
 use `type: "SessionInUseError"`. No ready/sync pair follows that failure.
-The process stays connected; `list_workspaces` or another `open_session` is
+The channel stays connected; `list_workspaces` or another `open_session` is
 allowed. `list_sessions` is also allowed when a workspace browsing context
 exists. A failed rebind retains the previously opened session and execution
 state; the failure event includes its complete `runtime` snapshot and commands
 can continue against that session. An initial opening failure has no retained
 session or runtime snapshot. Unexpected opening errors are fatal. A fresh
-`open_session` on an idle Bridge rebinds it and produces a new ready/sync pair;
-the process's sequence continues. Do not pipeline a rebind with a turn.
+`open_session` on an idle channel rebinds it and produces a new ready/sync pair;
+the channel's sequence continues. Do not pipeline a rebind with a turn.
 
 ## Explicit Runtime refresh
 
@@ -151,14 +193,13 @@ turn: it is emitted before the terminal event. The process may have queued input
 | `list_sessions` | `sessions_listed.sessions`: current workspace session summaries. |
 | `list_workspaces` | `workspaces_listed.workspaces`: absolute workspace paths with stored conversation history, most recently active first. |
 | `load_session` | `session_items.items`: currently bound conversation. |
-| `shutdown` | Routes cancellation and closes Runtime; process exit is completion. |
+| `session_snapshot` | `session_ready` then `runtime_state` for the existing Runtime; preserves its execution plane, Jobs, MCP and Journal writer. |
 
 Permission presets are `ask_for_approval`, `workspace_access`, `full_access`.
 Responses confirm the Runtime's actual changes. Changing provider/workspace may
 also emit `runtime_state: inactive`. Send these changes while idle. Commands other
-than steer/cancel/interactions/permission/shutdown are serialized behind an active
-turn. There is no generic RPC, universal request ID, or concurrent request/reply
-multiplexer. Serialize listing/history requests if matching responses matters.
+than steer/cancel/interactions/permission are serialized behind an active
+turn within that channel. There is no generic RPC or universal request ID. Serialize listing/history requests if matching responses matters.
 Use the opening checkpoint to display initial history; `load_session` is an
 explicit refresh, not a stream replay or cursor acknowledgment.
 The session listing contains stored conversations; a newly opened empty Session
@@ -209,7 +250,7 @@ The same request is in `runtime.approval`; avoid rendering it twice. Questions
 include `question`, `options: [{id, label, description?, recommended?}]` and
 `allow_free_text`. Submit a listed `option_id`, or nonblank `text` only when
 allowed. An invalid answer leaves the question outstanding; there is no validation
-error response. Interactions are serialized by Bridge. Cancellation and shutdown
+error response. Interactions are serialized within each channel. Cancellation and shutdown
 unblock them through existing Runtime cancellation.
 
 Workspace file writes (`apply_patch`, `edit_file`, `write_file`) request approval
@@ -281,8 +322,8 @@ the public event order/checkpoint rules and are not available over this stdio AP
 `turn_failed` and `fatal` contain `error: {type, message, details}`. Error class
 names and detail keys are diagnostic; branch on the event kind. `turn_failed`
 ends a turn and permits further valid commands; a startup failure has phase
-`failed`, while an execution failure can leave phase `idle`. `fatal` makes the
-connection unusable and the CLI exits with code 1. It may occur before any session
+`failed`, while an execution failure can leave phase `idle`. A channel `fatal` makes that channel unusable and closes its Runtime, while other
+channels continue. A top-level process `fatal` closes the process with exit code 1. It may occur before any session
 opens or before a protocol major is available. Malformed JSON/envelopes, unknown
 command kinds and out-of-order Session commands produce fatal `ProtocolError`;
 invalid command arguments can produce other fatal error types. Interaction
@@ -306,12 +347,14 @@ Forced termination cannot guarantee completed persistence.
 
 ```text
 spawn nosis-bridge (pipes)
-send open_session
-receive session_ready; check protocol_version == 2; apply checkpoint
-receive runtime_state; apply snapshot
-send user_turn with a fresh turn_id
+receive bridge_ready; check protocol_version == 3
+send channel_command(chat-1, open_session)
+receive channel_event(chat-1, session_ready); check protocol_version == 3; apply checkpoint
+receive channel_event(chat-1, runtime_state); apply snapshot
+send channel_command(chat-1, user_turn) with a fresh turn_id
 receive/render events; answer interactions by request_id
 receive terminal event; apply checkpoint
+send close_channel(chat-1); receive channel_closed(chat-1)
 send shutdown; close stdin; drain output; await process close
 ```
 

@@ -13,7 +13,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from threading import Thread
+from threading import Event, Thread
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import unittest
 
@@ -40,13 +40,19 @@ class Peer:
     def _read(self):
         try:
             for line in self.process.stdout:
-                self.events.put(json.loads(line))
+                packet = json.loads(line)
+                if packet["type"] == "channel_event":
+                    self.events.put(packet["event"])
+                elif packet["type"] == "fatal":
+                    self.events.put(packet)
         except Exception as error:
             self.events.put(error)
         finally:
             self.events.put(None)
 
     def send(self, message):
+        if message["type"] != "shutdown":
+            message = {"type": "channel_command", "channel_id": "main", "command": message}
         self.process.stdin.write(json.dumps(message, ensure_ascii=False) + "\n")
         self.process.stdin.flush()
 
@@ -129,6 +135,7 @@ class ExternalBridgeClientTest(unittest.TestCase):
         run([NPM, "install", "--ignore-scripts", "--no-audit", "--no-fund", "--offline",
              *(str(path) for path in sorted(cls.root.glob("*.tgz")))], cwd=cls.external)
         shutil.copyfile(ROOT / "tests/bridge_client/integration.mjs", cls.external / "integration.mjs")
+        shutil.copyfile(ROOT / "tests/bridge_client/multiplex.mjs", cls.external / "multiplex.mjs")
 
     def setUp(self):
         # A fixed, short home keeps journal paths clear of the Windows
@@ -153,7 +160,7 @@ class ExternalBridgeClientTest(unittest.TestCase):
     def open(self, peer, session_id=None):
         peer.send({"type": "open_session", "workspace": str(self.external), "session_id": session_id})
         ready = peer.until("session_ready")
-        self.assertEqual(ready["protocol_version"], 2)
+        self.assertEqual(ready["protocol_version"], 3)
         self.assertEqual(peer.until("runtime_state")["phase"], "inactive")
         return ready
 
@@ -224,7 +231,7 @@ print(json.dumps({'file': str(Path(local_tokens.__file__).resolve()), 'counts': 
                     capture_output=True, text=True, encoding="utf-8", timeout=20,
                 )
                 self.assertEqual(result.returncode, 1, result.stderr)
-                message = json.loads(result.stdout)
+                message = json.loads(result.stdout.splitlines()[-1])
                 self.assertEqual(message["type"], "fatal")
                 self.assertEqual(message["error"]["type"], "ProtocolError")
 
@@ -303,6 +310,77 @@ print(json.dumps({'file': str(Path(local_tokens.__file__).resolve()), 'counts': 
         self.assertGreater(json.loads(result.stdout)["events"], 20)
         self.assertEqual(len(requests), 4)
         self.assertTrue(outputs.empty())
+
+    def test_packaged_sdk_runs_independent_runtimes_in_one_resident_bridge(self):
+        bootstrap = self.peer()
+        self.open(bootstrap)
+        bootstrap.close()
+        released = Event()
+        requests = []
+
+        class ProviderFixture(BaseHTTPRequestHandler):
+            def log_message(self, *_args):
+                pass
+
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                text = next(message["content"] for message in reversed(body["messages"]) if message["role"] == "user")
+                if isinstance(text, list):
+                    text = "".join(part.get("text", "") for part in text)
+                requests.append(text)
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.end_headers()
+
+                def chunk(content, finish=None):
+                    event = {"id": "chat", "object": "chat.completion.chunk", "created": 1, "model": "gpt-5",
+                             "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": finish}],
+                             "usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12}}
+                    self.wfile.write(("data: " + json.dumps(event) + "\n\n").encode())
+                    self.wfile.flush()
+
+                try:
+                    if text == "blocked":
+                        chunk("waiting")
+                        released.wait(30)
+                    chunk("reply:" + text, "stop")
+                    self.wfile.write(b"data: [DONE]\n\n")
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+
+        http = ThreadingHTTPServer(("127.0.0.1", 0), ProviderFixture)
+        http.daemon_threads = True
+        Thread(target=http.serve_forever, daemon=True).start()
+        for name in ("one", "two"):
+            (self.external / name).mkdir(exist_ok=True)
+        config = self.home / ".nosis"
+        (config / "provider_config.json").write_text(json.dumps({
+            "main_agent": {"provider": "fixture"}, "subagent": {"provider": "fixture"},
+            "fast_model": {"provider": "fixture"}, "providers": {"fixture": {
+                "model": "gpt-5", "api": "chat_completions", "key": "fixture-key",
+                "url": f"http://127.0.0.1:{http.server_port}/v1",
+            }},
+        }), encoding="utf-8")
+        path = config / "agent_config.json"
+        agent = json.loads(path.read_text(encoding="utf-8"))
+        agent["generate_session_title"] = False
+        agent["memory"]["enabled"] = False
+        agent["mcp"]["enabled"] = False
+        agent["provider"]["max_retries"] = 0
+        agent["main_agent"]["tools"] = {name: False for name in agent["main_agent"]["tools"]}
+        path.write_text(json.dumps(agent), encoding="utf-8")
+        try:
+            result = subprocess.run(
+                [shutil.which("node"), "multiplex.mjs"], cwd=self.external, env=self.env,
+                capture_output=True, text=True, encoding="utf-8", timeout=60,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertTrue(json.loads(result.stdout)["reused_process"])
+            self.assertEqual(requests, ["blocked", "second", "after-close"])
+        finally:
+            released.set()
+            http.shutdown()
+            http.server_close()
 
 
 if __name__ == "__main__":

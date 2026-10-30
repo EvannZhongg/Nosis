@@ -30,12 +30,16 @@ from agent_core import (
 from agent_core.usage import cache_usage_to_dict, usage_to_dict
 
 
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
+
+
+class ProtocolError(ValueError):
+    pass
 
 COMMAND_TYPES = frozenset({
     "open_session", "user_turn", "user_steer", "cancel", "approval_response",
     "user_question_response", "permission_set", "provider_set", "workspace_set",
-    "list_sessions", "list_workspaces", "load_session", "shutdown", "settings_get",
+    "list_sessions", "list_workspaces", "load_session", "session_snapshot", "settings_get",
     "settings_provider_save", "settings_agent_save", "settings_routing_save",
     "runtime_refresh",
 })
@@ -53,6 +57,28 @@ def decode(line: str) -> dict[str, object]:
         raise ValueError("protocol message must have a string 'type'")
     if message["type"] not in COMMAND_TYPES:
         raise ValueError(f"unknown command type: {message['type']!r}")
+    return message
+
+
+def decode_bridge_command(line: str) -> dict[str, object]:
+    try:
+        message = json.loads(line)
+    except ValueError as error:
+        raise ProtocolError(str(error)) from error
+    if not isinstance(message, dict):
+        raise ProtocolError("bridge command must be a JSON object")
+    if message.get("type") == "shutdown":
+        return message
+    if message.get("type") not in {"channel_command", "close_channel"}:
+        raise ProtocolError("expected 'channel_command', 'close_channel' or 'shutdown'")
+    channel_id = message.get("channel_id")
+    if not isinstance(channel_id, str) or not channel_id:
+        raise ProtocolError("'channel_id' must be a non-empty string")
+    if message["type"] == "channel_command":
+        try:
+            message["command"] = decode(encode(message.get("command")))
+        except ValueError as error:
+            raise ProtocolError(str(error)) from error
     return message
 
 
