@@ -22,6 +22,7 @@ export function Composer({ runtime }: { runtime: SessionRuntime }) {
     { label: "临时工作区", options: runtime.availableWorkspaces.filter((option) => option.scratch) },
   ];
   const workspacePickerRef = useRef<HTMLDivElement | null>(null);
+  const feedbackRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const compositionEndTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const composingRef = useRef(false);
@@ -29,6 +30,19 @@ export function Composer({ runtime }: { runtime: SessionRuntime }) {
     ?? runtime.question?.options[0]?.id;
 
   useEffect(() => setCommandDismissed(false), [composerText]);
+
+  useLayoutEffect(() => {
+    const feedback = feedbackRef.current!;
+    const thread = feedback.parentElement!.parentElement!;
+    const updateHeight = () => thread.style.setProperty("--composer-feedback-height", `${feedback.offsetHeight}px`);
+    updateHeight();
+    const observer = new ResizeObserver(updateHeight);
+    observer.observe(feedback);
+    return () => {
+      observer.disconnect();
+      thread.style.removeProperty("--composer-feedback-height");
+    };
+  }, []);
 
   function runRefreshCommand() {
     if (runtime.refreshRuntime()) setComposerText("");
@@ -169,20 +183,22 @@ export function Composer({ runtime }: { runtime: SessionRuntime }) {
         <button type="submit" disabled={!runtime.questionDraft.trim()}>提交</button>
       </form>}
     </div>}
-    {runtime.alerts.length > 0 && <div className="feedback-alerts">{runtime.alerts.map((item) => <div className={`feedback-alert ${item.level}`} role="alert" key={item.id}><AlertTriangle size={15} /><span>{item.text}</span><button type="button" aria-label="关闭提示" onClick={() => runtime.dismissAlert(item.id)}><X size={13} /></button></div>)}</div>}
-    {runtime.toast && <div className={`feedback-toast ${runtime.toast.level}`} role="status">{runtime.toast.text}</div>}
-    {!runtime.attachmentReplaced && <RuntimeIndicators
-      running={runtime.running || runtime.refreshing}
-      refreshing={runtime.refreshing}
-      reconnecting={runtime.reconnecting}
-      runtimePhase={runtime.runtimePhase}
-      pendingSteers={runtime.pendingSteers}
-      approval={runtime.approval}
-      question={runtime.question}
-      plan={runtime.plan}
-      jobs={runtime.jobs}
-      onStop={runtime.stop}
-    />}
+    <div ref={feedbackRef} className="composer-feedback">
+      {runtime.alerts.length > 0 && <div className="feedback-alerts">{runtime.alerts.map((item) => <div className={`feedback-alert ${item.level}`} role="alert" key={item.id}><AlertTriangle size={15} /><span>{item.text}</span><button type="button" aria-label="关闭提示" onClick={() => runtime.dismissAlert(item.id)}><X size={13} /></button></div>)}</div>}
+      {runtime.toast && <div className={`feedback-toast ${runtime.toast.level}`} role="status">{runtime.toast.text}</div>}
+      {!runtime.attachmentReplaced && <RuntimeIndicators
+        running={runtime.running || runtime.refreshing}
+        refreshing={runtime.refreshing}
+        reconnecting={runtime.reconnecting}
+        runtimePhase={runtime.runtimePhase}
+        pendingSteers={runtime.pendingSteers}
+        approval={runtime.approval}
+        question={runtime.question}
+        plan={runtime.plan}
+        jobs={runtime.jobs}
+        onStop={runtime.stop}
+      />}
+    </div>
     {runtime.pendingFiles.length > 0 && <div className="attachment-list" aria-label="待发送附件">{runtime.pendingFiles.map((file, index) => <PendingAttachment key={`${file.name}-${file.lastModified}-${index}`} file={file} onRemove={() => runtime.removePendingFile(index)} />)}</div>}
     <ComposerPrimitive.Root className="composer" onSubmit={onComposerSubmit}>
       {showRefreshCommand && <div className="composer-command-menu" id={commandMenuId} role="listbox" aria-label="命令">
