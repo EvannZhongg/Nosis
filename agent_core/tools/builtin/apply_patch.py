@@ -47,10 +47,14 @@ class ApplyPatchTool(Tool):
                 "'*** Add File:', '*** Update File:', or '*** Delete File:' "
                 "sections. Update sections contain @@ hunks whose lines start "
                 "with space (context), + (add), or - (remove). Standard "
-                "unified-diff hunk ranges are validated when present. Paths are "
+                "unified-diff hunk counts are validated; line positions are hints "
+                "when context is present. Paths are "
                 "relative to the workspace root; missing parent directories are "
-                "created for added files. Bare @@ hunks must match exactly once; "
-                "include more context or use numbered ranges to disambiguate. "
+                "created for added files. Exact matches take priority, then "
+                "context-only trailing spaces/tabs may differ. With an exact "
+                "nonblank removal, up to two outer context lines may differ. "
+                "Removal lines must match exactly. Matches must be unique, except "
+                "a full match at the numbered position can disambiguate. "
                 "Updates preserve existing line endings and whether a non-empty "
                 "file ends with a newline; new non-empty files use LF and a final "
                 "newline. "
@@ -266,25 +270,24 @@ def _apply_hunks(original: str, body: list[str], path: str) -> str:
                 if header.old_count
                 else header.old_start
             )
-            lines_before_hunk = len(result) + match_index - source_index
-            expected_new_start = (
-                lines_before_hunk + 1
-                if header.new_count
-                else lines_before_hunk
+            if not old_lines:
+                lines_before_hunk = len(result) + match_index - source_index
+                expected_new_start = lines_before_hunk + (1 if new_lines else 0)
+                if header.new_start != expected_new_start:
+                    raise ValueError(
+                        f"apply_patch new start does not match hunk position "
+                        f"in '{location}'"
+                    )
+                if not source_index <= match_index <= len(source):
+                    raise ValueError(
+                        f"apply_patch hunk range did not match '{location}'"
+                    )
+        if old_lines:
+            match_index, hunk = _find_hunk(
+                source, hunk, source_index, location,
+                preferred=header.old_start - 1 if header is not None else None,
             )
-            if header.new_start != expected_new_start:
-                raise ValueError(
-                    f"apply_patch new start does not match hunk position "
-                    f"in '{location}'"
-                )
-            if match_index < source_index or not _lines_match(
-                source, old_lines, match_index
-            ):
-                raise ValueError(
-                    f"apply_patch hunk range did not match '{location}'"
-                )
-        else:
-            match_index = _find_hunk(source, old_lines, source_index, location)
+            old_lines = [line[1:] for line in hunk if line[0] != "+"]
         result.extend(source[source_index:match_index])
         matched_index = match_index
         for line in hunk:
@@ -363,32 +366,65 @@ def _parse_hunk_header(header: str, path: str) -> _HunkHeader | None:
 
 def _find_hunk(
     source: list[_TextLine],
-    old_lines: list[str],
+    hunk: list[str],
     start: int,
     path: str,
-) -> int:
-    match: int | None = None
-    for index in range(start, len(source) - len(old_lines) + 1):
-        if _lines_match(source, old_lines, index):
-            if match is not None:
-                raise ValueError(
-                    f"apply_patch hunk is ambiguous in '{path}'; "
-                    "include more context or use a numbered range"
-                )
-            match = index
-    if match is None:
-        preview = [line[:120] for line in old_lines[:3]]
-        raise ValueError(
-            f"apply_patch hunk did not match '{path}'; expected context: {preview!r}"
-        )
-    return match
+    *,
+    preferred: int | None = None,
+) -> tuple[int, list[str]]:
+    leading = next((i for i, line in enumerate(hunk) if line[0] != " "), len(hunk))
+    trailing = next((i for i, line in enumerate(reversed(hunk)) if line[0] != " "), 0)
+    has_removal = any(line[0] == "-" and line[1:].strip(" \t") for line in hunk)
+    # Only outer context can be discarded; the complete edit stays exact and
+    # anchors the match. A line-number hint never resolves a trimmed ambiguity.
+    for trim in range(3 if has_removal else 1):
+        for ignore_context_whitespace in (False, True):
+            if trim == 0 and preferred is not None and preferred >= start:
+                if _lines_match(source, hunk, preferred, ignore_context_whitespace):
+                    return preferred, hunk
+            matches: dict[int, tuple[int, list[str]]] = {}
+            for before in range(min(leading, trim) + 1):
+                after = trim - before
+                if after > trailing:
+                    continue
+                candidate = hunk[before:len(hunk) - after]
+                old_count = sum(line[0] != "+" for line in candidate)
+                for index in range(start, len(source) - old_count + 1):
+                    if _lines_match(source, candidate, index, ignore_context_whitespace):
+                        # Different trims can identify the same edit position.
+                        edit_start = index + leading - before
+                        matches[edit_start] = index, candidate
+                        if len(matches) > 1:
+                            raise ValueError(
+                                f"apply_patch hunk is ambiguous in '{path}'; "
+                                "include more context or use a numbered range "
+                                "with matching full context"
+                            )
+            if matches:
+                return next(iter(matches.values()))
+    old_lines = [line[1:] for line in hunk if line[0] != "+"]
+    preview = [line[:120] for line in old_lines[:3]]
+    raise ValueError(
+        f"apply_patch hunk did not match '{path}'; expected context: {preview!r}"
+    )
 
 
 def _lines_match(
-    source: list[_TextLine], old_lines: list[str], start: int
+    source: list[_TextLine], hunk: list[str], start: int,
+    ignore_context_whitespace: bool = False,
 ) -> bool:
-    return (
-        0 <= start <= len(source)
-        and start + len(old_lines) <= len(source)
-        and all(source[start + index].text == text for index, text in enumerate(old_lines))
-    )
+    if not 0 <= start <= len(source):
+        return False
+    index = start
+    for line in hunk:
+        if line[0] == "+":
+            continue
+        if index >= len(source):
+            return False
+        actual, expected = source[index].text, line[1:]
+        if ignore_context_whitespace and line[0] == " ":
+            actual, expected = actual.rstrip(" \t"), expected.rstrip(" \t")
+        if actual != expected:
+            return False
+        index += 1
+    return True

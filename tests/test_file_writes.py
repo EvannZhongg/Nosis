@@ -348,6 +348,122 @@ class ApplyPatchRegressionTest(unittest.TestCase):
         self.assertIn("missing", result.error.message)
         self.assertEqual((self.root / "file.txt").read_bytes(), b"one\ntwo\n")
 
+    def test_tolerates_context_trailing_whitespace_and_preserves_original_bytes(self) -> None:
+        target = self.root / "file.txt"
+        target.write_bytes(b"before \t\r\nold\r\ninside\t\r\nremove\r\nafter \r\n")
+        result = self.apply(
+            "*** Update File: file.txt\n@@\n before\n-old\n+new\n"
+            " inside \n-remove\n+replacement\n after"
+        )
+        self.assertIsNone(result.error)
+        self.assertEqual(
+            target.read_bytes(),
+            b"before \t\r\nnew\r\ninside\t\r\nreplacement\r\nafter \r\n",
+        )
+
+    def test_discards_at_most_two_outer_context_lines_without_overwriting_them(self) -> None:
+        cases = (
+            ("before\nold\nafter", " stale\n-old\n+new\n after"),
+            ("before\nold\nafter", " before\n-old\n+new\n stale"),
+            ("before\nold\nafter", " stale\n-old\n+new\n stale"),
+            ("before\nold\nafter", " stale\n stale\n-old\n+new\n after"),
+            ("before\nold\nafter", " before\n-old\n+new\n stale\n stale"),
+            ("old", " stale\n-old\n+new\n stale"),
+        )
+        target = self.root / "file.txt"
+        for original, hunk in cases:
+            with self.subTest(hunk=hunk):
+                target.write_bytes(original.encode())
+                result = self.apply(f"*** Update File: file.txt\n@@\n{hunk}")
+                self.assertIsNone(result.error)
+                self.assertEqual(target.read_bytes(), original.replace("old", "new").encode())
+
+    def test_exact_full_context_takes_priority_over_relaxed_matches(self) -> None:
+        target = self.root / "file.txt"
+        target.write_bytes(b"before \nold\nafter\nbefore\nold\nafter\n")
+        # Even a numbered hint at a weaker match cannot beat full exact context.
+        result = self.apply(
+            "*** Update File: file.txt\n@@ -1,3 +1,3 @@\n before\n-old\n+new\n after"
+        )
+        self.assertIsNone(result.error)
+        self.assertEqual(target.read_bytes(), b"before \nold\nafter\nbefore\nnew\nafter\n")
+
+    def test_whitespace_full_context_takes_priority_over_trimmed_matches(self) -> None:
+        target = self.root / "file.txt"
+        target.write_bytes(b"before \nold\nafter\nother\nold\nafter\n")
+        result = self.apply("*** Update File: file.txt\n@@\n before\n-old\n+new\n after")
+        self.assertIsNone(result.error)
+        self.assertEqual(target.read_bytes(), b"before \nnew\nafter\nother\nold\nafter\n")
+
+    def test_numbered_hunks_relocate_uniquely_and_ignore_stale_new_positions(self) -> None:
+        target = self.root / "file.txt"
+        target.write_bytes(b"intro\none\ntwo\nthree\n")
+        result = self.apply(
+            "*** Update File: file.txt\n@@ -1 +99,2 @@\n-one\n+first\n+extra\n"
+            "@@ -99 +3 @@\n-three\n+last"
+        )
+        self.assertIsNone(result.error)
+        self.assertEqual(target.read_bytes(), b"intro\nfirst\nextra\ntwo\nlast\n")
+
+    def test_numbered_full_matches_disambiguate_exact_and_whitespace_context(self) -> None:
+        target = self.root / "file.txt"
+        for ending in (b"", b" \t"):
+            with self.subTest(ending=ending):
+                block = b"before" + ending + b"\nold\nafter\n"
+                target.write_bytes(block * 2)
+                result = self.apply(
+                    "*** Update File: file.txt\n@@ -4,3 +4,3 @@\n before\n-old\n+new\n after"
+                )
+                self.assertIsNone(result.error)
+                self.assertEqual(target.read_bytes(), block + block.replace(b"old", b"new"))
+
+    def test_relaxed_matching_rejects_ambiguity_before_any_write(self) -> None:
+        cases = (
+            (b"before \nold\nafter\nbefore\t\nold\nafter\n", "@@\n before\n-old\n+new\n after"),
+            (b"a\nold\nb\na\nold\nb\n", "@@\n stale\n-old\n+new\n b"),
+            # A range hint must not select between ambiguous trimmed matches.
+            (b"a\nold\nb\na\nold\nb\n", "@@ -1,3 +1,3 @@\n stale\n-old\n+new\n b"),
+            # Different ways to trim context must be checked together.
+            (b"a\nold\nx\ny\nold\nb\n", "@@\n a\n-old\n+new\n b"),
+        )
+        target = self.root / "file.txt"
+        for original, hunk in cases:
+            with self.subTest(hunk=hunk, original=original):
+                target.write_bytes(original)
+                result = self.apply("*** Add File: new.txt\n+new\n*** Update File: file.txt\n" + hunk)
+                self.assertIn("ambiguous", result.error.message)
+                self.assertEqual(target.read_bytes(), original)
+                self.assertFalse((self.root / "new.txt").exists())
+
+    def test_relaxation_keeps_removals_and_internal_context_exact_and_is_bounded(self) -> None:
+        cases = (
+            (b"old \n", "-old\n+new"),
+            (b"    old\n", "-old\n+new"),
+            (b"different\n", "-old\n+new"),
+            (b"old\nchanged\nremove\n", "-old\n+new\n stale\n-remove\n+new"),
+            (b"old\n", " stale\n stale\n-old\n+new\n stale"),
+            # Pure insertions have no exact removal to anchor trimmed context.
+            (b"before\nafter\n", " stale\n+new\n after"),
+            (b"\n", " stale\n-\n+new"),
+        )
+        target = self.root / "file.txt"
+        for original, hunk in cases:
+            with self.subTest(hunk=hunk):
+                target.write_bytes(original)
+                result = self.apply(f"*** Update File: file.txt\n@@\n{hunk}")
+                self.assertIn("did not match", result.error.message)
+                self.assertEqual(target.read_bytes(), original)
+
+    def test_trimmed_matches_preserve_context_between_hunks(self) -> None:
+        target = self.root / "file.txt"
+        target.write_bytes(b"before\nold\nkeep\nremove\nafter\n")
+        result = self.apply(
+            "*** Update File: file.txt\n@@\n stale\n-old\n+new\n stale\n"
+            "@@\n stale\n-remove\n+last\n stale"
+        )
+        self.assertIsNone(result.error)
+        self.assertEqual(target.read_bytes(), b"before\nnew\nkeep\nlast\nafter\n")
+
     @unittest.skipIf(os.name == "nt", "POSIX file mode semantics")
     def test_all_file_writers_preserve_executable_permissions(self) -> None:
         for tool in (ApplyPatchTool(), EditFileTool(), WriteFileTool()):
