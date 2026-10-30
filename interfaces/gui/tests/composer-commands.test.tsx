@@ -32,7 +32,7 @@ function TestComposer() {
     providers, provider: "test", onProviderChange: noop, onBusyChange: noop,
     onContextWindowChange: noop, onSessionAvailable, onTitleChange, onTurnEnd, onInitialPromptConsumed: noop,
   });
-  return <AssistantRuntimeProvider runtime={runtime.assistantRuntime}><ThreadPrimitive.Root>
+  return <AssistantRuntimeProvider runtime={runtime.assistantRuntime}><ThreadPrimitive.Root className="thread">
     <Composer runtime={runtime} />
   </ThreadPrimitive.Root></AssistantRuntimeProvider>;
 }

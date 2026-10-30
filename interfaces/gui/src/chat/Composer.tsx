@@ -33,7 +33,7 @@ export function Composer({ runtime }: { runtime: SessionRuntime }) {
 
   useLayoutEffect(() => {
     const feedback = feedbackRef.current!;
-    const thread = feedback.parentElement!.parentElement!;
+    const thread = feedback.closest<HTMLElement>(".thread")!;
     const updateHeight = () => thread.style.setProperty("--composer-feedback-height", `${feedback.offsetHeight}px`);
     updateHeight();
     const observer = new ResizeObserver(updateHeight);
