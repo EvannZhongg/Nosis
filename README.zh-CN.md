@@ -4,18 +4,18 @@
   <a href="README.md">English</a> &middot; <b>简体中文</b>
 </div>
 
-Nosis 是一个开源的轻量级个人 Agent 应用。它提供本地 Workspace 操作、人工授权、会话持久化、上下文管理、长期记忆、计划、子 Agent、定时任务，以及 Skill、Plugin、MCP 扩展能力，并同时提供 TUI 和 GUI。
+Nosis 是一个开源的轻量级个人 Agent 应用。它提供本地 Workspace 操作、人工授权、会话持久化、上下文管理、长期记忆、计划、子 Agent、定时任务，以及 Skill、Plugin、MCP 扩展能力，并提供 TUI、GUI 和飞书移动端接入。
 
 ```text
 TUI ────────────┐
-                ├── Bridge ── agent_runtime ── agent_core
-GUI ── FastAPI ─┘
+GUI ── FastAPI ─┼── Bridge ── agent_runtime ── agent_core
+IM (Feishu) ────┘
 ```
 
 - `agent_core` 提供与前端无关的 Agent 机制。
 - `agent_runtime` 读取应用配置并把 Core 组装成可运行实例。
 - Bridge 作为独立进程，是前端驱动 Runtime 的唯一通道。
-- TUI 与 GUI 宿主通过 Bridge 协议共享执行状态和交互语义；Bridge 子进程通道使用 newline-delimited JSON。
+- TUI、GUI 与移动端宿主通过 Bridge 协议共享执行状态和交互语义；Bridge 子进程通道使用 newline-delimited JSON。
 
 ## 主要能力
 
@@ -27,7 +27,7 @@ GUI ── FastAPI ─┘
 - **记忆与定时任务**：维护全局及 Workspace 长期记忆，并可创建 one-shot、interval 和 cron 任务。
 - **模型与媒体**：OpenAI-compatible 端点通过原生 OpenAI SDK 接入，其他路由及图片生成使用 LiteLLM；可为主 Agent、视觉、图片生成、辅助模型调用及不同子 Agent 角色独立路由 Provider。
 - **扩展系统**：支持 standalone Skill、Plugin 提供的 Skill / Agent / MCP / [Hook](docs/plugin-hooks.md) 组件，以及独立 MCP Server。
-- **两个前端**：TUI 适合终端工作流；GUI 提供多会话、附件、文件树、设置、记忆和定时任务管理。
+- **多种前端**：TUI 适合终端工作流；GUI 提供多会话、附件、文件树、设置、记忆和定时任务管理；飞书支持工作区与会话选择、文本流式对话、提问和审批卡片。
 
 ## 快速开始
 
@@ -73,6 +73,8 @@ nosis-gui
 
 GUI 默认监听 <http://127.0.0.1:8737>。
 
+飞书移动端支持工作区与会话选择、普通文本流式对话、提问和审批卡片；配置与启动见 [移动端接入](interfaces/mobile/README.md)。`nosis-gui` 与 `nosis-mobile` 启动或复用同一常驻宿主，GUI 与飞书同时可用。
+
 ## 模块文档
 
 第三方前端可通过已安装的 `nosis-bridge` 命令使用
@@ -89,6 +91,7 @@ GUI 默认监听 <http://127.0.0.1:8737>。
 | [`interfaces/client`](interfaces/client/README.md) | 公开 Node/TypeScript stdio 客户端、进程生命周期及集成示例 |
 | [`interfaces/tui`](interfaces/tui/README.md) | Ink 终端界面、命令、输入状态和 Bridge 子进程接入 |
 | [`interfaces/gui`](interfaces/gui/README.md) | FastAPI 服务、React 界面、多会话连接、HTTP / WebSocket API 与媒体访问 |
+| [`interfaces/mobile`](interfaces/mobile/README.md) | 飞书收发、工作区与会话选择、流式文本、提问、审批与共享宿主配置 |
 
 ## 配置与数据
 
@@ -98,6 +101,7 @@ GUI 默认监听 <http://127.0.0.1:8737>。
 | --- | --- |
 | `~/.nosis/provider_config.json` | Provider、模型和角色路由（含可选的 `fast_model`） |
 | `~/.nosis/agent_config.json` | Tool、上下文、记忆、Skill 路径、子 Agent、MCP、Workspace Instructions 与 scratch Workspace 设置 |
+| `~/.nosis/im_channels.json` | IM 通道、凭证与飞书授权用户 |
 | `~/.nosis/tool_config.json` | Web Search、Web Fetch 的 provider 选择与 API key |
 | `~/.nosis/.env` | 配置引用的密钥和环境变量 |
 | `~/.nosis/prompts/` | 主 Agent、子 Agent、压缩与记忆 Prompt |

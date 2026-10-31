@@ -21,7 +21,7 @@ from interfaces.bridge.protocol import (
     runtime_state_message,
 )
 
-from ..active_session import (
+from interfaces.session_host import (
     ActiveSession,
     ActiveSessionRegistry,
     SessionRunningError,

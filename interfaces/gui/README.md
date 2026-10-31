@@ -2,6 +2,8 @@
 
 `interfaces/gui` 是 Nosis 的图形交互层，由 FastAPI 服务和 React + assistant-ui 前端组成。FastAPI 管理浏览器连接、文件与设置 API，并托管一个常驻 Bridge 进程，每个活动 Session 使用独立 Runtime 通道；浏览器不直接运行 Agent 或 Tool。
 
+`nosis-gui` 与 `nosis-mobile` 通过 `interfaces/application_host.py` 启动或复用同一个本机应用宿主，GUI 与飞书同时可用，共享活动 Session 和 Bridge。首次启动的进程持有宿主；另一个启动入口输出已有地址后返回。`/api/host` 提供宿主身份发现，不包含密钥。
+
 GUI 依赖是可选依赖。使用项目环境启动前先安装 GUI extra：
 
 ```bash
@@ -18,11 +20,11 @@ nosis-gui
 nosis-gui --workspace ~/projects/my-project
 ```
 
-默认监听 <http://127.0.0.1:8737>。`__main__.py` 初始化 `~/.nosis/`、默认 Workspace、Session Store 和 Settings Store，然后创建 FastAPI 应用。
+默认监听 <http://127.0.0.1:8737>。`interfaces/application_host.py` 初始化 `~/.nosis/`、默认 Workspace、Session Store 和 Settings Store，然后创建 FastAPI 应用。
 
 ## 服务端
 
-`server.py` 组装应用和路由。服务端职责包括：
+`interfaces/application_host.py` 管理共享 Session Host 与 IM 的生命周期，并向 `server.py` 注入活动 Session 注册表；`server.py` 组装 GUI 应用和路由。服务端职责包括：
 
 - 列出、读取和删除按 Workspace 分组的 Session
 - 在应用启动时创建常驻 Bridge，并为活动 Session 创建、复用和关闭通道
@@ -51,7 +53,8 @@ HTTP / WebSocket 路由按模块拆分：
 
 | 模块 | 职责 |
 | --- | --- |
-| `active_session.py` | 活动 Session 注册表、页面附着与事件续传 |
+| `../application_host.py` | 共享宿主启动与复用、GUI / IM 装配与生命周期 |
+| `../session_host.py` | GUI 与移动端共享的活动 Session 注册表、控制附着与事件续传 |
 | `windows_folders.py` | 通过 Windows Explorer 定位并打开 Workspace 文件夹 |
 
 常驻 Bridge 进程的生命周期、通道收发与故障广播由宿主侧模块 `interfaces/bridge_process.py` 提供；GUI 只决定何时创建、附着与关闭，不实现协议语义。

@@ -5,7 +5,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from agent_runtime.settings import EnvironmentReloader, SettingsStore, configuration_fingerprint
+from agent_runtime.settings import (
+    EnvironmentReloader,
+    SettingsStore,
+    configuration_fingerprint,
+    environment_reference,
+)
 
 
 PROVIDERS = {
@@ -90,6 +95,14 @@ class SettingsStoreTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.store.save_agent({"max_same_tool_calls": 0})
         self.assertEqual((self.root / "agent_config.json").read_text(), before)
+
+    def test_clearing_provider_secret_removes_its_dotenv_reference(self) -> None:
+        (self.root / ".env").write_text("FIRST_KEY=secret\nOTHER=kept\n", encoding="utf-8")
+        snapshot = self.store.save_provider("first", {
+            "model": "openai/first", "api_key": {"action": "clear"},
+        })
+        self.assertEqual((self.root / ".env").read_text(), "OTHER=kept\n")
+        self.assertEqual(snapshot["providers"][0]["credential"]["source"], "none")
 
     def test_agent_update_preserves_scratch_workspace_root(self) -> None:
         self.store.save_agent({"max_same_tool_calls": 6})
@@ -232,6 +245,11 @@ class SettingsStoreTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "configuration changed"):
             self.store.save_agent({"max_same_tool_calls": 6}, revision)
 
+    def test_im_configuration_does_not_invalidate_execution_configuration(self) -> None:
+        revision = configuration_fingerprint(self.root)
+        (self.root / "im_channels.json").write_text('{"channels": []}', encoding="utf-8")
+        self.assertEqual(configuration_fingerprint(self.root), revision)
+
     def test_rejects_secret_line_breaks(self) -> None:
         with self.assertRaisesRegex(ValueError, "line breaks"):
             self.store.save_provider("first", {
@@ -342,6 +360,12 @@ class SettingsStoreTest(unittest.TestCase):
 
 
 class EnvironmentReloaderTest(unittest.TestCase):
+    def test_environment_references_require_an_exact_variable_name(self) -> None:
+        self.assertEqual(environment_reference("${_SECRET_1}"), "_SECRET_1")
+        for value in (None, 1, "inline", "${}", "${1SECRET}", "${A-B}", "${A}${B}", "prefix${A}"):
+            with self.subTest(value=value):
+                self.assertIsNone(environment_reference(value))
+
     def test_reloads_changes_and_removes_deleted_values(self) -> None:
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, {}, clear=True):
             path = Path(directory) / ".env"

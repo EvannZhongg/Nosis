@@ -12,8 +12,8 @@
 
 ```text
 TUI (Ink + React) ──────┐
-                        ├─── Bridge ── agent_runtime ── Agent Core
-GUI (React) ── FastAPI ─┘
+GUI (React) ── FastAPI ─┼─── Bridge ── agent_runtime ── Agent Core
+移动端 (飞书等 IM) ─────┘
 ```
 
 `agent_runtime` 是共享的应用 Runtime；Bridge 以 `python -m interfaces.bridge` 作为独立进程运行，由前端宿主启动，是前端与 Runtime 之间的唯一通道，两端用 newline-delimited JSON 交换协议消息。
@@ -21,7 +21,8 @@ GUI (React) ── FastAPI ─┘
 * 依赖方向单向：`interfaces/* → agent_runtime → agent_core`；`agent_core` 不得 import `interfaces` 或 `agent_runtime`，`agent_runtime` 不得 import `interfaces`。
 * 驱动 Agent、执行 Tool、发起审批只能经由 Bridge 协议；前端不得运行 Agent Loop，也不得执行会改变 Workspace 或 Session 的 Tool。
 * 前端对 Core 的复用仅限只读能力（如 Session 读取、Workspace 路径解析、只读 Tool 的文件列举）；执行语义不得在前端复制。
-* TUI 和 GUI 仅作为交互层，共享同一套 Agent Runtime。
+* TUI、GUI 和移动端仅作为交互层，共享同一套 Agent Runtime。GUI 与移动端宿主可复用 `interfaces/session_host.py` 管理 Bridge 进程和控制附着，不得在其中实现执行语义。
+* GUI 与 IM 通过 `interfaces/application_host.py` 启动或复用同一个常驻前端宿主；两个入口可以同时使用，不得各自启动重复的 IM 接收连接或 Session Runtime。
 * 授权、取消、Session 与 Tool 执行语义只实现一次，不得由两个前端各维护一套。
 * 保持清晰的依赖方向，避免模块间循环依赖。
 

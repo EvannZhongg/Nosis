@@ -1,12 +1,10 @@
-"""Active GUI sessions and their bridge attachment lifecycle."""
+"""Frontend-owned sessions and their Bridge attachment lifecycle."""
 
 import asyncio
 from collections import deque
 from pathlib import Path
 
-from fastapi.encoders import jsonable_encoder
-
-from agent_core import JsonlSessionStore, Workspace, plan_snapshot_to_dict
+from agent_core import JsonlSessionStore, Workspace, message_to_dict, plan_snapshot_to_dict
 from interfaces.bridge.protocol import attachment_replaced_message, runtime_state_message
 from interfaces.bridge.event_stream import runtime_is_active
 
@@ -140,6 +138,10 @@ class ActiveSession:
         )
 
     @property
+    def turn_id(self) -> str | None:
+        return self._pending_turn or self.state.get("turn_id")
+
+    @property
     def failure_pending(self) -> bool:
         return self._failure_pending
 
@@ -271,7 +273,7 @@ class ActiveSessionRegistry:
                         session_id,
                         selected_provider,
                         selected_workspace,
-                        jsonable_encoder(stored.items),
+                        [message_to_dict(item, include_provider_data=False) for item in stored.items],
                         bridge,
                     )
                     runtime.state["plan"] = (

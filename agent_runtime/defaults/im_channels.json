@@ -1,0 +1,12 @@
+{
+  "channels": [
+    {
+      "id": "personal-feishu",
+      "type": "feishu",
+      "enabled": false,
+      "app_id": "",
+      "app_secret": "${FEISHU_APP_SECRET}",
+      "allowed_users": []
+    }
+  ]
+}

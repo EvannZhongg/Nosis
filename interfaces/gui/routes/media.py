@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse
 from agent_core import UnsupportedImageError, Workspace, image_extension, probe_image
 from agent_core.path_utils import path_for_comparison
 
-from ..active_session import ActiveSessionRegistry
+from interfaces.session_host import ActiveSessionRegistry
 from .workspace import WorkspaceResolver
 
 

@@ -22,7 +22,7 @@ from agent_core.providers import (
 from agent_core.tools import ROLE_TOOL_NAMES, TOOL_NAMES
 
 from .config import (
-    DEFAULT_CONFIG_FILENAMES,
+    EXECUTION_CONFIG_FILENAMES,
     configured_skill_sources,
     load_model_options,
     load_scratch_workspace_root,
@@ -56,6 +56,16 @@ def _dotenv_values(path: Path) -> dict[str, str]:
     }
 
 
+def load_environment(directory: Path) -> dict[str, str]:
+    """Read literal dotenv values, taking precedence over process variables."""
+    return {**os.environ, **_dotenv_values(directory / ".env")}
+
+
+def environment_reference(value: object) -> str | None:
+    reference = _ENV_REFERENCE.fullmatch(value) if isinstance(value, str) else None
+    return reference.group(1) if reference else None
+
+
 def _update_dotenv(path: Path, name: str, value: str | None) -> None:
     lines = path.read_text(encoding="utf-8").splitlines() if path.is_file() else []
     pattern = re.compile(rf"^\s*(?:export\s+)?{re.escape(name)}\s*=")
@@ -76,7 +86,7 @@ def _update_dotenv(path: Path, name: str, value: str | None) -> None:
 
 def configuration_fingerprint(directory: Path) -> str:
     digest = sha256()
-    for filename in (*DEFAULT_CONFIG_FILENAMES, ".env"):
+    for filename in (*EXECUTION_CONFIG_FILENAMES, ".env"):
         path = directory / filename
         digest.update(filename.encode())
         digest.update(b"\0")
@@ -143,7 +153,7 @@ class SettingsStore:
         agent_document = _read_json(self.agent_path)
         default_provider, models = load_model_options(self.provider_path)
         agent_config = load_agent_config(self.agent_path)
-        env = _dotenv_values(self.env_path)
+        env = load_environment(self.directory)
         providers_value = provider_document.get("providers")
         assert isinstance(providers_value, dict)
 
@@ -152,11 +162,7 @@ class SettingsStore:
             raw = providers_value[name]
             assert isinstance(raw, dict)
             key_value = raw.get("key")
-            reference = (
-                _ENV_REFERENCE.fullmatch(key_value)
-                if isinstance(key_value, str)
-                else None
-            )
+            reference = environment_reference(key_value)
             providers.append({
                 "id": name,
                 "model": model,
@@ -167,9 +173,9 @@ class SettingsStore:
                 "api": raw.get("api"),
                 "credential": {
                     "source": "env" if reference else "inline" if key_value else "none",
-                    "env_name": reference.group(1) if reference else None,
+                    "env_name": reference,
                     "configured": (
-                        bool(env.get(reference.group(1)) or os.environ.get(reference.group(1)))
+                        bool(env.get(reference))
                         if reference
                         else bool(key_value)
                     ),
@@ -388,14 +394,14 @@ class SettingsStore:
 
         action = api_key["action"]
         old_key = entry.get("key")
-        old_reference = _ENV_REFERENCE.fullmatch(old_key) if isinstance(old_key, str) else None
+        old_reference = environment_reference(old_key)
         if action == "set":
             value = api_key.get("value")
             if not isinstance(value, str) or not value:
                 raise ValueError("api_key.value must be a non-empty string")
             if "\n" in value or "\r" in value:
                 raise ValueError("api_key.value must not contain line breaks")
-            env_name = old_reference.group(1) if old_reference else self._provider_env_name(provider_id)
+            env_name = old_reference or self._provider_env_name(provider_id)
             entry["key"] = f"${{{env_name}}}"
         elif action == "clear":
             entry.pop("key", None)
@@ -411,7 +417,7 @@ class SettingsStore:
         if action == "set":
             _update_dotenv(self.env_path, env_name, value)
         elif action == "clear" and old_reference:
-            _update_dotenv(self.env_path, old_reference.group(1), None)
+            _update_dotenv(self.env_path, old_reference, None)
         _atomic_json(self.provider_path, document)
         self._environment.reload()
         return self._snapshot()

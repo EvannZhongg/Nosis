@@ -25,11 +25,12 @@ if TYPE_CHECKING:
     from agent_core.providers.base import ModelProvider
 
 
-DEFAULT_CONFIG_FILENAMES = (
+EXECUTION_CONFIG_FILENAMES = (
     "provider_config.json",
     "agent_config.json",
     "tool_config.json",
 )
+DEFAULT_CONFIG_FILENAMES = (*EXECUTION_CONFIG_FILENAMES, "im_channels.json")
 PROMPT_FILENAMES = (
     "Soul.md",
     "SubAgent.md",

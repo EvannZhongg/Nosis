@@ -39,6 +39,7 @@ addopts = "-n 4 --dist loadscope"
 nosis = "interfaces.launch:main"
 nosis-bridge = "interfaces.bridge.__main__:main"
 nosis-gui = "interfaces.gui.__main__:main"
+nosis-mobile = "interfaces.mobile.__main__:main"
 
 [tool.setuptools.packages.find]
 include = ["agent_core*", "agent_runtime*", "interfaces*"]
@@ -59,6 +60,7 @@ namespaces = false
     "defaults/plugins/*/.mcp.json",
 ]
 "interfaces.gui" = ["static/*", "static/assets/*"]
+"interfaces.mobile" = ["dist/*.cjs"]
 
 # The recursive skill pattern above would otherwise carry whatever sits in the
 # working tree, so byte-code caches and Finder metadata reach the wheel when a

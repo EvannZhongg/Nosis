@@ -1,0 +1,15 @@
+{
+  "name": "@nosis/mobile",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "esbuild feishu.mjs --bundle --platform=node --target=node22 --format=cjs --outfile=dist/feishu.cjs"
+  },
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.76.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  }
+}

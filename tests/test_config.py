@@ -222,6 +222,7 @@ class ConfigTest(unittest.TestCase):
                     config_directory / "provider_config.json",
                     config_directory / "agent_config.json",
                     config_directory / "tool_config.json",
+                    config_directory / "im_channels.json",
                     config_directory / "AGENTS.md",
                     config_directory / "MEMORY.md",
                     config_directory / "prompts" / "Soul.md",
@@ -359,6 +360,7 @@ class ConfigTest(unittest.TestCase):
                 (
                     config_directory / "agent_config.json",
                     config_directory / "tool_config.json",
+                    config_directory / "im_channels.json",
                     config_directory / "MEMORY.md",
                     config_directory / "prompts" / "SubAgent.md",
                     config_directory / "prompts" / "Consolidator.md",

@@ -13,6 +13,7 @@ interfaces/tui/dist/
 interfaces/protocol/dist/
 interfaces/client/dist/
 interfaces/gui/static/
+interfaces/mobile/dist/
 CubeSandbox/
 nanobot/
 .DS_Store

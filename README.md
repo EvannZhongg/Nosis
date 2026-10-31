@@ -4,18 +4,18 @@
   <b>English</b> &middot; <a href="README.zh-CN.md">简体中文</a>
 </div>
 
-Nosis is an open-source, lightweight personal agent application. It provides local workspace operations, human approval, session persistence, context management, long-term memory, plans, subagents, scheduled tasks, and Skill / Plugin / MCP extensibility — with both a TUI and a GUI.
+Nosis is an open-source, lightweight personal agent application. It provides local workspace operations, human approval, session persistence, context management, long-term memory, plans, subagents, scheduled tasks, and Skill / Plugin / MCP extensibility — with a TUI, a GUI, and Feishu messaging access.
 
 ```text
 TUI ────────────┐
-                ├── Bridge ── agent_runtime ── agent_core
-GUI ── FastAPI ─┘
+GUI ── FastAPI ─┼── Bridge ── agent_runtime ── agent_core
+IM (Feishu) ────┘
 ```
 
 - `agent_core` provides frontend-agnostic agent mechanisms.
 - `agent_runtime` reads application configuration and assembles the Core into a runnable instance.
 - Bridge runs as a standalone process and is the only channel through which a frontend drives the Runtime.
-- The TUI and GUI hosts share execution state and interaction semantics through the Bridge protocol; the Bridge subprocess channel uses newline-delimited JSON.
+- The TUI, GUI, and messaging hosts share execution state and interaction semantics through the Bridge protocol; the Bridge subprocess channel uses newline-delimited JSON.
 
 ## Key capabilities
 
@@ -27,7 +27,7 @@ GUI ── FastAPI ─┘
 - **Memory and scheduled tasks**: global and workspace-scoped long-term memory, plus one-shot, interval, and cron tasks.
 - **Models and media**: OpenAI-compatible endpoints use the native OpenAI SDK; other routes and image generation use LiteLLM. Providers can be routed independently for the main agent, vision, image generation, auxiliary model calls, and each subagent role.
 - **Extension system**: standalone skills, skills / agents / MCP / [command hooks](docs/plugin-hooks.md) provided by plugins, and standalone MCP servers.
-- **Two frontends**: the TUI suits terminal workflows; the GUI offers multi-session management, attachments, a file tree, settings, memory, and scheduled tasks.
+- **Multiple frontends**: the TUI suits terminal workflows; the GUI offers multi-session management, attachments, a file tree, settings, memory, and scheduled tasks; Feishu supports workspace and session selection, streaming text, questions, and approval cards.
 
 ## Quick start
 
@@ -73,6 +73,8 @@ nosis-gui
 
 The GUI listens on <http://127.0.0.1:8737> by default.
 
+Feishu messaging access is configured in `~/.nosis/im_channels.json`; see [Mobile / IM setup](interfaces/mobile/README.md). Run `nosis-mobile` or `nosis-gui` to start or reuse the same resident application host. The GUI and Feishu share active sessions and one Bridge process.
+
 ## Module documentation
 
 Third-party frontends can launch the installed `nosis-bridge` command and use the
@@ -89,6 +91,7 @@ Third-party frontends can launch the installed `nosis-bridge` command and use th
 | [`interfaces/client`](interfaces/client/README.md) | Public Node/TypeScript stdio client, process lifecycle and integration example |
 | [`interfaces/tui`](interfaces/tui/README.md) | The Ink terminal interface, commands, input state, and Bridge subprocess attachment |
 | [`interfaces/gui`](interfaces/gui/README.md) | The FastAPI service, React interface, multi-session connections, HTTP / WebSocket API, and media access |
+| [`interfaces/mobile`](interfaces/mobile/README.md) | Feishu transport, workspace and session selection, streaming text, questions, approvals, and shared-host setup |
 
 ## Configuration and data
 
@@ -98,6 +101,7 @@ Third-party frontends can launch the installed `nosis-bridge` command and use th
 | --- | --- |
 | `~/.nosis/provider_config.json` | Providers, models, and role routing, including the optional `fast_model` |
 | `~/.nosis/agent_config.json` | Tools, context, memory, skill paths, subagents, MCP, workspace instructions, and scratch workspace settings |
+| `~/.nosis/im_channels.json` | Messaging channels, credentials, and authorized Feishu users |
 | `~/.nosis/tool_config.json` | Web Search and Web Fetch provider selection and API keys |
 | `~/.nosis/.env` | The secrets and environment variables referenced by the configuration |
 | `~/.nosis/prompts/` | Main agent, subagent, compaction, and memory prompts |
