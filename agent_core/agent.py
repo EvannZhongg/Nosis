@@ -161,7 +161,6 @@ class Agent:
         tools: ToolSet,
         context: ToolExecutionContext,
         now: Callable[[], datetime] | None = None,
-        tool_result_normalizer: ToolResultNormalizer | None = None,
         memory_context: MemoryContext | None = None,
     ) -> None:
         self._provider = provider
@@ -170,14 +169,11 @@ class Agent:
         self._now = now or (lambda: datetime.now(timezone.utc))
         self._tools = tools
         self._execution_context = context
-        tool_result_normalizer = (
-            tool_result_normalizer
-            or ToolResultNormalizer(
-                context.workspace,
-                session.session_id,
-                sessions_directory=context.sessions_directory,
-                artifact_directory=context.artifact_directory,
-            )
+        tool_result_normalizer = ToolResultNormalizer(
+            context.workspace,
+            session.session_id,
+            sessions_directory=context.sessions_directory,
+            artifact_directory=context.artifact_directory,
         )
         if context.jobs is not None:
             context.jobs.set_result_normalizer(tool_result_normalizer)

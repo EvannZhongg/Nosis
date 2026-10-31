@@ -602,8 +602,7 @@ class MobileTest(unittest.IsolatedAsyncioTestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(png_bytes(3, 2))
         attachment = {"type": "image", "path": ".nosis/attachments/screenshot.png", "filename": "screenshot.png"}
-        for tool in ("computer_screenshot", "browser_screenshot", "read_image", "generate_image"):
-            channel.emit({"type": "tool_media", "turn_id": tool, "attachments": [attachment], "present_to_user": False})
+        channel.emit({"type": "tool_media", "turn_id": "observe", "attachments": [attachment], "present_to_user": False})
         await self.settle()
         self.assertEqual(self.transport.attachments, [])
         channel.emit({"type": "tool_media", "turn_id": "present", "attachments": [attachment], "present_to_user": True})

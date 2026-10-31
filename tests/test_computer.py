@@ -64,7 +64,7 @@ class PasteTextTest(unittest.TestCase):
 
 class HotkeyNormalizationTest(unittest.TestCase):
     def test_normalizes_control_alias_and_case(self) -> None:
-        pyautogui = Mock(KEYBOARD_KEYS={"ctrl", "shift", "c"})
+        pyautogui = Mock(platformModule=Mock(keyboardMapping={"ctrl": 17, "shift": 16, "c": 67}))
 
         self.assertEqual(
             _normalize_hotkey_keys(["Control", "SHIFT", "C"], pyautogui),
@@ -72,14 +72,13 @@ class HotkeyNormalizationTest(unittest.TestCase):
         )
 
     def test_rejects_unknown_key_before_pyautogui_can_ignore_it(self) -> None:
-        pyautogui = Mock(KEYBOARD_KEYS={"ctrl", "v"})
+        pyautogui = Mock(platformModule=Mock(keyboardMapping={"ctrl": 17, "v": 86}))
 
         with self.assertRaisesRegex(ValueError, "unsupported computer key: ControlLeft"):
             _normalize_hotkey_keys(["ControlLeft", "v"], pyautogui)
 
     def test_rejects_key_without_a_current_platform_mapping(self) -> None:
         pyautogui = SimpleNamespace(
-            KEYBOARD_KEYS=["ctrl", "command", "v"],
             platformModule=SimpleNamespace(
                 keyboardMapping={"ctrl": 17, "command": None, "v": 86}
             ),
@@ -139,7 +138,7 @@ class DesktopComputerTest(unittest.TestCase):
             },
         ]
         self.screenshots = _FakeMssFactory(self.monitors, scale=2)
-        self.pyautogui = Mock(KEYBOARD_KEYS={"enter", "ctrl", "v"})
+        self.pyautogui = Mock(platformModule=Mock(keyboardMapping={"enter": 13, "ctrl": 17, "v": 86}))
         self.pyautogui.size.return_value = (200, 100)
         self.pyautogui.position.return_value = (50, 0)
         self.pyautogui.FAILSAFE_POINTS = []

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TextIO
 from unittest.mock import patch
 
+from agent_core import SchedulerService
 from agent_core.tools.config import TOOL_NAMES
 from threading import Lock, Thread
 from interfaces.bridge.bridge import Bridge as SessionBridge
@@ -19,12 +20,14 @@ from agent_runtime.services import RuntimeServices
 class Bridge(SessionBridge):
     """Feed session-adapter unit tests without a process transport."""
 
-    def __init__(self, stdin, stdout, *, scheduler=None, start_scheduler=True):
+    def __init__(self, stdin, stdout, *, scheduler=None):
         self._stdin = stdin
         self._reader = None
         self._reader_lock = Lock()
+        config_directory = default_config_directory()
         self._test_services = RuntimeServices(
-            default_config_directory(), scheduler=scheduler, start_scheduler=start_scheduler,
+            config_directory,
+            scheduler=scheduler or SchedulerService(config_directory / "schedule.jsonl"),
         )
         super().__init__(services=self._test_services, send=lambda event: stdout.write(encode(event) + "\n"))
 
@@ -99,7 +102,7 @@ class BridgeTestCase(unittest.TestCase):
             "tests.bridge_fixtures.default_config_directory",
             return_value=config_directory,
         ):
-            bridge = Bridge(stdin, stdout, start_scheduler=False)
+            bridge = Bridge(stdin, stdout)
         self.addCleanup(bridge.close)
         return bridge, stdout
 

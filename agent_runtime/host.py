@@ -28,7 +28,6 @@ class RuntimeHost:
         *,
         callbacks: RuntimeCallbacks | None = None,
         scheduler: SchedulerService | None = None,
-        start_scheduler: bool = True,
         services: RuntimeServices | None = None,
         execution_authority_limit: ExecutionAuthority = FULL_ACCESS_AUTHORITY,
     ) -> None:
@@ -37,7 +36,7 @@ class RuntimeHost:
         runtime_callbacks = replace(self.callbacks, on_event=self.publish_event)
         self._owns_services = services is None
         self.services = services or RuntimeServices(
-            self.config_directory, scheduler=scheduler, start_scheduler=start_scheduler,
+            self.config_directory, scheduler=scheduler,
         )
         self.environment = self.services.environment
         self.settings = self.services.settings

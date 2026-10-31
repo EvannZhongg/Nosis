@@ -16,7 +16,7 @@ if "--block-litellm" in sys.argv:
     sys.meta_path.insert(0, BlockLiteLLM())
 from tests.bridge_fixtures import open_session_message
 from agent_runtime import RuntimeHost
-from agent_core import LLMRequest, Message, ToolDefinition
+from agent_core import LLMRequest, Message, SchedulerService, ToolDefinition
 import httpx
 from openai import OpenAI
 
@@ -60,7 +60,7 @@ with tempfile.TemporaryDirectory() as directory:
                      "output_reserve_tokens": 100, "memory": {"enabled": False},
                      "main_agent": {"tools": {"computer_screenshot": True, "computer_action": True,
                                               "generate_image": False, "subagent": False}}})
-    host = RuntimeHost(root, start_scheduler=False)
+    host = RuntimeHost(root, scheduler=SchedulerService(root / "schedule.jsonl"))
     host.open_session(root)
     turn_start = time.perf_counter()
     try:

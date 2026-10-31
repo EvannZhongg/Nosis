@@ -152,7 +152,7 @@ class SessionTitleRuntimeTest(unittest.TestCase):
         })
         output = io.StringIO()
         with patch("tests.bridge_fixtures.default_config_directory", return_value=root):
-            bridge = Bridge(io.StringIO(), output, start_scheduler=False)
+            bridge = Bridge(io.StringIO(), output)
         self.addCleanup(bridge.close)
         bridge.open_session(opening)
         fast = TitleProvider(RuntimeError("unavailable") if failure else "GUI 加载优化", blocked=True)

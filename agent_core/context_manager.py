@@ -425,7 +425,7 @@ def _validated_archive_summary(response: LLMResponse) -> str:
         raise ValueError("checkpoint must not be empty")
     lines = [line.strip() for line in summary.splitlines()]
     lines = [line for line in lines if line]
-    if lines and _ARCHIVE_OPEN_FENCE.fullmatch(lines[0]):
+    if _ARCHIVE_OPEN_FENCE.fullmatch(lines[0]):
         if lines[-1] != "```" or len(lines) < 3:
             raise ValueError(
                 "checkpoint code fence must wrap the complete checkpoint"
@@ -437,8 +437,6 @@ def _validated_archive_summary(response: LLMResponse) -> str:
         raise ValueError(
             "checkpoint lines must use '- [mark] fact' with a supported mark"
         )
-    if not lines:
-        raise ValueError("checkpoint must not be empty")
     return "\n".join(lines)
 
 

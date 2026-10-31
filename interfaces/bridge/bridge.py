@@ -133,11 +133,11 @@ class Bridge:
                 if waiter is not None:
                     waiter[1].put(message)
             return
-        if message_type == "permission_set" and not self._session_opened:
-            self._messages.put(message)
-            return
         if message_type == "permission_set":
-            self._set_permission_preset(message)
+            if self._session_opened:
+                self._set_permission_preset(message)
+            else:
+                self._messages.put(message)
             return
         if message_type == "user_steer":
             self._route_steer(message)

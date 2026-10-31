@@ -600,19 +600,14 @@ def _normalize_hotkey_keys(keys: list[str], pyautogui: Any) -> tuple[str, ...]:
     """Map common key spellings to PyAutoGUI names and reject unknown keys."""
 
     normalized: list[str] = []
-    mapping = getattr(getattr(pyautogui, "platformModule", None), "keyboardMapping", None)
-    if isinstance(mapping, dict):
-        supported = {key for key, code in mapping.items() if code is not None}
-    else:
-        try:
-            supported = set(getattr(pyautogui, "KEYBOARD_KEYS", ()))
-        except TypeError:
-            # Test doubles and older wrappers may not expose the key catalog.
-            supported = None
+    supported = {
+        key for key, code in pyautogui.platformModule.keyboardMapping.items()
+        if code is not None
+    }
     for key in keys:
         candidate = key.lower() if len(key) == 1 else key.casefold()
         candidate = _HOTKEY_ALIASES.get(candidate, candidate)
-        if supported is not None and candidate not in supported:
+        if candidate not in supported:
             raise ValueError(f"unsupported computer key: {key}")
         normalized.append(candidate)
     return tuple(normalized)

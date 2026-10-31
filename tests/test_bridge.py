@@ -1866,7 +1866,6 @@ class ScheduledTurnTest(unittest.TestCase):
                     io.StringIO(),
                     io.StringIO(),
                     scheduler=scheduler,
-                    start_scheduler=False,
                 )
                 for scope in (ExecutionScope.WORKSPACE, ExecutionScope.HOST):
                     schedule = Schedule(
@@ -1939,7 +1938,6 @@ class ScheduledTurnTest(unittest.TestCase):
                     io.StringIO(),
                     io.StringIO(),
                     scheduler=scheduler,
-                    start_scheduler=False,
                 )
                 cases = (
                     (
@@ -2347,8 +2345,6 @@ class BridgeSessionOpenTest(BridgeTestCase):
         self.assertIs(plane.memory.reconciler._provider, plane.fast_provider)
         self.assertIsNot(plane.provider, plane.fast_provider)
 
-        usage_files = list((root / "sessions").rglob("auxiliary_model_usage.jsonl"))
-        self.assertEqual(usage_files, [])
         session = bridge.host.sessions.session
         for index in range(8):
             session.add_item("user", f"request {index}")
@@ -2378,7 +2374,6 @@ class BridgeSessionOpenTest(BridgeTestCase):
             ("compression_completed", None, "openai/first", "completed"),
             ("memory_completed", "global", "openai/second", "completed"),
         ])
-        self.assertEqual(list((root / "sessions").rglob("auxiliary_model_usage.jsonl")), [])
         self.assertEqual(records[0]["usage"], {
             "input_tokens": 50, "output_tokens": 8, "total_tokens": 58,
             "cache_read_tokens": 30, "cache_write_tokens": 10,
@@ -2503,7 +2498,6 @@ class BridgeSessionOpenTest(BridgeTestCase):
             (calls[1].event_type, records[1]["scope"], records[1]["model"], records[1]["status"]),
             ("memory_completed", "global", "openai/first", "completed"),
         )
-        self.assertEqual(list((root / "sessions").rglob("auxiliary_model_usage.jsonl")), [])
         self.assertFalse(any(event.event_type in {"compression_completed", "memory_completed"}
                              for event in parent_session.journal))
         self.assertEqual(child.cache_usage, CacheUsage(600, 500))

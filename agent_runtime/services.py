@@ -10,8 +10,7 @@ from .settings import EnvironmentReloader, SettingsStore
 
 class RuntimeServices:
     def __init__(self, config_directory: Path, *,
-                 scheduler: SchedulerService | None = None,
-                 start_scheduler: bool = True) -> None:
+                 scheduler: SchedulerService | None = None) -> None:
         self.config_directory = config_directory.resolve()
         self.environment = EnvironmentReloader(self.config_directory / ".env")
         self.settings = SettingsStore(self.config_directory, self.environment)
@@ -25,8 +24,7 @@ class RuntimeServices:
             self.scheduler.runner = ScheduledTurnRunner(
                 self.config_directory, self.scheduler, services=self,
             )
-            if start_scheduler:
-                self.scheduler.start()
+            self.scheduler.start()
 
     def close(self) -> None:
         if self._owns_scheduler:
