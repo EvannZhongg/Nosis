@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, ClassVar, Protocol, TypeAlias
 
-from ..content import ImagePart
+from ..content import AttachmentPart
 
 if TYPE_CHECKING:
     from .context import ToolExecutionContext
@@ -107,11 +107,11 @@ class ToolResult:
     name: str
     output: JSONValue = None
     error: ToolError | None = None
-    #: Images this call wants placed in the model's context.  They are
+    #: Attachments this call publishes to the conversation. They are
     #: delivered as a separate message after the tool results, because a
     #: tool-role message cannot carry image content on the
     #: OpenAI-compatible chat API that providers are reached through.
-    attachments: tuple[ImagePart, ...] = ()
+    attachments: tuple[AttachmentPart, ...] = ()
     executed: bool = field(default=False, compare=False, repr=False)
     hook_feedback: tuple[str, ...] = field(default=(), compare=False, repr=False)
     # Internal hooks used by tools that spool large results.  They are not
@@ -165,7 +165,7 @@ class ToolOutput:
     """
 
     output: JSONValue = None
-    attachments: tuple[ImagePart, ...] = ()
+    attachments: tuple[AttachmentPart, ...] = ()
     artifact_writer: Callable[[Path], None] | None = field(
         default=None, compare=False, repr=False
     )

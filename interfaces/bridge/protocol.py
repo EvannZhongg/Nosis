@@ -392,7 +392,7 @@ def event_to_message(
             "turn_id": turn_id,
             "attachments": [
                 {
-                    "type": "image",
+                    "type": part.type,
                     "path": part.path,
                     "mime_type": part.mime_type,
                     "filename": part.filename,

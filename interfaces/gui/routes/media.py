@@ -4,18 +4,16 @@ import base64
 import hashlib
 import hmac
 import json
-import mimetypes
 import secrets
-import shutil
 import time
 from pathlib import Path
-from uuid import uuid4
 
 from fastapi import APIRouter, Body, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
-from agent_core import UnsupportedImageError, Workspace, image_extension, probe_image
+from agent_core import UnsupportedImageError, Workspace, probe_image
 from agent_core.path_utils import path_for_comparison
+from agent_runtime.attachments import store_attachment
 
 from interfaces.session_host import ActiveSessionRegistry
 from .workspace import WorkspaceResolver
@@ -155,47 +153,14 @@ def create_media_router(
     ) -> dict[str, object]:
         """Persist browser files as workspace-relative attachment paths."""
         current_workspace = resolver.for_session(session_id)
-        attachment_root = (
-            current_workspace.path / ".nosis" / "attachments"
-        ).resolve()
-        attachment_root.mkdir(parents=True, exist_ok=True)
         attachments = []
         for upload in files:
-            path = attachment_root / uuid4().hex
             try:
-                with path.open("wb") as target:
-                    shutil.copyfileobj(upload.file, target)
+                attachments.append(store_attachment(
+                    upload.file, current_workspace, upload.filename, upload.content_type,
+                ))
             except OSError as error:
-                path.unlink(missing_ok=True)
                 raise HTTPException(status_code=500, detail=str(error)) from error
-            filename = Path(upload.filename or "attachment").name
-            try:
-                info = probe_image(path, max_bytes=None)
-            except UnsupportedImageError:
-                info = None
-            suffix = (
-                image_extension(info.mime_type)
-                if info is not None
-                else Path(filename).suffix
-            )
-            named = path.with_name(path.name + suffix)
-            path.replace(named)
-            mime_type = (
-                info.mime_type
-                if info is not None
-                else mimetypes.guess_type(filename)[0]
-                or upload.content_type
-                or "application/octet-stream"
-            )
-            attachments.append(
-                {
-                    "type": "image" if info is not None else "file",
-                    "path": f".nosis/attachments/{named.name}",
-                    "filename": filename,
-                    "mime_type": mime_type,
-                    "size_bytes": named.stat().st_size,
-                }
-            )
         return {"attachments": attachments}
 
     @router.post("/api/image-url")

@@ -64,7 +64,9 @@ python -m interfaces.mobile --workspace F:/Nosis
 使用企业自建应用，开启机器人能力。最小应用身份权限：
 
 - `im:message.p2p_msg:readonly`：接收用户发给机器人的单聊消息。
+- `im:message:readonly`：获取消息中的资源文件，下载用户上传的附件（只有单聊事件权限不足以调用资源下载接口）。
 - `im:message:send_as_bot`：以机器人身份发送和更新消息卡片。
+- `im:resource`：下载用户消息中的图片、文件，以及上传机器人回传的附件。
 
 在“事件与回调”中分别配置事件和回调为长连接，并订阅：
 
@@ -92,8 +94,13 @@ python -m interfaces.mobile --workspace F:/Nosis
 | `/cancel` | 发送当前 Turn 的取消命令 |
 | `/takeover` | 显式替换另一端的控制附着 |
 | 普通文本 | 空闲时开始 Turn；执行期间发送 steer；允许自由输入的提问期间提交答案 |
+| 图片、文件、图文消息 | 空闲时下载附件并开始 Turn；运行、提问或审批期间提示任务结束后重发 |
 
 绑定按通道、单聊、用户隔离，保存在 `im_bindings.json`，不进入 Session Journal。该文件还保存最近 1000 条已接收消息的身份，阻止平台重投重复启动命令或 Turn；消息先登记再提交，因此宿主在这两步之间异常退出时需要用户重发。宿主重启后按需恢复同一 Session。新建时使用 Runtime 默认模型，恢复时由 Runtime 恢复会话模型、权限和计划。
+
+附件先经过身份、消息去重、Session 绑定和控制权检查，再通过官方 SDK 的[获取消息中的资源文件](https://open.feishu.cn/document/server-docs/im-v1/message/get-2)接口下载到临时目录，交给 `agent_runtime.attachments.store_attachment` 保存到当前工作区的 `.nosis/attachments/`。普通文件保留原始文件名，图片按真实字节确定类型和扩展名；图文消息中的文字和多张图片合并为同一个 `user_turn.attachments`。纯附件消息也可发起 Turn。Bridge 继续使用 Runtime 的附件解析，Core 负责模型图片输入、文件提示、视觉降级和 Journal；适配层不复制这些执行语义。失败的下载会清理临时文件和本条消息已保存的附件。
+
+Agent 的 `generate_image`、`read_image` 等现有图片输出和新增 `present_file` 文件交付，均沿用结构化 `tool_media` 事件。飞书端将事件附件通过 SDK 上传后发送为图片或文件消息；`present_file` 保存交付快照，避免后续编辑改变已交付文件。GUI 同样展示文件下载入口。单个附件发送失败会显示错误，继续处理后续附件和正文。平台权限的生效与版本发布要求以开发者后台提示为准；本地代码或 bundle 更新后需重启常驻宿主。
 
 一个 Session 只有一个控制附着。GUI 或飞书接管后，原端停止控制；待处理提问 / 审批从 Runtime 快照在新端重绘。运行期间不能切换工作区或新建替换当前会话，先取消或等待结束。
 

@@ -580,6 +580,22 @@ describe("applyMessage", () => {
     ]);
   });
 
+  it("renders a delivered file with the assistant and preserves its session download URL", () => {
+    const { items } = fold([
+      { type: "assistant_message", turn_id: "t1", model_call_index: 1, content: "报告已生成", timestamp_utc: "2026-10-31T00:00:00Z" },
+      { type: "tool_media", turn_id: "t1", attachments: [{
+        type: "file", path: ".nosis/attachments/report.pdf", filename: "report.pdf", mime_type: "application/pdf", size_bytes: 32,
+      }] },
+    ]);
+    const messages = toMessages(items, "session-1");
+    expect(messages).toHaveLength(1);
+    expect(messages[0].role).toBe("assistant");
+    expect(messages[0].content).toContainEqual({
+      type: "file", data: "/api/attachments/report.pdf?session_id=session-1&download_name=report.pdf",
+      filename: "report.pdf", mimeType: "application/pdf", sourceType: "url",
+    });
+  });
+
   it("applies a later tool result before earlier calls finish", () => {
     const calls = [
       { id: "call-a", name: "subagent", arguments: { task: "A" } },

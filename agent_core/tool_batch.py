@@ -4,7 +4,7 @@ from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Callable
 
-from .content import ImagePart
+from .content import AttachmentPart, ImagePart
 from .hooks import append_hook_feedback
 from .session import Session, ToolExecutionStatus
 from .tool_result import ToolResultNormalizer
@@ -14,7 +14,7 @@ from .turn_control import AgentCancelled, TurnControl
 
 ToolCallCallback = Callable[[ToolCall, int, int], None]
 ToolResultCallback = Callable[[ToolResult, int, int], None]
-ToolMediaCallback = Callable[[tuple[ImagePart, ...]], None]
+ToolMediaCallback = Callable[[tuple[AttachmentPart, ...]], None]
 
 
 class ToolBatchExecutor:
@@ -290,10 +290,13 @@ def _failure_status(error: BaseException) -> ToolExecutionStatus:
     return "failed"
 
 
-def _media_notice(attachments: tuple[ImagePart, ...]) -> str:
-    """Describe images as output, not as a new instruction from the user."""
+def _media_notice(attachments: tuple[AttachmentPart, ...]) -> str:
+    """Describe attachments as output rather than a new user instruction."""
     listed = "\n".join(f"- {part.path}" for part in attachments)
-    noun = "image" if len(attachments) == 1 else "images"
+    if all(isinstance(part, ImagePart) for part in attachments):
+        noun = "image" if len(attachments) == 1 else "images"
+    else:
+        noun = "attachment" if len(attachments) == 1 else "attachments"
     return (
         f"[Tool output] The {noun} requested by the preceding tool "
         f"call:\n{listed}"

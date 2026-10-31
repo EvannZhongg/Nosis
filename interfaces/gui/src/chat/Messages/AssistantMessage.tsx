@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type PropsWithChildr
 import { ActionBarPrimitive, MessagePrimitive, useAuiState, type PartState, type ReasoningMessagePartProps } from "@assistant-ui/react";
 import { Check, ChevronRight, Copy } from "lucide-react";
 import { TURN_PROCESS_GROUP, turnProcessPartIndexes } from "../../transcript";
-import { SignedImage } from "./Attachments";
+import { FileAttachmentPart, SignedImage } from "./Attachments";
 import { MarkdownText, MessageTimestamp } from "./messagePrimitives";
 import { ToolCard } from "./ToolCard";
 
@@ -52,6 +52,8 @@ function AssistantParts() {
           return <ReasoningText {...part} />;
         case "image":
           return <SignedImage {...part} />;
+        case "file":
+          return <FileAttachmentPart {...part} />;
         case "tool-call":
           return part.toolUI ?? <ToolCard {...part} />;
         default:

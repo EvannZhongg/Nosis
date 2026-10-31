@@ -215,7 +215,7 @@ standalone Skill 与 MCP 使用同一套 Core registry / manager，不存在 Plu
 
 ## 附件与定时任务
 
-`attachments.py` 验证前端提交的附件确实位于当前 Workspace，探测图片格式，并转换为 Core 的 `ImagePart` 或 `FilePart`。
+`attachments.py` 为 GUI 和 IM 共用上传落盘、文件命名与真实图片格式探测，并验证提交的附件位于当前 Workspace，转换为 Core 的 `ImagePart` 或 `FilePart`。主 Agent 的 `present_file` Tool 将交付文件快照保存为附件，沿用 Tool 执行、Journal 与 `tool_media` 事件链路；前端只负责展示或平台上传。
 
 `ScheduledTurnRunner` 为 Scheduler 创建独立 `RuntimeHost`，在任务绑定的 Workspace 中执行 Turn；Provider 沿用 Session 已保存或默认的选择。`workspace` scope 使用 Workspace-only authority，`host` scope 使用 Host authority；两者都不提供交互式授权或用户提问能力，因此只能在预先声明的 scope 内无人值守执行。
 

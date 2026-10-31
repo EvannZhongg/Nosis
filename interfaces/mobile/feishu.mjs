@@ -1,5 +1,7 @@
 import * as lark from '@larksuiteoapi/node-sdk';
 import { createInterface } from 'node:readline';
+import { createReadStream, createWriteStream } from 'node:fs';
+import { pipeline } from 'node:stream/promises';
 
 const emit = value => process.stdout.write(`${JSON.stringify(value)}\n`);
 let client;
@@ -13,6 +15,42 @@ const markdownContent = text => JSON.stringify({
   zh_cn: { content: [[{ tag: 'md', text }]] },
 });
 
+export function parseMessage(message) {
+  const content = JSON.parse(message.content);
+  const attachments = [];
+  let text = null;
+  if (message.message_type === 'text') {
+    text = content.text;
+  } else if (message.message_type === 'image') {
+    text = '';
+    attachments.push({ type: 'image', key: content.image_key, filename: 'image' });
+  } else if (message.message_type === 'file') {
+    text = '';
+    attachments.push({ type: 'file', key: content.file_key, filename: content.file_name });
+  } else if (message.message_type === 'post') {
+    const lines = content.title ? [content.title] : [];
+    for (const row of content.content) {
+      let line = '';
+      for (const part of row) {
+        if (part.tag === 'img') {
+          if (!attachments.some(item => item.key === part.image_key)) {
+            attachments.push({ type: 'image', key: part.image_key, filename: 'image' });
+          }
+        } else if (part.tag === 'a') {
+          line += `[${part.text}](${part.href})`;
+        } else if (part.tag === 'at') {
+          line += `@${part.user_name || part.user_id}`;
+        } else if (['text', 'md', 'code_block'].includes(part.tag)) {
+          line += part.text;
+        }
+      }
+      lines.push(line);
+    }
+    text = lines.join('\n').trim();
+  }
+  return { text, attachments };
+}
+
 async function handle(command) {
   try {
     let result;
@@ -25,7 +63,7 @@ async function handle(command) {
           if (data.message.chat_type !== 'p2p' || data.sender.sender_type !== 'user') return;
           const message = data.message;
           emit({ type: 'message', chat_id: message.chat_id, user_id: data.sender.sender_id.open_id,
-            message_id: message.message_id, text: message.message_type === 'text' ? JSON.parse(message.content).text : null });
+            message_id: message.message_id, ...parseMessage(message) });
         },
         'card.action.trigger': data => {
           emit({ type: 'action', chat_id: data.context.open_chat_id, user_id: data.operator.open_id,
@@ -66,6 +104,31 @@ async function handle(command) {
       });
       if (response.code !== 0) throw new Error(`Feishu ${response.code}: ${response.msg}`);
       result = {};
+    } else if (command.op === 'download_attachment') {
+      const response = await client.im.v1.messageResource.get({
+        path: { message_id: command.message_id, file_key: command.key },
+        params: { type: command.resource_type },
+      });
+      await pipeline(response.getReadableStream(), createWriteStream(command.path));
+      result = {};
+    } else if (command.op === 'send_attachment') {
+      const image = command.attachment_type === 'image';
+      const upload = image
+        ? await client.im.v1.image.create({
+          data: { image_type: 'message', image: createReadStream(command.path) },
+        })
+        : await client.im.v1.file.create({
+          data: { file_type: 'stream', file_name: command.filename, file: createReadStream(command.path) },
+        });
+      const key = image ? upload?.image_key : upload?.file_key;
+      if (!key) throw new Error('Feishu attachment upload returned no resource key');
+      const response = await client.im.v1.message.create({
+        params: { receive_id_type: 'chat_id' },
+        data: { receive_id: command.chat_id, msg_type: image ? 'image' : 'file',
+          content: JSON.stringify(image ? { image_key: key } : { file_key: key }) },
+      });
+      if (response.code !== 0) throw new Error(`Feishu ${response.code}: ${response.msg}`);
+      result = { message_id: response.data.message_id };
     } else if (command.op === 'close') {
       socket?.close({ force: true });
       process.stdout.write(`${JSON.stringify({ id: command.id, result: {} })}\n`, () => process.exit(0));
@@ -75,7 +138,15 @@ async function handle(command) {
     }
     emit({ id: command.id, result });
   } catch (error) {
-    emit({ id: command.id, error: String(error.message).replaceAll(secret || '\0', '[redacted]') });
+    let detail = error.response?.data;
+    if (detail?.[Symbol.asyncIterator]) {
+      const chunks = [];
+      for await (const chunk of detail) chunks.push(Buffer.from(chunk));
+      try { detail = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+      catch { detail = null; }
+    }
+    const message = detail?.code ? `Feishu ${detail.code}: ${detail.msg}` : String(error.message);
+    emit({ id: command.id, error: message.replaceAll(secret || '\0', '[redacted]') });
   }
 }
 

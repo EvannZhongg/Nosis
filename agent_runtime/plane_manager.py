@@ -433,6 +433,7 @@ class ExecutionPlaneManager:
                         skills,
                     ),
                     "ask_user",
+                    "present_file",
                     "update_plan",
                     *mcp.tool_names,
                     *(("remember",) if memory is not None else ()),

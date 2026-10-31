@@ -577,8 +577,7 @@ function applyMessage(state: State, message: Incoming): State {
       };
 
     case 'tool_media':
-      // A terminal cannot show the image, so the user is told which
-      // ones the agent is now looking at.
+      // Show paths for the attachments published by a tool batch.
       return {
         ...state,
         entries: [
@@ -587,7 +586,7 @@ function applyMessage(state: State, message: Incoming): State {
             kind: 'notice',
             id: nextId('notice'),
             level: 'info',
-            text: `Viewing ${message.attachments.length} image(s): ${message.attachments
+            text: `Viewing ${message.attachments.length} ${message.attachments.every((part) => part.type === 'image') ? 'image(s)' : 'attachment(s)'}: ${message.attachments
               .map((attachment) => attachment.path)
               .join(', ')}`,
           },

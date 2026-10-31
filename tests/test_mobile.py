@@ -7,6 +7,8 @@ from uuid import uuid4
 from unittest.mock import patch
 
 from agent_core import JsonlSessionStore, Workspace
+from agent_runtime.attachments import parse_attachments
+from tests.image_fixtures import png_bytes
 from interfaces.bridge.event_stream import EventStream
 from interfaces.bridge.protocol import runtime_state_message
 from interfaces.mobile.bindings import Bindings
@@ -23,6 +25,17 @@ class Transport:
         self.updates = []
         self.texts = {}
         self.text_updates = []
+        self.downloads = []
+        self.attachments = []
+        self.resources = {}
+
+    async def download_attachment(self, message_id, attachment, path):
+        self.downloads.append((message_id, attachment, path))
+        path.write_bytes(self.resources[attachment["key"]])
+
+    async def send_attachment(self, chat_id, attachment, path):
+        self.attachments.append((chat_id, attachment, path.read_bytes()))
+        return f"attachment{len(self.attachments)}"
 
     async def send(self, chat_id, card):
         message_id = f"m{len(self.messages)}"
@@ -120,7 +133,7 @@ class MobileTest(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(self.controller.close)
 
     async def text(self, text, user="ou_owner", chat="chat"):
-        await self.controller.receive_text(chat, user, text, str(uuid4()))
+        await self.controller.receive_message(chat, user, text, str(uuid4()))
 
     def conversation(self):
         return self.controller._conversation("chat", "ou_owner")
@@ -239,10 +252,10 @@ class MobileTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(channel.sent[-1], {"type": "cancel", "turn_id": turn_id})
 
     async def test_message_redelivery_is_deduplicated_across_restart(self):
-        await self.controller.receive_text("chat", "ou_owner", "/help", "delivery-1")
+        await self.controller.receive_message("chat", "ou_owner", "/help", "delivery-1")
         count = len(self.transport.messages)
         self.controller.bindings = Bindings(self.bindings.path)
-        await self.controller.receive_text("chat", "ou_owner", "/help", "delivery-1")
+        await self.controller.receive_message("chat", "ou_owner", "/help", "delivery-1")
         self.assertEqual(len(self.transport.messages), count)
 
     async def test_workspace_new_and_binding_survive_restart(self):
@@ -344,6 +357,108 @@ class MobileTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(channel.sent[-1]["turn_id"], turn_id)
         await self.text("/cancel")
         self.assertEqual(channel.sent[-1], {"type": "cancel", "turn_id": turn_id})
+
+    async def upload(self, attachments, *, text="", user="ou_owner", message_id=None):
+        await self.controller.receive_message(
+            "chat", user, text, message_id or str(uuid4()), attachments,
+        )
+
+    async def test_uploads_image_and_file_through_existing_user_turn(self):
+        c, channel = await self.open()
+        self.transport.resources = {"image-key": png_bytes(4, 3), "file-key": b"a,b\n1,2"}
+        await self.upload([
+            {"type": "image", "key": "image-key", "filename": "image"},
+            {"type": "file", "key": "file-key", "filename": "report.csv"},
+        ], text="分析这些附件", message_id="upload-1")
+        turn = channel.sent[-1]
+        self.assertEqual((turn["type"], turn["text"]), ("user_turn", "分析这些附件"))
+        parts = parse_attachments(turn["attachments"], self.workspace)
+        self.assertEqual([part.type for part in parts], ["image", "file"])
+        self.assertTrue(parts[0].path.endswith(".png"))
+        self.assertEqual(parts[1].filename, "report.csv")
+        self.assertEqual(self.workspace.resolve_path(parts[1].path).read_bytes(), b"a,b\n1,2")
+        self.assertTrue(all(item[0] == "upload-1" for item in self.transport.downloads))
+        self.assertTrue(all(not item[2].exists() for item in self.transport.downloads))
+        count = len(channel.sent)
+        await self.upload([{"type": "image", "key": "image-key", "filename": "image"}], message_id="upload-1")
+        self.assertEqual(len(channel.sent), count)
+        self.assertEqual(len(self.transport.downloads), 2)
+
+    async def test_attachment_only_input_starts_a_turn(self):
+        c, channel = await self.open()
+        self.transport.resources["file-key"] = b"hello"
+        await self.upload([{"type": "file", "key": "file-key", "filename": "notes.txt"}])
+        self.assertEqual(channel.sent[-1]["text"], "")
+        self.assertEqual(channel.sent[-1]["attachments"][0]["type"], "file")
+
+    async def test_upload_checks_identity_binding_and_busy_state_before_download(self):
+        attachment = [{"type": "image", "key": "image-key", "filename": "image"}]
+        await self.upload(attachment, user="outsider")
+        self.assertEqual(self.controller.conversations, {})
+        await self.upload(attachment)
+        self.assertEqual(self.process.channels, [])
+        c, channel = await self.open()
+        await self.text("开始")
+        count = len(channel.sent)
+        await self.upload(attachment, text="/new")
+        self.assertEqual(len(channel.sent), count)
+        self.assertEqual(self.transport.downloads, [])
+        self.assertIn("任务结束", next(reversed(self.transport.messages.values()))[1].text)
+
+    async def test_failed_upload_cleans_stored_and_temporary_files_without_starting_turn(self):
+        c, channel = await self.open()
+        self.transport.resources["first"] = b"hello"
+        original = self.transport.download_attachment
+
+        async def download(message_id, attachment, path):
+            if attachment["key"] == "second":
+                path.write_bytes(b"partial")
+                raise RuntimeError("download failed")
+            await original(message_id, attachment, path)
+
+        with patch.object(self.transport, "download_attachment", side_effect=download):
+            await self.upload([
+                {"type": "file", "key": "first", "filename": "first.txt"},
+                {"type": "file", "key": "second", "filename": "second.txt"},
+            ])
+        self.assertFalse(any(message["type"] == "user_turn" for message in channel.sent))
+        self.assertEqual(list((self.root / ".nosis/attachments").iterdir()), [])
+        self.assertFalse(self.transport.downloads[0][2].parent.exists())
+        self.assertIn("download failed", next(reversed(self.transport.messages.values()))[1].text)
+
+    async def test_takeover_during_download_prevents_turn_and_removes_upload(self):
+        c, channel = await self.open()
+        self.transport.resources["key"] = b"hello"
+        original = self.transport.download_attachment
+
+        async def download(message_id, attachment, path):
+            await original(message_id, attachment, path)
+            await c.runtime.attach(0, "gui", takeover=True)
+
+        with patch.object(self.transport, "download_attachment", side_effect=download):
+            await self.upload([{"type": "file", "key": "key", "filename": "first.txt"}])
+        self.assertFalse(any(message["type"] == "user_turn" for message in channel.sent))
+        self.assertEqual(list((self.root / ".nosis/attachments").iterdir()), [])
+
+    async def test_tool_media_delivers_images_and_files_and_reports_failures(self):
+        c, channel = await self.open()
+        image = self.root / "generated.png"
+        image.write_bytes(png_bytes(3, 2))
+        document = self.root / "report.txt"
+        document.write_text("report", encoding="utf-8")
+        attachments = [
+            {"type": "image", "path": "generated.png", "filename": "generated.png"},
+            {"type": "file", "path": "../outside.txt", "filename": "outside.txt"},
+            {"type": "file", "path": "report.txt", "filename": "report.txt"},
+        ]
+        channel.emit({"type": "tool_media", "turn_id": "t1", "attachments": attachments})
+        await self.settle()
+        self.assertEqual([item[1]["type"] for item in self.transport.attachments], ["image", "file"])
+        self.assertEqual(self.transport.attachments[1][2], b"report")
+        self.assertTrue(any(card.title == "附件发送失败" for _, card in self.transport.messages.values()))
+        channel.emit({"type": "assistant_message", "turn_id": "t1", "model_call_index": 1, "content": "已完成"})
+        await self.settle()
+        self.assertIn(("chat", "已完成"), self.transport.texts.values())
 
     async def test_running_session_cannot_be_replaced(self):
         c, channel = await self.open()

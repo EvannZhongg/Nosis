@@ -11,7 +11,7 @@ from .llm import (
     with_generation_limit,
 )
 from .session import Session
-from .content import AttachmentPart, ImagePart
+from .content import AttachmentPart
 from .errors import ProviderError, runtime_error_info
 from .tool_result import ToolResultNormalizer
 from .tool_batch import ToolBatchExecutor
@@ -99,9 +99,9 @@ class ToolResultEvent:
 
 @dataclass(frozen=True)
 class ToolMediaEvent:
-    """Images a tool batch placed into the model's context."""
+    """Attachments a tool batch published to the conversation."""
 
-    attachments: tuple[ImagePart, ...]
+    attachments: tuple[AttachmentPart, ...]
 
 
 @dataclass(frozen=True)
@@ -417,7 +417,7 @@ class Agent:
                             )
                         )
 
-                def emit_media(media: tuple[ImagePart, ...]) -> None:
+                def emit_media(media: tuple[AttachmentPart, ...]) -> None:
                     if on_event is not None:
                         on_event(ToolMediaEvent(attachments=media))
 

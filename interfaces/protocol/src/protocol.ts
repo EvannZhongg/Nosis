@@ -268,7 +268,7 @@ export type Incoming = (
   | {
       type: 'tool_media';
       turn_id: string;
-      attachments: ImageAttachment[];
+      attachments: UserAttachment[];
     }
   | ({
       type: 'job_status';

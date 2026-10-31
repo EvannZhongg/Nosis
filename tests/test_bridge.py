@@ -2331,7 +2331,7 @@ class BridgeSessionOpenTest(BridgeTestCase):
                 "main_agent": {"provider": "first"},
                 "fast_model": {"provider": "second"},
                 "providers": {
-                    "first": {"model": "openai/first", "max_context_tokens": 1000},
+                    "first": {"model": "openai/first", "max_context_tokens": 1200},
                     "second": {"model": "openai/second", "max_context_tokens": 200},
                 },
             },
@@ -2339,7 +2339,7 @@ class BridgeSessionOpenTest(BridgeTestCase):
         plane = bridge.host.planes.ensure(bridge.host.sessions)
         self.assertIs(plane.agent._provider, plane.provider)
         self.assertIs(plane.agent._context._provider, plane.provider)
-        self.assertEqual(plane.agent._context.limits.compression_threshold, 675)
+        self.assertEqual(plane.agent._context.limits.compression_threshold, 825)
         self.assertIs(plane.memory.reconciler._provider, plane.fast_provider)
         self.assertIsNot(plane.provider, plane.fast_provider)
 
@@ -3593,7 +3593,7 @@ class SubagentRoleStartTest(BridgeTestCase):
 
         self.assertEqual(
             [definition.name for definition in plane.agent._tools.definitions],
-            ["ask_user", "update_plan", "remember"],
+            ["ask_user", "present_file", "update_plan", "remember"],
         )
 
     def test_runtime_tools_are_registered_only_for_the_main_agent(self) -> None:

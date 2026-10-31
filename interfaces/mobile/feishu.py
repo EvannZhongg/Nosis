@@ -101,9 +101,12 @@ class FeishuTransport:
                 if event["type"] == "message":
                     if event["text"] is None:
                         if self.controller.authorized(event["user_id"]):
-                            await self.send(event["chat_id"], Card("暂不支持此消息", "请发送文字指令或文字回复。"))
+                            await self.send(event["chat_id"], Card("暂不支持此消息", "请发送文字、图片、文件或图文消息。"))
                     else:
-                        await self.controller.receive_text(event["chat_id"], event["user_id"], event["text"], event["message_id"])
+                        await self.controller.receive_message(
+                            event["chat_id"], event["user_id"], event["text"],
+                            event["message_id"], event["attachments"],
+                        )
                 elif event["type"] == "action" and isinstance(event.get("token"), str):
                     await self.controller.receive_action(event["chat_id"], event["user_id"], event["message_id"], event["token"])
                 elif event["type"] == "connection_error":
@@ -124,6 +127,19 @@ class FeishuTransport:
 
     async def update_markdown(self, message_id: str, text: str) -> None:
         await self._request("update_markdown", message_id=message_id, text=text)
+
+    async def download_attachment(self, message_id: str, attachment: dict, path: Path) -> None:
+        await self._request(
+            "download_attachment", message_id=message_id,
+            key=attachment["key"], resource_type=attachment["type"], path=str(path),
+        )
+
+    async def send_attachment(self, chat_id: str, attachment: dict, path: Path) -> str:
+        result = await self._request(
+            "send_attachment", chat_id=chat_id, attachment_type=attachment["type"],
+            filename=attachment["filename"], path=str(path),
+        )
+        return result["message_id"]
 
     async def close(self) -> None:
         if self.dispatcher is not None:

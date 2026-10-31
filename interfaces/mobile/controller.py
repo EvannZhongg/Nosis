@@ -4,11 +4,13 @@ import asyncio
 import json
 import logging
 import secrets
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from uuid import uuid4
 
 from agent_core import JsonlSessionStore, Workspace
+from agent_runtime.attachments import store_attachment
 from interfaces.session_host import ActiveSession, ActiveSessionRegistry
 
 from .bindings import Bindings
@@ -19,7 +21,8 @@ log = logging.getLogger(__name__)
 HELP = (
     "先用 /workspaces 选择工作区，再用 /new 新建或 /sessions 恢复会话。\n"
     "/status 查看状态 · /cancel 停止执行 · /takeover 接管当前会话\n"
-    "执行期间发送文字会作为补充指令；提问期间可点选项或直接回复。"
+    "支持发送图片、文件和图文消息；执行期间文字可作为补充指令，附件请在任务结束后发送。\n"
+    "提问期间可点选项或直接回复文字。"
 )
 COMMANDS = [
     ("/workspaces", "选择工作区"),
@@ -128,7 +131,10 @@ class MobileController:
         log.warning("Rejected Feishu identity: channel=%s open_id=%s", self.channel_id, user_id)
         return False
 
-    async def receive_text(self, chat_id: str, user_id: str, text: str, message_id: str) -> None:
+    async def receive_message(
+        self, chat_id: str, user_id: str, text: str, message_id: str,
+        attachments: list[dict] | tuple = (),
+    ) -> None:
         if not self.authorized(user_id):
             return
         conversation = self._conversation(chat_id, user_id)
@@ -136,7 +142,10 @@ class MobileController:
             if not self.bindings.accept(self.channel_id, message_id):
                 return
             try:
-                await self._text(conversation, text.strip())
+                if attachments:
+                    await self._input(conversation, text.strip(), attachments, message_id)
+                else:
+                    await self._text(conversation, text.strip())
             except (ValueError, OSError, RuntimeError) as error:
                 await self._show(conversation, "无法完成操作", str(error))
 
@@ -276,37 +285,61 @@ class MobileController:
         elif command.startswith("/"):
             await self._text(c, "/")
         else:
-            if c.session_id is None:
-                await self._show(c, "先选择会话", HELP)
-                await self._text(c, "/workspaces" if c.workspace is None else "/sessions")
-                return
-            runtime = await self._attached(c)
-            question = runtime.state["question"]
-            if question is not None:
-                if not question["allow_free_text"]:
-                    raise ValueError("请点击当前提问卡片中的选项。")
-                runtime.send(
-                    {
-                        "type": "user_question_response",
-                        "request_id": question["request_id"],
-                        "text": text,
-                    }
-                )
-                await self._resolve(c, question["request_id"], text)
-            elif runtime.state["approval"] is not None:
-                raise ValueError("请使用审批卡片中的允许或拒绝按钮。")
-            elif runtime.running:
-                runtime.send(
-                    {
-                        "type": "user_steer",
-                        "turn_id": runtime.turn_id,
-                        "steer_id": str(uuid4()),
-                        "text": text,
-                    }
-                )
-            else:
+            await self._input(c, text)
+
+    async def _input(
+        self, c: Conversation, text: str,
+        attachments: list[dict] | tuple = (), message_id: str = "",
+    ) -> None:
+        if c.session_id is None:
+            await self._show(c, "先选择会话", HELP)
+            await self._text(c, "/workspaces" if c.workspace is None else "/sessions")
+            return
+        runtime = await self._attached(c)
+        if attachments and runtime.running:
+            raise ValueError("当前会话正在执行，附件请在任务结束后重新发送；提问请回复文字或点击选项。")
+        question = runtime.state["question"]
+        if question is not None:
+            if not question["allow_free_text"]:
+                raise ValueError("请点击当前提问卡片中的选项。")
+            runtime.send({
+                "type": "user_question_response",
+                "request_id": question["request_id"], "text": text,
+            })
+            await self._resolve(c, question["request_id"], text)
+        elif runtime.state["approval"] is not None:
+            raise ValueError("请使用审批卡片中的允许或拒绝按钮。")
+        elif runtime.running:
+            runtime.send({
+                "type": "user_steer", "turn_id": runtime.turn_id,
+                "steer_id": str(uuid4()), "text": text,
+            })
+        else:
+            workspace = Workspace(Path(runtime.state["workspace"]))
+            stored = []
+            try:
+                if attachments:
+                    with tempfile.TemporaryDirectory(prefix="nosis-feishu-") as directory:
+                        for index, attachment in enumerate(attachments):
+                            path = Path(directory) / str(index)
+                            await self.transport.download_attachment(message_id, attachment, path)
+                            with path.open("rb") as source:
+                                stored.append(store_attachment(
+                                    source, workspace, attachment["filename"],
+                                ))
+                if not runtime.owns_attachment(c.attachment_id):
+                    raise ValueError("会话已由其他端接管。可使用 /takeover 接管。")
                 c.progress = await self._show(c, "Nosis 正在处理", self._status(c))
-                runtime.send({"type": "user_turn", "turn_id": str(uuid4()), "text": text})
+                if not runtime.owns_attachment(c.attachment_id):
+                    raise ValueError("会话已由其他端接管。可使用 /takeover 接管。")
+                runtime.send({
+                    "type": "user_turn", "turn_id": str(uuid4()), "text": text,
+                    **({"attachments": stored} if stored else {}),
+                })
+            except BaseException:
+                for attachment in stored:
+                    workspace.resolve_path(attachment["path"]).unlink(missing_ok=True)
+                raise
 
     async def _menu(
         self, c: Conversation, title: str, entries: list, kind: str, page_text: str
@@ -538,6 +571,16 @@ class MobileController:
                         stream.append(event["text"])
                     else:
                         await stream.finish(event["content"])
+                elif kind == "tool_media":
+                    workspace = Workspace(Path(runtime.state["workspace"]))
+                    for attachment in event["attachments"]:
+                        if not runtime.owns_attachment(c.attachment_id):
+                            break
+                        try:
+                            path = workspace.resolve_path(attachment["path"])
+                            await self.transport.send_attachment(c.chat_id, attachment, path)
+                        except (ValueError, OSError, RuntimeError) as error:
+                            await self._show(c, "附件发送失败", f"{attachment['filename']}：{error}")
                 elif kind in {
                     "turn_completed",
                     "turn_cancelled",

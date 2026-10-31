@@ -288,7 +288,7 @@ restarting Bridge. Nested Runtime snapshots need not have a sequence of their ow
 | `context_window` | Current token limits and compression metrics. |
 | `tool_batch_started` | Tool declarations for a model call, with IDs/names/arguments. |
 | `tool_call`, `tool_result` | Call execution/status keyed by Tool call ID; indices are 1-based. Result has `ok` and nullable structured `error`. |
-| `tool_media` | Image attachment descriptors. |
+| `tool_media` | Image or file attachment descriptors (`type`, `path`, `filename`, `mime_type`, `size_bytes`). |
 | `plan_updated` | Full plan snapshot and revision. |
 | `job_status` | Background job ID, kind, status, opaque details. |
 | `hook_completed` | Hook invocation ID, Plugin-qualified hook ID, checkpoint, Session ID, outcome, decision, reason, timing and optional Tool call ID. See [Plugin Hooks](plugin-hooks.md). |

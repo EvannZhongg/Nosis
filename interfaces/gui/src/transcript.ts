@@ -404,13 +404,13 @@ export function toMessages(items: TranscriptItem[], sessionId?: string): ThreadM
     // addressed against the session's own workspace from the start.
     const parts = itemParts(item, results, sessionId);
 
-    // Images a tool loaded arrive in a user-role item because that is the
+    // Attachments a tool published arrive in a user-role item because that is the
     // only message kind that can carry them. They belong to the reply the
     // agent was composing, so they join it instead of opening a bubble
     // that looks like the person spoke. The text beside them only tells
     // the model where they came from, so it is left out here.
     if (item.role === "user" && item.origin === "tool_media") {
-      if (open) open.content.push(...parts.filter((part) => (part as any).type === "image"));
+      if (open) open.content.push(...parts.filter((part) => ["image", "file"].includes((part as any).type)));
       return;
     }
     if (
