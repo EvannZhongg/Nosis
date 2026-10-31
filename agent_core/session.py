@@ -24,6 +24,7 @@ MessageRole = Literal["system", "user", "assistant", "tool"]
 MessageOrigin = Literal[
     "conversation",
     "tool_media",
+    "tool_delivery",
     "job_result",
     "user_interaction",
     "hook_feedback",
@@ -737,6 +738,7 @@ def message_from_dict(data: dict[str, object]) -> Message:
             data["origin"]
             if data.get("origin") in {
                 "tool_media",
+                "tool_delivery",
                 "job_result",
                 "user_interaction",
                 "hook_feedback",

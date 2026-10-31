@@ -31,6 +31,7 @@ class MobileService:
     async def start(self) -> None:
         for transport, controller in self.channels:
             await transport.start(controller)
+            await controller.recover()
 
     async def close(self) -> None:
         for transport, controller in reversed(self.channels):

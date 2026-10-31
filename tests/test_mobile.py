@@ -4,9 +4,9 @@ import tempfile
 import unittest
 from pathlib import Path
 from uuid import uuid4
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
-from agent_core import JsonlSessionStore, Workspace
+from agent_core import JsonlSessionStore, TurnControl, Workspace
 from agent_runtime.attachments import parse_attachments
 from tests.image_fixtures import png_bytes
 from interfaces.bridge.event_stream import EventStream
@@ -25,6 +25,7 @@ class Transport:
         self.updates = []
         self.texts = {}
         self.text_updates = []
+        self.text_changed = asyncio.Event()
         self.downloads = []
         self.attachments = []
         self.resources = {}
@@ -49,11 +50,13 @@ class Transport:
     async def send_markdown(self, chat_id, text):
         message_id = f"text{len(self.texts)}"
         self.texts[message_id] = (chat_id, text)
+        self.text_changed.set()
         return message_id
 
     async def update_markdown(self, message_id, text):
         self.text_updates.append((message_id, text))
         self.texts[message_id] = (self.texts[message_id][0], text)
+        self.text_changed.set()
 
 
 class Channel:
@@ -257,6 +260,139 @@ class MobileTest(unittest.IsolatedAsyncioTestCase):
         self.controller.bindings = Bindings(self.bindings.path)
         await self.controller.receive_message("chat", "ou_owner", "/help", "delivery-1")
         self.assertEqual(len(self.transport.messages), count)
+
+    async def test_failed_download_can_be_redelivered_with_the_same_turn_identity(self):
+        c, channel = await self.open()
+        attachments = [{"type": "file", "key": "file", "filename": "report.txt"}]
+        self.transport.resources["file"] = b"report"
+        with patch.object(self.transport, "download_attachment", side_effect=RuntimeError("offline")):
+            await self.controller.receive_message("chat", "ou_owner", "run", "retry", attachments)
+        self.controller.bindings = Bindings(self.bindings.path)
+        record = self.controller.bindings.messages[json.dumps(["feishu", "retry"])]
+        turn_id = record["turn"]["turn_id"]
+        self.assertEqual(record["status"], "received")
+        await self.controller.receive_message("chat", "ou_owner", "run", "retry", attachments)
+        self.assertEqual(channel.sent[-1]["turn_id"], turn_id)
+        await self.controller.receive_message("chat", "ou_owner", "run", "retry", attachments)
+        self.assertEqual(len([m for m in channel.sent if m["type"] == "user_turn"]), 1)
+
+    async def test_recovery_resubmits_persisted_input_that_never_reached_runtime(self):
+        c, channel = await self.open()
+        record = self.bindings.receive("feishu", "chat", "ou_owner", "run", "crash", ())
+        turn = self.bindings.prepare_turn(record, c.workspace, c.session_id)
+        self.controller.bindings = Bindings(self.bindings.path)
+        await self.controller.recover()
+        self.assertEqual(channel.sent[-1], {"type": "user_turn", "turn_id": turn["turn_id"], "text": "run"})
+
+    async def test_control_recovery_does_not_reinterpret_a_steer_as_a_new_turn(self):
+        c, channel = await self.open()
+        record = self.bindings.receive("feishu", "chat", "ou_owner", "extra", "steer", ())
+        self.bindings.prepare_control(record, c.session_id,
+                                      {"type": "user_steer", "turn_id": "ended", "steer_id": "steer", "text": "extra"})
+        self.controller.bindings = Bindings(self.bindings.path)
+        await self.controller.recover()
+        self.assertFalse(any(m["type"] in {"user_turn", "user_steer"} for m in channel.sent))
+
+    async def test_control_recovery_preserves_target_and_core_deduplicates_steers(self):
+        c, channel = await self.open()
+        await self.text("start")
+        record = self.bindings.receive("feishu", "chat", "ou_owner", "extra", "steer", ())
+        message = {"type": "user_steer", "turn_id": c.runtime.turn_id, "steer_id": "steer", "text": "extra"}
+        self.bindings.prepare_control(record, c.session_id, message)
+        self.controller.bindings = Bindings(self.bindings.path)
+        await self.controller.recover()
+        self.assertEqual(channel.sent[-1], message)
+        control = TurnControl()
+        self.assertTrue(control.steer("steer", "extra"))
+        self.assertEqual(len(control.drain_steering()), 1)
+        self.assertTrue(control.steer("steer", "extra"))
+        self.assertEqual(control.drain_steering(), ())
+
+    async def test_journal_prevents_reexecution_when_submission_confirmation_was_lost(self):
+        c, channel = await self.open()
+        record = self.bindings.receive("feishu", "chat", "ou_owner", "run", "crash", ())
+        turn = self.bindings.prepare_turn(record, c.workspace, c.session_id)
+        session = self.store.load(c.session_id)
+        session.begin_turn(turn["turn_id"])
+        self.store.bind_workspace(c.session_id, self.root)
+        self.store.append_events(c.session_id, session.journal)
+        self.controller.bindings = Bindings(self.bindings.path)
+        await self.controller.recover()
+        self.assertFalse(any(m["type"] == "user_turn" for m in channel.sent))
+        self.assertEqual(self.controller.bindings.messages[json.dumps(["feishu", "crash"])]["status"], "completed")
+
+    async def test_text_and_card_delivery_failures_do_not_stop_session_subscription(self):
+        c, channel = await self.open()
+        with self.assertLogs("interfaces.mobile", level="ERROR"):
+            with patch.object(self.transport, "send_markdown", side_effect=RuntimeError("offline")):
+                channel.emit({"type": "assistant_message", "turn_id": "turn", "model_call_index": 1, "content": "reply"})
+                await self.settle()
+            with patch.object(self.transport, "send", side_effect=RuntimeError("offline")):
+                channel.emit({"type": "runtime_refreshed"})
+                await self.settle()
+        await self.question(c, channel)
+        self.assertFalse(c.reader.done())
+        self.assertTrue(c.interactions)
+        channel.emit({"type": "turn_completed", "turn_id": "turn"})
+        await self.settle()
+        self.assertFalse(c.reader.done())
+        self.assertEqual(next(reversed(self.transport.messages.values()))[1].title, "处理完成")
+
+    async def test_snapshot_restores_an_interaction_after_failed_delivery(self):
+        c, channel = await self.open()
+        with self.assertLogs("interfaces.mobile", level="ERROR"):
+            with patch.object(self.transport, "send", side_effect=RuntimeError("offline")):
+                request = await self.question(c, channel)
+        self.assertFalse(c.interactions)
+        channel.emit(dict(channel.state))
+        await self.settle()
+        self.assertIn(request["request_id"], c.interactions)
+
+    async def test_attachment_batch_limit_cleans_saved_files_before_submission(self):
+        c, channel = await self.open()
+        self.transport.resources["file"] = b"abc"
+        attachments = [{"type": "file", "key": "file", "filename": "report.txt"}] * 2
+        with patch("interfaces.mobile.controller.MAX_INBOUND_ATTACHMENT_BYTES", 5):
+            await self.controller.receive_message("chat", "ou_owner", "run", "large", attachments)
+        self.assertFalse(any(m["type"] == "user_turn" for m in channel.sent))
+        self.assertEqual(list((self.root / ".nosis/attachments").iterdir()), [])
+
+    async def test_attachment_timeout_cleans_files_and_keeps_input_recoverable(self):
+        c, channel = await self.open()
+        self.transport.resources["file"] = b"abc"
+        original = self.transport.download_attachment
+
+        async def download(message_id, attachment, path):
+            await original(message_id, attachment, path)
+            if attachment["key"] == "slow":
+                await asyncio.Event().wait()
+
+        self.transport.resources["slow"] = b"partial"
+        attachments = [{"type": "file", "key": key, "filename": key} for key in ("file", "slow")]
+        with patch.object(self.transport, "download_attachment", side_effect=download):
+            with patch("interfaces.mobile.controller.ATTACHMENT_PROCESSING_SECONDS", 0.1):
+                await asyncio.wait_for(self.controller.receive_message("chat", "ou_owner", "run", "timeout", attachments), 2)
+        self.assertFalse(any(m["type"] == "user_turn" for m in channel.sent))
+        self.assertEqual(list((self.root / ".nosis/attachments").iterdir()), [])
+        self.assertFalse(self.transport.downloads[-1][2].parent.exists())
+        record = Bindings(self.bindings.path).messages[json.dumps(["feishu", "timeout"])]
+        self.assertEqual(record["status"], "received")
+
+    async def test_status_reads_host_without_taking_control_and_reports_unknown_when_absent(self):
+        c, channel = await self.open()
+        runtime = c.runtime
+        await self.controller._detach(c)
+        runtime.state["phase"] = "running"
+        await self.text("/status")
+        self.assertIn("状态：执行中", next(reversed(self.transport.messages.values()))[1].text)
+        self.assertIsNone(c.runtime)
+        runtime.done = True
+        await self.text("/status")
+        self.assertIn("状态：未知", next(reversed(self.transport.messages.values()))[1].text)
+        runtime.done = False
+        with patch.object(self.host, "get", new=AsyncMock(return_value=None)):
+            await self.text("/status")
+        self.assertIn("状态：未知", next(reversed(self.transport.messages.values()))[1].text)
 
     async def test_workspace_new_and_binding_survive_restart(self):
         c, channel = await self.open()
@@ -545,8 +681,9 @@ class MobileTest(unittest.IsolatedAsyncioTestCase):
         channel.emit(
             {"type": "assistant_delta", "text": "第一段", "turn_id": "turn", "model_call_index": 0}
         )
-        await self.settle()
+        await asyncio.wait_for(self.transport.text_changed.wait(), 2)
         self.assertEqual(list(self.transport.texts.values()), [("chat", "第一段")])
+        self.transport.text_changed.clear()
         channel.emit(
             {"type": "assistant_delta", "text": "第二段", "turn_id": "turn", "model_call_index": 0}
         )
@@ -558,7 +695,7 @@ class MobileTest(unittest.IsolatedAsyncioTestCase):
                 "model_call_index": 0,
             }
         )
-        await self.settle()
+        await asyncio.wait_for(self.transport.text_changed.wait(), 2)
         self.assertEqual(list(self.transport.texts.values()), [("chat", "第一段第二段")])
         self.assertEqual(len(self.transport.texts), 1)
         self.assertNotIn("private reasoning", str(self.transport.texts))

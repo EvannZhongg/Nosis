@@ -274,17 +274,17 @@ def _windows_shell_environment(environment: dict[str, str]) -> dict[str, str]:
 def _windows_powershell_argv(
     command: str, working_directory: Path
 ) -> list[str]:
+    location = str(working_directory).replace("'", "''")
     return [
         _powershell_7(),
         "-NoLogo",
         "-NoProfile",
         "-NonInteractive",
-        "-WorkingDirectory",
-        str(working_directory),
         "-Command",
         "$ErrorActionPreference = 'Stop'\n"
         "Set-StrictMode -Version Latest\n"
         "$PSNativeCommandUseErrorActionPreference = $true\n"
+        f"Set-Location -LiteralPath '{location}'\n"
         + command,
     ]
 

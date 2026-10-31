@@ -108,6 +108,30 @@ class HostCommandExecutorTest(unittest.TestCase):
         self.assertNotIn("\x1b[", result.stderr)
 
     @unittest.skipUnless(os.name == "nt", "Windows shell test")
+    def test_powershell_stops_when_working_directory_initialization_fails(self) -> None:
+        from agent_core.execution.process import _windows_powershell_argv
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            argv = _windows_powershell_argv(
+                "Set-Content -LiteralPath 'command-reached' -Value yes",
+                root / "missing-workspace",
+            )
+            result = subprocess.run(argv, cwd=root, capture_output=True, timeout=10)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse((root / "command-reached").exists())
+            self.assertTrue(result.stderr)
+
+    @unittest.skipUnless(os.name == "nt", "Windows shell test")
+    def test_powershell_working_directory_is_a_literal_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "workspace's [literal]"
+            root.mkdir()
+            result = HostCommandExecutor(root).execute("Set-Content -NoNewline -LiteralPath result.txt -Value ok")
+            self.assertEqual(result.exit_code, 0, result.stderr)
+            self.assertEqual((root / "result.txt").read_text(encoding="utf-8"), "ok")
+
+    @unittest.skipUnless(os.name == "nt", "Windows shell test")
     def test_powershell_stops_before_cleanup_after_setup_errors(self) -> None:
         # Only a marker follows the failing setup; never replay the incident's
         # destructive command against the actual PowerShell HOME variable.

@@ -793,7 +793,7 @@ describe('sessions', () => {
     ]);
   });
 
-  it('renders an interrupted tool call as failed and images as a notice', () => {
+  it.each(['tool_media', 'tool_delivery'] as const)('renders an interrupted tool call and %s images as a notice', (origin) => {
     const state = reducer(ready(), {
       type: 'message',
       message: {
@@ -806,7 +806,7 @@ describe('sessions', () => {
           },
           {
             role: 'user',
-            origin: 'tool_media',
+            origin,
             content: [
               { type: 'text', text: 'tool media' },
               { type: 'image', path: '.nosis/a.png', mime_type: 'image/png' },

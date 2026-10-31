@@ -42,6 +42,8 @@ PERMISSIONS = {
     "workspace_access": "工作区访问",
     "full_access": "完全访问",
 }
+MAX_INBOUND_ATTACHMENT_BYTES = 100 * 1024 * 1024
+ATTACHMENT_PROCESSING_SECONDS = 60
 PHASES = {
     "inactive": "待启动",
     "starting": "准备中",
@@ -50,6 +52,7 @@ PHASES = {
     "waiting_approval": "等待审批",
     "waiting_user": "等待回复",
     "failed": "失败",
+    "unknown": "未知",
 }
 
 
@@ -90,6 +93,7 @@ class Conversation:
     settings_requests: dict[str, tuple[str, str]] = field(default_factory=dict)
     streams: dict[tuple[str, int], TextStream] = field(default_factory=dict)
     attachment_id: str = field(default_factory=lambda: f"im:{uuid4()}")
+    inbound: dict | None = None
 
 
 class MobileController:
@@ -139,15 +143,74 @@ class MobileController:
             return
         conversation = self._conversation(chat_id, user_id)
         async with conversation.lock:
-            if not self.bindings.accept(self.channel_id, message_id):
+            record = self.bindings.receive(self.channel_id, chat_id, user_id, text, message_id, attachments)
+            if record["status"] == "completed":
                 return
+            conversation.inbound = record
             try:
+                if record["control"] is not None:
+                    await self._recover_control(conversation, record)
+                    return
+                if record["turn"] is not None and await self._submitted(record):
+                    if record["status"] == "submitted" and conversation.session_id == record["turn"]["session_id"]:
+                        await self._attached(conversation)
+                    return
                 if attachments:
                     await self._input(conversation, text.strip(), attachments, message_id)
                 else:
                     await self._text(conversation, text.strip())
+                if record["turn"] is None and record["status"] != "completed":
+                    self.bindings.mark(record, "completed")
             except (ValueError, OSError, RuntimeError) as error:
+                if isinstance(error, ValueError):
+                    self.bindings.mark(record, "completed")
                 await self._show(conversation, "无法完成操作", str(error))
+            finally:
+                conversation.inbound = None
+
+    def _send_control(self, c: Conversation, runtime: ActiveSession, message: dict) -> None:
+        if c.inbound:
+            self.bindings.prepare_control(c.inbound, c.session_id, message)
+        runtime.send(message)
+        if c.inbound:
+            self.bindings.mark(c.inbound, "completed")
+
+    async def _recover_control(self, c: Conversation, record: dict) -> None:
+        control = record["control"]
+        runtime = await self.host.get(control["session_id"])
+        message = control["message"]
+        if runtime is not None and not runtime.done and c.session_id == control["session_id"]:
+            runtime = await self._attached(c)
+        question = runtime.state["question"] if runtime is not None else None
+        current = (question is not None and question["request_id"] == message["request_id"]
+                   if message["type"] == "user_question_response"
+                   else runtime is not None and runtime.turn_id == message["turn_id"])
+        if runtime is None or runtime.done or c.session_id != control["session_id"] or not current:
+            self.bindings.mark(record, "completed")
+            await self._show(c, "请求已结束", "原任务或提问已结束，请查看当前状态。")
+            return
+        self._send_control(c, runtime, message)
+
+    async def _submitted(self, record: dict) -> bool:
+        turn = record["turn"]
+        runtime = await self.host.get(turn["session_id"])
+        if runtime is not None and not runtime.done and runtime.turn_id == turn["turn_id"]:
+            self.bindings.mark(record, "submitted")
+            return True
+        stored = self.store.load(turn["session_id"], recover=False)
+        if turn["turn_id"] in stored.turns:
+            self.bindings.mark(record, "completed")
+            return True
+        return False
+
+    async def recover(self) -> None:
+        for record in list(self.bindings.messages.values()):
+            if record["channel_id"] == self.channel_id and record["status"] != "completed":
+                await self.receive_message(record["chat_id"], record["user_id"], record["text"],
+                                           record["message_id"], record["attachments"])
+        for c in self.conversations.values():
+            if c.runtime is not None and not c.runtime.done and c.runtime.owns_attachment(c.attachment_id):
+                await self._deliver_event(c, c.runtime, c.runtime.state)
 
     async def receive_action(self, chat_id: str, user_id: str, message_id: str, token: str) -> None:
         if not self.authorized(user_id):
@@ -181,7 +244,12 @@ class MobileController:
             tokens.append(token)
             c.actions[token] = (action, None)
             buttons.append(Button(action["label"], token))
-        message_id = await self.transport.send(c.chat_id, Card(title, text, buttons))
+        try:
+            message_id = await self.transport.send(c.chat_id, Card(title, text, buttons))
+        except BaseException:
+            for token in tokens:
+                c.actions.pop(token, None)
+            raise
         for token in tokens:
             c.actions[token] = (c.actions[token][0], message_id)
         return message_id
@@ -270,7 +338,8 @@ class MobileController:
             runtime.send({"type": "runtime_refresh"})
             await self._show(c, "正在刷新运行环境", "完成后会通知你。")
         elif command == "/status":
-            await self._show(c, "当前会话", self._status(c))
+            runtime = await self.host.get(c.session_id) if c.session_id else None
+            await self._show(c, "当前会话", self._status(c, runtime.state if runtime and not runtime.done else None))
         elif command == "/takeover":
             if c.session_id is None:
                 raise ValueError("请先选择会话。")
@@ -281,7 +350,7 @@ class MobileController:
             if runtime.turn_id is None:
                 await self._show(c, "当前会话", "没有正在执行的任务。")
             else:
-                runtime.send({"type": "cancel", "turn_id": runtime.turn_id})
+                self._send_control(c, runtime, {"type": "cancel", "turn_id": runtime.turn_id})
         elif command.startswith("/"):
             await self._text(c, "/")
         else:
@@ -296,13 +365,18 @@ class MobileController:
             await self._text(c, "/workspaces" if c.workspace is None else "/sessions")
             return
         runtime = await self._attached(c)
+        retry_turn = c.inbound["turn"] if c.inbound else None
+        if retry_turn and retry_turn["session_id"] != c.session_id:
+            raise ValueError("消息所属会话已变更，请先恢复原会话后重发。")
+        if retry_turn and runtime.running:
+            raise ValueError("原消息尚未提交，请等待当前任务结束后重试。")
         if attachments and runtime.running:
             raise ValueError("当前会话正在执行，附件请在任务结束后重新发送；提问请回复文字或点击选项。")
         question = runtime.state["question"]
         if question is not None:
             if not question["allow_free_text"]:
                 raise ValueError("请点击当前提问卡片中的选项。")
-            runtime.send({
+            self._send_control(c, runtime, {
                 "type": "user_question_response",
                 "request_id": question["request_id"], "text": text,
             })
@@ -310,36 +384,50 @@ class MobileController:
         elif runtime.state["approval"] is not None:
             raise ValueError("请使用审批卡片中的允许或拒绝按钮。")
         elif runtime.running:
-            runtime.send({
+            self._send_control(c, runtime, {
                 "type": "user_steer", "turn_id": runtime.turn_id,
                 "steer_id": str(uuid4()), "text": text,
             })
         else:
             workspace = Workspace(Path(runtime.state["workspace"]))
+            turn = self.bindings.prepare_turn(c.inbound, str(workspace.path), c.session_id) if c.inbound else None
+            if turn and turn["session_id"] != c.session_id:
+                raise ValueError("消息所属会话已变更，请先恢复原会话后重发。")
             stored = []
+            submitted = False
             try:
                 if attachments:
-                    with tempfile.TemporaryDirectory(prefix="nosis-feishu-") as directory:
-                        for index, attachment in enumerate(attachments):
-                            path = Path(directory) / str(index)
-                            await self.transport.download_attachment(message_id, attachment, path)
-                            with path.open("rb") as source:
-                                stored.append(store_attachment(
-                                    source, workspace, attachment["filename"],
-                                ))
+                    async with asyncio.timeout(ATTACHMENT_PROCESSING_SECONDS):
+                        await self._download(message_id, attachments, workspace, stored)
                 if not runtime.owns_attachment(c.attachment_id):
                     raise ValueError("会话已由其他端接管。可使用 /takeover 接管。")
                 c.progress = await self._show(c, "Nosis 正在处理", self._status(c))
                 if not runtime.owns_attachment(c.attachment_id):
                     raise ValueError("会话已由其他端接管。可使用 /takeover 接管。")
                 runtime.send({
-                    "type": "user_turn", "turn_id": str(uuid4()), "text": text,
+                    "type": "user_turn", "turn_id": turn["turn_id"] if turn else str(uuid4()), "text": text,
                     **({"attachments": stored} if stored else {}),
                 })
+                submitted = True
+                if c.inbound:
+                    self.bindings.mark(c.inbound, "submitted")
             except BaseException:
-                for attachment in stored:
-                    workspace.resolve_path(attachment["path"]).unlink(missing_ok=True)
+                if not submitted:
+                    for attachment in stored:
+                        workspace.resolve_path(attachment["path"]).unlink(missing_ok=True)
                 raise
+
+    async def _download(self, message_id: str, attachments, workspace: Workspace, stored: list) -> None:
+        total = 0
+        with tempfile.TemporaryDirectory(prefix="nosis-feishu-") as directory:
+            for index, attachment in enumerate(attachments):
+                path = Path(directory) / str(index)
+                await self.transport.download_attachment(message_id, attachment, path)
+                total += path.stat().st_size
+                if total > MAX_INBOUND_ATTACHMENT_BYTES:
+                    raise ValueError("本条消息的附件总大小不能超过 100 MiB。")
+                with path.open("rb") as source:
+                    stored.append(store_attachment(source, workspace, attachment["filename"]))
 
     async def _menu(
         self, c: Conversation, title: str, entries: list, kind: str, page_text: str
@@ -460,11 +548,12 @@ class MobileController:
         c.settings_requests.clear()
         c.runtime = c.queue = c.reader = None
 
-    def _status(self, c: Conversation) -> str:
-        state = c.runtime.state if c.runtime is not None else {}
+    def _status(self, c: Conversation, state: dict | None = None) -> str:
+        if state is None:
+            state = c.runtime.state if c.runtime is not None and not c.runtime.done else {}
         return (
             f"工作区：{c.workspace or '未选择'}\n会话：{c.session_id or '未选择'}\n"
-            f"状态：{PHASES[state.get('phase', 'inactive')]}\n模型：{state.get('provider') or '默认'}\n"
+            f"状态：{PHASES[state.get('phase', 'unknown')]}\n模型：{state.get('provider') or '未知'}\n"
             f"权限：{PERMISSIONS.get(state.get('permission_preset'), '随会话恢复')}"
         )
 
@@ -553,73 +642,10 @@ class MobileController:
     async def _read(self, c: Conversation, runtime: ActiveSession, queue: asyncio.Queue) -> None:
         try:
             while (event := await queue.get()) is not None:
-                kind = event["type"]
-                if kind in {"settings_snapshot", "settings_update_failed"}:
-                    await self._settings(c, event)
-                elif kind in {"permission_changed", "provider_changed", "runtime_refreshed"}:
-                    await self._show(c, "运行设置已更新", self._status(c))
-                elif kind == "runtime_refresh_failed":
-                    await self._show(c, "刷新失败", event["error"]["message"])
-                elif kind in {"approval_request", "user_question"}:
-                    await self._interaction(c, event)
-                elif kind in {"assistant_delta", "assistant_message"}:
-                    key = (event["turn_id"], event["model_call_index"])
-                    stream = c.streams.get(key)
-                    if stream is None:
-                        stream = c.streams[key] = TextStream(self.transport, c.chat_id)
-                    if kind == "assistant_delta":
-                        stream.append(event["text"])
-                    else:
-                        await stream.finish(event["content"])
-                elif kind == "tool_media" and event["present_to_user"]:
-                    workspace = Workspace(Path(runtime.state["workspace"]))
-                    for attachment in event["attachments"]:
-                        if not runtime.owns_attachment(c.attachment_id):
-                            break
-                        try:
-                            path = workspace.resolve_path(attachment["path"])
-                            await self.transport.send_attachment(c.chat_id, attachment, path)
-                        except (ValueError, OSError, RuntimeError) as error:
-                            await self._show(c, "附件发送失败", f"{attachment['filename']}：{error}")
-                elif kind in {
-                    "turn_completed",
-                    "turn_cancelled",
-                    "turn_failed",
-                    "fatal",
-                    "session_open_failed",
-                }:
-                    for stream in c.streams.values():
-                        await stream.finish()
-                    c.streams.clear()
-                    for request_id in list(c.interactions):
-                        await self._resolve(c, request_id, "请求已结束。")
-                    title = {"turn_completed": "处理完成", "turn_cancelled": "已停止"}.get(
-                        kind, "执行失败"
-                    )
-                    text = event["error"]["message"] if event.get("error") else self._status(c)
-                    if c.progress is not None:
-                        await self.transport.update(c.progress, Card(title, text))
-                        c.progress = None
-                    else:
-                        await self._show(c, title, text)
-                elif kind == "runtime_state":
-                    pending = [
-                        value["request_id"]
-                        for value in (event["approval"], event["question"])
-                        if value is not None
-                    ]
-                    for request_id in list(c.interactions):
-                        if request_id not in pending:
-                            await self._resolve(c, request_id, "请求已结束。")
-                elif kind == "user_steer_rejected":
-                    await self._show(c, "补充指令未接收", "当前执行已经结束，请重新发送。")
-                elif kind == "attachment_replaced":
-                    for stream in c.streams.values():
-                        await stream.abort()
-                    c.streams.clear()
-                    for request_id in list(c.interactions):
-                        await self._resolve(c, request_id, "会话已由其他端接管。")
-                    await self._show(c, "会话已被接管", "使用 /takeover 可重新接管。")
+                try:
+                    await self._deliver_event(c, runtime, event)
+                except Exception:
+                    log.exception("Mobile event delivery failed: %s (%s)", c.key, event["type"])
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -629,6 +655,88 @@ class MobileController:
                 await stream.abort()
             c.streams.clear()
             await runtime.detach(queue, c.attachment_id)
+
+    async def _deliver_event(self, c: Conversation, runtime: ActiveSession, event: dict) -> None:
+        kind = event["type"]
+        if kind in {"settings_snapshot", "settings_update_failed"}:
+            await self._settings(c, event)
+        elif kind in {"permission_changed", "provider_changed", "runtime_refreshed"}:
+            await self._show(c, "运行设置已更新", self._status(c))
+        elif kind == "runtime_refresh_failed":
+            await self._show(c, "刷新失败", event["error"]["message"])
+        elif kind in {"approval_request", "user_question"}:
+            await self._interaction(c, event)
+        elif kind in {"assistant_delta", "assistant_message"}:
+            key = (event["turn_id"], event["model_call_index"])
+            stream = c.streams.get(key)
+            if stream is None:
+                stream = c.streams[key] = TextStream(self.transport, c.chat_id)
+            if kind == "assistant_delta":
+                stream.append(event["text"])
+            else:
+                await stream.finish(event["content"])
+        elif kind == "tool_media" and event["present_to_user"]:
+            workspace = Workspace(Path(runtime.state["workspace"]))
+            for attachment in event["attachments"]:
+                if not runtime.owns_attachment(c.attachment_id):
+                    break
+                try:
+                    path = workspace.resolve_path(attachment["path"])
+                    await self.transport.send_attachment(c.chat_id, attachment, path)
+                except (ValueError, OSError, RuntimeError) as error:
+                    log.exception("Mobile attachment delivery failed: %s", c.key)
+                    try:
+                        await self._show(c, "附件发送失败", f"{attachment['filename']}：{error}")
+                    except Exception:
+                        log.exception("Mobile attachment error notification failed: %s", c.key)
+        elif kind in {
+            "turn_completed",
+            "turn_cancelled",
+            "turn_failed",
+            "fatal",
+            "session_open_failed",
+        }:
+            if event.get("turn_id"):
+                self.bindings.finish_turn(runtime.session_id, event["turn_id"])
+            for stream in c.streams.values():
+                await stream.finish()
+            c.streams.clear()
+            for request_id in list(c.interactions):
+                await self._resolve(c, request_id, "请求已结束。")
+            title = {"turn_completed": "处理完成", "turn_cancelled": "已停止"}.get(
+                kind, "执行失败"
+            )
+            text = event["error"]["message"] if event.get("error") else self._status(c)
+            if c.progress is not None:
+                progress = c.progress
+                c.progress = None
+                try:
+                    await self.transport.update(progress, Card(title, text))
+                except Exception:
+                    await self._show(c, title, text)
+            else:
+                await self._show(c, title, text)
+        elif kind == "runtime_state":
+            for request in (event["approval"], event["question"]):
+                if request is not None:
+                    await self._interaction(c, request)
+            pending = [
+                value["request_id"]
+                for value in (event["approval"], event["question"])
+                if value is not None
+            ]
+            for request_id in list(c.interactions):
+                if request_id not in pending:
+                    await self._resolve(c, request_id, "请求已结束。")
+        elif kind == "user_steer_rejected":
+            await self._show(c, "补充指令未接收", "当前执行已经结束，请重新发送。")
+        elif kind == "attachment_replaced":
+            for stream in c.streams.values():
+                await stream.abort()
+            c.streams.clear()
+            for request_id in list(c.interactions):
+                await self._resolve(c, request_id, "会话已由其他端接管。")
+            await self._show(c, "会话已被接管", "使用 /takeover 可重新接管。")
 
     async def close(self) -> None:
         for conversation in self.conversations.values():

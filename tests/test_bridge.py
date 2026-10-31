@@ -625,7 +625,10 @@ class PermissionProtocolTest(BridgeTestCase):
         )
 
     def test_workspace_access_routes_shell_without_host_approval(self) -> None:
-        directory = self.enterContext(tempfile.TemporaryDirectory())
+        # A restricted token cannot traverse an administrator-only temp parent.
+        directory = self.enterContext(tempfile.TemporaryDirectory(
+            dir=Path.home() if sys.platform == "win32" else None,
+        ))
         root = Path(directory)
         if sys.platform == "win32":
             user = "*" + subprocess.run(
@@ -684,6 +687,7 @@ class PermissionProtocolTest(BridgeTestCase):
         ):
             self.skipTest("the test runner already forbids nested Seatbelt")
         self.assertIsNone(result.error)
+        self.assertEqual(result.output["exit_code"], 0, result.output)
         self.assertEqual(
             (root / "routed.txt").read_text(encoding="utf-8"),
             "workspace",

@@ -276,7 +276,7 @@ function historyEntries(items: SessionItem[]): Entry[] {
     // Tool results only carry an outcome; the call entry shows it.
     if (item.role === 'tool') continue;
 
-    if (item.origin === 'tool_media') {
+    if (item.origin === 'tool_media' || item.origin === 'tool_delivery') {
       const paths = itemImagePaths(item.content);
       if (paths.length > 0) {
         entries.push({

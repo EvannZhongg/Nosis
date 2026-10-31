@@ -87,6 +87,24 @@ describe("Feishu incoming content", () => {
 });
 
 describe("Feishu resource transport", () => {
+  it("uses the installed SDK's unwrapped upload response", async () => {
+    const sdk = await vi.importActual<typeof import("@larksuiteoapi/node-sdk")>("@larksuiteoapi/node-sdk");
+    const request = vi.fn();
+    const client = new sdk.Client({ appId: "app", appSecret: "secret", httpInstance: { request } as any });
+    vi.spyOn(client as any, "formatPayload").mockResolvedValue({ headers: {}, params: {}, data: {}, path: {} });
+    request.mockResolvedValue({ code: 0, data: { image_key: "image" } });
+    expect(await client.im.v1.image.create({ data: { image_type: "message", image: "bytes" } })).toEqual({ image_key: "image" });
+    request.mockResolvedValue({ code: 0, data: { file_key: "file" } });
+    expect(await client.im.v1.file.create({ data: { file_type: "stream", file_name: "file", file: "bytes" } })).toEqual({ file_key: "file" });
+  });
+
+  it("stops oversized resources before writing them to disk", async () => {
+    let bytes = 0;
+    mocks.write.mockReturnValue(new Writable({ write(chunk, encoding, done) { bytes += chunk.length; done(); } }));
+    mocks.resource.mockResolvedValue({ getReadableStream: () => Readable.from([Buffer.alloc(51 * 1024 * 1024)]) });
+    expect((await command("download_attachment", { message_id: "incoming", key: "key", resource_type: "file", path: "staged" })).error).toContain("50 MiB");
+    expect(bytes).toBe(0);
+  });
   it.each(["image", "file"])("downloads %s from the originating message", async resource_type => {
     let bytes = "";
     mocks.write.mockReturnValue(new Writable({ write(chunk, encoding, done) { bytes += chunk; done(); } }));

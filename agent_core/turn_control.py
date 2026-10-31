@@ -21,6 +21,7 @@ class UserSteeringMailbox:
 
     def __init__(self) -> None:
         self._items: deque[UserSteer] = deque()
+        self._received: set[str] = set()
         self._accepting = True
         self._lock = Lock()
 
@@ -28,6 +29,9 @@ class UserSteeringMailbox:
         with self._lock:
             if not self._accepting:
                 return False
+            if steer.steer_id in self._received:
+                return True
+            self._received.add(steer.steer_id)
             self._items.append(steer)
             return True
 

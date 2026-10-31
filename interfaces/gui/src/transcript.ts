@@ -150,7 +150,7 @@ export function applyMessage(
           ...items,
           {
             role: "user",
-            origin: "tool_media",
+            origin: message.present_to_user ? "tool_delivery" : "tool_media",
             content: message.attachments,
           },
         ],
@@ -409,7 +409,7 @@ export function toMessages(items: TranscriptItem[], sessionId?: string): ThreadM
     // agent was composing, so they join it instead of opening a bubble
     // that looks like the person spoke. The text beside them only tells
     // the model where they came from, so it is left out here.
-    if (item.role === "user" && item.origin === "tool_media") {
+    if (item.role === "user" && (item.origin === "tool_media" || item.origin === "tool_delivery")) {
       if (open) open.content.push(...parts.filter((part) => ["image", "file"].includes((part as any).type)));
       return;
     }

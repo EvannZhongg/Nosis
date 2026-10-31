@@ -254,31 +254,23 @@ class ToolBatchExecutor:
     ) -> None:
         # Attachments follow all tool messages. OpenAI-compatible providers reject
         # a batch when another message interrupts its tool-result sequence.
-        media = tuple(
-            attachment
-            for result in results
-            for attachment in result.attachments
-        )
-        if not media:
-            return
-        self._session.add_item(
-            role="user",
-            content=_media_notice(media),
-            timestamp_utc=self._now().astimezone(timezone.utc),
-            attachments=media,
-            origin="tool_media",
-        )
-        if on_media is not None:
-            # A batch may mix observations and explicit deliverables. Never
-            # promote its observation media to user delivery with the latter.
-            for present_to_user in (False, True):
-                attachments = tuple(
-                    part for result in results
-                    if result.present_to_user == present_to_user
-                    for part in result.attachments
-                )
-                if attachments:
-                    on_media(attachments, present_to_user)
+        for present_to_user in (False, True):
+            attachments = tuple(
+                part for result in results
+                if result.present_to_user == present_to_user
+                for part in result.attachments
+            )
+            if not attachments:
+                continue
+            self._session.add_item(
+                role="user",
+                content="" if present_to_user else _media_notice(attachments),
+                timestamp_utc=self._now().astimezone(timezone.utc),
+                attachments=attachments,
+                origin="tool_delivery" if present_to_user else "tool_media",
+            )
+            if on_media is not None:
+                on_media(attachments, present_to_user)
 
     @staticmethod
     def _cleanup_results(

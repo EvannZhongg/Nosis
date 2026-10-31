@@ -41,8 +41,6 @@ class PresentFileTool(Tool):
             info = probe_image(source, max_bytes=None)
         except UnsupportedImageError:
             info = None
-        if info is not None:
-            info = probe_image(source)
         root = context.workspace.resolve_path(".nosis/attachments")
         root.mkdir(parents=True, exist_ok=True)
         suffix = image_extension(info.mime_type) if info else source.suffix

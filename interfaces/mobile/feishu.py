@@ -33,29 +33,61 @@ class FeishuTransport:
         self.process = None
         self.reader = None
         self.dispatcher = None
+        self.supervisor = None
+        self.connected = False
         self.controller = None
         self.pending: dict[str, asyncio.Future] = {}
         self.inbound: asyncio.Queue = asyncio.Queue()
 
     async def start(self, controller) -> None:
+        self.controller = controller
+        await self._connect()
+        self.supervisor = asyncio.create_task(self._supervise())
+
+    async def _connect(self) -> None:
         node = shutil.which("node")
         bundle = Path(__file__).parent / "dist" / "feishu.cjs"
         if node is None or not bundle.is_file():
             raise RuntimeError("Feishu requires Node.js 22+ and its bundle. Run npm install && npm run build --workspace @nosis/mobile.")
-        self.controller = controller
         self.process = await asyncio.create_subprocess_exec(
             node, str(bundle), stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
         )
+        self.inbound = asyncio.Queue()
         self.reader = asyncio.create_task(self._read())
         self.dispatcher = asyncio.create_task(self._dispatch())
         try:
             await self._request("start", app_id=self.config.app_id, app_secret=self.config.app_secret)
+            self.connected = True
         except BaseException:
-            await self.close()
+            await self._disconnect()
             raise
 
+    async def _supervise(self) -> None:
+        while True:
+            await asyncio.shield(self.reader)
+            log.error("Feishu process exited; reconnecting: %s", self.config.id)
+            await self.dispatcher
+            await self._disconnect()
+            delay = 1
+            while True:
+                await asyncio.sleep(delay)
+                try:
+                    await self._connect()
+                except Exception:
+                    log.exception("Feishu reconnect failed: %s", self.config.id)
+                    delay = min(delay * 2, 30)
+                else:
+                    log.info("Feishu reconnected: %s", self.config.id)
+                    break
+            try:
+                await self.controller.recover()
+            except Exception:
+                log.exception("Feishu inbound recovery failed: %s", self.config.id)
+
     async def _request(self, op: str, *, timeout: float = 30, **fields) -> dict:
-        if self.process is None or self.process.returncode is not None:
+        if (self.process is None or self.process.returncode is not None
+                or (self.reader is not None and self.reader.done())
+                or (op not in {"start", "close"} and not self.connected)):
             raise RuntimeError("Feishu transport is not running")
         request_id = str(uuid4())
         future = asyncio.get_running_loop().create_future()
@@ -90,29 +122,54 @@ class FeishuTransport:
             failure = error
             log.exception("Feishu transport reader failed")
         finally:
+            self.connected = False
             for future in self.pending.values():
                 if not future.done():
                     future.set_exception(failure)
             self.inbound.put_nowait(None)
 
     async def _dispatch(self) -> None:
-        while (event := await self.inbound.get()) is not None:
+        workers: dict[tuple[str, str], tuple[asyncio.Queue, asyncio.Task]] = {}
+
+        async def consume(key, queue):
             try:
-                if event["type"] == "message":
-                    if event["text"] is None:
-                        if self.controller.authorized(event["user_id"]):
-                            await self.send(event["chat_id"], Card("暂不支持此消息", "请发送文字、图片、文件或图文消息。"))
-                    else:
-                        await self.controller.receive_message(
-                            event["chat_id"], event["user_id"], event["text"],
-                            event["message_id"], event["attachments"],
-                        )
-                elif event["type"] == "action" and isinstance(event.get("token"), str):
-                    await self.controller.receive_action(event["chat_id"], event["user_id"], event["message_id"], event["token"])
-                elif event["type"] == "connection_error":
+                while not queue.empty():
+                    await self._deliver(queue.get_nowait())
+            finally:
+                workers.pop(key, None)
+
+        try:
+            while (event := await self.inbound.get()) is not None:
+                if event["type"] == "connection_error":
                     log.error("%s: %s", self.config.id, event["error"])
-            except Exception:
-                log.exception("Feishu inbound delivery failed")
+                    continue
+                key = (event["chat_id"], event["user_id"])
+                if key not in workers:
+                    queue = asyncio.Queue()
+                    workers[key] = (queue, asyncio.create_task(consume(key, queue)))
+                workers[key][0].put_nowait(event)
+            await asyncio.gather(*(task for _, task in tuple(workers.values())))
+        finally:
+            tasks = [task for _, task in tuple(workers.values())]
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _deliver(self, event: dict) -> None:
+        try:
+            if event["type"] == "message":
+                if event["text"] is None:
+                    if self.controller.authorized(event["user_id"]):
+                        await self.send(event["chat_id"], Card("暂不支持此消息", "请发送文字、图片、文件或图文消息。"))
+                else:
+                    await self.controller.receive_message(
+                        event["chat_id"], event["user_id"], event["text"],
+                        event["message_id"], event["attachments"],
+                    )
+            elif event["type"] == "action" and isinstance(event.get("token"), str):
+                await self.controller.receive_action(event["chat_id"], event["user_id"], event["message_id"], event["token"])
+        except Exception:
+            log.exception("Feishu inbound delivery failed")
 
     async def send(self, chat_id: str, card: Card) -> str:
         result = await self._request("send", chat_id=chat_id, card=render_card(card))
@@ -142,6 +199,14 @@ class FeishuTransport:
         return result["message_id"]
 
     async def close(self) -> None:
+        if self.supervisor is not None:
+            self.supervisor.cancel()
+            await asyncio.gather(self.supervisor, return_exceptions=True)
+            self.supervisor = None
+        await self._disconnect()
+
+    async def _disconnect(self) -> None:
+        self.connected = False
         if self.dispatcher is not None:
             self.dispatcher.cancel()
             await asyncio.gather(self.dispatcher, return_exceptions=True)
@@ -158,5 +223,5 @@ class FeishuTransport:
                         self.process.kill()
                 await self.process.wait()
             if self.reader is not None:
-                await self.reader
+                await asyncio.gather(self.reader, return_exceptions=True)
             self.process = self.reader = None

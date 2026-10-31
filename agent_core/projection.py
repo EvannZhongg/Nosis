@@ -41,7 +41,7 @@ def project_context_units(
             while end < len(history) and (
                 history[end].role == "tool"
                 or history[end].is_tool_media
-                or history[end].origin in {"user_interaction", "hook_feedback"}
+                or history[end].origin in {"user_interaction", "hook_feedback", "tool_delivery"}
             ):
                 following = history[end]
                 if following.tool_call_id in calls:
@@ -68,7 +68,7 @@ def project_context_units(
             )
             index = end
             continue
-        messages = () if item.role == "tool" else (item,)
+        messages = () if item.role == "tool" or item.origin == "tool_delivery" else (item,)
         result.append(
             ContextUnit(
                 start=start_index + index,

@@ -137,7 +137,7 @@ export type SessionItem = {
   reasoning?: string | null;
   // Non-conversation origins mark runtime-generated context that receives
   // special transcript rendering instead of a normal user message.
-  origin?: 'conversation' | 'tool_media' | 'job_result' | 'user_interaction' | 'hook_feedback';
+  origin?: 'conversation' | 'tool_media' | 'tool_delivery' | 'job_result' | 'user_interaction' | 'hook_feedback';
 };
 
 export type UserQuestionOption = {

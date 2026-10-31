@@ -1,6 +1,7 @@
 """Coalesce assistant deltas into editable body messages."""
 
 import asyncio
+import logging
 
 from .views import Transport
 
@@ -8,6 +9,7 @@ from .views import Transport
 MAX_TEXT_CHARACTERS = 6000
 MAX_MESSAGE_EDITS = 20
 UPDATE_INTERVAL_SECONDS = 1.0
+log = logging.getLogger(__name__)
 
 
 class TextStream:
@@ -53,7 +55,10 @@ class TextStream:
         while True:
             await self._changed.wait()
             self._changed.clear()
-            await self._flush()
+            try:
+                await self._flush()
+            except Exception:
+                log.exception("Mobile text delivery failed: %s", self.chat_id)
             if self._finished.is_set():
                 if self._changed.is_set():
                     continue
@@ -78,9 +83,15 @@ class TextStream:
                     self._message_id = None
                     self._sent = ""
                     continue
-                await self.transport.update_markdown(self._message_id, text)
+                try:
+                    await self.transport.update_markdown(self._message_id, text)
+                except Exception:
+                    # An uneditable message must not block the remaining reply.
+                    self._message_id = await self.transport.send_markdown(self.chat_id, text)
+                    self._edits = 0
+                else:
+                    self._edits += 1
                 self._sent = text
-                self._edits += 1
             if len(text) == MAX_TEXT_CHARACTERS:
                 self._offset += len(text)
                 self._message_id = None

@@ -107,12 +107,10 @@ class ToolResult:
     name: str
     output: JSONValue = None
     error: ToolError | None = None
-    #: Attachments this call publishes to the conversation. They are
-    #: delivered as a separate message after the tool results, because a
-    #: tool-role message cannot carry image content on the
-    #: OpenAI-compatible chat API that providers are reached through.
+    #: Observation attachments enter model context after the tool results.
+    #: With present_to_user=True they are persisted as delivery records only.
     attachments: tuple[AttachmentPart, ...] = ()
-    #: Context media is not a request to send files to the user.
+    #: Route attachments exclusively to user delivery instead of model input.
     present_to_user: bool = field(default=False, kw_only=True)
     executed: bool = field(default=False, compare=False, repr=False)
     hook_feedback: tuple[str, ...] = field(default=(), compare=False, repr=False)

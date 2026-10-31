@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import tempfile
 import sys
 import time
@@ -10,7 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Event, Thread
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from agent_core import JsonlSessionStore, Workspace
 from interfaces.bridge_process import BridgeProcess
@@ -81,6 +82,8 @@ class ModelPeer(BaseHTTPRequestHandler):
 
 class MultiplexBridgeTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        # Loopback HTTP peers must not be sent through a developer's system proxy.
+        self.enterContext(patch.dict(os.environ, {"NO_PROXY": "127.0.0.1,localhost"}))
         self.temporary = tempfile.TemporaryDirectory(prefix="nosis-multiplex-")
         self.root = Path(self.temporary.name)
         self.http = ThreadingHTTPServer(("127.0.0.1", 0), ModelPeer)
@@ -120,6 +123,7 @@ class MultiplexBridgeTest(unittest.IsolatedAsyncioTestCase):
             self.assertIsNotNone(event, events)
             events.append(event)
             self.assertNotEqual(event["type"], "fatal", event)
+            self.assertNotEqual(event["type"], "turn_failed", event)
             if event["type"] == kind:
                 return event, events
 

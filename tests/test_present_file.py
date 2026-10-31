@@ -7,6 +7,9 @@ from types import SimpleNamespace
 
 from agent_core import Session, ToolBatchExecutor, ToolCall, ToolExecutionContext, ToolMediaEvent, Workspace, builtin_catalog
 from agent_core.content import FilePart
+from agent_core.projection import project_context_units
+from agent_core.session import message_from_dict, message_to_dict
+from agent_core.media import MAX_IMAGE_BYTES
 from agent_core.tools.builtin.present_file import PresentFileTool
 from agent_core.mcp.tool import McpTool
 from interfaces.bridge.protocol import event_to_message
@@ -51,7 +54,12 @@ class PresentFileTest(unittest.TestCase):
             self.assertTrue(all(part.type == "image" for part in events[0].attachments))
             self.assertEqual([part.filename for part in events[1].attachments], ["report.txt"])
             # Observations still reach the model together with the tool results.
-            self.assertEqual(len(session.items[-1].parts), 4)
+            self.assertEqual(session.items[-2].origin, "tool_media")
+            self.assertEqual(len(session.items[-2].parts), 3)
+            self.assertEqual(session.items[-1].origin, "tool_delivery")
+            messages = [m for unit in project_context_units(session.items) for m in unit.messages]
+            self.assertIn(session.items[-2], messages)
+            self.assertNotIn(session.items[-1], messages)
             self.assertFalse(event_to_message(events[0], turn_id)["present_to_user"])
             self.assertTrue(event_to_message(events[1], turn_id)["present_to_user"])
 
@@ -91,12 +99,38 @@ class PresentFileTest(unittest.TestCase):
             self.assertEqual(part.filename, "report.csv")
             original.write_bytes(b"changed")
             self.assertEqual(workspace.resolve_path(part.path).read_bytes(), b"a,b\n1,2")
-            self.assertEqual(session.items[-1].origin, "tool_media")
+            self.assertEqual(session.items[-1].origin, "tool_delivery")
             self.assertIn(part, session.items[-1].content)
+            restored = message_from_dict(message_to_dict(session.items[-1]))
+            self.assertEqual(restored.origin, "tool_delivery")
+            self.assertEqual(restored.parts, session.items[-1].parts)
             event = event_to_message(media[0], turn_id)
             self.assertTrue(event["present_to_user"])
             self.assertEqual(event["attachments"][0]["type"], "file")
             self.assertEqual(event["attachments"][0]["size_bytes"], 7)
+
+    def test_large_image_delivery_never_enters_model_context(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+            image = png_bytes(2, 3) + b"\0" * MAX_IMAGE_BYTES
+            (workspace.path / "large.png").write_bytes(image)
+            session = Session()
+            turn_id = session.begin_turn("turn")
+            call = ToolCall("deliver", "present_file", {"path": "large.png"})
+            session.add_item("assistant", None, tool_calls=(call,))
+            tools = builtin_catalog().select(("present_file",), ToolExecutionContext(workspace=workspace, session=session))
+
+            class Normalizer:
+                def normalize(self, result):
+                    return result.to_content()
+
+            ToolBatchExecutor(tools, session, Normalizer(), now=lambda: datetime.now(timezone.utc)).execute((call,), turn_id=turn_id)
+            delivery = session.items[-1]
+            self.assertEqual(delivery.origin, "tool_delivery")
+            self.assertEqual(delivery.parts[-1].size_bytes, len(image))
+            units = project_context_units(session.items)
+            self.assertEqual(len(units), 1)
+            self.assertEqual([m.role for m in units[0].messages], ["assistant", "tool"])
 
     def test_rejects_paths_outside_workspace_and_missing_files(self):
         with tempfile.TemporaryDirectory() as directory:

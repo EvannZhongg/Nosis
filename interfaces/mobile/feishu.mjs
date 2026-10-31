@@ -2,6 +2,7 @@ import * as lark from '@larksuiteoapi/node-sdk';
 import { createInterface } from 'node:readline';
 import { createReadStream, createWriteStream } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
+import { Transform } from 'node:stream';
 
 const emit = value => process.stdout.write(`${JSON.stringify(value)}\n`);
 let client;
@@ -109,7 +110,13 @@ async function handle(command) {
         path: { message_id: command.message_id, file_key: command.key },
         params: { type: command.resource_type },
       });
-      await pipeline(response.getReadableStream(), createWriteStream(command.path));
+      let size = 0;
+      const limit = new Transform({ transform(chunk, encoding, done) {
+        size += chunk.length;
+        done(size > 50 * 1024 * 1024 ? new Error('Attachment exceeds 50 MiB') : null, chunk);
+      } });
+      await pipeline(response.getReadableStream(), limit, createWriteStream(command.path),
+        { signal: AbortSignal.timeout(30_000) });
       result = {};
     } else if (command.op === 'send_attachment') {
       const image = command.attachment_type === 'image';

@@ -1,6 +1,6 @@
 import asyncio
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from interfaces.mobile.streaming import TextStream
 
@@ -24,6 +24,23 @@ class TextTransport:
 
 
 class StreamingTest(unittest.IsolatedAsyncioTestCase):
+    async def test_failed_edit_publishes_a_new_message(self):
+        transport = TextTransport()
+        stream = TextStream(transport, "chat")
+        stream.append("partial")
+        await asyncio.wait_for(transport.changed.wait(), 1)
+        transport.update_markdown = AsyncMock(side_effect=RuntimeError("edit failed"))
+        await stream.finish("complete")
+        self.assertEqual(transport.messages, ["partial", "complete"])
+
+    async def test_failed_send_does_not_escape_finish_or_leave_unobserved_task(self):
+        transport = TextTransport()
+        transport.send_markdown = AsyncMock(side_effect=RuntimeError("offline"))
+        stream = TextStream(transport, "chat")
+        with self.assertLogs("interfaces.mobile.streaming", level="ERROR"):
+            await stream.finish("reply")
+        await stream.abort()
+
     async def test_leading_whitespace_waits_for_visible_text(self):
         transport = TextTransport()
         stream = TextStream(transport, "chat")

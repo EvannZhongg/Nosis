@@ -588,6 +588,7 @@ describe("applyMessage", () => {
         type: "file", path: ".nosis/attachments/report.pdf", filename: "report.pdf", mime_type: "application/pdf", size_bytes: 32,
       }] },
     ]);
+    expect(items.at(-1)?.origin).toBe("tool_delivery");
     const messages = toMessages(items, "session-1");
     expect(messages).toHaveLength(1);
     expect(messages[0].role).toBe("assistant");
