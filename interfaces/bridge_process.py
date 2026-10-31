@@ -1,4 +1,4 @@
-"""One GUI-owned Bridge process and its independent session channels."""
+"""One frontend-owned Bridge process and its independent session channels."""
 
 import asyncio
 import json

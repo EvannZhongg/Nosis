@@ -52,8 +52,9 @@ HTTP / WebSocket 路由按模块拆分：
 | 模块 | 职责 |
 | --- | --- |
 | `active_session.py` | 活动 Session 注册表、页面附着与事件续传 |
-| `bridge_process.py` | 常驻 Bridge 进程生命周期、通道收发与故障广播 |
 | `windows_folders.py` | 通过 Windows Explorer 定位并打开 Workspace 文件夹 |
+
+常驻 Bridge 进程的生命周期、通道收发与故障广播由宿主侧模块 `interfaces/bridge_process.py` 提供；GUI 只决定何时创建、附着与关闭，不实现协议语义。
 
 服务端只直接复用 Core 的只读 Session / Workspace 能力和 Runtime 的设置服务，唯一的 Session 写入是 fork：Session Store 复制锚点所在 Turn 之前的 Journal 生成新 Session，并记录来源和锚点，不经过 Bridge，也不改写源 Session。所有会改变 Session 或 Workspace 执行状态的 Agent 操作仍经 Bridge 协议完成。
 

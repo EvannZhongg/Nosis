@@ -10,7 +10,7 @@ from agent_core import JsonlSessionStore, Workspace, plan_snapshot_to_dict
 from interfaces.bridge.protocol import attachment_replaced_message, runtime_state_message
 from interfaces.bridge.event_stream import runtime_is_active
 
-from .bridge_process import BridgeChannel, BridgeProcess
+from interfaces.bridge_process import BridgeChannel, BridgeProcess
 
 
 EVENT_REPLAY_LIMIT = 512

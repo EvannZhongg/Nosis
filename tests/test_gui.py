@@ -35,9 +35,9 @@ try:
     from interfaces.gui import __main__ as gui_main
     from interfaces.gui import (
         active_session,
-        bridge_process,
         server,
     )
+    from interfaces import bridge_process
     from interfaces.gui.routes import media
 except ModuleNotFoundError:  # pragma: no cover - exercised without [gui]
     TestClient = None

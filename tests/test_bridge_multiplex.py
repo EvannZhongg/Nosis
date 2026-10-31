@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 from agent_core import JsonlSessionStore, Workspace
-from interfaces.gui.bridge_process import BridgeProcess
+from interfaces.bridge_process import BridgeProcess
 from tests.bridge_fixtures import open_session_message
 
 
