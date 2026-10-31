@@ -67,7 +67,7 @@ class TextStream:
         while self._offset < len(self.content):
             text = self.content[self._offset:self._offset + MAX_TEXT_CHARACTERS]
             if self._message_id is None:
-                self._message_id = await self.transport.send_text(self.chat_id, text)
+                self._message_id = await self.transport.send_markdown(self.chat_id, text)
                 self._sent = text
                 self._edits = 0
             elif text != self._sent:
@@ -78,7 +78,7 @@ class TextStream:
                     self._message_id = None
                     self._sent = ""
                     continue
-                await self.transport.update_text(self._message_id, text)
+                await self.transport.update_markdown(self._message_id, text)
                 self._sent = text
                 self._edits += 1
             if len(text) == MAX_TEXT_CHARACTERS:

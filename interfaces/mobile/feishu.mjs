@@ -52,14 +52,14 @@ async function handle(command) {
       });
       if (response.code !== 0) throw new Error(`Feishu ${response.code}: ${response.msg}`);
       result = {};
-    } else if (command.op === 'send_text') {
+    } else if (command.op === 'send_markdown') {
       const response = await client.im.v1.message.create({
         params: { receive_id_type: 'chat_id' },
         data: { receive_id: command.chat_id, msg_type: 'post', content: markdownContent(command.text) },
       });
       if (response.code !== 0) throw new Error(`Feishu ${response.code}: ${response.msg}`);
       result = { message_id: response.data.message_id };
-    } else if (command.op === 'update_text') {
+    } else if (command.op === 'update_markdown') {
       const response = await client.im.v1.message.update({
         path: { message_id: command.message_id },
         data: { msg_type: 'post', content: markdownContent(command.text) },

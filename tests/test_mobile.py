@@ -33,12 +33,12 @@ class Transport:
         self.updates.append((message_id, card))
         self.messages[message_id] = (self.messages[message_id][0], card)
 
-    async def send_text(self, chat_id, text):
+    async def send_markdown(self, chat_id, text):
         message_id = f"text{len(self.texts)}"
         self.texts[message_id] = (chat_id, text)
         return message_id
 
-    async def update_text(self, message_id, text):
+    async def update_markdown(self, message_id, text):
         self.text_updates.append((message_id, text))
         self.texts[message_id] = (self.texts[message_id][0], text)
 

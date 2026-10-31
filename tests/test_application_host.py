@@ -8,7 +8,10 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
-from fastapi.testclient import TestClient
+try:
+    from fastapi.testclient import TestClient
+except ModuleNotFoundError:  # pragma: no cover - exercised without [gui]
+    TestClient = None
 
 from agent_core import JsonlSessionStore, Workspace
 from agent_runtime.settings import SettingsStore
@@ -43,6 +46,9 @@ class ApplicationHostTest(unittest.TestCase):
                     with self.assertRaisesRegex(SystemExit, "Failed to start Nosis: failed"):
                         entrypoint.main([])
 
+
+@unittest.skipIf(TestClient is None, "Install the gui extra to test the application host")
+class ApplicationHostGuiTest(unittest.TestCase):
     def test_host_owns_shared_frontend_lifecycle(self):
         from interfaces.gui import server
 

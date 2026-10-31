@@ -11,13 +11,13 @@ class TextTransport:
         self.edits = []
         self.changed = asyncio.Event()
 
-    async def send_text(self, chat_id, text):
+    async def send_markdown(self, chat_id, text):
         self.messages.append(text)
         self.edits.append(0)
         self.changed.set()
         return len(self.messages) - 1
 
-    async def update_text(self, message_id, text):
+    async def update_markdown(self, message_id, text):
         self.messages[message_id] = text
         self.edits[message_id] += 1
         self.changed.set()

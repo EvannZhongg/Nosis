@@ -118,12 +118,12 @@ class FeishuTransport:
     async def update(self, message_id: str, card: Card) -> None:
         await self._request("update", message_id=message_id, card=render_card(card))
 
-    async def send_text(self, chat_id: str, text: str) -> str:
-        result = await self._request("send_text", chat_id=chat_id, text=text)
+    async def send_markdown(self, chat_id: str, text: str) -> str:
+        result = await self._request("send_markdown", chat_id=chat_id, text=text)
         return result["message_id"]
 
-    async def update_text(self, message_id: str, text: str) -> None:
-        await self._request("update_text", message_id=message_id, text=text)
+    async def update_markdown(self, message_id: str, text: str) -> None:
+        await self._request("update_markdown", message_id=message_id, text=text)
 
     async def close(self) -> None:
         if self.dispatcher is not None:

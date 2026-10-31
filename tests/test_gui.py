@@ -2680,8 +2680,8 @@ class GuiTest(unittest.TestCase):
             )
 
 
+@unittest.skipIf(TestClient is None, "Install the gui extra to test the GUI")
 class GuiStartupTest(unittest.TestCase):
-    @unittest.skipIf(TestClient is None, "Install the gui extra to test the GUI")
     def test_reports_missing_websocket_backend(self) -> None:
         with patch.object(application_host.importlib, "import_module", side_effect=ModuleNotFoundError):
             with self.assertRaisesRegex(RuntimeError, "uv sync --extra gui"):
