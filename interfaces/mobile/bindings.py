@@ -27,21 +27,27 @@ class Bindings:
                 message_id: str, attachments) -> dict:
         identity = json.dumps([channel_id, message_id])
         if identity in self.messages:
-            if self.messages[identity]["status"] != "completed":
-                self._write()
             return self.messages[identity]
         record = {"channel_id": channel_id, "chat_id": chat_id, "user_id": user_id,
                   "text": text, "message_id": message_id, "attachments": list(attachments),
                   "status": "received", "turn": None, "control": None}
         self.messages[identity] = record
-        self._write()
+        try:
+            self._write()
+        except BaseException:
+            del self.messages[identity]
+            raise
         return record
 
     def prepare_turn(self, record: dict, workspace: str, session_id: str) -> dict:
         if record["turn"] is None:
             record["turn"] = {"workspace": workspace, "session_id": session_id,
                               "turn_id": str(uuid4())}
-            self._write()
+            try:
+                self._write()
+            except BaseException:
+                record["turn"] = None
+                raise
         return record["turn"]
 
     def mark(self, record: dict, status: str) -> None:

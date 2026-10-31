@@ -701,6 +701,42 @@ class MobileTest(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("private reasoning", str(self.transport.texts))
 
 
+class BindingsTest(unittest.TestCase):
+    def test_duplicate_receipts_do_not_write_in_any_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            bindings = Bindings(Path(directory) / "im_bindings.json")
+            record = bindings.receive("feishu", "chat", "owner", "run", "message", ())
+            for status in ("received", "submitted", "completed"):
+                with self.subTest(status=status):
+                    bindings.mark(record, status)
+                    with patch("interfaces.mobile.bindings.atomic_write_text") as write:
+                        self.assertIs(bindings.receive("feishu", "chat", "owner", "run", "message", ()), record)
+                    write.assert_not_called()
+
+    def test_failed_receipt_write_is_not_cached(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "im_bindings.json"
+            bindings = Bindings(path)
+            with patch("interfaces.mobile.bindings.atomic_write_text", side_effect=OSError("disk unavailable")):
+                with self.assertRaises(OSError):
+                    bindings.receive("feishu", "chat", "owner", "run", "message", ())
+            self.assertEqual(bindings.messages, {})
+            record = bindings.receive("feishu", "chat", "owner", "run", "message", ())
+            self.assertEqual(list(Bindings(path).messages.values()), [record])
+
+    def test_failed_turn_mapping_write_is_not_cached(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "im_bindings.json"
+            bindings = Bindings(path)
+            record = bindings.receive("feishu", "chat", "owner", "run", "message", ())
+            with patch("interfaces.mobile.bindings.atomic_write_text", side_effect=OSError("disk unavailable")):
+                with self.assertRaises(OSError):
+                    bindings.prepare_turn(record, directory, "session")
+            self.assertIsNone(record["turn"])
+            turn = bindings.prepare_turn(record, directory, "session")
+            self.assertEqual(list(Bindings(path).messages.values())[0]["turn"], turn)
+
+
 class ConfigurationTest(unittest.TestCase):
     def test_dotenv_overrides_process_environment_without_interpolation(self):
         with tempfile.TemporaryDirectory() as directory:
