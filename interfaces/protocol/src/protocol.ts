@@ -268,6 +268,7 @@ export type Incoming = (
   | {
       type: 'tool_media';
       turn_id: string;
+      present_to_user: boolean;
       attachments: UserAttachment[];
     }
   | ({

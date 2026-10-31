@@ -14,7 +14,7 @@ from .turn_control import AgentCancelled, TurnControl
 
 ToolCallCallback = Callable[[ToolCall, int, int], None]
 ToolResultCallback = Callable[[ToolResult, int, int], None]
-ToolMediaCallback = Callable[[tuple[AttachmentPart, ...]], None]
+ToolMediaCallback = Callable[[tuple[AttachmentPart, ...], bool], None]
 
 
 class ToolBatchExecutor:
@@ -252,7 +252,7 @@ class ToolBatchExecutor:
         results: tuple[ToolResult, ...],
         on_media: ToolMediaCallback | None,
     ) -> None:
-        # Images follow all tool messages. OpenAI-compatible providers reject
+        # Attachments follow all tool messages. OpenAI-compatible providers reject
         # a batch when another message interrupts its tool-result sequence.
         media = tuple(
             attachment
@@ -269,7 +269,16 @@ class ToolBatchExecutor:
             origin="tool_media",
         )
         if on_media is not None:
-            on_media(media)
+            # A batch may mix observations and explicit deliverables. Never
+            # promote its observation media to user delivery with the latter.
+            for present_to_user in (False, True):
+                attachments = tuple(
+                    part for result in results
+                    if result.present_to_user == present_to_user
+                    for part in result.attachments
+                )
+                if attachments:
+                    on_media(attachments, present_to_user)
 
     @staticmethod
     def _cleanup_results(

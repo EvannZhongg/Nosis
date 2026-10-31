@@ -100,7 +100,7 @@ python -m interfaces.mobile --workspace F:/Nosis
 
 附件先经过身份、消息去重、Session 绑定和控制权检查，再通过官方 SDK 的[获取消息中的资源文件](https://open.feishu.cn/document/server-docs/im-v1/message/get-2)接口下载到临时目录，交给 `agent_runtime.attachments.store_attachment` 保存到当前工作区的 `.nosis/attachments/`。普通文件保留原始文件名，图片按真实字节确定类型和扩展名；图文消息中的文字和多张图片合并为同一个 `user_turn.attachments`。纯附件消息也可发起 Turn。Bridge 继续使用 Runtime 的附件解析，Core 负责模型图片输入、文件提示、视觉降级和 Journal；适配层不复制这些执行语义。失败的下载会清理临时文件和本条消息已保存的附件。
 
-Agent 的 `generate_image`、`read_image` 等现有图片输出和新增 `present_file` 文件交付，均沿用结构化 `tool_media` 事件。飞书端将事件附件通过 SDK 上传后发送为图片或文件消息；`present_file` 保存交付快照，避免后续编辑改变已交付文件。GUI 同样展示文件下载入口。单个附件发送失败会显示错误，继续处理后续附件和正文。平台权限的生效与版本发布要求以开发者后台提示为准；本地代码或 bundle 更新后需重启常驻宿主。
+Tool 附件统一沿用结构化 `tool_media` 事件，并通过 `present_to_user` 区分模型观察与显式交付。`computer_screenshot`、浏览器 MCP 截图、`read_image`、`generate_image` 的图片默认只进入模型上下文和本地预览，不自动发送到飞书；需要交付时由 Agent 调用 `present_file`，该 Tool 保存附件快照并设置 `present_to_user=true`。Core 将同一批中的观察媒体和交付附件分开发出，飞书仅将显式交付的附件通过 SDK 上传并发送。GUI 同样展示文件下载入口。单个附件发送失败会显示错误，继续处理后续附件和正文。平台权限的生效与版本发布要求以开发者后台提示为准；本地代码或 bundle 更新后需重启常驻宿主。
 
 一个 Session 只有一个控制附着。GUI 或飞书接管后，原端停止控制；待处理提问 / 审批从 Runtime 快照在新端重绘。运行期间不能切换工作区或新建替换当前会话，先取消或等待结束。
 

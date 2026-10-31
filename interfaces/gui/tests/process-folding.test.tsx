@@ -164,7 +164,7 @@ describe("process folding in the live transcript", () => {
 
   it("keeps process groups open across images until text arrives", async () => {
     await receive(reasoning("inspect image"));
-    await receive({ type: "tool_media", turn_id: "t1", attachments: [{ type: "image", path: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=", filename: "image.png", mime_type: "image/png", size_bytes: 68 }] });
+    await receive({ type: "tool_media", turn_id: "t1", present_to_user: false, attachments: [{ type: "image", path: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=", filename: "image.png", mime_type: "image/png", size_bytes: 68 }] });
     expect(processes()[0]?.open).toBe(true);
     expect(scrollIntoView).not.toHaveBeenCalled();
     await receive(text("image description"));

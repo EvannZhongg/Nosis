@@ -218,7 +218,7 @@ describe("isTurnActivity", () => {
     { type: "assistant_delta", turn_id: "t1", text: "hi", model_call_index: 1 },
     { type: "reasoning_delta", turn_id: "t1", text: "thinking", model_call_index: 1 },
     { type: "tool_batch_started", turn_id: "t1", model_call_index: 1, tool_calls: [] },
-    { type: "tool_media", turn_id: "t1", attachments: [] },
+    { type: "tool_media", turn_id: "t1", attachments: [], present_to_user: false },
     { type: "assistant_message", turn_id: "t1", content: "hi", timestamp_utc: "2026-09-16T00:00:00Z", model_call_index: 1 },
     { type: "job_status", turn_id: "t1", job_id: "job-1", kind: "shell", status: "running", details: { command: "ls" } },
   ] satisfies Incoming[])("recognizes $type", (message) => {
@@ -554,6 +554,7 @@ describe("applyMessage", () => {
       {
         type: "tool_media",
         turn_id: "t1",
+        present_to_user: false,
         attachments: [{
           type: "image",
           path: ".nosis/attachments/generated.png",
@@ -583,7 +584,7 @@ describe("applyMessage", () => {
   it("renders a delivered file with the assistant and preserves its session download URL", () => {
     const { items } = fold([
       { type: "assistant_message", turn_id: "t1", model_call_index: 1, content: "报告已生成", timestamp_utc: "2026-10-31T00:00:00Z" },
-      { type: "tool_media", turn_id: "t1", attachments: [{
+      { type: "tool_media", turn_id: "t1", present_to_user: true, attachments: [{
         type: "file", path: ".nosis/attachments/report.pdf", filename: "report.pdf", mime_type: "application/pdf", size_bytes: 32,
       }] },
     ]);

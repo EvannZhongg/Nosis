@@ -390,6 +390,7 @@ def event_to_message(
         return {
             "type": "tool_media",
             "turn_id": turn_id,
+            "present_to_user": event.present_to_user,
             "attachments": [
                 {
                     "type": part.type,

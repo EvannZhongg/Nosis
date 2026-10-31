@@ -451,7 +451,7 @@ class MobileTest(unittest.IsolatedAsyncioTestCase):
             {"type": "file", "path": "../outside.txt", "filename": "outside.txt"},
             {"type": "file", "path": "report.txt", "filename": "report.txt"},
         ]
-        channel.emit({"type": "tool_media", "turn_id": "t1", "attachments": attachments})
+        channel.emit({"type": "tool_media", "turn_id": "t1", "attachments": attachments, "present_to_user": True})
         await self.settle()
         self.assertEqual([item[1]["type"] for item in self.transport.attachments], ["image", "file"])
         self.assertEqual(self.transport.attachments[1][2], b"report")
@@ -459,6 +459,21 @@ class MobileTest(unittest.IsolatedAsyncioTestCase):
         channel.emit({"type": "assistant_message", "turn_id": "t1", "model_call_index": 1, "content": "已完成"})
         await self.settle()
         self.assertIn(("chat", "已完成"), self.transport.texts.values())
+
+    async def test_context_media_is_not_sent_until_explicitly_presented(self):
+        c, channel = await self.open()
+        path = self.workspace.resolve_path(".nosis/attachments/screenshot.png")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(png_bytes(3, 2))
+        attachment = {"type": "image", "path": ".nosis/attachments/screenshot.png", "filename": "screenshot.png"}
+        for tool in ("computer_screenshot", "browser_screenshot", "read_image", "generate_image"):
+            channel.emit({"type": "tool_media", "turn_id": tool, "attachments": [attachment], "present_to_user": False})
+        await self.settle()
+        self.assertEqual(self.transport.attachments, [])
+        channel.emit({"type": "tool_media", "turn_id": "present", "attachments": [attachment], "present_to_user": True})
+        await self.settle()
+        self.assertEqual(len(self.transport.attachments), 1)
+        self.assertFalse(c.reader.done())
 
     async def test_running_session_cannot_be_replaced(self):
         c, channel = await self.open()

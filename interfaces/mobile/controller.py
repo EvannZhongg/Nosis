@@ -571,7 +571,7 @@ class MobileController:
                         stream.append(event["text"])
                     else:
                         await stream.finish(event["content"])
-                elif kind == "tool_media":
+                elif kind == "tool_media" and event["present_to_user"]:
                     workspace = Workspace(Path(runtime.state["workspace"]))
                     for attachment in event["attachments"]:
                         if not runtime.owns_attachment(c.attachment_id):

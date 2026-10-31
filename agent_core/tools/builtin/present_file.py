@@ -58,4 +58,4 @@ class PresentFileTool(Tool):
         except BaseException:
             target.unlink(missing_ok=True)
             raise
-        return ToolOutput(output=asdict(part), attachments=(part,))
+        return ToolOutput(output=asdict(part), attachments=(part,), present_to_user=True)

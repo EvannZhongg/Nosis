@@ -29,7 +29,8 @@ class GenerateImageTool(Tool):
             description=(
                 "Generate images from a prompt, or edit existing images by "
                 "passing their workspace paths as reference_images. Generated "
-                "images are saved persistently and shown in the conversation."
+                "images are saved persistently for inspection. Call present_file "
+                "with a saved path to deliver an image to the user."
             ),
             parameters={
                 "type": "object",
