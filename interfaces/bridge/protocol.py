@@ -156,13 +156,13 @@ def runtime_state_message(
     *,
     phase: str,
     turn_id: str | None = None,
-    approval: dict[str, object] | None,
-    question: dict[str, object] | None,
-    provider: str | None,
-    permission_preset: str,
-    context_window: dict[str, object] | None,
-    cache_usage: dict[str, int] | None,
-    jobs: list[dict[str, object]],
+    approval: dict[str, object] | None = None,
+    question: dict[str, object] | None = None,
+    provider: str | None = None,
+    permission_preset: str = "ask_for_approval",
+    context_window: dict[str, object] | None = None,
+    cache_usage: dict[str, int] | None = None,
+    jobs: list[dict[str, object]] | None = None,
     event_sequence: int | None = None,
     runtime_warnings: tuple[str, ...] = (),
     plan: PlanSnapshot | dict[str, object] | None = None,
@@ -183,7 +183,7 @@ def runtime_state_message(
         "permission_preset": permission_preset,
         "context_window": context_window,
         "cache_usage": cache_usage,
-        "jobs": jobs,
+        "jobs": jobs if jobs is not None else [],
         "runtime_warnings": list(runtime_warnings),
         "plan": _plan_payload(plan),
     }
@@ -192,6 +192,23 @@ def runtime_state_message(
     if workspace is not None:
         message["workspace"] = workspace
     return message
+
+
+def inactive_runtime_state(
+    *,
+    provider: str | None = None,
+    workspace: str | None = None,
+    cache_usage: dict[str, int] | None = None,
+    event_sequence: int | None = None,
+) -> dict[str, object]:
+    """Build a placeholder snapshot before an execution plane is available."""
+    return runtime_state_message(
+        phase="inactive",
+        provider=provider,
+        workspace=workspace,
+        cache_usage=cache_usage,
+        event_sequence=event_sequence,
+    )
 
 
 def plan_updated_message(plan: PlanSnapshot) -> dict[str, object]:

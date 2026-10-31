@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef, useState, useEffect } from "react";
 import { useExternalStoreRuntime, type AppendMessage } from "@assistant-ui/react";
-import { runtimeIsActive, type CacheUsage, type ContextWindow, type PermissionPreset, type PlanSnapshot, type RuntimePhase, type UserQuestion } from "@nosis/protocol";
+import { initialRuntimeState, runtimeIsActive, type CacheUsage, type ContextWindow, type PermissionPreset, type PlanSnapshot, type RuntimePhase, type UserQuestion } from "@nosis/protocol";
 import { createScratchWorkspace, releaseActiveSession, selectWorkspace, uploadAttachments, type ModelOption, type Session, type UserAttachment, type WorkspaceOption } from "../api";
 import { SessionSocket } from "../session";
 import { applyMessage, isTurnActivity, toMessages, type Feedback, type TranscriptItem } from "../transcript";
@@ -51,7 +51,7 @@ export function useSessionRuntime({
   // The fork's first render includes its prompt, even before socket startup.
   const [pendingUserItem, setPendingUserItem] = useState<TranscriptItem | null>(() =>
     initialPrompt ? { role: "user", content: initialPrompt } : null);
-  const [runtimePhase, setRuntimePhase] = useState<RuntimePhase>("inactive");
+  const [runtimePhase, setRuntimePhase] = useState<RuntimePhase>(() => initialRuntimeState().phase);
   const [pendingSteers, setPendingSteers] = useState(0);
   const [jobs, setJobs] = useState<Record<string, BackgroundJob>>({});
   const [attaching, setAttaching] = useState(false);
@@ -87,7 +87,7 @@ export function useSessionRuntime({
   // turn state they fold onto are kept in refs.
   const itemsRef = useRef(items);
   const pendingUserItemRef = useRef(pendingUserItem);
-  const runtimePhaseRef = useRef<RuntimePhase>("inactive");
+  const runtimePhaseRef = useRef<RuntimePhase>(runtimePhase);
   const attachmentReplacedRef = useRef(false);
   const attachmentSubmitRef = useRef(false);
   const awaitingSessionActivityRef = useRef(false);

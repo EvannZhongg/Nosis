@@ -193,6 +193,24 @@ export type RuntimeState = {
   plan: PlanSnapshot | null;
 };
 
+/** Local placeholder only; commands still await an authoritative Bridge snapshot. */
+export function initialRuntimeState(): RuntimeState {
+  return {
+    type: 'runtime_state',
+    phase: 'inactive',
+    turn_id: null,
+    approval: null,
+    question: null,
+    provider: null,
+    permission_preset: 'ask_for_approval',
+    context_window: null,
+    cache_usage: null,
+    jobs: [],
+    runtime_warnings: [],
+    plan: null,
+  };
+}
+
 export type TranscriptCheckpoint = {
   items: SessionItem[];
   event_sequence: number;

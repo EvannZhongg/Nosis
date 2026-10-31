@@ -5,7 +5,7 @@ from collections import deque
 from pathlib import Path
 
 from agent_core import JsonlSessionStore, Workspace, message_to_dict, plan_snapshot_to_dict
-from interfaces.bridge.protocol import attachment_replaced_message, runtime_state_message
+from interfaces.bridge.protocol import attachment_replaced_message, inactive_runtime_state
 from interfaces.bridge.event_stream import runtime_is_active
 
 from interfaces.bridge_process import BridgeChannel, BridgeProcess
@@ -31,11 +31,7 @@ class ActiveSession:
     ) -> None:
         self.session_id = session_id
         self.bridge = bridge
-        self.state = runtime_state_message(
-            phase="inactive", approval=None, question=None, provider=provider,
-            workspace=workspace, permission_preset="ask_for_approval",
-            context_window=None, jobs=[], cache_usage=None,
-        )
+        self.state = inactive_runtime_state(provider=provider, workspace=workspace)
         self.transcript = {"items": items, "event_sequence": 0}
         self._pending_turn: str | None = None
         self._pending_refresh = False

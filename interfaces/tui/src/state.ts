@@ -1,3 +1,4 @@
+import { initialRuntimeState } from '@nosis/protocol';
 import type {
   ApprovalKind,
   Incoming,
@@ -105,24 +106,26 @@ export type Action =
   | { type: 'cancelling' }
   | { type: 'exited'; code: number | null };
 
+const initialRuntime = initialRuntimeState();
+
 export const initialState: State = {
   status: 'opening',
   sessionId: null,
-  workspace: '',
+  workspace: initialRuntime.workspace ?? '',
   model: '',
-  provider: '',
-  permissionPreset: 'ask_for_approval',
+  provider: initialRuntime.provider ?? '',
+  permissionPreset: initialRuntime.permission_preset,
   entries: [],
   mcpStatus: null,
   approval: null,
   question: null,
   picker: null,
   settings: null,
-  turnId: null,
+  turnId: initialRuntime.turn_id,
   usage: null,
-  cacheUsage: null,
-  contextWindow: null,
-  plan: null,
+  cacheUsage: initialRuntime.cache_usage,
+  contextWindow: initialRuntime.context_window,
+  plan: initialRuntime.plan,
   pendingSteers: 0,
 };
 

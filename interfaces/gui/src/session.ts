@@ -1,4 +1,4 @@
-import { runtimeIsActive, type Incoming, type Outgoing, type RuntimePhase } from "@nosis/protocol/internal";
+import { initialRuntimeState, runtimeIsActive, type Incoming, type Outgoing, type RuntimePhase } from "@nosis/protocol/internal";
 
 export type SessionSocketOptions = {
   sessionId: string | null;
@@ -37,7 +37,7 @@ export class SessionSocket {
   private queued: QueuedCommand[] = [];
   private pendingUserTurns = new Map<string, QueuedCommand["acknowledgment"]>();
   private synchronized = false;
-  private phase: RuntimePhase = "inactive";
+  private phase: RuntimePhase = initialRuntimeState().phase;
 
   constructor(private readonly options: SessionSocketOptions) {
     const scheme = location.protocol === "https:" ? "wss" : "ws";

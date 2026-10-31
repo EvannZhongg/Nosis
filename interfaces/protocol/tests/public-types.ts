@@ -1,8 +1,9 @@
-import type { Incoming, Outgoing } from '@nosis/protocol';
+import { initialRuntimeState, type Incoming, type Outgoing, type RuntimeState } from '@nosis/protocol';
 import type { Incoming as HostIncoming, Outgoing as HostOutgoing } from '@nosis/protocol/internal';
 // @ts-expect-error Configuration editor schemas are not public exports.
 import type { SettingsSnapshot } from '@nosis/protocol';
 
+const initial: RuntimeState = initialRuntimeState();
 const open: Outgoing = { type: 'open_session', workspace: '/workspace', session_id: null };
 // @ts-expect-error GUI attachment ownership is not a stdio command field.
 const attachment: Outgoing = { ...open, attachment_id: 'page' };
@@ -22,4 +23,4 @@ function inspect(message: Incoming): void {
     console.log(major);
   }
 }
-void [open, attachment, settings, replaced, hostOpen, hostReplaced, inspect];
+void [initial, open, attachment, settings, replaced, hostOpen, hostReplaced, inspect];

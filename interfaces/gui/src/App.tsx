@@ -4,7 +4,7 @@ import { Chat } from "./Chat";
 import { Settings, type SettingsSection } from "./Settings";
 import { Workspace } from "./Workspace";
 import { SessionSearch } from "./SessionSearch";
-import { runtimeIsActive, type ContextWindow, type RuntimePhase } from "@nosis/protocol";
+import { initialRuntimeState, runtimeIsActive, type ContextWindow, type RuntimePhase } from "@nosis/protocol";
 import { deleteSession, forkSession, get, sessionUrl, type ModelOption, type ModelOptions, type Session, type WorkspaceSessions } from "./api";
 
 type ActiveSession = Session & { provider: string | null; phase: RuntimePhase };
@@ -15,7 +15,7 @@ function newSession(workspace?: string | null): Session {
     session_id: crypto.randomUUID(),
     items: [],
     workspace,
-    permission_preset: "ask_for_approval",
+    permission_preset: initialRuntimeState().permission_preset,
   };
 }
 

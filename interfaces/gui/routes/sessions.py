@@ -18,7 +18,7 @@ from interfaces.bridge.managed_workspaces import (
 )
 from interfaces.bridge.protocol import (
     attachment_replaced_message,
-    runtime_state_message,
+    inactive_runtime_state,
 )
 
 from interfaces.session_host import (
@@ -357,18 +357,10 @@ def create_sessions_router(
                 else None
             )
             await websocket.send_json(
-                runtime_state_message(
-                    phase="inactive",
-                    turn_id=None,
-                    approval=None,
-                    question=None,
-                    provider=None,
-                    permission_preset="ask_for_approval",
-                    context_window=None,
+                inactive_runtime_state(
                     cache_usage=cache_usage_to_dict(stored_session.cache_usage)
                     if stored_session is not None else None,
                     event_sequence=0,
-                    jobs=[],
                 )
             )
             await websocket.close()

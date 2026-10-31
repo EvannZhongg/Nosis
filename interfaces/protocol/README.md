@@ -43,6 +43,10 @@ open_session
 
 `runtimeIsActive()` 为两个前端提供统一的活动状态判断。
 
+`initialRuntimeState()` 与 Python 的 `inactive_runtime_state()` 提供一致的初始协议快照，每次调用创建独立的数组。前端从中取用协议字段，界面特有的输入与连接状态仍由各端维护。这些本地占位值不代替 Bridge 的权威快照，也不会解除首个 `runtime_state` 的同步屏障。
+
+Python 的 `runtime_state_message()` 集中定义默认值；Bridge 构造实时快照时仍显式填入实际运行阶段、Session 权限、缓存用量、计划和交互状态。
+
 ## 消息类型
 
 内部入口的 `Outgoing` 按用途分为：

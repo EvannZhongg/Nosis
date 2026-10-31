@@ -328,28 +328,27 @@ class Bridge:
 
     def _runtime_snapshot(self) -> dict[str, object]:
         plane = self.host.planes.current
+        session = self.host.sessions.session
+        session_fields = {
+            "permission_preset": session.permission_preset.value,
+            "cache_usage": cache_usage_to_dict(session.cache_usage),
+        } if session is not None else {}
         return runtime_state_message(
             phase=self._phase,
             turn_id=self.host.turns.turn_id,
             approval=self._approval,
             question=self._question,
             provider=self.host.sessions.provider_name,
-            permission_preset=(
-                self.host.sessions.session.permission_preset.value
-                if self.host.sessions.session is not None
-                else PermissionPreset.ASK_FOR_APPROVAL.value
-            ),
             context_window=(
                 context_window_to_dict(plane.context_window)
                 if plane is not None and plane.context_window is not None
                 else None
             ),
             jobs=list(self._jobs.values()),
-            cache_usage=cache_usage_to_dict(self.host.sessions.session.cache_usage)
-            if self.host.sessions.session is not None else None,
             runtime_warnings=self._runtime_warnings,
             plan=self.host.sessions.plan.snapshot if self.host.sessions.plan is not None else None,
             workspace=str(self.host.sessions.workspace.path) if self.host.sessions.workspace is not None else None,
+            **session_fields,
         )
 
 

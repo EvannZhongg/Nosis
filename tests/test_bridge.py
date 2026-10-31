@@ -78,6 +78,7 @@ from interfaces.bridge.protocol import (
     decode,
     event_to_message,
     format_timestamp,
+    inactive_runtime_state,
     session_ready_message,
     runtime_state_message,
     runtime_failure_to_dict,
@@ -159,6 +160,30 @@ class AttachmentParsingTest(unittest.TestCase):
 
 
 class ProtocolTest(unittest.TestCase):
+    def test_initial_runtime_state_contract_and_independent_arrays(self) -> None:
+        expected = {
+            "type": "runtime_state", "phase": "inactive", "turn_id": None,
+            "approval": None, "question": None, "provider": None,
+            "permission_preset": "ask_for_approval", "context_window": None,
+            "cache_usage": None, "jobs": [], "runtime_warnings": [], "plan": None,
+        }
+        first = inactive_runtime_state()
+        self.assertEqual(first, expected)
+        first["jobs"].append({"job_id": "other-session"})
+        first["runtime_warnings"].append("other-session warning")
+        self.assertEqual(inactive_runtime_state(), expected)
+        self.assertEqual(runtime_state_message(phase="starting"), {**expected, "phase": "starting"})
+
+    def test_initial_runtime_state_preserves_attachment_context(self) -> None:
+        totals = {"input_tokens": 100, "cache_read_tokens": 60}
+        state = inactive_runtime_state(
+            provider="second", workspace="/workspace", cache_usage=totals, event_sequence=0,
+        )
+        self.assertEqual(state, {
+            **inactive_runtime_state(), "provider": "second", "workspace": "/workspace",
+            "cache_usage": totals, "event_sequence": 0,
+        })
+
     def test_encodes_only_compression_cache_totals(self):
         for totals in (CacheUsage(2000, 800), None):
             with self.subTest(totals=totals):
@@ -497,6 +522,14 @@ class ProtocolTest(unittest.TestCase):
 
 
 class IsolatedBridgeTest(BridgeTestCase):
+    def test_unopened_snapshot_preserves_failure_phase_and_warnings(self) -> None:
+        bridge, stdout = self.make_bridge([])
+        bridge._emit_runtime_state("failed", runtime_warnings=("Unavailable",))
+        state = emitted(stdout)[-1]
+        self.assertEqual(state["phase"], "failed")
+        self.assertEqual(state["runtime_warnings"], ["Unavailable"])
+        self.assertEqual(state["permission_preset"], inactive_runtime_state()["permission_preset"])
+
     def test_bridges_own_distinct_configuration_and_scheduler_storage(self) -> None:
         first, _ = self.make_bridge([])
         second, _ = self.make_bridge([])

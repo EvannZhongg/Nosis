@@ -1,7 +1,25 @@
 import { describe, expect, it } from 'vitest';
-import { MessageDecoder, formatArguments } from '@nosis/protocol';
+import { initialRuntimeState, MessageDecoder, formatArguments } from '@nosis/protocol';
 import type { Incoming } from '@nosis/protocol/internal';
 import { initialState, reducer, type State } from '../src/state.js';
+
+it('shares protocol defaults while keeping initial UI state separate', () => {
+  const first = initialRuntimeState();
+  first.jobs.push({ job_id: 'other', kind: 'shell', status: 'running', details: {} });
+  first.runtime_warnings!.push('other session warning');
+  const next = initialRuntimeState();
+  expect(next.phase).toBe('inactive');
+  expect(next.jobs).toEqual([]);
+  expect(next.runtime_warnings).toEqual([]);
+  expect(initialState).toMatchObject({
+    status: 'opening',
+    permissionPreset: next.permission_preset,
+    turnId: next.turn_id,
+    cacheUsage: next.cache_usage,
+    contextWindow: next.context_window,
+    plan: next.plan,
+  });
+});
 
 const READY = {
   type: 'session_ready' as const,
