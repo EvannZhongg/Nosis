@@ -79,15 +79,31 @@ Feishu messaging access is configured in `~/.nosis/im_channels.json`; see [Mobil
 
 Third-party frontends can launch the installed `nosis-bridge` command and use the
 [public stdio protocol](docs/bridge-protocol.md) or the lightweight
-[`@nosis/client` TypeScript SDK](interfaces/client/README.md). See the
-[protocol review and design](docs/bridge-api-design.md) for the public/internal boundary.
+[`@nosis/client` TypeScript SDK](interfaces/client/README.md).
+
+Public contracts:
+
+| Document | Scope |
+| --- | --- |
+| [`docs/bridge-protocol`](docs/bridge-protocol.md) | Stdio transport, commands, events, runtime phases, transcript checkpoints, and error rules for third-party clients |
+| [`docs/bridge-api-design`](docs/bridge-api-design.md) | Which messages are public or internal, who owns them, and the versioning decisions |
+| [`docs/plugin-hooks`](docs/plugin-hooks.md) | Command hook declarations, checkpoints, invocation payloads, and decisions |
+| [`docs/plugin-interop`](docs/plugin-interop.md) | Assembly, static validation, error isolation, and re-assembly of plugin components |
+
+Runtime layers:
 
 | Document | Scope |
 | --- | --- |
 | [`agent_core`](agent_core/README.md) | Agent loop, context, session, tools, execution, permissions, memory, plans, jobs, scheduler, providers, skills, and MCP mechanisms |
 | [`agent_runtime`](agent_runtime/README.md) | Configuration, prompts, plugin discovery, runtime assembly, execution plane, session binding, and turn entry |
+
+Frontends and SDK:
+
+| Document | Scope |
+| --- | --- |
+| [`interfaces`](interfaces/README.md) | Shared host modules, launch entries, Bridge process and channel attachment, and the allowed Core reuse boundary |
 | [`interfaces/bridge`](interfaces/bridge/README.md) | The standalone Bridge process, protocol routing, event translation, and frontend interaction forwarding |
-| [`interfaces/protocol`](interfaces/protocol/README.md) | The TypeScript protocol types and connection-state conventions shared by the TUI and GUI |
+| [`interfaces/protocol`](interfaces/protocol/README.md) | The TypeScript protocol package: exports, build, and change checklist |
 | [`interfaces/client`](interfaces/client/README.md) | Public Node/TypeScript stdio client, process lifecycle and integration example |
 | [`interfaces/tui`](interfaces/tui/README.md) | The Ink terminal interface, commands, input state, and Bridge subprocess attachment |
 | [`interfaces/gui`](interfaces/gui/README.md) | The FastAPI service, React interface, multi-session connections, HTTP / WebSocket API, and media access |

@@ -142,9 +142,11 @@ stdio 的相对 cwd 基于 Workspace 解析，未配置时使用当前 Workspace
 }
 ```
 
-`key` 可以是明文或 `${ENV_NAME}` 引用，引用从进程环境（含 `~/.nosis/.env`）解析。只解析选中 provider 的密钥；密钥缺失、为空或请求返回 401 时，该次搜索降级到 DuckDuckGo，结果附带实际 `provider` 和 `fallback` 原因。降级时保留原始查询（包括已有的 `site:` 等操作符），Exa 的 `include_domains` / `exclude_domains` 按结果 URL 的主机名及其子域名过滤，不向查询拼接操作符。过滤后可能少于请求的结果数，不额外发起搜索。403 不视为鉴权失败，直接返回错误。其他请求错误直接返回，不重试、不切换 provider；降级本身失败也直接返回错误。配置或 `.env` 变化会在下次 Turn 重建执行面；主 Agent 和子 Agent 共用同一份解析后的 Tool 设置。工具是否启用仍由 `agent_config.json` 的 `main_agent.tools.web_search` 和对应角色开关控制。
+`key` 可以是明文或 `${ENV_NAME}` 引用，引用从进程环境（含 `~/.nosis/.env`）解析。Runtime 只解析选中 provider 的密钥，作为 `tool_settings` 注入 Tool 执行上下文；Core 不读取配置文件或环境变量。两个工具分别配置 provider 和 key，可引用同一个 `DEEPSEEK_API_KEY`。
 
-DeepSeek Fetch 使用 [Fetch API](https://api-docs.deepseek.com/zh-cn/api/fetch/)，返回标题与 Markdown 正文，URL 最长为 8192 个字符。结果中的 `url` 是请求地址；API 不提供目标网页的 HTTP 状态码或重定向后的地址，因此不会生成这些信息。公开 URL 校验、响应字节上限与工具输出预算仍生效。密钥缺失、为空或返回 401 时，该次调用降级到 `direct`，结果包含结构化的 `fallback` 原因。Fetch 的 403 表示安全策略拒绝，直接返回错误；其他错误也不会触发降级或重试。两个工具分别配置 provider 和 key，可引用同一个 `DEEPSEEK_API_KEY`。`web_fetch` 的启用开关仍位于 `agent_config.json` 的主 Agent 和角色 Tool 配置中；`tool_config.json` 必须包含两个配置段。
+`tool_config.json` 只选择 provider 与密钥，工具是否可用仍由 `agent_config.json` 的 `main_agent.tools` 和对应角色开关决定，两个配置段都必须存在。配置或 `.env` 变化会在下次 Turn 重建执行面，主 Agent 与子 Agent 共用同一份解析后的设置。
+
+provider 的鉴权失败降级、403 处理以及查询与 URL 语义都属于 Tool 行为，由 Core 实现并记录在 [Core 的 Tool 系统](../agent_core/README.md#tool-系统)；本层只负责把选中的 provider 与密钥注入执行上下文。
 
 `agent_config.json` 的 `skills.global_paths` 相对配置目录解析、`skills.workspace_paths` 相对当前 Workspace 解析。同名 Skill 保留最先注册的来源，Plugin Skill 排在配置来源之后。
 
@@ -155,7 +157,9 @@ Provider 路由按以下链解析：
 ```
 
 空字符串表示继续继承。`fast_model` 是独立的一路，只服务长期记忆合并，不参与上面的子 Agent 链；未配置时沿用当前选中的主模型，主 Agent 与子 Agent 的记忆合并共享这个 Provider。上下文压缩始终使用当前 Agent 自己的 LLM，复用原请求前缀。压缩和记忆调用直接写入所属 Session 的 JSONL Journal，记录实际模型、任务、状态、耗时和用量，不进入对话上下文；子 Agent 调用保存在子 Session 中。图片生成使用独立 `image_generation` 配置；模型请求超时和额外重试次数来自 `agent_config.json` 的 `provider` 字段。
-每个 `provider_config.json` 的 `providers.<name>` 条目可以配置 `api: "responses"` 或 `api: "chat_completions"`，按协议选择原生 OpenAI SDK；与中转域名无关，也不在失败后切换协议。显式选择协议时，除 `deepseek/` 路由前缀会移除外，`model` 是原样发送的服务端模型 ID，例如 `gpt-6-astra` 或 `openai/gpt-5`（后者适用于要求该 ID 的网关）。省略 `api` 时，无路由前缀（已知 DeepSeek 模型名除外）或使用 `openai/` 前缀的模型默认使用 Responses，移除路由前缀 `openai/`；`deepseek/` 路由和已知的 DeepSeek 无前缀模型名默认使用原生 Chat Completions，移除 `deepseek/` 前缀；其他带前缀的服务商路由使用 LiteLLM。DeepSeek Flash 和 V4 Pro 使用本地发布资料，不查询 LiteLLM 元数据；未知 DeepSeek 模型要求显式上下文上限，不映射旧别名。协议选择不依赖联网模型目录。主 Agent、视觉和子 Agent 共用同一装配入口。
+每个 `provider_config.json` 的 `providers.<name>` 条目可以配置 `api: "responses"` 或 `api: "chat_completions"`，按协议选择原生 OpenAI SDK；与中转域名无关，也不在失败后切换协议。显式选择协议时，除 `deepseek/` 路由前缀会移除外，`model` 是原样发送的服务端模型 ID，例如 `gpt-6-astra` 或 `openai/gpt-5`（后者适用于要求该 ID 的网关）。
+
+省略 `api` 时，无路由前缀（已知 DeepSeek 模型名除外）或使用 `openai/` 前缀的模型默认使用 Responses，并移除 `openai/` 前缀；`deepseek/` 路由和已知的 DeepSeek 无前缀模型名默认使用原生 Chat Completions，并移除 `deepseek/` 前缀；其他带前缀的服务商路由使用 LiteLLM。协议选择不依赖联网模型目录，DeepSeek Flash 与 V4 Pro 使用本地发布资料而不查询 LiteLLM 元数据，未知 DeepSeek 模型要求显式上下文上限且不映射旧别名。主 Agent、视觉和子 Agent 共用同一装配入口。
 
 可选的 `reasoning_effort` 值为 `none`、`minimal`、`low`、`medium`、`high`、`xhigh` 或 `max`；具体模型只支持其中的子集。原生 Responses 发送 `reasoning.effort`，原生 Chat Completions 发送 `reasoning_effort`，其他路由保留其参数映射。省略该字段时使用上游默认值。`reasoning_parameters` 可以覆盖推理参数，`extra_body` 用于网关扩展字段，例如 `{"extra_body": {"enable_thinking": true}}`；原生 Chat 的额外推理字段也通过 SDK 的扩展 body 发送。
 
@@ -224,11 +228,14 @@ standalone Skill 与 MCP 使用同一套 Core registry / manager，不存在 Plu
 | 模块 | 职责 |
 | --- | --- |
 | `host.py` | RuntimeHost 公共入口和控制器协调 |
+| `services.py` | 进程内共享的配置服务、环境重载、Settings 与 Scheduler |
 | `execution_plane.py` | 一次原子装配的资源容器 |
 | `plane_manager.py` | Execution Plane 创建、复用、失效与关闭 |
 | `session_controller.py` | Session、Workspace、Provider、权限与计划绑定 |
 | `turn_runner.py` | Turn、steer、cancel 和结果 |
 | `scheduled_runner.py` | 无人值守定时 Turn 入口 |
+| `role_tools.py` | 把角色声明在装配完成的 Catalog 与 MCP 选择上展开为 ToolSet |
+| `session_title.py` | 执行面持有的 Session 命名任务 |
 | `config.py` | 配置目录初始化、Provider 与 Prompt 读取 |
 | `settings.py` | 配置快照、校验、写入和 fingerprint |
 | `plugins.py` | Plugin manifest、Skill、MCP、Agent 与 Hook component 发现 |

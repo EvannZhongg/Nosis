@@ -45,7 +45,9 @@ interfaces → agent_runtime → agent_core
 
 消息内容统一表示为文本、图片和文件 part。图片可以进入支持视觉的 Provider；普通附件以 Workspace 文件引用进入上下文。
 
-`ContextManager` 按完整语义单元投影 Session 历史，计算窗口占用，并在达到阈值时压缩较早上下文、保留近期单元和用户锚点。压缩使用当前 Agent 的模型，保留主请求的 system、工具定义和原始待归档消息前缀，在尾部追加压缩指令；近期尾部不送入压缩，格式修复指令也追加在尾部。可用输入预算为模型窗口减去 `output_reserve_tokens`；默认阈值在窗口不超过 32K 时取预算的 75%，更大窗口取 `min(预算的 80%, 256K)`，配置 `trigger_ratio` 时以它为准。用户锚点先保留最近两整轮，再按 `user_anchor_token_budget` 向前扩展连续 Turn，判断时计入已选中的全部输入，压缩不会改变保留范围。压缩结果验证后写回 Session，压缩返回的 Tool Call 不执行；超过硬上限时明确失败。
+`ContextManager` 按完整语义单元投影 Session 历史，计算窗口占用，并在达到阈值时压缩较早上下文、保留近期单元和用户锚点。压缩使用当前 Agent 的模型，保留主请求的 system、工具定义和原始待归档消息前缀，在尾部追加压缩指令；近期尾部不送入压缩，格式修复指令也追加在尾部。
+
+阈值从可用输入预算推导：预算为模型窗口减去 `output_reserve_tokens`，小窗口与超大窗口使用不同的默认比例，配置 `trigger_ratio` 时以配置为准。用户锚点先保留最近两整轮，再按 `user_anchor_token_budget` 向前扩展连续 Turn，判断时计入已选中的全部输入，压缩不会改变保留范围。压缩结果验证后写回 Session，压缩返回的 Tool Call 不执行；超过硬上限时明确失败。默认比例与上限定义在 `context_manager.py`，不在本文档重复列举。
 
 | 模块 | 职责 |
 | --- | --- |
@@ -71,6 +73,7 @@ Runtime 通过 `JsonlSessionStore.open_journal()` 持有当前 Session 的写入
 | `session_store.py` | append-only JSONL、Session 元数据、列表与全文搜索、恢复 |
 | `session_paths.py` | Session 与 Workspace 存储路径规则 |
 | `plan.py` | 计划状态、更新与序列化 |
+| `session_title.py` | 首条输入生成初始标题、首个完成单元后异步生成标题 |
 | `tool_result.py` | Tool 输出预算、预览和 Artifact 落盘 |
 
 ## Tool 系统
@@ -93,7 +96,7 @@ Runtime 通过 `JsonlSessionStore.open_journal()` 持有当前 Session 的写入
 
 `web_search` 从 `ToolExecutionContext.tool_settings` 获取 Runtime 注入的 provider 与密钥，Core 不读取配置文件或环境变量。Runtime 在 `~/.nosis/tool_config.json` 中选择 `duckduckgo`（`ddgs` 库，无需密钥）、`exa` 或 `deepseek`，详见 [Runtime 配置](../agent_runtime/README.md#配置与默认资源)。
 
-`web_fetch` 同样使用该上下文中的设置，可选择 `direct` 或 `deepseek`。`direct` 提取网页文本并逐次检查重定向；DeepSeek [Fetch API](https://api-docs.deepseek.com/zh-cn/api/fetch/) 返回标题与 Markdown 正文，保留 Markdown 格式并按工具预算截断。两条路径都校验公开 URL 并限制响应字节数。DeepSeek 密钥缺失或返回 401 时降级到直接抓取；403 是安全策略拒绝，和其他错误一样直接返回，不重试。
+`web_fetch` 同样使用该上下文中的设置，可选择 `direct` 或 `deepseek`。`direct` 提取网页文本并逐次检查重定向；DeepSeek [Fetch API](https://api-docs.deepseek.com/zh-cn/api/fetch/) 返回标题与 Markdown 正文，保留 Markdown 格式并按工具预算截断，请求 URL 最长 8192 个字符。该 API 不返回目标网页的 HTTP 状态码或重定向后的地址，因此结果中的 `url` 是请求地址，不生成状态码与最终地址。两条路径都校验公开 URL 并限制响应字节数。DeepSeek 密钥缺失或返回 401 时降级到直接抓取，结果附带结构化的 `fallback` 原因与实际 `provider`；403 是安全策略拒绝，和其他错误一样直接返回，不重试，也不切换 provider。
 
 后端同时决定 Tool schema 暴露的参数，例如 Exa 的 `include_domains`。DeepSeek 使用 [Search API](https://api-docs.deepseek.com/zh-cn/api/search/)（`POST https://api.deepseek.com/v1/tools/search`），将 `num_results` 映射为 `count`，沿用工具的 1～10 条结果上限；查询限制为 1～128 个 Unicode 字符且不能全为空白，支持 `site:`、`-site:`、引号、`lang:`、`after:`、`before:` 等语法。结果保持统一的 `title`、`url`、`published_date`、`highlights` 格式，其中 `summary` 用作摘要，不请求网页正文。Exa 和 DeepSeek 使用 HTTP 状态码识别鉴权错误；密钥缺失或返回 401 时仅该次调用降级到 DuckDuckGo，并返回结构化的降级原因；其他错误通过现有 Tool 错误路径返回。
 
@@ -110,7 +113,7 @@ Runtime 通过 `JsonlSessionStore.open_journal()` 持有当前 Session 的写入
 | `paths.py` | 读取路径解析与 Workspace 包含校验 |
 | `globs.py` | 文件路径 glob 匹配 |
 | `policy.py` | Shell、文件写入、桌面自动化与 MCP 的授权策略组合 |
-| `approval.py` | 文件写入审批摘要与审批历史文本 |
+| `files.py` | Workspace 写入的共享落盘与路径校验 |
 | `budget.py` | Tool 结果大小预算 |
 | `builtin/` | 内置 Tool 实现 |
 
@@ -126,7 +129,7 @@ Shell 通过 `ExecutionRouter` 根据 `ExecutionScope` 和当前 `ExecutionAutho
 
 显式传入的 scope 始终生效，但仍受 Runtime 提供的 authority 上限约束。`apply_patch`、`edit_file`、`write_file` 解析为 Workspace scope，因此同样按 preset 决定是否确认：`Ask for approval` 请求确认，`Workspace Access` 与 `Full Access` 直接执行。文件 Tool 在任何 preset 下都限制在 Workspace 内，不使用宿主执行器。
 
-审批提示与审批历史只写入有界摘要：路径、字节与行数、每个文本字段的前 3 行预览，整体不超过 2048 字符，patch 最多列出 8 个文件操作并说明省略数量。完整参数保留在原始 Tool Call 中，不重复写入用户交互记录。
+`approval.py` 生成审批提示与审批历史的有界摘要：路径、字节与行数、每个文本字段的前 3 行预览，整体不超过 2048 字符，patch 最多列出 8 个文件操作并说明省略数量。完整参数保留在原始 Tool Call 中，不重复写入用户交互记录。
 
 `execution/` 负责进程超时、取消、输出 spool、平台 shell 和沙箱路由：
 
@@ -141,15 +144,19 @@ Shell 通过 `ExecutionRouter` 根据 `ExecutionScope` 和当前 `ExecutionAutho
 
 `LLMProvider` 定义模型调用接口、能力信息、流式响应和 token usage。`OpenAIProvider` 使用原生 SDK 实现 Responses 与 Chat Completions 协议，官方服务和中转使用同一实现；其他服务商路由由 `LiteLLMProvider` 承担。
 
-`usage.py` 统一定义 `TokenUsage` 和序列化：`input_tokens` 包含缓存部分，`cache_read_tokens` 与 `cache_write_tokens` 记录其读取、写入明细，未报告时为 `None`，明确报告无缓存活动时为 `0`。普通模型、压缩尝试和记忆调用分别以 `model_completed`、`compression_completed`、`memory_completed` 事件写入所属 Session 的同一份 Journal；辅助调用记录实际模型、scope、尝试次数、状态、耗时、用量和错误，不进入对话上下文。Session 在应用普通模型和压缩事件时累计 `CacheUsage`，只计入同时报告输入和缓存读取 token 的调用，包括格式校验失败的压缩尝试；记忆调用单独记录，不计入该口径。会话缓存命中率为 `Σcache_read_tokens / Σinput_tokens`，Journal 重载时恢复，跨 Turn、模型与工作区切换保持累计。每次调用落盘后，`ModelCompletedEvent` 经 Bridge 推送本次用量和会话累计快照，`CompressionCompletedEvent` 只推送会话累计缓存快照，两个前端立即更新，无需等待工具执行、压缩重试或 Turn 结束。`runtime_state.cache_usage` 与 GUI 历史读取提供相同累计快照，事件重放不会重复计数。Bridge 的 `turn_completed.usage` 表示最后一次普通模型调用的用量，不是整个 Turn 的累计用量。
+`usage.py` 统一定义 `TokenUsage` 和序列化：`input_tokens` 包含缓存部分，`cache_read_tokens` 与 `cache_write_tokens` 记录其读取、写入明细，未报告时为 `None`，明确报告无缓存活动时为 `0`。普通模型、压缩尝试和记忆调用分别以 `model_completed`、`compression_completed`、`memory_completed` 事件写入所属 Session 的同一份 Journal；辅助调用记录实际模型、scope、尝试次数、状态、耗时、用量和错误，不进入对话上下文。
 
-`ModelProvider` 共享媒体序列化、模型信息缓存和可取消的流读取。原生 OpenAI 模型的输入上限、输出上限和视觉能力来自 `providers/openai_models.py` 的本地资料，仅维护经官方模型页核验的 18 个规范模型名，不维护日期快照、chat 别名或预览条目。资料使用官方公布的总上下文窗口，输出预留由 Runtime 扣除；token 估算使用 `tiktoken` 与随包分发的词表，不联网下载或导入 LiteLLM。工具 schema 按完整 JSON 计入，图片沿用共享尺寸估算，加密推理沿用服务端 usage。清单外的模型（含日期快照和别名）必须显式配置 `max_context_tokens`，按文本模型处理且不提供自动输出上限；未知别名和上游尚未公布 tokenizer 映射的 GPT-6 使用 `cl100k_base` 做本地估算，不能视为服务端精确计数。资料表与词表随软件发布维护。
+Session 在应用普通模型和压缩事件时累计 `CacheUsage`，只计入同时报告输入和缓存读取 token 的调用，包括格式校验失败的压缩尝试；记忆调用单独记录，不计入该口径。会话缓存命中率为 `Σcache_read_tokens / Σinput_tokens`，Journal 重载时恢复，跨 Turn、模型与工作区切换保持累计。
+
+每次调用落盘后，`ModelCompletedEvent` 经 Bridge 推送本次用量和会话累计快照，`CompressionCompletedEvent` 只推送会话累计缓存快照，两个前端立即更新，无需等待工具执行、压缩重试或 Turn 结束。`runtime_state.cache_usage` 与 GUI 历史读取提供相同累计快照，事件重放不会重复计数。Bridge 的 `turn_completed.usage` 表示最后一次普通模型调用的用量，不是整个 Turn 的累计用量。
+
+`ModelProvider` 共享媒体序列化、模型信息缓存和可取消的流读取。原生 OpenAI 模型的输入上限、输出上限和视觉能力来自 `providers/openai_models.py` 的本地资料，只维护经官方模型页核验的规范模型名，不维护日期快照、chat 别名或预览条目。资料使用官方公布的总上下文窗口，输出预留由 Runtime 扣除；token 估算使用 `tiktoken` 与随包分发的词表，不联网下载或导入 LiteLLM。工具 schema 按完整 JSON 计入，图片沿用共享尺寸估算，加密推理沿用服务端 usage。清单外的模型（含日期快照和别名）必须显式配置 `max_context_tokens`，按文本模型处理且不提供自动输出上限；未知别名和上游尚未公布 tokenizer 映射的 GPT-6 使用 `cl100k_base` 做本地估算，不能视为服务端精确计数。资料表与词表随软件发布维护，条目清单以该模块为准。
 
 原生文本计数器只缓存编码对象，每次对请求文本与完整 JSON 工具定义重新分词。ContextManager 使用最近一次成功普通模型调用的输入 usage，加上当前请求与锚点请求的本地估算差量；压缩判断和上下文展示共享这个值。锚点随 `model_completed` 写入 Journal，可恢复；压缩事件直接清除锚点，不将压缩状态重复写入指纹；端点、模型、协议、推理参数、系统提示、工具定义、计数策略或压缩状态变化时失效。缓存 token 已包含在输入 usage 中，不再相加；压缩、记忆和标题等辅助调用不替换普通请求锚点。首次请求及失效后的请求仍为本地估算，增量误差仍可能累积。DeepSeek 原生 Chat 在无工具时忽略历史 reasoning；Responses 只回传原生 reasoning 项，展示摘要不计入输入，加密 reasoning 按原生回传状态和 usage 计入。
 
 DeepSeek Flash 与 V4 Pro 共用原生 OpenAI SDK 的 Chat Completions 传输，本地模型资料与文本计数不依赖 LiteLLM；其他服务商的具名前缀（如 `anthropic/`）继续使用 LiteLLM 元数据与计数，即使显式选择原生 OpenAI 兼容协议也保持这一路径。图片生成仍使用 LiteLLM。只有装配的主模型、辅助模型、视觉模型和子 Agent 模型都走原生 OpenAI 或 DeepSeek 模型路径，且未启用图片生成时，首个模型请求才完全不需要导入 LiteLLM。
 
-图片在共享请求序列化阶段按 `providers/image_limits.py` 的内部策略处理，覆盖用户附件、Tool 图片及历史重发。DeepSeek Flash单边最多 8192 像素，请求包含至少 15 张图片时降为 4096；Claude 单边最多 8000 像素，超过 20 张时降为 2000。策略识别官方端点；未指定端点时使用模型路由，未知端点和未覆盖的服务保持原有发送行为。OpenAI、Gemini 等服务端的推理缩放尺寸不作为客户端上传限制。超限图片仅在内存中等比缩小，发送时附带原图尺寸和坐标换算；原始附件与 Journal 不变。编码缓存包含目标尺寸上限，token 估算使用发送尺寸且不解码图片。
+图片在共享请求序列化阶段按 `providers/image_limits.py` 的内部策略处理，覆盖用户附件、Tool 图片及历史重发。已知服务的单边像素上限按整段对话的图片数量分档，数值随服务变化，以该模块为准；策略识别官方端点，未指定端点时使用模型路由，未知端点和未覆盖的服务保持原有发送行为。OpenAI、Gemini 等服务端的推理缩放尺寸不作为客户端上传限制。超限图片仅在内存中等比缩小，发送时附带原图尺寸和坐标换算；原始附件与 Journal 不变。编码缓存包含目标尺寸上限，token 估算使用发送尺寸且不解码图片。
 
 所有视觉 Provider 在 token 估算和发送阶段都使用相同的格式探测和 5 MiB 字节上限检查。缺失图片以文本提示替代，不计图片 token；存在但为空、格式不可识别或超出字节上限的图片直接报错，不按 0 token 忽略，也不发送给上游。路径越界等调用错误同样直接报错。未知服务仅不应用尺寸缩放规则，仍受统一图片校验约束。
 

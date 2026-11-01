@@ -1,9 +1,14 @@
-# Bridge Public Client API: review and design
+# Bridge public API: surfaces and decisions
 
-## Existing implementation
+Which Bridge messages third-party clients may depend on, who owns each of them,
+and the rules that keep the public surface stable. Transport details, command
+semantics and event ordering are documented in the
+[protocol reference](bridge-protocol.md).
 
-The call chain is `TUI BridgeClient / GUI BridgeProcess → interfaces.bridge.BridgeServer
-→ interfaces.bridge.Bridge (one per channel) → agent_runtime.RuntimeHost → agent_core`.
+## Call chain
+
+`TUI BridgeClient / GUI BridgeProcess → interfaces.bridge.BridgeServer → interfaces.bridge.Bridge
+(one per channel) → agent_runtime.RuntimeHost → agent_core`.
 `BridgeServer` owns the stdio transport and multiplexing, warms the process-wide
 `RuntimeServices` once, and starts one worker thread per channel. Each `Bridge`
 routes that channel's commands and projects its Runtime callbacks. `RuntimeHost`
@@ -43,8 +48,7 @@ shutdown acknowledgment, and transport exit can happen without a terminal event.
 1. Publish a stdio protocol major, advertised on `bridge_ready` and on every
    `session_ready`. Additive fields/events can be ignored; breaking public changes
    increment the major and are documented. There is no negotiation or
-   compatibility implementation. Major 3 replaced the single-session stream with
-   channel envelopes and dropped earlier wire formats.
+   compatibility implementation.
 2. `@nosis/protocol` exports the stable message/data surface and decoder;
    `@nosis/protocol/internal` holds first-party settings and GUI extensions.
    Extra on-wire metadata is allowed but does not acquire public stability.
@@ -57,34 +61,17 @@ shutdown acknowledgment, and transport exit can happen without a terminal event.
    directory), warms provider code, tokenizer and TLS trust, then serves channels.
    Hosts keep one resident process and open a channel per Runtime.
 5. Publish ESM JavaScript and declarations for both TS packages so an external
-   Node client does not need a TS loader or repository paths. Nothing is published
-   to a registry as part of this change.
+   Node client does not need a TS loader or repository paths.
 6. Process-wide resources stay in `agent_runtime.RuntimeServices` (configuration,
    environment reload, scheduler, warmed provider code, tokenizer vocabularies,
    TLS trust context); a channel owns only its Runtime, journal writer, event
    sequence and interaction waiters.
 
-## Remaining gaps
+## Boundaries
 
-- `BridgeRequest` / `BridgeEvent` describe the process envelope, but
-  `@nosis/client` writes it from object literals instead of the shared type.
-- Both TS packages and the Python wheel are built locally for integration tests;
-  nothing is published to a registry.
 - A channel belongs to the host process that opened it. Another host cannot attach
   to a running Runtime; `attach_only` / `takeover` only reattach browser pages
   inside one GUI server.
-
-## Delivered stages
-
-1. **Public protocol**: protocol reference, public/internal TS exports, protocol
-   major, installed CLI and first-use configuration initialization; envelopes are
-   validated at the transport boundary without changing execution rules.
-2. **SDK**: `@nosis/client` extracted from the TUI transport, package builds and
-   examples, caller-owned Session synchronization and interaction decisions.
-3. **External integration tests**: install/build artifacts, launch from a foreign
-   cwd with an isolated home, exercise real stdio and the packaged SDK, and use a
-   local provider fixture for turn/interaction/cancel flows without paid model
-   calls.
-4. **Resident channels**: `BridgeServer` multiplexing, `RuntimeServices`, channel
-   addressing in the SDK, GUI/TUI adoption, `session_snapshot`, provider warmup and
-   the shared TLS context.
+- `BridgeRequest` / `BridgeEvent` are the process envelope; `Incoming` /
+  `Outgoing` are the nested channel payloads. Both are defined in
+  [`@nosis/protocol`](../interfaces/protocol/src/protocol.ts).
