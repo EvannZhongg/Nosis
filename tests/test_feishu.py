@@ -110,3 +110,19 @@ class FeishuTransportTest(unittest.IsolatedAsyncioTestCase):
         result = await transport.send_attachment("chat", {"type": "file", "filename": "report.pdf"}, path)
         self.assertEqual(result, "sent")
         transport._request.assert_awaited_with("send_attachment", chat_id="chat", attachment_type="file", filename="report.pdf", path=str(path))
+
+    async def test_stream_sequences_increase_through_renewal_and_close(self):
+        transport = self.transport()
+        transport._request = AsyncMock(return_value={"card_id": "card"})
+        handle = await transport.create_streaming_card("chat", "first")
+        await transport.stream_text(handle, "second")
+        handle.opened_at -= 601
+        await transport.stream_text(handle, "third")
+        await transport.close_stream(handle)
+        calls = transport._request.await_args_list
+        self.assertEqual([call.args[0] for call in calls], [
+            "create_streaming_card", "stream_text", "stream_settings", "stream_text", "stream_settings",
+        ])
+        self.assertEqual([call.kwargs["sequence"] for call in calls[1:]], [1, 2, 3, 4])
+        self.assertTrue(calls[2].kwargs["streaming"])
+        self.assertFalse(calls[4].kwargs["streaming"])

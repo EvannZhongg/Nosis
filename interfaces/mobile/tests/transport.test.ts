@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   handlers: {} as Record<string, (...args: any[]) => any>,
   input: {} as Record<string, (...args: any[]) => any>,
   create: vi.fn(), image: vi.fn(), file: vi.fn(), resource: vi.fn(),
+  card: vi.fn(), content: vi.fn(), settings: vi.fn(), react: vi.fn(), unreact: vi.fn(),
   read: vi.fn(), write: vi.fn(), output: [] as any[],
 }));
 
@@ -12,7 +13,9 @@ vi.mock("@larksuiteoapi/node-sdk", () => ({
   Client: class { im = { v1: {
     message: { create: mocks.create }, image: { create: mocks.image },
     file: { create: mocks.file }, messageResource: { get: mocks.resource },
-  } }; },
+    messageReaction: { create: mocks.react, delete: mocks.unreact },
+  } }; cardkit = { v1: { card: { create: mocks.card, settings: mocks.settings },
+    cardElement: { content: mocks.content } } }; },
   EventDispatcher: class {
     register(handlers: typeof mocks.handlers) { mocks.handlers = handlers; return this; }
   },
@@ -50,6 +53,59 @@ beforeEach(async () => {
   mocks.output.length = 0;
   await command("start", { app_id: "app", app_secret: "secret" });
   mocks.create.mockResolvedValue({ code: 0, data: { message_id: "sent" } });
+  mocks.card.mockResolvedValue({ code: 0, data: { card_id: "card" } });
+  mocks.content.mockResolvedValue({ code: 0 });
+  mocks.settings.mockResolvedValue({ code: 0 });
+  mocks.react.mockResolvedValue({ code: 0, data: { reaction_id: "reaction" } });
+  mocks.unreact.mockResolvedValue({ code: 0 });
+});
+
+describe("Feishu streaming cards and receipts", () => {
+  it("creates a JSON 2.0 card and sends its entity reference", async () => {
+    expect((await command("create_streaming_card", { chat_id: "chat", text: "正文" })).result).toEqual({ card_id: "card" });
+    const card = JSON.parse(mocks.card.mock.calls[0][0].data.data);
+    expect(card).toEqual({ schema: "2.0", config: { streaming_mode: true, update_multi: true },
+      body: { elements: [{ tag: "markdown", element_id: "body", content: "正文" }] } });
+    expect(mocks.create).toHaveBeenCalledWith({ params: { receive_id_type: "chat_id" }, data: {
+      receive_id: "chat", msg_type: "interactive", content: JSON.stringify({ type: "card", data: { card_id: "card" } }),
+    } });
+  });
+
+  it("streams cumulative text and closes using strictly ordered card operations", async () => {
+    await command("stream_text", { card_id: "card", text: "全部正文", sequence: 41 });
+    await command("stream_settings", { card_id: "card", streaming: false, sequence: 42 });
+    expect(mocks.content).toHaveBeenCalledWith({ path: { card_id: "card", element_id: "body" },
+      data: { content: "全部正文", sequence: 41 } });
+    expect(mocks.settings).toHaveBeenCalledWith({ path: { card_id: "card" },
+      data: { settings: JSON.stringify({ config: { streaming_mode: false } }), sequence: 42 } });
+  });
+
+  it("never sends a message if card creation fails", async () => {
+    mocks.card.mockResolvedValue({ code: 999, msg: "no permission" });
+    expect((await command("create_streaming_card", { chat_id: "chat", text: "reply" })).error).toContain("no permission");
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
+
+  it("adds and removes only the bot's reaction on the original message", async () => {
+    expect((await command("react", { message_id: "incoming", emoji: "OnIt" })).result).toEqual({ reaction_id: "reaction" });
+    await command("unreact", { message_id: "incoming", reaction_id: "reaction" });
+    expect(mocks.react).toHaveBeenCalledWith({ path: { message_id: "incoming" }, data: { reaction_type: { emoji_type: "OnIt" } } });
+    expect(mocks.unreact).toHaveBeenCalledWith({ path: { message_id: "incoming", reaction_id: "reaction" } });
+  });
+
+  it("uses the installed SDK CardKit and reaction endpoints", async () => {
+    const sdk = await vi.importActual<typeof import("@larksuiteoapi/node-sdk")>("@larksuiteoapi/node-sdk");
+    const request = vi.fn().mockResolvedValue({ code: 0, data: { card_id: "card" } });
+    const client = new sdk.Client({ appId: "app", appSecret: "secret", httpInstance: { request } as any });
+    vi.spyOn(client as any, "formatPayload").mockImplementation(async (payload: any) => ({ headers: {}, params: {}, ...payload }));
+    expect(await client.cardkit.v1.card.create({ data: { type: "card_json", data: "{}" } })).toEqual({ code: 0, data: { card_id: "card" } });
+    await client.cardkit.v1.cardElement.content({ path: { card_id: "card", element_id: "body" }, data: { content: "text", sequence: 1 } });
+    expect(request.mock.calls.at(-1)?.[0].url).toContain("/cardkit/v1/cards/card/elements/body/content");
+    await client.cardkit.v1.card.settings({ path: { card_id: "card" }, data: { settings: "{}", sequence: 2 } });
+    expect(request.mock.calls.at(-1)?.[0].url).toContain("/cardkit/v1/cards/card/settings");
+    await client.im.v1.messageReaction.create({ path: { message_id: "incoming" }, data: { reaction_type: { emoji_type: "OnIt" } } });
+    expect(request.mock.calls.at(-1)?.[0].url).toContain("/im/v1/messages/incoming/reactions");
+  });
 });
 
 describe("Feishu incoming content", () => {

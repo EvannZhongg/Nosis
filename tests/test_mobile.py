@@ -15,6 +15,7 @@ from interfaces.mobile.bindings import Bindings
 from interfaces.mobile.config import load_channels
 from interfaces.mobile.controller import MobileController
 from interfaces.mobile.feishu import render_card
+from interfaces.mobile.service import MobileService
 from interfaces.mobile.views import Button, Card
 from interfaces.session_host import ActiveSessionRegistry
 
@@ -29,6 +30,19 @@ class Transport:
         self.downloads = []
         self.attachments = []
         self.resources = {}
+        self.reactions = []
+        self.removed_reactions = []
+        self.closed_streams = []
+
+    async def react(self, message_id, emoji):
+        self.reactions.append((message_id, emoji))
+        return f"reaction{len(self.reactions)}"
+
+    async def unreact(self, message_id, reaction_id):
+        self.removed_reactions.append((message_id, reaction_id))
+
+    async def close_stream(self, handle):
+        self.closed_streams.append(handle)
 
     async def download_attachment(self, message_id, attachment, path):
         self.downloads.append((message_id, attachment, path))
@@ -47,13 +61,13 @@ class Transport:
         self.updates.append((message_id, card))
         self.messages[message_id] = (self.messages[message_id][0], card)
 
-    async def send_markdown(self, chat_id, text):
+    async def create_streaming_card(self, chat_id, text):
         message_id = f"text{len(self.texts)}"
         self.texts[message_id] = (chat_id, text)
         self.text_changed.set()
         return message_id
 
-    async def update_markdown(self, message_id, text):
+    async def stream_text(self, message_id, text):
         self.text_updates.append((message_id, text))
         self.texts[message_id] = (self.texts[message_id][0], text)
         self.text_changed.set()
@@ -261,6 +275,60 @@ class MobileTest(unittest.IsolatedAsyncioTestCase):
         await self.controller.receive_message("chat", "ou_owner", "/help", "delivery-1")
         self.assertEqual(len(self.transport.messages), count)
 
+    async def test_concurrent_turn_redelivery_and_recovery_submit_only_once(self):
+        c, channel = await self.open()
+        await asyncio.gather(*[
+            self.controller.receive_message("chat", "ou_owner", "run", "duplicate")
+            for _ in range(8)
+        ])
+        self.controller.bindings = Bindings(self.bindings.path)
+        await self.controller.recover()
+        self.assertEqual(len([m for m in channel.sent if m["type"] == "user_turn"]), 1)
+        self.assertEqual(self.transport.reactions, [("duplicate", "OnIt")])
+        channel.emit({"type": "turn_completed", "turn_id": c.runtime.turn_id})
+        await self.settle()
+        self.controller.bindings = Bindings(self.bindings.path)
+        await self.controller.receive_message("chat", "ou_owner", "run", "duplicate")
+        self.assertEqual(len([m for m in channel.sent if m["type"] == "user_turn"]), 1)
+
+    async def test_receipt_is_removed_only_after_visible_text_and_on_takeover(self):
+        c, channel = await self.open()
+        await self.text("run")
+        receipt = c.receipt
+        channel.emit({"type": "assistant_delta", "turn_id": "turn", "model_call_index": 0, "text": "\n"})
+        await self.settle()
+        self.assertEqual(c.receipt, receipt)
+        channel.emit({"type": "assistant_delta", "turn_id": "turn", "model_call_index": 0, "text": "visible"})
+        await asyncio.wait_for(self.transport.text_changed.wait(), 1)
+        await self.settle()
+        self.assertIsNone(c.receipt)
+        self.assertEqual(self.transport.removed_reactions, [receipt])
+        channel.emit({"type": "attachment_replaced"})
+        await self.settle()
+        self.assertEqual(self.transport.closed_streams, ["text0"])
+
+    async def test_receipt_failures_do_not_prevent_turn_submission(self):
+        c, channel = await self.open()
+        with patch.object(self.transport, "react", side_effect=RuntimeError("offline")):
+            with self.assertLogs("interfaces.mobile.controller", level="ERROR"):
+                await self.text("run")
+        self.assertEqual(channel.sent[-1]["type"], "user_turn")
+        self.assertIsNone(c.receipt)
+
+    async def test_failed_output_keeps_receipt_until_terminal_event(self):
+        c, channel = await self.open()
+        await self.text("run")
+        receipt = c.receipt
+        with patch.object(self.transport, "create_streaming_card", side_effect=RuntimeError("offline")):
+            with self.assertLogs("interfaces.mobile.streaming", level="ERROR"):
+                channel.emit({"type": "assistant_message", "turn_id": "turn", "model_call_index": 0, "content": "reply"})
+                await self.settle()
+        self.assertEqual(c.receipt, receipt)
+        channel.emit({"type": "turn_cancelled"})
+        await self.settle()
+        self.assertIsNone(c.receipt)
+        self.assertEqual(self.transport.removed_reactions, [receipt])
+
     async def test_failed_download_can_be_redelivered_with_the_same_turn_identity(self):
         c, channel = await self.open()
         attachments = [{"type": "file", "key": "file", "filename": "report.txt"}]
@@ -324,7 +392,7 @@ class MobileTest(unittest.IsolatedAsyncioTestCase):
     async def test_text_and_card_delivery_failures_do_not_stop_session_subscription(self):
         c, channel = await self.open()
         with self.assertLogs("interfaces.mobile", level="ERROR"):
-            with patch.object(self.transport, "send_markdown", side_effect=RuntimeError("offline")):
+            with patch.object(self.transport, "create_streaming_card", side_effect=RuntimeError("offline")):
                 channel.emit({"type": "assistant_message", "turn_id": "turn", "model_call_index": 1, "content": "reply"})
                 await self.settle()
             with patch.object(self.transport, "send", side_effect=RuntimeError("offline")):
@@ -336,7 +404,8 @@ class MobileTest(unittest.IsolatedAsyncioTestCase):
         channel.emit({"type": "turn_completed", "turn_id": "turn"})
         await self.settle()
         self.assertFalse(c.reader.done())
-        self.assertEqual(next(reversed(self.transport.messages.values()))[1].title, "处理完成")
+        self.assertFalse(c.interactions)
+        self.assertEqual(next(reversed(self.transport.messages.values()))[1].title, "请求已结束")
 
     async def test_snapshot_restores_an_interaction_after_failed_delivery(self):
         c, channel = await self.open()
@@ -645,10 +714,13 @@ class MobileTest(unittest.IsolatedAsyncioTestCase):
         await self.controller._open(c, c.session_id)
         self.assertEqual(next(reversed(self.transport.messages.values()))[1].title, "请做选择")
 
-    async def test_terminal_event_updates_progress_and_delivers_assistant_output(self):
+    async def test_terminal_event_clears_receipt_and_delivers_assistant_output(self):
         c, channel = await self.open()
         await self.text("工作")
-        progress = c.progress
+        receipt = c.receipt
+        card_count = len(self.transport.messages)
+        self.assertIsNotNone(receipt)
+        self.assertFalse(any(card.title == "Nosis 正在处理" for _, card in self.transport.messages.values()))
         channel.emit(
             {
                 "type": "assistant_message",
@@ -663,7 +735,10 @@ class MobileTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(
             any(card.text == "完成内容" for _, card in self.transport.messages.values())
         )
-        self.assertEqual(self.transport.messages[progress][1].title, "处理完成")
+        self.assertIsNone(c.receipt)
+        self.assertIn(receipt, self.transport.removed_reactions)
+        self.assertEqual(len(self.transport.messages), card_count)
+        self.assertEqual(self.transport.closed_streams, ["text0"])
 
     async def test_assistant_deltas_stream_as_text_without_reasoning_or_duplicate_final_message(
         self,
@@ -698,6 +773,26 @@ class MobileTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(list(self.transport.texts.values()), [("chat", "第一段第二段")])
         self.assertEqual(len(self.transport.texts), 1)
         self.assertNotIn("private reasoning", str(self.transport.texts))
+
+
+class MobileServiceTest(unittest.IsolatedAsyncioTestCase):
+    async def test_shutdown_closes_presentations_before_the_transport(self):
+        service = MobileService.__new__(MobileService)
+        order = []
+
+        class Controller:
+            async def close(self):
+                order.append("cards_and_receipts")
+                raise RuntimeError("close failed")
+
+        class ChannelTransport:
+            async def close(self):
+                order.append("transport")
+
+        service.channels = [(ChannelTransport(), Controller())]
+        with self.assertRaisesRegex(RuntimeError, "close failed"):
+            await service.close()
+        self.assertEqual(order, ["cards_and_receipts", "transport"])
 
 
 class BindingsTest(unittest.TestCase):

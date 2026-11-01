@@ -36,6 +36,6 @@ class MobileService:
     async def close(self) -> None:
         for transport, controller in reversed(self.channels):
             try:
-                await transport.close()
-            finally:
                 await controller.close()
+            finally:
+                await transport.close()

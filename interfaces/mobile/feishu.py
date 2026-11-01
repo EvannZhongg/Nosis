@@ -4,7 +4,9 @@ import asyncio
 import json
 import logging
 import shutil
+from dataclasses import dataclass, field
 from pathlib import Path
+from time import monotonic
 from uuid import uuid4
 
 from .config import ChannelConfig
@@ -12,6 +14,13 @@ from .views import Card
 
 
 log = logging.getLogger(__name__)
+
+
+@dataclass
+class StreamingCard:
+    card_id: str
+    sequence: int = 0
+    opened_at: float = field(default_factory=monotonic)
 
 
 def render_card(card: Card) -> dict:
@@ -178,12 +187,32 @@ class FeishuTransport:
     async def update(self, message_id: str, card: Card) -> None:
         await self._request("update", message_id=message_id, card=render_card(card))
 
-    async def send_markdown(self, chat_id: str, text: str) -> str:
-        result = await self._request("send_markdown", chat_id=chat_id, text=text)
-        return result["message_id"]
+    async def react(self, message_id: str, emoji: str) -> str:
+        result = await self._request("react", message_id=message_id, emoji=emoji)
+        return result["reaction_id"]
 
-    async def update_markdown(self, message_id: str, text: str) -> None:
-        await self._request("update_markdown", message_id=message_id, text=text)
+    async def unreact(self, message_id: str, reaction_id: str) -> None:
+        await self._request("unreact", message_id=message_id, reaction_id=reaction_id)
+
+    async def create_streaming_card(self, chat_id: str, text: str) -> StreamingCard:
+        result = await self._request("create_streaming_card", chat_id=chat_id, text=text)
+        return StreamingCard(result["card_id"])
+
+    async def stream_text(self, handle: StreamingCard, text: str) -> None:
+        # Feishu automatically closes streaming mode ten minutes after opening.
+        if monotonic() - handle.opened_at >= 9 * 60:
+            handle.sequence += 1
+            await self._request("stream_settings", card_id=handle.card_id,
+                                sequence=handle.sequence, streaming=True)
+            handle.opened_at = monotonic()
+        handle.sequence += 1
+        await self._request("stream_text", card_id=handle.card_id,
+                            sequence=handle.sequence, text=text)
+
+    async def close_stream(self, handle: StreamingCard) -> None:
+        handle.sequence += 1
+        await self._request("stream_settings", card_id=handle.card_id,
+                            sequence=handle.sequence, streaming=False)
 
     async def download_attachment(self, message_id: str, attachment: dict, path: Path) -> None:
         await self._request(

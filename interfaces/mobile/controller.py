@@ -89,7 +89,7 @@ class Conversation:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     actions: dict[str, tuple[dict, str | None]] = field(default_factory=dict)
     interactions: dict[str, str] = field(default_factory=dict)
-    progress: str | None = None
+    receipt: tuple[str, str] | None = None
     settings_requests: dict[str, tuple[str, str]] = field(default_factory=dict)
     streams: dict[tuple[str, int], TextStream] = field(default_factory=dict)
     attachment_id: str = field(default_factory=lambda: f"im:{uuid4()}")
@@ -396,12 +396,16 @@ class MobileController:
             stored = []
             submitted = False
             try:
+                if c.inbound:
+                    try:
+                        incoming = c.inbound["message_id"]
+                        reaction = await self.transport.react(incoming, "OnIt")
+                        c.receipt = (incoming, reaction)
+                    except Exception:
+                        log.exception("Mobile receipt failed: %s", c.key)
                 if attachments:
                     async with asyncio.timeout(ATTACHMENT_PROCESSING_SECONDS):
                         await self._download(message_id, attachments, workspace, stored)
-                if not runtime.owns_attachment(c.attachment_id):
-                    raise ValueError("会话已由其他端接管。可使用 /takeover 接管。")
-                c.progress = await self._show(c, "Nosis 正在处理", self._status(c))
                 if not runtime.owns_attachment(c.attachment_id):
                     raise ValueError("会话已由其他端接管。可使用 /takeover 接管。")
                 runtime.send({
@@ -413,9 +417,19 @@ class MobileController:
                     self.bindings.mark(c.inbound, "submitted")
             except BaseException:
                 if not submitted:
+                    await self._clear_receipt(c)
                     for attachment in stored:
                         workspace.resolve_path(attachment["path"]).unlink(missing_ok=True)
                 raise
+
+    async def _clear_receipt(self, c: Conversation) -> None:
+        if c.receipt is not None:
+            message_id, reaction_id = c.receipt
+            c.receipt = None
+            try:
+                await self.transport.unreact(message_id, reaction_id)
+            except Exception:
+                log.exception("Mobile receipt removal failed: %s", c.key)
 
     async def _download(self, message_id: str, attachments, workspace: Workspace, stored: list) -> None:
         total = 0
@@ -654,6 +668,7 @@ class MobileController:
             for stream in c.streams.values():
                 await stream.abort()
             c.streams.clear()
+            await self._clear_receipt(c)
             await runtime.detach(queue, c.attachment_id)
 
     async def _deliver_event(self, c: Conversation, runtime: ActiveSession, event: dict) -> None:
@@ -670,7 +685,9 @@ class MobileController:
             key = (event["turn_id"], event["model_call_index"])
             stream = c.streams.get(key)
             if stream is None:
-                stream = c.streams[key] = TextStream(self.transport, c.chat_id)
+                stream = c.streams[key] = TextStream(
+                    self.transport, c.chat_id, lambda: self._clear_receipt(c)
+                )
             if kind == "assistant_delta":
                 stream.append(event["text"])
             else:
@@ -701,20 +718,12 @@ class MobileController:
             for stream in c.streams.values():
                 await stream.finish()
             c.streams.clear()
+            await self._clear_receipt(c)
             for request_id in list(c.interactions):
                 await self._resolve(c, request_id, "请求已结束。")
-            title = {"turn_completed": "处理完成", "turn_cancelled": "已停止"}.get(
-                kind, "执行失败"
-            )
-            text = event["error"]["message"] if event.get("error") else self._status(c)
-            if c.progress is not None:
-                progress = c.progress
-                c.progress = None
-                try:
-                    await self.transport.update(progress, Card(title, text))
-                except Exception:
-                    await self._show(c, title, text)
-            else:
+            if kind != "turn_completed":
+                title = "已停止" if kind == "turn_cancelled" else "执行失败"
+                text = event["error"]["message"] if event.get("error") else self._status(c)
                 await self._show(c, title, text)
         elif kind == "runtime_state":
             for request in (event["approval"], event["question"]):
@@ -734,6 +743,7 @@ class MobileController:
             for stream in c.streams.values():
                 await stream.abort()
             c.streams.clear()
+            await self._clear_receipt(c)
             for request_id in list(c.interactions):
                 await self._resolve(c, request_id, "会话已由其他端接管。")
             await self._show(c, "会话已被接管", "使用 /takeover 可重新接管。")

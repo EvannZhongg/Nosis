@@ -1,26 +1,28 @@
-"""Coalesce assistant deltas into editable body messages."""
+"""Coalesce assistant deltas into streaming cards."""
 
 import asyncio
+import json
 import logging
+from collections.abc import Awaitable, Callable
 
 from .views import Transport
 
 
-MAX_TEXT_CHARACTERS = 6000
-MAX_MESSAGE_EDITS = 20
+# Leave room for the card envelope under Feishu's 30 KB card limit.
+MAX_TEXT_BYTES = 24000
 UPDATE_INTERVAL_SECONDS = 1.0
 log = logging.getLogger(__name__)
 
 
 class TextStream:
-    def __init__(self, transport: Transport, chat_id: str) -> None:
+    def __init__(self, transport: Transport, chat_id: str,
+                 on_started: Callable[[], Awaitable[None]] | None = None) -> None:
         self.transport = transport
         self.chat_id = chat_id
         self.content = ""
-        self._offset = 0
-        self._message_id: str | None = None
-        self._sent = ""
-        self._edits = 0
+        self._cards: list[tuple[object, str]] = []
+        self._on_started = on_started
+        self._closed = False
         self._changed = asyncio.Event()
         self._finished = asyncio.Event()
         self._task: asyncio.Task | None = None
@@ -38,6 +40,8 @@ class TextStream:
             self._task = asyncio.create_task(self._run())
 
     async def finish(self, content: str | None = None) -> None:
+        if self._closed:
+            return
         if content is not None:
             self.content = content
         self._finished.set()
@@ -45,11 +49,23 @@ class TextStream:
             self._wake()
         if self._task is not None:
             await self._task
+        await self._close()
 
     async def abort(self) -> None:
         if self._task is not None:
             self._task.cancel()
             await asyncio.gather(self._task, return_exceptions=True)
+        await self._close()
+
+    async def _close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        for handle, _ in self._cards:
+            try:
+                await self.transport.close_stream(handle)
+            except Exception:
+                log.exception("Mobile stream closing failed: %s", self.chat_id)
 
     async def _run(self) -> None:
         while True:
@@ -69,32 +85,29 @@ class TextStream:
                 pass
 
     async def _flush(self) -> None:
-        while self._offset < len(self.content):
-            text = self.content[self._offset:self._offset + MAX_TEXT_CHARACTERS]
-            if self._message_id is None:
-                self._message_id = await self.transport.send_markdown(self.chat_id, text)
-                self._sent = text
-                self._edits = 0
-            elif text != self._sent:
-                # Feishu allows at most 20 edits per ordinary message. Freeze
-                # the published prefix and continue in a new message.
-                if self._edits == MAX_MESSAGE_EDITS:
-                    self._offset += len(self._sent)
-                    self._message_id = None
-                    self._sent = ""
-                    continue
-                try:
-                    await self.transport.update_markdown(self._message_id, text)
-                except Exception:
-                    # An uneditable message must not block the remaining reply.
-                    self._message_id = await self.transport.send_markdown(self.chat_id, text)
-                    self._edits = 0
+        remaining = self.content
+        index = 0
+        while remaining or index < len(self._cards):
+            # Count escaped UTF-8 bytes rather than characters (CJK, emoji,
+            # quotes and code blocks have different serialized sizes).
+            low, high = 0, min(len(remaining), MAX_TEXT_BYTES)
+            while low < high:
+                middle = (low + high + 1) // 2
+                size = len(json.dumps(remaining[:middle], ensure_ascii=False).encode("utf-8"))
+                if size <= MAX_TEXT_BYTES:
+                    low = middle
                 else:
-                    self._edits += 1
-                self._sent = text
-            if len(text) == MAX_TEXT_CHARACTERS:
-                self._offset += len(text)
-                self._message_id = None
-                self._sent = ""
-                continue
-            return
+                    high = middle - 1
+            text, remaining = remaining[:low] or " ", remaining[low:]
+            if index == len(self._cards):
+                handle = await self.transport.create_streaming_card(self.chat_id, text)
+                self._cards.append((handle, text))
+                if self._on_started is not None:
+                    await self._on_started()
+                    self._on_started = None
+            else:
+                handle, sent = self._cards[index]
+                if text != sent:
+                    await self.transport.stream_text(handle, text)
+                    self._cards[index] = (handle, text)
+            index += 1

@@ -12,9 +12,6 @@ const log = (...values) => process.stderr.write(`${values.map(value =>
   typeof value === 'string' ? value.replaceAll(secret || '\0', '[redacted]') : '[SDK diagnostic]'
 ).join(' ')}\n`);
 const logger = { trace() {}, debug() {}, info() {}, warn: log, error: log };
-const markdownContent = text => JSON.stringify({
-  zh_cn: { content: [[{ tag: 'md', text }]] },
-});
 
 export function parseMessage(message) {
   const content = JSON.parse(message.content);
@@ -91,17 +88,46 @@ async function handle(command) {
       });
       if (response.code !== 0) throw new Error(`Feishu ${response.code}: ${response.msg}`);
       result = {};
-    } else if (command.op === 'send_markdown') {
-      const response = await client.im.v1.message.create({
-        params: { receive_id_type: 'chat_id' },
-        data: { receive_id: command.chat_id, msg_type: 'post', content: markdownContent(command.text) },
+    } else if (command.op === 'react') {
+      const response = await client.im.v1.messageReaction.create({
+        path: { message_id: command.message_id },
+        data: { reaction_type: { emoji_type: command.emoji } },
       });
       if (response.code !== 0) throw new Error(`Feishu ${response.code}: ${response.msg}`);
-      result = { message_id: response.data.message_id };
-    } else if (command.op === 'update_markdown') {
-      const response = await client.im.v1.message.update({
-        path: { message_id: command.message_id },
-        data: { msg_type: 'post', content: markdownContent(command.text) },
+      result = { reaction_id: response.data.reaction_id };
+    } else if (command.op === 'unreact') {
+      const response = await client.im.v1.messageReaction.delete({
+        path: { message_id: command.message_id, reaction_id: command.reaction_id },
+      });
+      if (response.code !== 0) throw new Error(`Feishu ${response.code}: ${response.msg}`);
+      result = {};
+    } else if (command.op === 'create_streaming_card') {
+      const card = await client.cardkit.v1.card.create({ data: {
+        type: 'card_json', data: JSON.stringify({
+          schema: '2.0', config: { streaming_mode: true, update_multi: true },
+          body: { elements: [{ tag: 'markdown', element_id: 'body', content: command.text }] },
+        }),
+      } });
+      if (card.code !== 0) throw new Error(`Feishu ${card.code}: ${card.msg}`);
+      const response = await client.im.v1.message.create({
+        params: { receive_id_type: 'chat_id' },
+        data: { receive_id: command.chat_id, msg_type: 'interactive',
+          content: JSON.stringify({ type: 'card', data: { card_id: card.data.card_id } }) },
+      });
+      if (response.code !== 0) throw new Error(`Feishu ${response.code}: ${response.msg}`);
+      result = { card_id: card.data.card_id };
+    } else if (command.op === 'stream_text') {
+      const response = await client.cardkit.v1.cardElement.content({
+        path: { card_id: command.card_id, element_id: 'body' },
+        data: { content: command.text, sequence: command.sequence },
+      });
+      if (response.code !== 0) throw new Error(`Feishu ${response.code}: ${response.msg}`);
+      result = {};
+    } else if (command.op === 'stream_settings') {
+      const response = await client.cardkit.v1.card.settings({
+        path: { card_id: command.card_id },
+        data: { settings: JSON.stringify({ config: { streaming_mode: command.streaming } }),
+          sequence: command.sequence },
       });
       if (response.code !== 0) throw new Error(`Feishu ${response.code}: ${response.msg}`);
       result = {};

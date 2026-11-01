@@ -52,6 +52,8 @@ uv sync --extra gui
 - `im:message:readonly`：获取消息中的资源文件。仅有单聊事件权限不足以调用资源下载接口。
 - `im:message:send_as_bot`：以机器人身份发送和更新消息卡片。
 - `im:resource`：下载图片、文件，以及上传机器人回传的附件。
+- `im:message.reactions:write_only`：添加和删除消息表情回复。
+- `cardkit:card:write`：创建和更新流式卡片实体。
 
 在“事件与回调”中把事件和回调都配置为长连接，并订阅事件 `im.message.receive_v1` 与回调 `card.action.trigger`（新版卡片回传交互）。保存长连接方式时本地收发进程必须已连接，随后发布应用版本并设置可用范围。无需公网监听端口或内网穿透。
 
@@ -94,7 +96,11 @@ Tool 附件沿用结构化 `tool_media` 事件，并通过 `present_to_user` 区
 
 `ask_user` 使用选项按钮，支持自由文本时可直接发送回复；审批使用“允许本次 / 拒绝”按钮，普通消息不会被解析成授权。按钮标识在宿主内映射到动作，并绑定用户、聊天、消息与当前请求，重复、转发、重启前或已结束请求的按钮不会再次执行。
 
-助手正文通过富文本 `post` 消息的 `md` 标签渲染 Markdown。首个 `assistant_delta` 到来即发送正文，后续增量按约一秒的节奏合并编辑同一消息，`assistant_message` 到达时立即同步最终正文；推理增量与 Tool 原始输出不推送到聊天。飞书单条消息最多编辑 20 次、每段 6000 字符，达到上限后已发布的前缀固定，后续内容在新消息中续写。正文编辑失败时改为发送新消息，仍失败则记录错误并继续消费事件，不解除控制附着；未成功投递的审批与提问由后续 Runtime 快照和通道恢复补绘。格式与平台限制以[发送消息内容结构](https://open.feishu.cn/document/server-docs/im-v1/message-content-description/create_json?lang=zh-CN)和[编辑消息](https://open.feishu.cn/document/server-docs/im-v1/message/update)为准。
+普通输入通过检查并准备提交 Turn 时，在原消息上添加 `OnIt`（在做了）表情回复，不再单独发送处理中卡片。首张正文卡片成功发送后移除该表情；提交失败、Turn 结束、取消、接管或解除附着时也清理。表情 API 失败只记录错误，不阻止执行。
+
+助手正文使用 CardKit JSON 2.0 卡片的 Markdown 组件。首个可见 `assistant_delta` 到来即创建并发送卡片实体，后续增量按约一秒的节奏向同一组件发送累计全文，`assistant_message` 到达时同步最终正文并关闭流式模式；推理增量与 Tool 原始输出不推送到聊天。每张卡片独立维护递增的 `sequence`，更新次数不再触发拆消息。飞书卡片体积上限为 30 KB，正文按 JSON 转义后的 UTF-8 字节计量，每段最多 24000 字节，为卡片结构预留空间，仅超过体积预算时续发卡片。卡片开启超过九分钟后的下一次文本更新先重新开启流式模式，避免平台十分钟自动关闭影响长回答。取消时保留已收到的正文，接管与解除附着时停止更新并关闭卡片。
+
+正文 API 失败记录错误并继续消费事件，不新发普通消息替代；未成功投递的审批与提问仍由后续 Runtime 快照和通道恢复补绘。格式与限制以[流式更新卡片](https://open.feishu.cn/document/cardkit-v1/streaming-updates-openapi-overview)和[流式更新文本](https://open.feishu.cn/document/cardkit-v1/card-element/content)为准。
 
 ## 验证
 
