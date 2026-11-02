@@ -4,6 +4,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 from pathlib import Path
 from threading import Event
@@ -31,6 +32,28 @@ def persist(store: JsonlSessionStore, workspace: Path, session: Session) -> None
 
 
 class JsonlSessionStoreTest(unittest.TestCase):
+    def test_independent_store_waits_for_the_session_operation_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            first = JsonlSessionStore(root / "sessions")
+            second = JsonlSessionStore(first.directory)
+            first.bind_workspace("shared", root)
+            attempted, finished = Event(), Event()
+
+            def read_workspace():
+                attempted.set()
+                try:
+                    return second.workspace_for("shared")
+                finally:
+                    finished.set()
+
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                with first._locked_session("shared"):
+                    result = pool.submit(read_workspace)
+                    self.assertTrue(attempted.wait(2))
+                    self.assertFalse(finished.wait(0.1))
+                self.assertEqual(result.result(timeout=5), str(root.resolve()))
+
     def test_search_streams_only_until_the_extra_session_match(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

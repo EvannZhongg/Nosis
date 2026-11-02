@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -11,6 +10,7 @@ from threading import Lock
 from typing import Callable, Literal
 
 from .auxiliary import AuxiliaryCallTracker
+from .file_lock import acquire_file_lock
 from .llm import AuxiliaryModelCall, LLMProvider, LLMRequest
 from .atomic import atomic_write_text
 from .session import Message
@@ -164,13 +164,8 @@ class MemoryStore:
     @contextmanager
     def _locked_files(self):
         lock_path = self.global_path.parent / ".memory.lock"
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with self._lock, lock_path.open("a+b") as handle:
-            _lock_file(handle)
-            try:
-                yield
-            finally:
-                _unlock_file(handle)
+        with self._lock, acquire_file_lock(lock_path, blocking=True):
+            yield
 
 
 class MemoryReconciler:
@@ -398,34 +393,6 @@ def _render_document(document: MemoryDocument, *, level: int) -> str:
 
 def _render_prompt_memory(document: MemoryDocument) -> str:
     return _render_document(document, level=4).rstrip()
-
-
-def _lock_file(handle) -> None:
-    if os.name == "nt":
-        import msvcrt
-
-        handle.seek(0)
-        if handle.read(1) == b"":
-            handle.write(b"0")
-            handle.flush()
-        handle.seek(0)
-        msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
-        return
-    import fcntl
-
-    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-
-
-def _unlock_file(handle) -> None:
-    if os.name == "nt":
-        import msvcrt
-
-        handle.seek(0)
-        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-        return
-    import fcntl
-
-    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 __all__ = [

@@ -1,3 +1,4 @@
+import errno
 import tempfile
 import time
 import unittest
@@ -7,6 +8,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfoNotFoundError
 
 from agent_core import ExecutionScope
+from agent_core.file_lock import acquire_file_lock
 
 from agent_core.scheduler import (
     AgentTurnAction,
@@ -271,12 +273,69 @@ class SchedulerServiceTest(unittest.TestCase):
                 first._release_leader_lock()
                 second._release_leader_lock()
 
-    def test_lock_filesystem_errors_leave_scheduler_without_leadership(self) -> None:
+    def test_lock_filesystem_errors_propagate_without_claiming_leadership(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             service = SchedulerService(Path(directory) / "schedule.jsonl")
             with patch("agent_core.scheduler.acquire_file_lock", side_effect=PermissionError("denied")):
+                with self.assertRaises(PermissionError):
+                    service._acquire_leader_lock()
+            self.assertIsNone(service._leader_lock)
+
+    def test_lock_contention_is_silent_and_does_not_claim_leadership(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            service = SchedulerService(Path(directory) / "schedule.jsonl")
+            with (
+                patch("agent_core.scheduler.acquire_file_lock", side_effect=BlockingIOError("locked")),
+                self.assertNoLogs("agent_core.scheduler", level="WARNING"),
+            ):
                 self.assertFalse(service._acquire_leader_lock())
             self.assertIsNone(service._leader_lock)
+
+    def test_lock_filesystem_error_logs_once_and_stops_the_scheduler_thread(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            service = SchedulerService(Path(directory) / "schedule.jsonl")
+            lock_path = service.path.with_suffix(service.path.suffix + ".lock")
+            error = PermissionError(errno.EACCES, "denied", str(lock_path))
+            with (
+                patch("agent_core.scheduler.acquire_file_lock", side_effect=error) as acquire,
+                patch.object(service, "poll_once") as poll,
+                self.assertLogs("agent_core.scheduler", level="ERROR") as logs,
+            ):
+                thread = service.start(interval=0.01)
+                try:
+                    thread.join(2)
+                    self.assertFalse(thread.is_alive())
+                finally:
+                    service.close()
+                    thread.join(2)
+            acquire.assert_called_once()
+            poll.assert_not_called()
+            self.assertEqual(len(logs.records), 1)
+            self.assertIs(logs.records[0].exc_info[1], error)
+            self.assertIn(str(service.path), logs.records[0].getMessage())
+            self.assertEqual(logs.records[0].exc_info[1].filename, str(lock_path))
+            self.assertIsNone(service._leader_lock)
+
+    def test_poll_filesystem_error_releases_leadership_before_the_thread_exits(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            service = SchedulerService(Path(directory) / "schedule.jsonl")
+            with (
+                patch.object(service, "poll_once", side_effect=OSError(errno.EIO, "write failed")) as poll,
+                self.assertLogs("agent_core.scheduler", level="ERROR") as logs,
+            ):
+                thread = service.start(interval=0.01)
+                try:
+                    thread.join(2)
+                    self.assertFalse(thread.is_alive())
+                finally:
+                    service.close()
+                    thread.join(2)
+            poll.assert_called_once()
+            self.assertEqual(len(logs.records), 1)
+            self.assertIn(str(service.path), logs.output[0])
+            self.assertIsNone(service._leader_lock)
+            with acquire_file_lock(service.path.with_suffix(service.path.suffix + ".lock")):
+                pass
 
 
 if __name__ == "__main__":

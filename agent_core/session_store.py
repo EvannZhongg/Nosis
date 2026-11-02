@@ -10,6 +10,7 @@ from typing import BinaryIO, Callable, Iterable, Iterator, TextIO
 
 from .atomic import atomic_write_text
 from .content import text_content
+from .file_lock import acquire_file_lock
 from .permissions import PermissionPreset
 from .session import JournalEvent, JournalSink, Session, message_from_dict
 from .session_title import initial_session_title
@@ -472,13 +473,8 @@ class JsonlSessionStore:
     def _locked_session(self, session_id: str) -> Iterator[None]:
         _validate_session_id(session_id)
         lock_path = self._directory / ".locks" / f"{session_id}.lock"
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        with lock_path.open("a+b") as handle:
-            _lock_file(handle)
-            try:
-                yield
-            finally:
-                _unlock_file(handle)
+        with acquire_file_lock(lock_path, blocking=True):
+            yield
 
     def _find_session_directory(self, session_id: str) -> Path | None:
         if not self._group_by_workspace:
@@ -681,35 +677,6 @@ def _permission_preset(directory: Path) -> PermissionPreset:
         if value is not None
         else PermissionPreset.ASK_FOR_APPROVAL
     )
-
-
-def _lock_file(handle: BinaryIO) -> None:
-    if os.name == "nt":
-        import msvcrt
-
-        # Windows byte-range locks are mandatory, so another handle cannot even
-        # read the locked byte: size the file without reading it.
-        if os.fstat(handle.fileno()).st_size == 0:
-            handle.write(b"0")
-            handle.flush()
-        handle.seek(0)
-        msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
-        return
-    import fcntl
-
-    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-
-
-def _unlock_file(handle: BinaryIO) -> None:
-    if os.name == "nt":
-        import msvcrt
-
-        handle.seek(0)
-        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-        return
-    import fcntl
-
-    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
 def _write_session_metadata(

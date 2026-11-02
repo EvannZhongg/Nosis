@@ -7,6 +7,7 @@ is supplied by a callback that builds the normal Agent runtime.
 from __future__ import annotations
 
 import json
+import logging
 import threading
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta, timezone, tzinfo
@@ -17,6 +18,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .execution.authority import ExecutionScope
 from .file_lock import acquire_file_lock
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -564,6 +568,8 @@ class SchedulerService:
                     if self._leader_lock is not None or self._acquire_leader_lock():
                         self.poll_once()
                     self._stop.wait(interval)
+            except OSError:
+                logger.exception("Scheduler stopped due to a filesystem error for %s", self.path)
             finally:
                 self._release_leader_lock()
         thread = threading.Thread(target=loop, name="nosis-scheduler", daemon=True)
@@ -577,7 +583,7 @@ class SchedulerService:
         lock_path = self.path.with_suffix(self.path.suffix + ".lock")
         try:
             self._leader_lock = acquire_file_lock(lock_path)
-        except OSError:
+        except BlockingIOError:
             return False
         return True
 

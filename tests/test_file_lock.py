@@ -40,3 +40,19 @@ class FileLockTest(unittest.TestCase):
                     acquire_file_lock(path)
             self.assertEqual(failure.exception.errno, errno.EIO)
             self.assertTrue(handle.closed)
+
+    def test_blocking_failure_is_not_reported_as_nonblocking_contention(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "resource.lock"
+            handle = path.open("a+b")
+            self.addCleanup(handle.close)
+            error = PermissionError(errno.EACCES, "blocking lock failed")
+            native_lock = "msvcrt.locking" if os.name == "nt" else "fcntl.flock"
+            with (
+                patch.object(Path, "open", return_value=handle),
+                patch(native_lock, side_effect=error),
+            ):
+                with self.assertRaises(PermissionError) as failure:
+                    acquire_file_lock(path, blocking=True)
+            self.assertIs(failure.exception, error)
+            self.assertTrue(handle.closed)

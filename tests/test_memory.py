@@ -4,6 +4,7 @@ import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 
 from agent_core import (
     AgentCancelled,
@@ -66,6 +67,25 @@ class MemoryTest(unittest.TestCase):
                 workspace_max_tokens=3000,
             ),
         )
+
+    def test_independent_store_waits_for_the_memory_lock(self) -> None:
+        other = MemoryStore(self.store.global_path, self.store.sessions_directory)
+        attempted, finished = Event(), Event()
+        expected = self.store.load(self.workspace)
+
+        def load_memory():
+            attempted.set()
+            try:
+                return other.load(self.workspace)
+            finally:
+                finished.set()
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            with self.store._locked_files():
+                result = pool.submit(load_memory)
+                self.assertTrue(attempted.wait(2))
+                self.assertFalse(finished.wait(0.1))
+            self.assertEqual(result.result(timeout=5), expected)
 
     def test_remember_only_submits_a_candidate(self) -> None:
         provider = ReconcilerProvider([])

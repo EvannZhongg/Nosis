@@ -39,7 +39,7 @@ interfaces → agent_runtime → agent_core
 | `workspace.py` | `Workspace` 类型与路径包含校验 |
 | `path_utils.py` | 路径比较与包含判断 |
 | `atomic.py` | 文件原子写入 |
-| `file_lock.py` | 非阻塞独占文件锁机制；错误策略与持锁生命周期由调用方管理 |
+| `file_lock.py` | 阻塞与非阻塞独占文件锁机制；错误策略与持锁生命周期由调用方管理 |
 | `time_utils.py` | UTC 时间序列化 |
 
 ## 上下文与内容
@@ -197,7 +197,7 @@ Core 只定义扩展机制，不决定扩展从哪个目录加载：
 
 `JobManager` 管理可取消的后台任务和状态事件，供子 Agent 等长任务使用。Job 快照（原始详情、耗时、progress、错误与结果摘要）随 Journal 持久化，Turn 恢复后仍可由 `job_control` 查询；已恢复的中断 Job 不能再取消。
 
-`SchedulerService` 定义 one-shot、interval、cron trigger，以及任务、运行记录、错过执行的处理和 JSONL 持久化。它通过注入的 runner 发起 Agent Turn，但不负责组装应用 Runtime。
+`SchedulerService` 定义 one-shot、interval、cron trigger，以及任务、运行记录、错过执行的处理和 JSONL 持久化。它通过注入的 runner 发起 Agent Turn，但不负责组装应用 Runtime。领导权锁争用时继续轮询；其他文件系统错误会记录异常与调度数据路径，结束调度循环并释放领导权锁。
 
 相关模块为 `memory.py`、`jobs.py` 和 `scheduler.py`。
 
