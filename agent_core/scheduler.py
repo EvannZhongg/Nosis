@@ -7,16 +7,16 @@ is supplied by a callback that builds the normal Agent runtime.
 from __future__ import annotations
 
 import json
-import os
 import threading
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
-from typing import Callable, Literal, TypedDict
+from typing import BinaryIO, Callable, Literal, TypedDict
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .execution.authority import ExecutionScope
+from .file_lock import acquire_file_lock
 
 
 @dataclass(frozen=True)
@@ -344,7 +344,7 @@ class SchedulerService:
         self._running: set[str] = set()
         self._lock = threading.RLock()
         self._stop = threading.Event()
-        self._leader_lock = None
+        self._leader_lock: BinaryIO | None = None
         self._reload()
 
     @property
@@ -576,43 +576,15 @@ class SchedulerService:
     def _acquire_leader_lock(self) -> bool:
         lock_path = self.path.with_suffix(self.path.suffix + ".lock")
         try:
-            lock_path.parent.mkdir(parents=True, exist_ok=True)
-            handle = lock_path.open("a+b")
-            if handle.tell() == 0:
-                handle.write(b"\0")
-                handle.flush()
-            handle.seek(0)
-            if os.name == "nt":
-                import msvcrt
-
-                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self._leader_lock = acquire_file_lock(lock_path)
         except OSError:
-            if "handle" in locals():
-                handle.close()
             return False
-        self._leader_lock = handle
         return True
 
     def _release_leader_lock(self) -> None:
         handle = self._leader_lock
         self._leader_lock = None
-        if handle is None:
-            return
-        try:
-            handle.seek(0)
-            if os.name == "nt":
-                import msvcrt
-
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-        finally:
+        if handle is not None:
             handle.close()
 
 

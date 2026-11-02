@@ -35,8 +35,6 @@ def create_app(
     store: JsonlSessionStore,
     settings: SettingsStore,
     active_sessions: ActiveSessionRegistry,
-    *,
-    host: str = HOST,
 ) -> FastAPI:
     workspace_resolver = WorkspaceResolver(workspace, store)
 
@@ -48,7 +46,7 @@ def create_app(
 
     app.add_middleware(
         TrustedHostMiddleware,
-        allowed_hosts=[host, "localhost"],
+        allowed_hosts=[HOST, "localhost"],
     )
     app.include_router(create_settings_router(settings))
     app.include_router(create_schedules_router(settings, store))
@@ -60,7 +58,7 @@ def create_app(
             store,
             settings,
             active_sessions,
-            host=host,
+            host=HOST,
         )
     )
 

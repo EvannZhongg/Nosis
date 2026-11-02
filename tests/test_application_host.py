@@ -1,4 +1,5 @@
 import asyncio
+import builtins
 import os
 import signal
 import socket
@@ -66,8 +67,14 @@ class ApplicationHostCommandTest(unittest.TestCase):
                 patch.object(application_host, "initialize_config_directory") as initialize,
                 patch.object(application_host, "ApplicationHost") as host,
             ):
-                with self.assertRaisesRegex(RuntimeError, "already running"):
-                    application_host.run_application_host(root, root, http=False)
+                with self.assertRaises(SystemExit) as failure:
+                    application_host.main([
+                        "--workspace", str(root), "--config-directory", str(root), "--no-http",
+                    ])
+                self.assertEqual(
+                    str(failure.exception),
+                    f"Failed to start Nosis server: already running for config directory: {root.resolve()}",
+                )
                 initialize.assert_not_called()
                 host.assert_not_called()
 
@@ -215,6 +222,52 @@ class ApplicationHostLifecycleTest(unittest.IsolatedAsyncioTestCase):
     async def stop(self, task):
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+    async def test_missing_http_dependencies_log_install_commands_without_stopping_im(self):
+        original_import = builtins.__import__
+        for dependency in ("fastapi", "uvicorn", "starlette"):
+            with self.subTest(dependency=dependency):
+                failed = asyncio.Event()
+                missing = ModuleNotFoundError(f"No module named '{dependency}'", name=dependency)
+
+                def import_http(name, *args, **kwargs):
+                    if name == "interfaces.gui.server":
+                        raise missing
+                    return original_import(name, *args, **kwargs)
+
+                with (
+                    patch("builtins.__import__", side_effect=import_http),
+                    patch.object(application_host.log, "error", side_effect=lambda *args: failed.set()) as log,
+                ):
+                    task = asyncio.create_task(self.host.serve())
+                    try:
+                        await asyncio.wait_for(failed.wait(), 2)
+                        self.assertFalse(task.done())
+                        self.assertEqual(log.call_args.args[1], "HTTP")
+                        error = log.call_args.args[2]
+                        self.assertIsInstance(error, RuntimeError)
+                        self.assertIn("uv sync --extra server", str(error))
+                        self.assertIn('python -m pip install -e ".[server]"', str(error))
+                        self.assertIs(error.__cause__, missing)
+                    finally:
+                        await self.stop(task)
+
+    async def test_unrelated_http_import_errors_are_not_relabelled(self):
+        original_import = builtins.__import__
+        for error in (
+            ImportError("cannot import name 'serve_http'"),
+            ModuleNotFoundError("No module named 'interfaces.gui.missing'", name="interfaces.gui.missing"),
+        ):
+            with self.subTest(error=error):
+                def import_http(name, *args, **kwargs):
+                    if name == "interfaces.gui.server":
+                        raise error
+                    return original_import(name, *args, **kwargs)
+
+                with patch("builtins.__import__", side_effect=import_http):
+                    with self.assertRaises(type(error)) as failure:
+                        await self.host._serve_http()
+                self.assertIs(failure.exception, error)
 
     async def test_parallel_adapter_startup_and_shutdown_before_bridge(self):
         http_ready, mobile_starting = asyncio.Event(), asyncio.Event()

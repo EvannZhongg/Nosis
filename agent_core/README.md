@@ -39,6 +39,7 @@ interfaces → agent_runtime → agent_core
 | `workspace.py` | `Workspace` 类型与路径包含校验 |
 | `path_utils.py` | 路径比较与包含判断 |
 | `atomic.py` | 文件原子写入 |
+| `file_lock.py` | 非阻塞独占文件锁机制；错误策略与持锁生命周期由调用方管理 |
 | `time_utils.py` | UTC 时间序列化 |
 
 ## 上下文与内容

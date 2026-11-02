@@ -258,6 +258,26 @@ class SchedulerServiceTest(unittest.TestCase):
 
             self.assertEqual(len(first.runs), 1)
 
+    def test_leadership_can_transfer_after_the_owner_releases_its_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "schedule.jsonl"
+            first, second = SchedulerService(path), SchedulerService(path)
+            try:
+                self.assertTrue(first._acquire_leader_lock())
+                self.assertFalse(second._acquire_leader_lock())
+                first._release_leader_lock()
+                self.assertTrue(second._acquire_leader_lock())
+            finally:
+                first._release_leader_lock()
+                second._release_leader_lock()
+
+    def test_lock_filesystem_errors_leave_scheduler_without_leadership(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            service = SchedulerService(Path(directory) / "schedule.jsonl")
+            with patch("agent_core.scheduler.acquire_file_lock", side_effect=PermissionError("denied")):
+                self.assertFalse(service._acquire_leader_lock())
+            self.assertIsNone(service._leader_lock)
+
 
 if __name__ == "__main__":
     unittest.main()

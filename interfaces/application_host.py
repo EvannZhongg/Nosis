@@ -2,7 +2,6 @@
 
 import argparse
 import asyncio
-import errno
 import logging
 import os
 import signal
@@ -11,6 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from agent_core import JsonlSessionStore, Workspace
+from agent_core.file_lock import acquire_file_lock
 from agent_runtime.config import default_config_directory, initialize_config_directory
 from agent_runtime.settings import SettingsStore
 from interfaces.mobile.service import MobileService
@@ -22,30 +22,11 @@ log = logging.getLogger(__name__)
 
 @contextmanager
 def application_lock(directory: Path) -> Iterator[None]:
-    directory.mkdir(parents=True, exist_ok=True)
-    # Keep the file in place: unlinking a locked file would let a second
-    # process acquire a different inode while the first host is still alive.
-    with (directory / "server.lock").open("a+b") as handle:
-        if handle.tell() == 0:
-            handle.write(b"\0")
-            handle.flush()
-        handle.seek(0)
-        try:
-            if os.name == "nt":
-                import msvcrt
-
-                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError as error:
-            if error.errno not in {errno.EACCES, errno.EAGAIN}:
-                raise
-            raise RuntimeError(
-                f"Nosis server is already running for config directory: {directory}"
-            ) from error
-        # Closing the handle releases the OS lock, including on process exit.
+    try:
+        handle = acquire_file_lock(directory / "server.lock")
+    except BlockingIOError as error:
+        raise RuntimeError(f"already running for config directory: {directory}") from error
+    with handle:
         yield
 
 
@@ -72,7 +53,15 @@ class ApplicationHost:
             await mobile.close()
 
     async def _serve_http(self) -> None:
-        from interfaces.gui.server import serve_http
+        try:
+            from interfaces.gui.server import serve_http
+        except ModuleNotFoundError as error:
+            if error.name not in {"fastapi", "starlette", "uvicorn"}:
+                raise
+            raise RuntimeError(
+                f"Missing HTTP dependency '{error.name}'. "
+                'Install with `uv sync --extra server` or `python -m pip install -e ".[server]"`.'
+            ) from error
 
         await serve_http(
             self.workspace, self.store, self.settings, self.active_sessions,
