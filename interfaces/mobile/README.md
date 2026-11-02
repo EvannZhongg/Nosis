@@ -16,7 +16,7 @@ TUI ─ @nosis/client ─ Bridge ─ agent_runtime ─ agent_core
 ```powershell
 npm install
 npm run build --workspace @nosis/mobile
-uv sync --extra gui
+uv sync
 ```
 
 首次初始化会从 `agent_runtime/defaults/im_channels.json` 安装禁用状态的飞书模板，不覆盖已有配置。在 `~/.nosis/im_channels.json` 中配置：
@@ -38,9 +38,9 @@ uv sync --extra gui
 
 密钥可以直接填写，也可用 `${ENV_NAME}` 引用进程环境变量或同目录 `.env`（`.env` 优先，值不做二次插值）。`allowed_users` 使用当前应用下的 `open_id`，空数组拒绝所有用户；被拒用户的 open_id 会写入本地日志，便于补配置。当前只接收人工用户与机器人的单聊文本，不开放群聊或自动授权。
 
-`nosis-gui` 与 `python -m interfaces.mobile`（或已安装的 `nosis-mobile`）是同一常驻应用宿主的两个入口：先启动者拥有宿主并管理其生命周期，另一个识别并复用 `127.0.0.1:8737` 上的已有宿主后返回。GUI 与飞书因此共享同一份活动 Session 注册表、Bridge 和飞书连接。宿主、端口与复用规则见 [`interfaces/README.md`](../README.md)。
+配置完成后运行 `nosis-server --no-http`，只启动共享 Session Host、Bridge 与 IM，不需要 FastAPI、Uvicorn 或任何本地 HTTP 端口。需要同时使用 GUI 时安装 `uv sync --extra server` 并运行 `nosis-server`。两种模式使用同一个配置目录级进程锁，重复启动会明确报错。宿主与单实例规则见 [`interfaces/README.md`](../README.md)。
 
-通道由 `interfaces/application_host.py` 装配并管理生命周期，GUI 不依赖移动端实现。IM 配置错误或收发进程启动失败时，宿主记录错误并释放移动端资源，GUI 仍可使用，修正后需重启宿主；未配置任何通道时不启动 IM 进程。构建产物随 wheel 的 `interfaces.mobile/dist/feishu.cjs` 分发。
+通道由 `interfaces/application_host.py` 装配并管理生命周期，与 HTTP 并列启动，IM 连接不等待 HTTP 就绪。HTTP 端口占用或依赖缺失不关闭 IM；IM 配置错误或收发进程启动失败时释放移动端资源，HTTP 仍可使用。无 HTTP 模式下 IM 启动失败会报错退出，修正后需重启宿主。未配置任何通道时不启动 IM 进程，共享 Bridge 与 Scheduler 仍保持运行。构建产物随 wheel 的 `interfaces.mobile/dist/feishu.cjs` 分发。
 
 收发进程由 Transport 监督：意外退出时先结束旧连接上的请求与入站处理，再按 1–30 秒退避重建连接并恢复已持久化的入站消息；关闭宿主会停止监督和各对话任务。入站按聊天与用户分队列，不同对话并发，同一对话的消息和按钮保持到达顺序。
 

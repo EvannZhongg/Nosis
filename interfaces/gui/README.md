@@ -1,33 +1,33 @@
 # GUI
 
-`interfaces/gui` 是 Nosis 的图形交互层，由 FastAPI 服务和 React + assistant-ui 前端组成。FastAPI 管理浏览器连接、文件与设置 API，并托管一个常驻 Bridge 进程，每个活动 Session 使用独立 Runtime 通道；浏览器不直接运行 Agent 或 Tool。
+`interfaces/gui` 是 Nosis 的图形交互层，由 HTTP / WebSocket 适配器和 React + assistant-ui 前端组成。FastAPI 管理浏览器连接、文件与设置 API；常驻 Bridge 由独立于 FastAPI 生命周期的应用宿主管理，每个活动 Session 使用独立 Runtime 通道。浏览器不直接运行 Agent 或 Tool。
 
-`nosis-gui` 与 `nosis-mobile` 通过 `interfaces/application_host.py` 启动或复用同一个本机应用宿主，GUI 与飞书同时可用，共享活动 Session 和 Bridge。首次启动的进程持有宿主；另一个启动入口输出已有地址后返回。`/api/host` 提供宿主身份发现，不包含密钥。
+`nosis-server` 通过 `interfaces/application_host.py` 管理同一宿主内并列运行的 HTTP 与 IM 适配器，两者共享活动 Session 和 Bridge。单实例由配置目录级进程锁保护，重复启动明确报错，不通过 HTTP 识别已有实例。
 
-GUI 依赖是可选依赖。使用项目环境启动前先安装 GUI extra：
+HTTP 依赖是可选依赖。使用项目环境启动前先安装 server extra：
 
 ```bash
-uv sync --extra gui
-# 或：python -m pip install -e ".[gui]"
+uv sync --extra server
+# 或：python -m pip install -e ".[server]"
 ```
 
-其中包含 Uvicorn 的 WebSocket 后端，Windows 上还包含用于通过 Explorer 打开 Workspace 文件夹的 `pywin32`；三个平台使用相同命令。若缺少 WebSocket 后端，`nosis-gui` 会在启动时直接提示安装命令。
+其中包含 Uvicorn 的 WebSocket 后端，Windows 上还包含用于通过 Explorer 打开 Workspace 文件夹的 `pywin32`；三个平台使用相同命令。若缺少 WebSocket 后端，HTTP 适配器会提示安装命令，IM 继续运行。
 
 ## 启动
 
 ```bash
-nosis-gui
-nosis-gui --workspace ~/projects/my-project
+nosis-server
+nosis-server --workspace ~/projects/my-project
 ```
 
-默认监听 <http://127.0.0.1:8737>。`interfaces/application_host.py` 初始化 `~/.nosis/`、默认 Workspace、Session Store 和 Settings Store，然后创建 FastAPI 应用。
+默认监听 <http://127.0.0.1:8737>。`interfaces/application_host.py` 初始化 `~/.nosis/`、默认 Workspace、Session Store 和 Settings Store，然后并行启动 HTTP 与 IM 适配器。`--no-http` 不启动此适配器，也不加载 HTTP 依赖。
 
 ## 服务端
 
-`interfaces/application_host.py` 管理共享 Session Host 与 IM 的生命周期，并向 `server.py` 注入活动 Session 注册表；`server.py` 组装 GUI 应用和路由。服务端职责包括：
+`interfaces/application_host.py` 管理共享 Session Host、HTTP 与 IM 的生命周期，并向 `server.py` 注入活动 Session 注册表；`server.py` 组装 GUI 应用和路由，管理 HTTP 监听与 Uvicorn 的启停。HTTP 适配器职责包括：
 
 - 列出、读取和删除按 Workspace 分组的 Session
-- 在应用启动时创建常驻 Bridge，并为活动 Session 创建、复用和关闭通道
+- 通过共享 Session Host 为活动 Session 创建、复用和关闭通道
 - 通过 WebSocket 双向转发共享协议
 - 管理单 Session 的页面附着、事件续传和显式 takeover
 - 选择普通 Workspace，创建与回收 scratch Workspace
@@ -53,7 +53,8 @@ HTTP / WebSocket 路由按模块拆分：
 
 | 模块 | 职责 |
 | --- | --- |
-| `../application_host.py` | 共享宿主启动与复用、GUI / IM 装配与生命周期 |
+| `../application_host.py` | 配置目录级进程锁、共享 Session Host、HTTP / IM 装配与生命周期 |
+| `server.py` | FastAPI 应用与路由组装、HTTP 监听与 Uvicorn 生命周期 |
 | `../session_host.py` | GUI 与移动端共享的活动 Session 注册表、控制附着与事件续传 |
 | `windows_folders.py` | 通过 Windows Explorer 定位并打开 Workspace 文件夹 |
 
@@ -65,7 +66,7 @@ HTTP / WebSocket 路由按模块拆分：
 
 React 应用提供可折叠的 Session 列表、对话区和 Workspace 文件树。多个 Session 会稳定挂载，因此可以并行执行并在页面内切换。编辑历史用户消息不会改写原会话：GUI 以该消息为锚点创建分支 Session，先在源会话中预览待提交的内容，创建成功后再切换过去。
 
-切换到其他会话时，只断开空闲会话的 WebSocket，保留其 Bridge、Provider 和 MCP；返回后附着已有 Runtime。离开浏览器页面时释放该页面持有的空闲会话，删除会话和关闭 GUI 宿主也会释放资源。关闭会话通道不会结束常驻 Bridge；新会话复用已加载的 SDK、tokenizer 和 TLS 上下文，仍有独立执行面。GUI 宿主退出时才关闭进程及全部通道。
+切换到其他会话时，只断开空闲会话的 WebSocket，保留其 Bridge、Provider 和 MCP；返回后附着已有 Runtime。离开浏览器页面时释放该页面持有的空闲会话，删除会话和关闭应用宿主也会释放资源。关闭会话通道不会结束常驻 Bridge；新会话复用已加载的 SDK、tokenizer 和 TLS 上下文，仍有独立执行面。应用宿主退出时才关闭进程及全部通道。
 
 对话层由 `useSessionRuntime` 统一管理：
 
@@ -120,7 +121,7 @@ Context Window 指示器展开后显示当前输入、缓存命中率、可用�
 先启动 Python 服务，再运行 Vite：
 
 ```bash
-nosis-gui
+nosis-server
 npm run dev --workspace interfaces/gui
 ```
 

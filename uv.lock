@@ -1587,11 +1587,12 @@ dependencies = [
     { name = "pyperclip" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
+    { name = "tiktoken" },
     { name = "tzdata" },
 ]
 
 [package.optional-dependencies]
-gui = [
+server = [
     { name = "fastapi" },
     { name = "python-multipart" },
     { name = "pywin32", marker = "sys_platform == 'win32'" },
@@ -1608,7 +1609,7 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "ddgs", specifier = ">=9.5.5,<10.0.0" },
-    { name = "fastapi", marker = "extra == 'gui'", specifier = ">=0.115" },
+    { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "httpx2", specifier = ">=2.5" },
     { name = "litellm", specifier = ">=1.105" },
@@ -1622,15 +1623,16 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'test'", specifier = ">=8" },
     { name = "pytest-xdist", marker = "extra == 'test'", specifier = ">=3" },
     { name = "python-dotenv", specifier = ">=1.0" },
-    { name = "python-multipart", marker = "extra == 'gui'", specifier = ">=0.0.9" },
-    { name = "pywin32", marker = "sys_platform == 'win32' and extra == 'gui'", specifier = ">=306" },
+    { name = "python-multipart", marker = "extra == 'server'", specifier = ">=0.0.9" },
+    { name = "pywin32", marker = "sys_platform == 'win32' and extra == 'server'", specifier = ">=306" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "setuptools", marker = "extra == 'test'", specifier = ">=68" },
+    { name = "tiktoken", specifier = ">=0.14.0" },
     { name = "tzdata", specifier = ">=2022.1" },
-    { name = "uvicorn", marker = "extra == 'gui'", specifier = ">=0.30" },
-    { name = "websockets", marker = "extra == 'gui'", specifier = ">=13" },
+    { name = "uvicorn", marker = "extra == 'server'", specifier = ">=0.30" },
+    { name = "websockets", marker = "extra == 'server'", specifier = ">=13" },
 ]
-provides-extras = ["gui", "test"]
+provides-extras = ["server", "test"]
 
 [[package]]
 name = "openai"

@@ -7,9 +7,11 @@
 Nosis 是一个开源的轻量级个人 Agent 应用。它提供本地 Workspace 操作、人工授权、会话持久化、上下文管理、长期记忆、计划、子 Agent、定时任务，以及 Skill、Plugin、MCP 扩展能力，并提供 TUI、GUI 和飞书移动端接入。
 
 ```text
-TUI ────────────┐
-GUI ── FastAPI ─┼── Bridge ── agent_runtime ── agent_core
-IM (Feishu) ────┘
+TUI ────────────────── Bridge ── agent_runtime ── agent_core
+nosis-server（常驻宿主）
+├─ HTTP / WebSocket（可选）── GUI
+├─ IM（飞书）
+└─ Session Host ── Bridge ── agent_runtime ── agent_core
 ```
 
 - `agent_core` 提供与前端无关的 Agent 机制。
@@ -38,13 +40,13 @@ git clone https://github.com/EvannZhongg/Nosis.git
 cd Nosis
 npm install
 npm run build
-uv tool install --editable ".[gui]"
+uv tool install --editable ".[server]"
 ```
 
-如果使用 `uv sync` 创建项目环境，请同时安装 GUI extra，否则 Uvicorn 无法提供 Session WebSocket：
+需要通过项目环境使用 GUI 的 HTTP / WebSocket 接入时，安装 server extra：
 
 ```bash
-uv sync --extra gui
+uv sync --extra server
 ```
 
 先在当前目录启动一次 TUI：
@@ -65,15 +67,15 @@ OPENAI_KEY=your-api-key
 nosis
 ```
 
-或启动 GUI：
+或启动 GUI / IM 共享服务：
 
 ```bash
-nosis-gui
+nosis-server
 ```
 
 GUI 默认监听 <http://127.0.0.1:8737>。
 
-飞书移动端支持工作区与会话选择、普通文本流式对话、提问和审批卡片；配置与启动见 [移动端接入](interfaces/mobile/README.md)。`nosis-gui` 与 `nosis-mobile` 启动或复用同一常驻宿主，GUI 与飞书同时可用。
+飞书移动端支持工作区与会话选择、普通文本流式对话、提问和审批卡片；配置与启动见 [移动端接入](interfaces/mobile/README.md)。`nosis-server` 统一管理并列运行的 HTTP 与 IM 适配器，共享活动 Session 和 Bridge。`nosis-server --no-http` 不加载 HTTP 依赖，也不监听本地端口。同一配置目录通过进程锁保证单实例，重复启动会明确报错。
 
 ## 模块文档
 
@@ -146,7 +148,7 @@ python -m pytest --durations=20
 
 Pytest 默认用 4 个独立进程按测试类并行运行；串行调试使用 `-n 0`，资源较少时使用 `-n 2`。完整测试包含安装包验证及真实本地 MCP/沙箱进程；日常迭代可用 `--ignore=tests/test_bridge_client.py` 跳过安装包验证。独立插件测试包的运行方式见 [docs/plugin-interop.md](docs/plugin-interop.md)。
 
-GUI extra 包含 FastAPI、Uvicorn、WebSocket 后端和 multipart 支持；Windows、macOS 与 Linux 使用相同的安装方式。
+server extra 包含 FastAPI、Uvicorn、WebSocket 后端和 multipart 支持；Windows、macOS 与 Linux 使用相同的安装方式。TUI 与 `nosis-server --no-http` 无需安装该可选依赖。
 
 前端构建、类型检查和测试：
 

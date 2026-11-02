@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from threading import Event, Lock
@@ -32,12 +33,11 @@ try:
 
     from interfaces.bridge import protocol as bridge_protocol
     from interfaces.bridge.event_stream import EventStream
-    from interfaces.gui import __main__ as gui_main
-    from interfaces import application_host
+    from interfaces.gui import server as gui_server
     from interfaces import session_host
     from interfaces import bridge_process
     from interfaces.gui.routes import media
-except ModuleNotFoundError:  # pragma: no cover - exercised without [gui]
+except ModuleNotFoundError:  # pragma: no cover - exercised without [server]
     TestClient = None
 
 
@@ -144,7 +144,7 @@ class FakeBridgeProcess:
             await channel.close()
 
 
-@unittest.skipIf(TestClient is None, "Install the gui extra to test the GUI")
+@unittest.skipIf(TestClient is None, "Install the server extra to test the GUI")
 class ActiveSessionTest(unittest.IsolatedAsyncioTestCase):
     async def test_cancelled_release_keeps_same_session_waiting_without_blocking_other_sessions(self):
         entered, release = asyncio.Event(), asyncio.Event()
@@ -346,7 +346,7 @@ class ActiveSessionTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(runtime.attachable)
 
 
-@unittest.skipIf(TestClient is None, "Install the gui extra to test the GUI")
+@unittest.skipIf(TestClient is None, "Install the server extra to test the GUI")
 class RuntimeSnapshotTest(unittest.IsolatedAsyncioTestCase):
     async def test_runtime_state_replaces_warnings_including_with_an_empty_list(self) -> None:
         bridge = FakeBridge()
@@ -384,14 +384,17 @@ class RuntimeSnapshotTest(unittest.IsolatedAsyncioTestCase):
         await _wait_for_async(lambda: runtime.event_sequence == 2)
         self.assertEqual(runtime.state["runtime_warnings"], [])
 
-@unittest.skipIf(TestClient is None, "Install the gui extra to test the GUI")
+@unittest.skipIf(TestClient is None, "Install the server extra to test the GUI")
 class SessionSearchCancellationTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         root = Path(directory.name)
         self.store = JsonlSessionStore(root / "sessions")
-        self.app = application_host.create_app(Workspace(root), self.store, SettingsStore(root / "config"))
+        workspace = Workspace(root)
+        settings = SettingsStore(root / "config")
+        registry = session_host.ActiveSessionRegistry(self.store, workspace, settings.directory)
+        self.app = gui_server.create_app(workspace, self.store, settings, registry)
         self.requests = []
         self.releases = []
 
@@ -579,7 +582,7 @@ class SessionSearchCancellationTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(sent[0]["status"], 500)
 
 
-@unittest.skipIf(TestClient is None, "Install the gui extra to test the GUI")
+@unittest.skipIf(TestClient is None, "Install the server extra to test the GUI")
 class GuiTest(unittest.TestCase):
     def test_occupied_session_reports_failure_then_allows_selection_or_retry(self) -> None:
         for selected in ("occupied", "another"):
@@ -688,12 +691,12 @@ class GuiTest(unittest.TestCase):
         (self.config / "skills").mkdir()
         (self.config / "plugins").mkdir()
 
-    def client(self, bridge: FakeBridge | None = None) -> TestClient:
-        app = application_host.create_app(
-            Workspace(self.root),
-            self.store,
-            SettingsStore(self.config),
-        )
+    @contextmanager
+    def client(self, bridge: FakeBridge | None = None):
+        workspace = Workspace(self.root)
+        settings = SettingsStore(self.config)
+        registry = session_host.ActiveSessionRegistry(self.store, workspace, settings.directory)
+        app = gui_server.create_app(workspace, self.store, settings, registry)
         client = TestClient(
             app,
             base_url="http://127.0.0.1",
@@ -707,7 +710,12 @@ class GuiTest(unittest.TestCase):
             patcher = patch.object(process, "open_channel", side_effect=lambda channel_id: process.track(bridge))
             patcher.start()
             self.addCleanup(patcher.stop)
-        return client
+        with client:
+            client.portal.call(registry.start)
+            try:
+                yield client
+            finally:
+                client.portal.call(registry.close_all)
 
     def test_server_builds_open_session_from_browser_session_choices(self) -> None:
         bridge = FakeBridge(replies={
@@ -2678,43 +2686,6 @@ class GuiTest(unittest.TestCase):
                 ).status_code,
                 400,
             )
-
-
-@unittest.skipIf(TestClient is None, "Install the gui extra to test the GUI")
-class GuiStartupTest(unittest.TestCase):
-    def test_reports_missing_websocket_backend(self) -> None:
-        with patch.object(application_host.importlib, "import_module", side_effect=ModuleNotFoundError):
-            with self.assertRaisesRegex(RuntimeError, "uv sync --extra gui"):
-                application_host.require_websocket_backend()
-
-    def test_initializes_shared_default_configuration(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            config_directory = root / "nosis"
-            with (
-                patch.object(
-                    application_host,
-                    "default_config_directory",
-                    return_value=config_directory,
-                ),
-                patch("uvicorn.Server") as serve,
-                patch.object(application_host, "PORT", 0),
-                patch("builtins.print"),
-            ):
-                gui_main.main(["--workspace", str(root)])
-
-            self.assertTrue(
-                (config_directory / "provider_config.json").is_file()
-            )
-            self.assertTrue((config_directory / "agent_config.json").is_file())
-            with TestClient(
-                serve.call_args.args[0].app,
-                base_url="http://127.0.0.1",
-            ) as client:
-                self.assertEqual(
-                    client.get("/api/models").json()["default"],
-                    "openai",
-                )
 
 
 async def _wait_for_async(condition, timeout: float = 2.0) -> None:

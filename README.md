@@ -7,9 +7,11 @@
 Nosis is an open-source, lightweight personal agent application. It provides local workspace operations, human approval, session persistence, context management, long-term memory, plans, subagents, scheduled tasks, and Skill / Plugin / MCP extensibility — with a TUI, a GUI, and Feishu messaging access.
 
 ```text
-TUI ────────────┐
-GUI ── FastAPI ─┼── Bridge ── agent_runtime ── agent_core
-IM (Feishu) ────┘
+TUI ───────────────────────── Bridge ── agent_runtime ── agent_core
+nosis-server
+├─ HTTP / WebSocket (optional) ── GUI
+├─ IM (Feishu)
+└─ Session Host ── Bridge ── agent_runtime ── agent_core
 ```
 
 - `agent_core` provides frontend-agnostic agent mechanisms.
@@ -38,13 +40,13 @@ git clone https://github.com/EvannZhongg/Nosis.git
 cd Nosis
 npm install
 npm run build
-uv tool install --editable ".[gui]"
+uv tool install --editable ".[server]"
 ```
 
-If you create the project environment with `uv sync`, install the GUI extra as well, otherwise Uvicorn cannot serve the session WebSocket:
+To enable HTTP / WebSocket access in the project environment, install the server extra:
 
 ```bash
-uv sync --extra gui
+uv sync --extra server
 ```
 
 Start the TUI once in the current directory:
@@ -65,15 +67,15 @@ Then restart the TUI:
 nosis
 ```
 
-Or start the GUI:
+Or start the shared GUI / IM server:
 
 ```bash
-nosis-gui
+nosis-server
 ```
 
 The GUI listens on <http://127.0.0.1:8737> by default.
 
-Feishu messaging access is configured in `~/.nosis/im_channels.json`; see [Mobile / IM setup](interfaces/mobile/README.md). Run `nosis-mobile` or `nosis-gui` to start or reuse the same resident application host. The GUI and Feishu share active sessions and one Bridge process.
+Feishu messaging access is configured in `~/.nosis/im_channels.json`; see [Mobile / IM setup](interfaces/mobile/README.md). `nosis-server` runs HTTP and IM adapters alongside a shared Session Host and Bridge. Use `nosis-server --no-http` to run without HTTP dependencies or a local listening port. A configuration-directory process lock prevents duplicate servers; a second launch reports that the server is already running.
 
 ## Module documentation
 
@@ -146,7 +148,7 @@ On Windows, activate the environment with `.venv\Scripts\Activate.ps1`.
 
 Pytest distributes test classes across four isolated worker processes. Use `-n 0` for a serial run or `-n 2` on smaller machines. The full suite includes package installation and real local MCP/sandbox processes; `--ignore=tests/test_bridge_client.py` omits the package installation check during iteration. The standalone plugin testkit has its own command in [docs/plugin-interop.md](docs/plugin-interop.md).
 
-The GUI extra includes FastAPI, Uvicorn, the WebSocket backend, and multipart support; Windows, macOS, and Linux use the same installation.
+The server extra includes FastAPI, Uvicorn, the WebSocket backend, and multipart support; Windows, macOS, and Linux use the same installation. The TUI and `nosis-server --no-http` do not require this extra.
 
 Frontend build, type checking, and tests:
 

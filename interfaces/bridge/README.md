@@ -20,7 +20,7 @@ Bridge，无需了解内部模块路径。入口在保留协议 stdout 后调用
 
 `__main__.py` 在 import Provider 相关模块前保留专用 stdout 协议通道，并把普通 `print()` 和第三方库输出重定向到 stderr，防止日志破坏 JSON 消息流。它也统一处理 UTF-8 stdin、启动期中断和无法进入协议循环时的 `fatal` 错误。
 
-TUI 和 GUI 宿主各自管理一个常驻 Bridge 进程。宿主通过协议关闭通道或整个进程，强制退出时终止进程树。
+TUI 与 `nosis-server` 各自管理一个常驻 Bridge 进程；后者由 HTTP 和 IM 适配器共享。宿主通过协议关闭通道或整个进程，强制退出时终止进程树。
 
 ## 连接与路由
 
@@ -29,7 +29,7 @@ TUI 和 GUI 宿主各自管理一个常驻 Bridge 进程。宿主通过协议关
 1. `session_ready`：Session、Workspace、Provider 和权限已恢复。
 2. `runtime_state`：当前执行面的权威快照，也是前端发送后续命令前的同步屏障。
 
-Journal 写入权被占用、工作区或配置无效、文件系统错误导致打开失败时，Bridge 返回 `session_open_failed`，保持协议连接并允许 `list_workspaces` 或重新发送 `open_session`；存在工作区浏览上下文时也允许 `list_sessions`。前端在收到 `session_ready` 前不得请求历史记录；在初始 `runtime_state` 前不得提交执行命令。同一 GUI 宿主内打开已有会话会附着原 Bridge，模型或工作区变更通过显式协议消息执行，不另建 Session 写者。
+Journal 写入权被占用、工作区或配置无效、文件系统错误导致打开失败时，Bridge 返回 `session_open_failed`，保持协议连接并允许 `list_workspaces` 或重新发送 `open_session`；存在工作区浏览上下文时也允许 `list_sessions`。前端在收到 `session_ready` 前不得请求历史记录；在初始 `runtime_state` 前不得提交执行命令。同一应用宿主内打开已有会话会附着原 Bridge，模型或工作区变更通过显式协议消息执行，不另建 Session 写者。
 
 Provider、MCP、Tool 和 Agent 仍由 Runtime 在首个 `user_turn` 到来时延迟初始化。
 
