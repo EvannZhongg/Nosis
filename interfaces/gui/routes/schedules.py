@@ -31,7 +31,7 @@ def create_schedules_router(
                 "prompt": item.action.prompt,
                 "trigger": trigger_to_dict(item.trigger),
                 "workspace": item.workspace,
-                "permission_preset": store.load(item.schedule_session_id, recover=False).permission_preset.value,
+                "permission_preset": store.permission_preset_for(item.schedule_session_id).value,
                 "origin_session_id": item.origin_session_id,
                 "schedule_session_id": item.schedule_session_id,
                 "session_available": store.has_journal(item.schedule_session_id),
@@ -79,7 +79,7 @@ def create_schedules_router(
                 "schedule_id": item.schedule_id,
                 "schedule_session_id": item.schedule_session_id,
                 "trigger": trigger_to_dict(item.trigger),
-                "permission_preset": store.load(item.schedule_session_id, recover=False).permission_preset.value,
+                "permission_preset": store.permission_preset_for(item.schedule_session_id).value,
                 "enabled": item.enabled,
                 "end_at": item.end_at.isoformat() if item.end_at else None,
                 "next_run_at": (

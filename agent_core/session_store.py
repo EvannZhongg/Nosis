@@ -341,6 +341,14 @@ class JsonlSessionStore:
             return None
         return workspace_from_key(current.parent.name)
 
+    def permission_preset_for(self, session_id: str) -> PermissionPreset:
+        """Read the current permission projection without opening the journal."""
+        with self._locked_session(session_id):
+            directory = self._find_session_directory(session_id)
+            if directory is None:
+                return PermissionPreset.ASK_FOR_APPROVAL
+            return _permission_preset(directory)
+
     def set_permission_preset(
         self,
         session_id: str,
@@ -699,6 +707,9 @@ def _update_session_metadata(
     metadata = _session_metadata(directory)
     changed = False
     for event in events:
+        if event.event_type == "permission_preset_changed":
+            metadata["permission_preset"] = PermissionPreset(str(event.payload["preset"])).value
+            changed = True
         if not metadata["has_activity"] and event.event_type not in {
             "permission_preset_changed", "plan_updated",
         }:

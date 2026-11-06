@@ -3,7 +3,7 @@
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Iterator
-from agent_core import JsonlSessionStore, Session, Workspace, PlanManager, PermissionController, PermissionPreset, CompositeToolPolicy
+from agent_core import JsonlSessionStore, Session, Workspace, PlanManager, PermissionController, CompositeToolPolicy
 from .config import load_model_options
 from .settings import EnvironmentReloader
 from .callbacks import RuntimeCallbacks
@@ -97,16 +97,6 @@ class SessionRuntimeController:
         self.permissions = PermissionController(
             self.session,
             self.approval_policy,
-            self._persist_permission_preset,
-        )
-
-    def _persist_permission_preset(self, preset: PermissionPreset) -> None:
-        if self.store is None or self.session is None or self.workspace is None:
-            raise RuntimeError("session is not initialized")
-        self.store.set_permission_preset(
-            self.session.session_id,
-            preset,
-            self.workspace.path,
         )
 
     @contextmanager
@@ -116,9 +106,6 @@ class SessionRuntimeController:
         if session_id == self.session.session_id:
             yield self.permissions
             return
-        workspace = self.store.workspace_for(session_id)
-        if workspace is None:
-            raise ValueError("session has no workspace")
         with self.store.open_journal(session_id) as sink:
             session = self.store.load(session_id, recover=False)
             session.attach_journal_sink(sink)
@@ -126,7 +113,6 @@ class SessionRuntimeController:
                 yield PermissionController(
                     session,
                     self.approval_policy,
-                    lambda value: self.store.set_permission_preset(session_id, value, workspace),
                 )
             finally:
                 session.attach_journal_sink(None)

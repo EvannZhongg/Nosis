@@ -128,7 +128,7 @@ Shell 通过 `ExecutionRouter` 根据 `ExecutionScope` 和当前 `ExecutionAutho
 | `Workspace Access` | `workspace` | 仅 `host` 请求确认 |
 | `Full Access` | `host` | 不请求确认 |
 
-显式传入的 scope 始终生效，但仍受 Runtime 提供的 authority 上限约束。`apply_patch`、`edit_file`、`write_file` 解析为 Workspace scope，因此同样按 preset 决定是否确认：`Ask for approval` 请求确认，`Workspace Access` 与 `Full Access` 直接执行。文件 Tool 在任何 preset 下都限制在 Workspace 内，不使用宿主执行器。
+显式传入的 scope 始终生效，但仍受 Session 权限 preset 的授权范围约束。`apply_patch`、`edit_file`、`write_file` 解析为 Workspace scope，因此同样按 preset 决定是否确认：`Ask for approval` 请求确认，`Workspace Access` 与 `Full Access` 直接执行。文件 Tool 在任何 preset 下都限制在 Workspace 内，不使用宿主执行器。
 
 `approval.py` 生成审批提示与审批历史的有界摘要：路径、字节与行数、每个文本字段的前 3 行预览，整体不超过 2048 字符，patch 最多列出 8 个文件操作并说明省略数量。完整参数保留在原始 Tool Call 中，不重复写入用户交互记录。
 

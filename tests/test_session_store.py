@@ -687,6 +687,40 @@ class JsonlSessionStoreTest(unittest.TestCase):
             )
             self.assertEqual(store.list_sessions(), [])
 
+    def test_permission_metadata_reads_defaults_and_initial_preset_without_a_journal(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            store = JsonlSessionStore(workspace / "sessions")
+            with patch.object(session_store_module, "_read_journal_records", side_effect=AssertionError("must not read journal")):
+                self.assertEqual(store.permission_preset_for("missing"), PermissionPreset.ASK_FOR_APPROVAL)
+                store.bind_workspace("session-1", workspace)
+                self.assertEqual(store.permission_preset_for("session-1"), PermissionPreset.ASK_FOR_APPROVAL)
+                store.set_permission_preset("session-1", PermissionPreset.FULL_ACCESS, workspace)
+                self.assertEqual(store.permission_preset_for("session-1"), PermissionPreset.FULL_ACCESS)
+            self.assertFalse(store.has_journal("session-1"))
+
+    def test_permission_metadata_tracks_appended_and_live_journal_events(self) -> None:
+        for grouped in (True, False):
+            with self.subTest(grouped=grouped), tempfile.TemporaryDirectory() as directory:
+                workspace = Path(directory)
+                store = JsonlSessionStore(workspace / "sessions", group_by_workspace=grouped)
+                reader = JsonlSessionStore(store.directory, group_by_workspace=grouped)
+                session = Session("session-1")
+                session.set_permission_preset(PermissionPreset.FULL_ACCESS)
+                session.set_permission_preset(PermissionPreset.WORKSPACE_ACCESS)
+                store.append_events(session.session_id, session.journal, workspace=workspace)
+                self.assertEqual(reader.permission_preset_for(session.session_id), PermissionPreset.WORKSPACE_ACCESS)
+                with store.open_journal(session.session_id, workspace) as sink:
+                    session.attach_journal_sink(sink)
+                    try:
+                        for preset in (PermissionPreset.FULL_ACCESS, PermissionPreset.ASK_FOR_APPROVAL):
+                            session.set_permission_preset(preset)
+                            with patch.object(session_store_module, "_read_journal_records", side_effect=AssertionError("must not read journal")):
+                                self.assertEqual(reader.permission_preset_for(session.session_id), preset)
+                            self.assertEqual(reader.load(session.session_id).permission_preset, preset)
+                    finally:
+                        session.attach_journal_sink(None)
+
     def test_stores_permission_preset_in_session_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)

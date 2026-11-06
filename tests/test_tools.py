@@ -231,6 +231,27 @@ class ToolCatalogTest(unittest.TestCase):
 
 
 class ScheduledTaskToolTest(unittest.TestCase):
+    def test_list_and_update_read_permissions_without_loading_sessions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            scheduler = SchedulerService(root / "schedule.jsonl")
+            context = scheduled_context_for(
+                Workspace(root), session=Session("origin", permission_preset=PermissionPreset.FULL_ACCESS),
+                sessions_directory=root / "sessions", scheduler=scheduler,
+            )
+            created = execute_scheduled({
+                "action": "create",
+                "schedule": {"prompt": "scheduled work", "trigger": {"type": "interval", "seconds": 60}},
+            }, context)
+            with patch.object(JsonlSessionStore, "load", side_effect=AssertionError("must not load Session")):
+                listed = execute_scheduled({"action": "list"}, context)
+                updated = execute_scheduled({
+                    "action": "update", "schedule_id": created["schedule_id"], "changes": {"enabled": False},
+                }, context)
+            self.assertEqual(listed[0]["permission_preset"], "full_access")
+            self.assertEqual(updated["permission_preset"], "full_access")
+            self.assertFalse(updated["enabled"])
+
     def test_catalog_requires_scheduler_and_execution_router(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

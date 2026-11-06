@@ -2193,7 +2193,7 @@ class GuiTest(unittest.TestCase):
             workspace=self.root,
         )
 
-        with self.client() as client:
+        with self.client() as client, patch.object(JsonlSessionStore, "load", side_effect=AssertionError("schedule listing must not load Session")):
             item = client.get("/api/schedules").json()[0]
 
         self.assertEqual(item["schedule_id"], schedule.schedule_id)
@@ -2217,7 +2217,9 @@ class GuiTest(unittest.TestCase):
             schedule_session_id="scheduled-session",
         )
 
-        with self.client() as client:
+        self.store.bind_workspace(schedule.schedule_session_id, self.root)
+        self.store.set_permission_preset(schedule.schedule_session_id, PermissionPreset.FULL_ACCESS, self.root)
+        with self.client() as client, patch.object(JsonlSessionStore, "load", side_effect=AssertionError("schedule update must not load Session")):
             response = client.put(
                 f"/api/schedules/{schedule.schedule_id}",
                 json={
@@ -2234,6 +2236,7 @@ class GuiTest(unittest.TestCase):
         body = response.json()
         self.assertEqual(body["schedule_id"], schedule.schedule_id)
         self.assertEqual(body["schedule_session_id"], "scheduled-session")
+        self.assertEqual(body["permission_preset"], "full_access")
         self.assertEqual(
             body["trigger"],
             {
