@@ -18,6 +18,7 @@ from agent_core import (
     JsonlSessionStore,
     MemoryDocument,
     MemoryStore,
+    PermissionPreset,
     Session,
     SessionInUseError,
     Workspace,
@@ -2181,6 +2182,7 @@ class GuiTest(unittest.TestCase):
         )
         run = scheduler.poll_once(datetime.now(timezone.utc))[0]
         session = Session("scheduled-session")
+        session.set_permission_preset(PermissionPreset.FULL_ACCESS)
         session.begin_turn(run.turn_id)
         session.add_item("user", schedule.action.prompt)
         session.finish_turn("completed")
@@ -2195,7 +2197,7 @@ class GuiTest(unittest.TestCase):
             item = client.get("/api/schedules").json()[0]
 
         self.assertEqual(item["schedule_id"], schedule.schedule_id)
-        self.assertEqual(item["execution_scope"], "workspace")
+        self.assertEqual(item["permission_preset"], "full_access")
         self.assertEqual(
             item["trigger"],
             {"type": "once", "at": schedule.trigger.at.isoformat()},

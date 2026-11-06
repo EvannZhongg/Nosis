@@ -7,7 +7,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfoNotFoundError
 
-from agent_core import ExecutionScope
 from agent_core.file_lock import acquire_file_lock
 
 from agent_core.scheduler import (
@@ -54,7 +53,6 @@ class SchedulerServiceTest(unittest.TestCase):
                 workspace=directory,
                 origin_session_id="origin",
                 schedule_session_id="scheduled-session",
-                execution_scope=ExecutionScope.WORKSPACE,
             )
 
             with self.assertRaises(TypeError):
@@ -69,7 +67,6 @@ class SchedulerServiceTest(unittest.TestCase):
                 workspace=directory,
                 origin_session_id="origin",
                 schedule_session_id="scheduled-session",
-                execution_scope=ExecutionScope.WORKSPACE,
             )
 
             updated = service.update_schedule(
@@ -93,7 +90,6 @@ class SchedulerServiceTest(unittest.TestCase):
                 workspace=directory,
                 origin_session_id="origin",
                 schedule_session_id="scheduled-session",
-                execution_scope=ExecutionScope.WORKSPACE,
             )
             self.assertEqual(schedule.action.prompt, "scheduled prompt")
             with self.assertRaisesRegex(ValueError, "prompt must be"):
@@ -137,7 +133,6 @@ class SchedulerServiceTest(unittest.TestCase):
                 workspace=directory,
                 origin_session_id="origin",
                 schedule_session_id="scheduled-session",
-                execution_scope=ExecutionScope.WORKSPACE,
             )
             after = datetime(2099, 1, 1, 12, 1, tzinfo=timezone.utc)
             self.assertEqual(
@@ -179,7 +174,6 @@ class SchedulerServiceTest(unittest.TestCase):
                 workspace=directory,
                 origin_session_id="origin",
                 schedule_session_id="scheduled-session",
-                execution_scope=ExecutionScope.WORKSPACE,
             )
             schedule.next_run_at = start
             service._append({"op": "update", "schedule": _schedule_to_dict(schedule)})
@@ -200,7 +194,6 @@ class SchedulerServiceTest(unittest.TestCase):
                 workspace=directory,
                 origin_session_id="origin",
                 schedule_session_id="scheduled-session",
-                execution_scope=ExecutionScope.WORKSPACE,
             )
 
             self.assertEqual(

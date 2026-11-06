@@ -50,7 +50,6 @@ from agent_core import (
     UserSteerAppliedEvent,
     TurnControl,
     FULL_ACCESS_AUTHORITY,
-    WORKSPACE_ONLY_AUTHORITY,
     Workspace,
 )
 from agent_core.scheduler import (
@@ -1847,55 +1846,164 @@ class InterruptedTurnTest(BridgeTestCase):
         )
 
 
+class ScheduledTaskPermissionTest(BridgeTestCase):
+    def setUp(self) -> None:
+        self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.bridge, _ = self.make_bridge([], self.root)
+        self.bridge.open_session(open_session_message(
+            self.root, session_id="origin",
+            agent_config={
+                "generate_session_title": False,
+                "max_same_tool_calls": 5,
+                "output_reserve_tokens": 100,
+                "workspace_instruction_files": [],
+                "main_agent": {"tools": {"scheduled_task": True}},
+            },
+        ))
+        self.bridge.host.set_permission_preset(PermissionPreset.FULL_ACCESS)
+        self.tools = self.bridge.host.planes.ensure(self.bridge.host.sessions).agent._tools
+        created = self.tools.execute(ToolCall("create", "scheduled_task", {
+            "action": "create",
+            "schedule": {
+                "prompt": "scheduled work",
+                "trigger": {"type": "interval", "seconds": 60},
+                "permission_preset": "workspace_access",
+            },
+        }))
+        self.assertIsNone(created.error)
+        self.assertEqual(created.output["permission_preset"], "workspace_access")
+        self.schedule_id = created.output["schedule_id"]
+        self.session_id = created.output["schedule_session_id"]
+        self.store = JsonlSessionStore(self.root / "sessions")
+
+    def update(self, changes):
+        return self.tools.execute(ToolCall("update", "scheduled_task", {
+            "action": "update", "schedule_id": self.schedule_id, "changes": changes,
+        }))
+
+    def test_permission_update_persists_journal_without_rescheduling_and_is_used_next_run(self) -> None:
+        schedule = self.bridge.host.scheduler.schedules[0]
+        next_run_at = schedule.next_run_at
+        before = self.bridge.host.scheduler.path.read_text(encoding="utf-8")
+        for preset in (PermissionPreset.FULL_ACCESS, PermissionPreset.WORKSPACE_ACCESS, PermissionPreset.ASK_FOR_APPROVAL):
+            with self.subTest(preset=preset):
+                result = self.update({"permission_preset": preset.value})
+                self.assertIsNone(result.error)
+                self.assertEqual(result.output["permission_preset"], preset.value)
+                self.assertEqual(result.output["next_run_at"], next_run_at.isoformat())
+                stored = self.store.load(self.session_id)
+                self.assertEqual(stored.permission_preset, preset)
+                self.assertEqual(stored.journal[-1].event_type, "permission_preset_changed")
+                self.assertEqual(stored.journal[-1].payload["preset"], preset.value)
+                listed = self.tools.execute(ToolCall("list", "scheduled_task", {"action": "list"}))
+                self.assertEqual(listed.output[0]["permission_preset"], preset.value)
+
+                observed = []
+                def run_turn(worker, *args, **kwargs):
+                    observed.append(worker.sessions.permissions.authority)
+                    return SimpleNamespace(status="completed")
+                run = ScheduledRun(preset.value, self.schedule_id, self.session_id, preset.value, datetime.now(timezone.utc))
+                with patch.object(RuntimeHost, "run_turn", run_turn):
+                    ScheduledTurnRunner(self.root, self.bridge.host.scheduler)(schedule, run)
+                self.assertEqual(observed, [preset.authority])
+        self.assertEqual(self.bridge.host.scheduler.path.read_text(encoding="utf-8"), before)
+
+    def test_non_full_access_cannot_elevate_a_schedule_or_apply_other_changes(self) -> None:
+        for preset in (PermissionPreset.WORKSPACE_ACCESS, PermissionPreset.ASK_FOR_APPROVAL):
+            with self.subTest(preset=preset):
+                self.bridge.host.set_permission_preset(preset)
+                result = self.update({"permission_preset": "full_access", "prompt": "changed"})
+                self.assertEqual(result.error.type, "PermissionError")
+                self.assertEqual(self.store.load(self.session_id).permission_preset, PermissionPreset.WORKSPACE_ACCESS)
+                self.assertEqual(self.bridge.host.scheduler.schedules[0].action.prompt, "scheduled work")
+
+    def test_invalid_update_does_not_change_permission(self) -> None:
+        for changes in (
+            {"permission_preset": "invalid"},
+            {"permission_preset": None},
+            {"permission_preset": 1},
+            {"permission_preset": "full_access", "enabled": "yes"},
+            {"permission_preset": "full_access", "unknown": True},
+            {"permission_preset": "full_access", "trigger": {"type": "cron", "expression": "invalid"}},
+        ):
+            with self.subTest(changes=changes):
+                result = self.update(changes)
+                self.assertEqual(result.error.type, "ValueError")
+                self.assertEqual(self.store.load(self.session_id).permission_preset, PermissionPreset.WORKSPACE_ACCESS)
+
+    def test_update_current_session_uses_the_active_permission_controller(self) -> None:
+        self.bridge.host.open_session(self.root, session_id=self.session_id)
+        self.bridge.host.set_permission_preset(PermissionPreset.FULL_ACCESS)
+        plane = self.bridge.host.planes.ensure(self.bridge.host.sessions)
+        self.tools = plane.agent._tools
+        result = self.update({"permission_preset": "workspace_access", "prompt": "updated"})
+        self.assertIsNone(result.error)
+        self.assertEqual(self.bridge.host.sessions.permissions.preset, PermissionPreset.WORKSPACE_ACCESS)
+        self.assertEqual(plane.execution_router.authority, PermissionPreset.WORKSPACE_ACCESS.authority)
+        self.assertEqual(self.store.load(self.session_id).permission_preset, PermissionPreset.WORKSPACE_ACCESS)
+        self.assertEqual(self.bridge.host.scheduler.schedules[0].action.prompt, "updated")
+
+    @unittest.skipUnless(sys.platform == "win32", "Windows journal ownership")
+    def test_occupied_target_rejects_permission_and_schedule_changes(self) -> None:
+        other = RuntimeHost(self.root, scheduler=self.bridge.host.scheduler)
+        try:
+            other.open_session(self.root, session_id=self.session_id)
+            result = self.update({"permission_preset": "full_access", "prompt": "changed"})
+            self.assertEqual(result.error.type, "SessionInUseError")
+            self.assertEqual(other.sessions.permissions.preset, PermissionPreset.WORKSPACE_ACCESS)
+            self.assertEqual(self.store.load(self.session_id).permission_preset, PermissionPreset.WORKSPACE_ACCESS)
+            self.assertEqual(self.bridge.host.scheduler.schedules[0].action.prompt, "scheduled work")
+        finally:
+            other.close()
+
+
 class ScheduledTurnTest(unittest.TestCase):
-    def test_scheduled_worker_uses_persisted_execution_scope(self) -> None:
+    def test_scheduled_worker_preserves_manual_permission_changes_between_runs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            open_session_message(root)
             scheduler = SchedulerService(root / "schedule.jsonl")
+            schedule = Schedule(
+                "schedule", OneShotTrigger(datetime.now(timezone.utc)),
+                AgentTurnAction("scheduled prompt"), str(root), "origin", "scheduled-session",
+            )
+            store = JsonlSessionStore(root / "sessions")
+            store.bind_workspace(schedule.schedule_session_id, root)
+            store.set_permission_preset(schedule.schedule_session_id, PermissionPreset.WORKSPACE_ACCESS, root)
             captured = []
 
-            def open_session(worker: RuntimeHost, *args, **kwargs) -> None:
-                captured.append(worker.planes._execution_authority_limit)
-                raise RuntimeError("stop after capturing worker authority")
+            def run_turn(worker, *args, **kwargs):
+                # Verify the actual Tool router as well as the persisted preset.
+                plane = worker.planes.ensure(worker.sessions)
+                captured.append(plane.execution_router.authority)
+                return SimpleNamespace(status="completed")
 
-            with patch(
-                "tests.bridge_fixtures.default_config_directory",
-                return_value=root,
-            ), patch.object(RuntimeHost, "open_session", open_session):
-                bridge = Bridge(
-                    io.StringIO(),
-                    io.StringIO(),
-                    scheduler=scheduler,
-                )
-                for scope in (ExecutionScope.WORKSPACE, ExecutionScope.HOST):
-                    schedule = Schedule(
-                        f"schedule-{scope.value}",
-                        OneShotTrigger(datetime.now(timezone.utc)),
-                        AgentTurnAction("scheduled prompt"),
-                        str(root),
-                        "origin",
-                        f"scheduled-session-{scope.value}",
-                        scope,
-                    )
+            with patch.object(RuntimeHost, "run_turn", run_turn):
+                for index, preset in enumerate((
+                    PermissionPreset.WORKSPACE_ACCESS,
+                    PermissionPreset.FULL_ACCESS,
+                    PermissionPreset.WORKSPACE_ACCESS,
+                    PermissionPreset.ASK_FOR_APPROVAL,
+                )):
+                    interactive = RuntimeHost(root, scheduler=scheduler)
+                    try:
+                        interactive.open_session(root, session_id=schedule.schedule_session_id)
+                        interactive.set_permission_preset(preset)
+                    finally:
+                        interactive.close()
+                    before = len(store.load(schedule.schedule_session_id).journal)
                     run = ScheduledRun(
-                        f"run-{scope.value}",
-                        schedule.schedule_id,
-                        schedule.schedule_session_id,
-                        f"turn-{scope.value}",
-                        datetime.now(timezone.utc),
+                        f"run-{index}", schedule.schedule_id, schedule.schedule_session_id,
+                        f"turn-{index}", datetime.now(timezone.utc),
                     )
-
-                    with self.assertRaisesRegex(
-                        RuntimeError,
-                        "stop after capturing worker authority",
-                    ):
-                        ScheduledTurnRunner(root, scheduler)(schedule, run)
-                bridge.close()
-
-            self.assertEqual(
-                captured,
-                [WORKSPACE_ONLY_AUTHORITY, FULL_ACCESS_AUTHORITY],
-            )
+                    ScheduledTurnRunner(root, scheduler)(schedule, run)
+                    stored = store.load(schedule.schedule_session_id)
+                    self.assertEqual(stored.permission_preset, preset)
+                    self.assertFalse(any(
+                        event.event_type == "permission_preset_changed"
+                        for event in stored.journal[before:]
+                    ))
+                    self.assertEqual(captured[-1], preset.authority)
 
     def test_scheduled_turn_uses_normal_runtime_and_persists_session(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1939,28 +2047,24 @@ class ScheduledTurnTest(unittest.TestCase):
                     io.StringIO(),
                     scheduler=scheduler,
                 )
-                cases = (
-                    (
-                        ExecutionScope.WORKSPACE,
-                        PermissionPreset.WORKSPACE_ACCESS,
-                    ),
-                    (ExecutionScope.HOST, PermissionPreset.FULL_ACCESS),
-                )
-                for scope, _ in cases:
+                cases = tuple(PermissionPreset)
+                store = JsonlSessionStore(root / "sessions")
+                for preset in cases:
                     schedule = Schedule(
-                        f"schedule-{scope.value}",
+                        f"schedule-{preset.value}",
                         OneShotTrigger(datetime.now(timezone.utc)),
-                        AgentTurnAction(f"scheduled prompt {scope.value}"),
+                        AgentTurnAction(f"scheduled prompt {preset.value}"),
                         str(root),
                         "origin",
-                        f"scheduled-session-{scope.value}",
-                        scope,
+                        f"scheduled-session-{preset.value}",
                     )
+                    store.bind_workspace(schedule.schedule_session_id, root)
+                    store.set_permission_preset(schedule.schedule_session_id, preset, root)
                     run = ScheduledRun(
-                        f"run-{scope.value}",
+                        f"run-{preset.value}",
                         schedule.schedule_id,
                         schedule.schedule_session_id,
-                        f"turn-{scope.value}",
+                        f"turn-{preset.value}",
                         datetime.now(timezone.utc),
                     )
 
@@ -1968,14 +2072,14 @@ class ScheduledTurnTest(unittest.TestCase):
                 bridge.close()
 
             store = JsonlSessionStore(root / "sessions")
-            for scope, preset in cases:
-                stored = store.load(f"scheduled-session-{scope.value}")
+            for preset in cases:
+                stored = store.load(f"scheduled-session-{preset.value}")
                 self.assertEqual(
                     [item.content for item in stored.items],
-                    [f"scheduled prompt {scope.value}", "scheduled answer"],
+                    [f"scheduled prompt {preset.value}", "scheduled answer"],
                 )
                 self.assertEqual(
-                    stored.turns[f"turn-{scope.value}"].status,
+                    stored.turns[f"turn-{preset.value}"].status,
                     "completed",
                 )
                 self.assertEqual(stored.permission_preset, preset)

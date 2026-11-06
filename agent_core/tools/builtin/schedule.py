@@ -36,6 +36,21 @@ def _execution_authority(context: ToolExecutionContext) -> ExecutionAuthority:
     return execution.authority
 
 
+def _parse_permission_preset(value: object, context: ToolExecutionContext) -> PermissionPreset:
+    try:
+        preset = PermissionPreset(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(
+            "permission_preset must be 'ask_for_approval', 'workspace_access', or 'full_access'"
+        ) from error
+    if (
+        preset is PermissionPreset.FULL_ACCESS
+        and not _execution_authority(context).allows_unattended(ExecutionScope.HOST)
+    ):
+        raise PermissionError("Full Access scheduled tasks require Full Access")
+    return preset
+
+
 def _reject_unknown_arguments(
     arguments: dict[str, JSONValue], allowed: set[str]
 ) -> None:
@@ -101,9 +116,21 @@ class ScheduledTaskTool(Tool):
 
     def definition(self, context):
         authority = _definition_authority(context)
-        scopes = [ExecutionScope.WORKSPACE.value]
+        presets = [
+            PermissionPreset.ASK_FOR_APPROVAL.value,
+            PermissionPreset.WORKSPACE_ACCESS.value,
+        ]
         if authority.allows_unattended(ExecutionScope.HOST):
-            scopes.append(ExecutionScope.HOST.value)
+            presets.append(PermissionPreset.FULL_ACCESS.value)
+        permission_schema = {
+            "type": "string",
+            "enum": presets,
+            "description": (
+                "Permission preset of the task's session, shared with interactive use "
+                "and future scheduled runs. Full Access requires the caller to have Full Access. "
+                "Unattended runs cannot grant interactive approvals."
+            ),
+        }
         schedule_schema = {
             "type": "object",
             "description": "Required only for create. The complete new plan.",
@@ -116,11 +143,9 @@ class ScheduledTaskTool(Tool):
                 "end_at": _date_time_schema(
                     "Optional end time for recurring plans, with an explicit UTC offset."
                 ),
-                "execution_scope": {
-                    "type": "string",
-                    "enum": scopes,
-                    "default": ExecutionScope.WORKSPACE.value,
-                    "description": "Unattended execution boundary. Workspace is the default; Host requires Full Access.",
+                "permission_preset": {
+                    **permission_schema,
+                    "description": permission_schema["description"] + " If omitted, inherits the caller session's current permission preset.",
                 },
             },
             "required": ["prompt", "trigger"],
@@ -140,6 +165,7 @@ class ScheduledTaskTool(Tool):
                 "end_at": _date_time_schema(
                     "New end time with an explicit UTC offset, or null to remove it."
                 ),
+                "permission_preset": permission_schema,
             },
             "additionalProperties": False,
         }
@@ -190,31 +216,20 @@ class ScheduledTaskTool(Tool):
         if not isinstance(data, dict):
             raise ValueError("schedule must be an object")
         _reject_unknown_arguments(
-            data, {"prompt", "trigger", "end_at", "execution_scope"}
+            data, {"prompt", "trigger", "end_at", "permission_preset"}
         )
         prompt = parse_schedule_prompt_input(data.get("prompt"))
         trigger = parse_trigger_input(data.get("trigger"))
         end_at = parse_end_at_input(data.get("end_at"))
-        try:
-            scope = ExecutionScope(
-                data.get("execution_scope", ExecutionScope.WORKSPACE.value)
-            )
-        except (TypeError, ValueError) as error:
-            raise ValueError("execution_scope must be 'workspace' or 'host'") from error
-        authority = _execution_authority(context)
-        if (
-            scope is ExecutionScope.HOST
-            and not authority.allows_unattended(ExecutionScope.HOST)
-        ):
-            raise PermissionError("host scheduled tasks require Full Access")
+        preset = _parse_permission_preset(
+            data.get("permission_preset", context.session.permission_preset.value), context,
+        )
         schedule_session_id = str(uuid4())
         store = JsonlSessionStore(context.sessions_directory)
         store.bind_workspace(schedule_session_id, context.workspace.path)
         store.set_permission_preset(
             schedule_session_id,
-            PermissionPreset.FULL_ACCESS
-            if scope is ExecutionScope.HOST
-            else PermissionPreset.WORKSPACE_ACCESS,
+            preset,
             context.workspace.path,
         )
         provider = store.provider_for(context.session.session_id)
@@ -226,14 +241,13 @@ class ScheduledTaskTool(Tool):
             workspace=str(context.workspace.path),
             origin_session_id=context.session.session_id,
             schedule_session_id=schedule_session_id,
-            execution_scope=scope,
             end_at=end_at,
         )
         return {
             "schedule_id": schedule.schedule_id,
             "schedule_session_id": schedule.schedule_session_id,
             "workspace": schedule.workspace,
-            "execution_scope": schedule.execution_scope.value,
+            "permission_preset": preset.value,
             "next_run_at": schedule.next_run_at.isoformat() if schedule.next_run_at else None,
         }
 
@@ -243,26 +257,47 @@ class ScheduledTaskTool(Tool):
         changes = arguments.get("changes")
         if not isinstance(changes, dict) or not changes:
             raise ValueError("changes must be a non-empty object")
-        parsed = parse_schedule_update_input(changes)
-        schedule = _service(context).update_schedule(schedule_id, **parsed)
+        parsed = parse_schedule_update_input({
+            key: value for key, value in changes.items() if key != "permission_preset"
+        })
+        preset = (
+            _parse_permission_preset(changes["permission_preset"], context)
+            if "permission_preset" in changes else None
+        )
+        service = _service(context)
+        if preset is None:
+            schedule = service.update_schedule(schedule_id, **parsed)
+        else:
+            schedule = next((item for item in service.schedules if item.schedule_id == schedule_id), None)
+            if schedule is None:
+                raise ValueError("scheduled task not found")
+            if context.session_permissions is None:
+                raise RuntimeError("session permission control is unavailable")
+            # Acquire the Session writer before applying either part of the update.
+            with context.session_permissions(schedule.schedule_session_id) as permissions:
+                if parsed:
+                    schedule = service.update_schedule(schedule_id, **parsed)
+                permissions.set_preset(preset)
+        store = JsonlSessionStore(context.sessions_directory)
         return {
             "schedule_id": schedule.schedule_id,
             "schedule_session_id": schedule.schedule_session_id,
             "trigger": trigger_to_dict(schedule.trigger),
-            "execution_scope": schedule.execution_scope.value,
+            "permission_preset": store.load(schedule.schedule_session_id, recover=False).permission_preset.value,
             "enabled": schedule.enabled,
             "end_at": schedule.end_at.isoformat() if schedule.end_at else None,
             "next_run_at": schedule.next_run_at.isoformat() if schedule.next_run_at else None,
         }
 
     def _list(self, context: ToolExecutionContext):
+        store = JsonlSessionStore(context.sessions_directory)
         return [
             {
                 "schedule_id": s.schedule_id,
                 "prompt": s.action.prompt,
                 "trigger": trigger_to_dict(s.trigger),
                 "workspace": s.workspace,
-                "execution_scope": s.execution_scope.value,
+                "permission_preset": store.load(s.schedule_session_id, recover=False).permission_preset.value,
                 "enabled": s.enabled,
                 "end_at": s.end_at.isoformat() if s.end_at else None,
                 "next_run_at": s.next_run_at.isoformat() if s.next_run_at else None,

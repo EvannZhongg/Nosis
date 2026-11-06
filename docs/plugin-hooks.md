@@ -139,7 +139,7 @@ Hook commands use an internal, model-invisible ToolSet and the same ExecutionRou
 PermissionController, executors, cancellation and process-tree cleanup as ordinary
 commands. Their approval is independent from the original Tool's approval. This
 internal invocation cannot recursively trigger command hooks. Scope cannot exceed
-the Runtime authority limit; unattended workers cannot obtain interactive approval.
+the Session permission preset; unattended workers cannot obtain interactive approval.
 
 Workspace execution makes the Plugin directory readable inside the existing Linux
 and macOS sandbox. Executables and dependencies must also be accessible within that

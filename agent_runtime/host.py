@@ -6,7 +6,7 @@ from typing import Callable
 
 from agent_core import (
     AgentEvent, AttachmentPart, CompositeToolPolicy, ContextWindowEvent,
-    ExecutionAuthority, FULL_ACCESS_AUTHORITY, McpApprovalPolicy,
+    McpApprovalPolicy,
     PermissionPreset, SchedulerService, ShellApprovalPolicy,
     ComputerApprovalPolicy, Workspace,
     FileWriteApprovalPolicy,
@@ -29,7 +29,6 @@ class RuntimeHost:
         callbacks: RuntimeCallbacks | None = None,
         scheduler: SchedulerService | None = None,
         services: RuntimeServices | None = None,
-        execution_authority_limit: ExecutionAuthority = FULL_ACCESS_AUTHORITY,
     ) -> None:
         self.config_directory = config_directory.resolve()
         self.callbacks = callbacks or RuntimeCallbacks()
@@ -43,7 +42,7 @@ class RuntimeHost:
         self.scheduler = self.services.scheduler
         self.planes = ExecutionPlaneManager(
             self.config_directory, self.environment, self.scheduler,
-            runtime_callbacks, execution_authority_limit,
+            runtime_callbacks,
         )
         self.sessions = SessionRuntimeController(
             self.config_directory, self.environment, runtime_callbacks,

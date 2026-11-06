@@ -38,7 +38,7 @@ Host 关闭只释放自身执行面与 Journal，由进程宿主在全部 Host �
 
 - 创建主 Provider、`fast_model` 对应的辅助模型 Provider、视觉 Provider 和图片生成 Provider
 - 按选中的协议与模型路由导入对应适配器；原生 OpenAI 和 DeepSeek 模型的装配和视觉校验不导入 LiteLLM
-- 建立宿主与平台沙箱执行器，并施加 Runtime authority 上限
+- 建立宿主与平台沙箱执行器，并按 Session 的权限 preset 决定执行路由授权
 - 装配桌面截图与输入能力；PyAutoGUI、PyScreeze、OpenCV、NumPy 等原生依赖在首次使用桌面 Tool 时才加载
 - 从内置 Catalog 按主 Agent 和子 Agent 角色选择 Tool
 - 注入 Session、Plan、Memory、Scheduler、权限、图片和用户交互能力
@@ -221,7 +221,7 @@ standalone Skill 与 MCP 使用同一套 Core registry / manager，不存在 Plu
 
 `attachments.py` 为 GUI 和 IM 共用上传落盘、文件命名与真实图片格式探测，并验证提交的附件位于当前 Workspace，转换为 Core 的 `ImagePart` 或 `FilePart`。主 Agent 的 `present_file` Tool 将交付文件快照保存为附件，沿用 Tool 执行、Journal 与 `tool_media` 事件链路。Tool 附件默认只用于模型观察，`present_file` 显式设置 `present_to_user=true`；Core 将观察附件写入 `tool_media` 消息，将交付附件写入 `tool_delivery` 消息，后者从模型上下文投影中排除，不受模型图片输入的字节限制。Core 按交付标记分开发出媒体事件，IM 仅发送显式交付的附件。`.nosis/attachments/` 是存储目录，不表达交付意图。
 
-`ScheduledTurnRunner` 为 Scheduler 创建独立 `RuntimeHost`，在任务绑定的 Workspace 中执行 Turn；Provider 沿用 Session 已保存或默认的选择。`workspace` scope 使用 Workspace-only authority，`host` scope 使用 Host authority；两者都不提供交互式授权或用户提问能力，因此只能在预先声明的 scope 内无人值守执行。
+`ScheduledTurnRunner` 为 Scheduler 创建独立 `RuntimeHost`，在任务绑定的 Workspace 中执行 Turn；Provider 沿用 Session 已保存或默认的选择。每次运行的授权由调度 Session 的权限 preset 决定，Runner 不写入也不覆盖该 preset，因此交互式修改会在下一次运行生效；无人值守运行不提供交互式授权或用户提问能力，需要审批的 Tool 不会因为运行无人值守而获得放行。
 
 ## 模块索引
 

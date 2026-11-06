@@ -109,6 +109,28 @@ class SessionRuntimeController:
             self.workspace.path,
         )
 
+    @contextmanager
+    def session_permissions(self, session_id: str) -> Iterator[PermissionController]:
+        if self.session is None or self.store is None or self.permissions is None:
+            raise RuntimeError("session is not initialized")
+        if session_id == self.session.session_id:
+            yield self.permissions
+            return
+        workspace = self.store.workspace_for(session_id)
+        if workspace is None:
+            raise ValueError("session has no workspace")
+        with self.store.open_journal(session_id) as sink:
+            session = self.store.load(session_id, recover=False)
+            session.attach_journal_sink(sink)
+            try:
+                yield PermissionController(
+                    session,
+                    self.approval_policy,
+                    lambda value: self.store.set_permission_preset(session_id, value, workspace),
+                )
+            finally:
+                session.attach_journal_sink(None)
+
 
     def change_provider(self, provider: str) -> None:
         assert self.session is not None and self.store is not None and self.workspace is not None

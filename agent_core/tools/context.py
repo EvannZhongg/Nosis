@@ -8,12 +8,14 @@ from .base import JSONValue
 from .config import ToolSettings
 
 if TYPE_CHECKING:
+    from contextlib import AbstractContextManager
     from ..hooks import HookRunner, HookInvocation, HookCompletedEvent
     from ..execution.router import ExecutionRouter, ResolvedExecution
     from ..execution.process import CancellationSignal
     from ..llm import LLMProvider
     from ..mcp.manager import McpClientManager
     from ..plan import PlanManager
+    from ..permissions import PermissionController
     from ..session import Session
     from ..skills import SkillRegistry
     from ..subagent import SubagentRuntime
@@ -60,6 +62,7 @@ class ToolExecutionContext:
         Callable[[str, list[dict[str, JSONValue]], bool], JSONValue] | None
     ) = None
     scheduler: object | None = None
+    session_permissions: Callable[[str], "AbstractContextManager[PermissionController]"] | None = None
     memory: "MemoryManager | None" = None
     hooks: "HookRunner | None" = None
     hook_invocation: "HookInvocation | None" = None

@@ -359,8 +359,12 @@ class ScheduledTaskToolTest(unittest.TestCase):
             "(?:Z|[+-][0-9]{2}:[0-9]{2})$",
         )
         self.assertEqual(
-            definition.parameters["properties"]["schedule"]["properties"]["execution_scope"]["enum"],
-            ["workspace"],
+            definition.parameters["properties"]["schedule"]["properties"]["permission_preset"]["enum"],
+            ["ask_for_approval", "workspace_access"],
+        )
+        self.assertEqual(
+            properties["changes"]["properties"]["permission_preset"]["enum"],
+            ["ask_for_approval", "workspace_access"],
         )
 
     def test_full_access_may_create_an_unattended_host_schedule(self) -> None:
@@ -382,8 +386,8 @@ class ScheduledTaskToolTest(unittest.TestCase):
 
             self.assertEqual(
                 tool.definition(context).parameters["properties"]["schedule"]
-                ["properties"]["execution_scope"]["enum"],
-                ["workspace", "host"],
+                ["properties"]["permission_preset"]["enum"],
+                ["ask_for_approval", "workspace_access", "full_access"],
             )
             result = execute_scheduled(
                 {
@@ -394,17 +398,13 @@ class ScheduledTaskToolTest(unittest.TestCase):
                             "type": "once",
                             "at": "2099-01-01T00:00:00+00:00",
                         },
-                        "execution_scope": "host",
+                        "permission_preset": "full_access",
                     },
                 },
                 context,
             )
 
-            self.assertEqual(result["execution_scope"], "host")
-            self.assertIs(
-                scheduler.schedules[0].execution_scope,
-                ExecutionScope.HOST,
-            )
+            self.assertEqual(result["permission_preset"], "full_access")
             self.assertEqual(
                 store.load(result["schedule_session_id"]).permission_preset,
                 PermissionPreset.FULL_ACCESS,
@@ -422,7 +422,7 @@ class ScheduledTaskToolTest(unittest.TestCase):
 
             with self.assertRaisesRegex(
                 PermissionError,
-                "host scheduled tasks require Full Access",
+                "Full Access scheduled tasks require Full Access",
             ):
                 execute_scheduled(
                     {
@@ -433,7 +433,7 @@ class ScheduledTaskToolTest(unittest.TestCase):
                                 "type": "once",
                                 "at": "2099-01-01T00:00:00+00:00",
                             },
-                            "execution_scope": "host",
+                            "permission_preset": "full_access",
                         },
                     },
                     context,
@@ -461,12 +461,12 @@ class ScheduledTaskToolTest(unittest.TestCase):
 
             self.assertEqual(
                 ScheduledTaskTool().definition(context).parameters
-                ["properties"]["schedule"]["properties"]["execution_scope"]["enum"],
-                ["workspace"],
+                ["properties"]["schedule"]["properties"]["permission_preset"]["enum"],
+                ["ask_for_approval", "workspace_access"],
             )
             with self.assertRaisesRegex(
                 PermissionError,
-                "host scheduled tasks require Full Access",
+                "Full Access scheduled tasks require Full Access",
             ):
                 execute_scheduled(
                     {
@@ -477,7 +477,7 @@ class ScheduledTaskToolTest(unittest.TestCase):
                                 "type": "once",
                                 "at": "2099-01-01T00:00:00+00:00",
                             },
-                            "execution_scope": "host",
+                            "permission_preset": "full_access",
                         },
                     },
                     context,
@@ -741,14 +741,13 @@ class ScheduledTaskToolTest(unittest.TestCase):
                     context,
                 )
 
-    def test_new_schedule_session_inherits_provider_and_caps_permissions(self) -> None:
+    def test_new_schedule_session_inherits_current_permissions_workspace_and_provider(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             workspace = Workspace(root)
             sessions_directory = root / "sessions"
             store = JsonlSessionStore(sessions_directory)
             session = Session("origin")
-            session.permission_preset = PermissionPreset.WORKSPACE_ACCESS
             store.bind_workspace(session.session_id, workspace.path)
             store.set_provider(session.session_id, "configured", workspace.path)
             scheduler = SchedulerService(root / "schedule.jsonl")
@@ -758,49 +757,24 @@ class ScheduledTaskToolTest(unittest.TestCase):
                 sessions_directory=sessions_directory,
                 scheduler=scheduler,
             )
+            tools = builtin_catalog().select(("scheduled_task",), context)
 
-            result = execute_scheduled(
-                {
-                    "action": "create",
-                    "schedule": {
-                        "prompt": "scheduled prompt",
-                        "trigger": {
-                            "type": "once",
-                            "at": "2099-01-01T00:00:00+00:00",
+            for preset in (PermissionPreset.FULL_ACCESS, PermissionPreset.WORKSPACE_ACCESS, PermissionPreset.ASK_FOR_APPROVAL):
+                with self.subTest(preset=preset):
+                    session.permission_preset = preset
+                    result = tools.execute(ToolCall("create", "scheduled_task", {
+                        "action": "create",
+                        "schedule": {
+                            "prompt": "scheduled prompt",
+                            "trigger": {"type": "interval", "seconds": 60},
                         },
-                    },
-                },
-                context,
-            )
-
-            scheduled_session = result["schedule_session_id"]
-            self.assertEqual(
-                store.load(scheduled_session).permission_preset,
-                PermissionPreset.WORKSPACE_ACCESS,
-            )
-            self.assertEqual(
-                store.provider_for(scheduled_session),
-                "configured",
-            )
-
-            session.permission_preset = PermissionPreset.FULL_ACCESS
-            second = execute_scheduled(
-                {
-                    "action": "create",
-                    "schedule": {
-                        "prompt": "another scheduled prompt",
-                        "trigger": {
-                            "type": "once",
-                            "at": "2099-01-02T00:00:00+00:00",
-                        },
-                    },
-                },
-                context,
-            )
-            self.assertEqual(
-                store.load(second["schedule_session_id"]).permission_preset,
-                PermissionPreset.WORKSPACE_ACCESS,
-            )
+                    }))
+                    self.assertIsNone(result.error)
+                    scheduled_session = result.output["schedule_session_id"]
+                    self.assertEqual(result.output["permission_preset"], preset.value)
+                    self.assertEqual(store.load(scheduled_session).permission_preset, preset)
+                    self.assertEqual(store.workspace_for(scheduled_session), str(workspace.path))
+                    self.assertEqual(store.provider_for(scheduled_session), "configured")
 
 
 class ToolSetTest(unittest.TestCase):

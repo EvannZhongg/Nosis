@@ -3,8 +3,7 @@
 from pathlib import Path
 
 from agent_core import (
-    ExecutionScope, FULL_ACCESS_AUTHORITY, JsonlSessionStore, PermissionPreset,
-    Schedule, ScheduledRun, SchedulerService, Session, WORKSPACE_ONLY_AUTHORITY,
+    JsonlSessionStore, Schedule, ScheduledRun, SchedulerService, Session,
     runtime_error_info,
 )
 
@@ -24,19 +23,9 @@ class ScheduledTurnRunner:
             self.config_directory,
             scheduler=self.scheduler,
             services=self.services,
-            execution_authority_limit=(
-                FULL_ACCESS_AUTHORITY
-                if schedule.execution_scope is ExecutionScope.HOST
-                else WORKSPACE_ONLY_AUTHORITY
-            ),
         )
         try:
             worker.open_session(Path(schedule.workspace), session_id=run.session_id)
-            worker.set_permission_preset(
-                PermissionPreset.FULL_ACCESS
-                if schedule.execution_scope is ExecutionScope.HOST
-                else PermissionPreset.WORKSPACE_ACCESS
-            )
             result = worker.run_turn(run.turn_id, schedule.action.prompt, input_source="scheduled")
             if result.status != "completed":
                 raise RuntimeError(

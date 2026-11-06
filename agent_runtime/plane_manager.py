@@ -9,7 +9,6 @@ from agent_core import (
     JobStatusEvent,
     MemoryManager,
     MemoryReconciler,
-    ExecutionAuthority,
     ExecutionRouter,
     McpConfig,
     PermissionController,
@@ -62,15 +61,13 @@ from .session_title import SessionTitleTask
 
 class ExecutionPlaneManager:
     def __init__(self, config_directory: Path, environment: EnvironmentReloader,
-                 scheduler: SchedulerService, callbacks: RuntimeCallbacks,
-                 execution_authority_limit: ExecutionAuthority) -> None:
+                 scheduler: SchedulerService, callbacks: RuntimeCallbacks) -> None:
         self._config_directory = config_directory
         self._config_path = config_directory / "provider_config.json"
         self._agent_config_path = config_directory / "agent_config.json"
         self._environment = environment
         self.scheduler = scheduler
         self.callbacks = callbacks
-        self._execution_authority_limit = execution_authority_limit
         self.current: ExecutionPlane | None = None
 
     def ensure(
@@ -252,9 +249,7 @@ class ExecutionPlaneManager:
             execution_router = ExecutionRouter(
                 workspace_executor,
                 host_executor,
-                authority=lambda: session.permissions.authority.intersect(
-                    self._execution_authority_limit
-                ),
+                authority=lambda: session.permissions.authority,
                 host_tool=mcp.requires_approval,
             )
             plane = ExecutionPlane(
@@ -406,6 +401,7 @@ class ExecutionPlaneManager:
                     self.callbacks.ask_user
                 ),
                 scheduler=self.scheduler,
+                session_permissions=session.session_permissions,
                 memory=memory,
                 hooks=plane.hooks,
                 on_hook_event=lambda event: self.callbacks.on_event(event, session.session.current_turn_id),

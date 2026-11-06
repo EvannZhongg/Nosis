@@ -16,7 +16,6 @@ from typing import BinaryIO, Callable, Literal, TypedDict
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from .execution.authority import ExecutionScope
 from .file_lock import acquire_file_lock
 
 
@@ -88,15 +87,12 @@ class Schedule:
     workspace: str
     origin_session_id: str
     schedule_session_id: str
-    execution_scope: ExecutionScope
     enabled: bool = True
     end_at: datetime | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     next_run_at: datetime | None = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.execution_scope, ExecutionScope):
-            raise ValueError("schedule execution_scope must be workspace or host")
         _require_aware(self.created_at, "schedule created_at")
         if self.next_run_at is not None:
             _require_aware(self.next_run_at, "schedule next_run_at")
@@ -272,7 +268,6 @@ def _schedule_to_dict(schedule: Schedule) -> dict[str, object]:
         **asdict(schedule),
         "trigger": trigger_to_dict(schedule.trigger),
         "action": asdict(schedule.action),
-        "execution_scope": schedule.execution_scope.value,
         "created_at": _dt(schedule.created_at),
         "end_at": _dt(schedule.end_at),
         "next_run_at": _dt(schedule.next_run_at),
@@ -287,7 +282,6 @@ def _schedule_from_dict(value: dict[str, object]) -> Schedule:
         workspace=str(value["workspace"]),
         origin_session_id=str(value["origin_session_id"]),
         schedule_session_id=str(value["schedule_session_id"]),
-        execution_scope=ExecutionScope(str(value["execution_scope"])),
         enabled=bool(value.get("enabled", True)),
         end_at=_parse_dt(value.get("end_at")),
         created_at=_parse_dt(value.get("created_at")) or datetime.now(timezone.utc),
@@ -399,7 +393,7 @@ class SchedulerService:
         self._schedules = schedules
         self._runs = runs
 
-    def create_schedule(self, *, trigger: Trigger, prompt: str, workspace: str, origin_session_id: str, schedule_session_id: str, execution_scope: ExecutionScope = ExecutionScope.WORKSPACE, end_at: datetime | None = None) -> Schedule:
+    def create_schedule(self, *, trigger: Trigger, prompt: str, workspace: str, origin_session_id: str, schedule_session_id: str, end_at: datetime | None = None) -> Schedule:
         normalized_prompt = parse_schedule_prompt_input(prompt)
         if end_at is not None:
             _require_aware(end_at, "schedule end_at")
@@ -415,7 +409,6 @@ class SchedulerService:
             str(Path(workspace).expanduser().resolve()),
             origin_session_id,
             schedule_session_id,
-            execution_scope,
             end_at=end_at,
             next_run_at=next_run_at,
         )

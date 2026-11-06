@@ -9,7 +9,7 @@ import tempfile
 from unittest.mock import patch
 
 from agent_core import (
-    AgentTurnAction, ExecutionScope, HostCommandExecutor, JsonlSessionStore,
+    AgentTurnAction, HostCommandExecutor, JsonlSessionStore,
     LLMResponse, OneShotTrigger, PermissionPreset, Schedule, ScheduledRun,
     SchedulerService, ToolCall,
 )
@@ -140,12 +140,15 @@ class HookInteropTest(BridgeTestCase):
         self.main = MockProvider(["scheduled done"])
         now = datetime.now(timezone.utc)
         schedule = Schedule("schedule", OneShotTrigger(now), AgentTurnAction("scheduled work"),
-                            str(self.root), "origin", "scheduled-session", ExecutionScope.WORKSPACE)
+                            str(self.root), "origin", "scheduled-session")
+        store = JsonlSessionStore(self.root / "sessions")
+        store.bind_workspace(schedule.schedule_session_id, self.root)
+        store.set_permission_preset(schedule.schedule_session_id, PermissionPreset.WORKSPACE_ACCESS, self.root)
         run = ScheduledRun("run", "schedule", "scheduled-session", "scheduled-turn", now)
         scheduler = SchedulerService(self.root / "schedule.jsonl")
         self.addCleanup(scheduler.close)
         ScheduledTurnRunner(self.root, scheduler)(schedule, run)
-        session = JsonlSessionStore(self.root / "sessions").load("scheduled-session")
+        session = store.load("scheduled-session")
         self.assertEqual(session.turns["scheduled-turn"].status, "completed")
         self.assertTrue(any(event.payload.get("input", {}).get("source") == "scheduled" for event in session.journal))
 
