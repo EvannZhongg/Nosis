@@ -77,6 +77,7 @@ class TurnRunner:
             if turn_id in self._pending_cancels or self._shutdown:
                 control.cancel()
             self._pending_cancels.discard(turn_id)
+        plane = None
         memory = None
         started = False
         try:
@@ -114,6 +115,12 @@ class TurnRunner:
                 memory.discard_pending()
             return TurnResult("failed", error=runtime_error_info(error), startup_failed=not started)
         finally:
-            with self._lock:
-                self.control = None
-                self.turn_id = None
+            try:
+                if plane is not None and plane.computer is not None:
+                    plane.computer.release_input()
+            except Exception as error:
+                self.callbacks.on_phase("running", (f"Desktop input cleanup failed: {error}",))
+            finally:
+                with self._lock:
+                    self.control = None
+                    self.turn_id = None

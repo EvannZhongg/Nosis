@@ -39,7 +39,7 @@ Host 关闭只释放自身执行面与 Journal，由进程宿主在全部 Host �
 - 创建主 Provider、`fast_model` 对应的辅助模型 Provider、视觉 Provider 和图片生成 Provider
 - 按选中的协议与模型路由导入对应适配器；原生 OpenAI 和 DeepSeek 模型的装配和视觉校验不导入 LiteLLM
 - 建立宿主与平台沙箱执行器，并按 Session 的权限 preset 决定执行路由授权
-- 装配桌面截图与输入能力；PyAutoGUI、PyScreeze、OpenCV、NumPy 等原生依赖在首次使用桌面 Tool 时才加载
+- 装配桌面截图与输入能力；Windows 输入使用原生 SendInput，其他平台的 PyAutoGUI、PyScreeze、OpenCV、NumPy 等原生依赖在首次使用桌面 Tool 时才加载
 - 从内置 Catalog 按主 Agent 和子 Agent 角色选择 Tool
 - 注入 Session、Plan、Memory、Scheduler、权限、图片和用户交互能力
 - 加载 standalone Skill、Plugin Skill、Plugin Agent 与 MCP Server
@@ -241,7 +241,7 @@ standalone Skill 与 MCP 使用同一套 Core registry / manager，不存在 Plu
 | `plugins.py` | Plugin manifest、Skill、MCP、Agent 与 Hook component 发现 |
 | `instructions.py` | Workspace Instructions 来源读取与 fingerprint |
 | `attachments.py` | 入站附件解析 |
-| `computer.py` | 桌面截图与输入的平台能力 |
+| `desktop/` | 桌面截图、输入与 Windows 窗口定位的平台能力 |
 | `callbacks.py` | Runtime 对宿主的回调接口 |
 
 ## Plugin Hooks

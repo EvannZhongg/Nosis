@@ -1,12 +1,9 @@
 """Perform a controlled computer action and return the new screen."""
 
-from pathlib import Path
-
 from ...execution.authority import WORKSPACE_ACCESS_AUTHORITY, ExecutionScope
-from ...media import UnsupportedImageError
 from ..base import JSONValue, Tool, ToolDefinition, ToolOutput
 from ..context import ToolExecutionContext
-from ..paths import resolve_image
+from ._desktop import WINDOW_PARAMETER, desktop_output
 
 
 class ComputerActionTool(Tool):
@@ -28,21 +25,40 @@ class ComputerActionTool(Tool):
         return ToolDefinition(
             name=self.name,
             description=(
-                "Operate the visible computer interface, then inspect the "
-                "resulting screenshot. The screenshot is the bounding rectangle "
-                "of the full virtual desktop. Coordinates are zero-based, "
-                "non-negative pixels relative to its top-left corner. The Runtime "
-                "maps them to OS input coordinates as (input_x, input_y) = "
-                "(x + virtual_desktop_left, y + virtual_desktop_top), including "
-                "when a monitor is left of or above the primary display. Use "
-                "coordinates from the latest screenshot; a display layout, "
-                "resolution, or scale change ends computer control with an error. "
-                "The type action inserts committed text through the clipboard, "
-                "so it is safe with active keyboard input methods."
+                "Operate the visible desktop. By default the result includes a new "
+                "screenshot. Coordinates are zero-based original-image pixels. For "
+                "the full virtual desktop, the Runtime adds its origin, including "
+                "negative screen origins. Pass the source screenshot path as observation "
+                "to get a best-effort pre-action change signal. screen_changed compares "
+                "the frames immediately before and after the action. Pixel changes "
+                "are clues about visible state. Re-observe after an observation_error "
+                "because the input may already have been sent. Mouse buttons held by "
+                "the tool are released at the end of the turn. A display layout, "
+                "resolution, or scale change requires a fresh desktop runtime."
+                + (
+                    " With window, pass the latest observation path for that window. "
+                    "Coordinates are relative to the crop's top-left corner. Input is "
+                    "rejected if the window moved or if the point/foreground check "
+                    "finds a different window. Window checks are sampled, and the "
+                    "result reports window_at_point, foreground_before, and foreground_after "
+                    "where applicable. Window-scoped scrolling requires the target to be in the foreground."
+                    if context.computer_windows else ""
+                )
             ),
             parameters={
                 "type": "object",
                 "properties": {
+                    **({"window": WINDOW_PARAMETER} if context.computer_windows else {}),
+                    "observation": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "Path of the most recent screenshot used as the coordinate reference.",
+                    },
+                    "screenshot": {
+                        "type": "boolean",
+                        "default": True,
+                        "description": "Capture and attach the screen after the action.",
+                    },
                     "action": {
                         "type": "string",
                         "enum": [
@@ -60,7 +76,8 @@ class ComputerActionTool(Tool):
                         "description": (
                             "Coordinate actions require x and y. Drag additionally "
                             "requires to_x and to_y. Scroll additionally requires a "
-                            "non-zero amount. Wait optionally accepts seconds."
+                            "non-zero amount. Mouse up releases a button held by this tool. "
+                            "Wait optionally accepts seconds."
                         ),
                     },
                     "x": {
@@ -95,7 +112,7 @@ class ComputerActionTool(Tool):
                     "key": {
                         "type": "string",
                         "description": (
-                            "A key name supported by PyAutoGUI on the current platform, "
+                            "A key name supported on the current platform, "
                             "such as enter, esc, or tab."
                         ),
                     },
@@ -104,7 +121,7 @@ class ComputerActionTool(Tool):
                         "items": {"type": "string"},
                         "minItems": 1,
                         "description": (
-                            "PyAutoGUI key names for a hotkey; Control and Ctrl are "
+                            "Key names for a hotkey; Control and Ctrl are "
                             "accepted aliases for ctrl. Use command on macOS and ctrl "
                             "on Windows or Linux."
                         ),
@@ -149,15 +166,6 @@ class ComputerActionTool(Tool):
             "wait",
         }:
             raise ValueError("computer_action requires a supported action")
-        path = computer(arguments)
-        if not isinstance(path, Path):
-            raise ValueError("computer control returned an invalid screenshot path")
-        try:
-            relative = path.resolve().relative_to(context.workspace.path).as_posix()
-            part, info = resolve_image(relative, context)
-        except (UnsupportedImageError, OSError, ValueError) as error:
-            raise ValueError(f"action screenshot is not readable: {error}") from error
-        return ToolOutput(
-            output={"action": action, "screenshot": part.path, "width": info.width, "height": info.height},
-            attachments=(part,),
-        )
+        if "window" in arguments and not context.computer_windows:
+            raise ValueError("window-scoped computer control is unavailable on this platform")
+        return desktop_output(computer(arguments), context, action=action)

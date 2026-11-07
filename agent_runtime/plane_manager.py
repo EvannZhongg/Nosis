@@ -54,7 +54,7 @@ from .plugins import PluginAgent, PluginManager
 from .role_tools import resolve_role_tools
 from .settings import EnvironmentReloader, configuration_fingerprint
 from .callbacks import RuntimeCallbacks
-from .computer import DesktopCapability
+from .desktop import DesktopCapability
 from .session_controller import SessionRuntimeController
 from .session_title import SessionTitleTask
 
@@ -412,6 +412,7 @@ class ExecutionPlaneManager:
                     and "computer_screenshot" in computer_tools
                     else None
                 ),
+                computer_windows=desktop is not None and desktop.supports_windows,
                 computer=(
                     desktop.control
                     if desktop is not None and "computer_action" in computer_tools

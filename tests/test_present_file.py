@@ -13,6 +13,7 @@ from agent_core.media import MAX_IMAGE_BYTES
 from agent_core.tools.builtin.present_file import PresentFileTool
 from agent_core.mcp.tool import McpTool
 from interfaces.bridge.protocol import event_to_message
+from agent_core.tools.context import DesktopResult
 from tests.image_fixtures import png_bytes
 
 
@@ -29,7 +30,7 @@ class PresentFileTest(unittest.TestCase):
             browser = McpTool("browser", "browser_screenshot", "Screenshot", {"type": "object"})
             context = ToolExecutionContext(
                 workspace=workspace, session=session, vision_input=True,
-                screenshot=lambda label: screenshot,
+                screenshot=lambda _label, _window: DesktopResult(screenshot=screenshot),
                 mcp=SimpleNamespace(call_tool=lambda *args, **kwargs: {
                     "content": [{"type": "image", "data": base64.b64encode(png_bytes(2, 3)).decode(), "mime_type": "image/png"}],
                 }),

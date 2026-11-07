@@ -22,7 +22,7 @@ nosis-server（常驻宿主）
 ## 主要能力
 
 - **受控本地执行**：Session 支持 `Ask for approval`、`Workspace Access` 和 `Full Access` 三种权限 preset；Shell 根据 scope 进入 Workspace 沙箱或宿主环境，文件 Tool 始终限制在当前 Workspace。
-- **桌面自动化**：主 Agent 可通过 `computer_screenshot` 与 `computer_action` 观察并操作可见桌面，覆盖截图、点击、拖拽、滚动、按键与文本输入；两项 Tool 默认开启且只对主 Agent 可见，调用时按当前权限 preset 确认。
+- **桌面自动化**：主 Agent 可通过 `computer_screenshot` 与 `computer_action` 观察并操作可见桌面，覆盖截图、点击、拖拽、滚动、按键与文本输入；两项 Tool 默认开启且只对主 Agent 可见，调用时按当前权限 preset 确认。动作默认返回截图，可通过 `screenshot: false` 跳过。Windows 还支持裁剪窗口范围内的可见画面和窗口相对坐标。执行窗口动作时，将最近一次截图路径作为 `observation`，并使用该窗口的 `hwnd:<十进制>` 作为目标。
 - **Web 检索**：`web_fetch` 直接或通过 DeepSeek 读取公开网页；启用 `web_search` 后默认使用 DuckDuckGo 检索，也可切换为 Exa 或 DeepSeek。
 - **完整 Agent Loop**：支持流式响应、Tool 批次、上下文压缩、steer、取消、计划和后台 Job。
 - **可恢复 Session**：对话和执行事件写入 append-only JSONL Journal，TUI 与 GUI 可读取同一类 Session。

@@ -23,6 +23,7 @@ from agent_core import (
     Workspace,
 )
 from agent_core.config import ContextCompressionConfig
+from agent_core.tools.context import DesktopResult
 from tests.image_fixtures import png_bytes
 
 
@@ -43,11 +44,11 @@ class ComputerScreenshotToolTest(unittest.TestCase):
             screenshot=capture,
         )
 
-    def capture(self, _label: str) -> Path:
+    def capture(self, _label: str, _window: str | None) -> DesktopResult:
         path = self.root / ".nosis" / "attachments" / "desktop.png"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(png_bytes(40, 20))
-        return path
+        return DesktopResult(screenshot=path)
 
     def test_returns_a_workspace_relative_image_attachment(self) -> None:
         result = ComputerScreenshotTool().execute(
@@ -83,7 +84,7 @@ class ComputerScreenshotToolTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "not readable"):
             ComputerScreenshotTool().execute(
-                {}, self.context(lambda _label: outside)
+                {}, self.context(lambda _label, _window: DesktopResult(screenshot=outside))
             )
 
 
@@ -136,7 +137,7 @@ class ComputerScreenshotContextTest(unittest.TestCase):
                 workspace=workspace,
                 session=session,
                 vision_input=True,
-                screenshot=lambda _label: screenshot,
+                screenshot=lambda _label, _window: DesktopResult(screenshot=screenshot),
             )
             config = AgentConfig(
                 max_same_tool_calls=5,

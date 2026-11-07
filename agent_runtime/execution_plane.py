@@ -20,7 +20,7 @@ from agent_core.image_generation import ImageGenerator
 from agent_core.tools.config import ToolSettings
 from agent_core.hooks import HookRunner
 
-from .computer import DesktopCapability
+from .desktop import DesktopCapability
 
 if TYPE_CHECKING:
     from .session_title import SessionTitleTask
@@ -79,6 +79,8 @@ class ExecutionPlane:
         )
 
     def unbind_session(self) -> None:
+        if self.computer is not None:
+            self.computer.clear_observation()
         title_task = self.title_task
         self.title_task = None
         if title_task is not None:

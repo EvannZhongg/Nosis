@@ -1,12 +1,9 @@
 """Capture the current computer display and show it to the model."""
 
-from pathlib import Path
-
 from ...execution.authority import WORKSPACE_ACCESS_AUTHORITY, ExecutionScope
-from ...media import UnsupportedImageError
 from ..base import JSONValue, Tool, ToolDefinition, ToolOutput
 from ..context import ToolExecutionContext
-from ..paths import resolve_image
+from ._desktop import WINDOW_PARAMETER, desktop_output
 
 
 class ComputerScreenshotTool(Tool):
@@ -35,6 +32,13 @@ class ComputerScreenshotTool(Tool):
                 "computer_action: (0, 0) is the image's top-left corner, even when "
                 "the OS virtual desktop begins at a negative coordinate. Use this "
                 "when you need to observe the desktop or an active app."
+                + (
+                    " Pass window to crop the visible desktop to that window. The crop "
+                    "can include overlapping windows. Use its path as the observation "
+                    "and its hwnd as the target in a window-scoped action. The window "
+                    "must fit completely within one display."
+                    if context.computer_windows else ""
+                )
             ),
             parameters={
                 "type": "object",
@@ -42,7 +46,8 @@ class ComputerScreenshotTool(Tool):
                     "label": {
                         "type": "string",
                         "description": "Short label for this screenshot.",
-                    }
+                    },
+                    **({"window": WINDOW_PARAMETER} if context.computer_windows else {}),
                 },
                 "additionalProperties": False,
             },
@@ -59,21 +64,9 @@ class ComputerScreenshotTool(Tool):
         label = arguments.get("label", "computer")
         if not isinstance(label, str) or not label.strip():
             raise ValueError("computer_screenshot label must be a non-empty string")
-        path = capture(label.strip())
-        if not isinstance(path, Path):
-            raise ValueError("screenshot capture returned an invalid path")
-        try:
-            relative = path.resolve().relative_to(context.workspace.path).as_posix()
-            part, info = resolve_image(relative, context)
-        except (UnsupportedImageError, OSError, ValueError) as error:
-            raise ValueError(f"captured screenshot is not readable: {error}") from error
-        return ToolOutput(
-            output={
-                "path": part.path,
-                "mime_type": info.mime_type,
-                "width": info.width,
-                "height": info.height,
-                "size_bytes": info.size_bytes,
-            },
-            attachments=(part,),
-        )
+        window = arguments.get("window")
+        if window is not None and (
+            not context.computer_windows or not isinstance(window, str) or not window.strip()
+        ):
+            raise ValueError("window requires a supported, non-empty window selector")
+        return desktop_output(capture(label.strip(), window), context)

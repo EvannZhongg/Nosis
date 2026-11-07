@@ -25,6 +25,28 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True)
+class DesktopWindow:
+    hwnd: int
+    pid: int
+    title: str
+    process: str | None
+
+
+@dataclass(frozen=True)
+class DesktopResult:
+    screenshot: Path | None = None
+    window: DesktopWindow | None = None
+    origin: tuple[int, int] | None = None
+    window_at_point: DesktopWindow | None = None
+    window_at_destination: DesktopWindow | None = None
+    foreground_before: DesktopWindow | None = None
+    foreground_after: DesktopWindow | None = None
+    observation_changed: bool | None = None
+    screen_changed: bool | None = None
+    observation_error: str | None = None
+
+
+@dataclass(frozen=True)
 class ToolExecutionContext:
     """The Runtime dependencies handed to every Tool call.
 
@@ -73,8 +95,9 @@ class ToolExecutionContext:
     tool_settings: ToolSettings = field(default_factory=ToolSettings)
     # Runtime-provided screenshot capture. Core owns the tool contract while
     # the Runtime chooses the platform-specific capture implementation.
-    screenshot: Callable[[str], Path] | None = None
-    computer: Callable[[dict[str, JSONValue]], Path] | None = None
+    screenshot: Callable[[str, str | None], DesktopResult] | None = None
+    computer: Callable[[dict[str, JSONValue]], DesktopResult] | None = None
+    computer_windows: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(
