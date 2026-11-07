@@ -1,7 +1,7 @@
 """Turn lifecycle shared by interactive and unattended runtime hosts."""
 
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from threading import Lock
 from typing import Callable, Literal
 
@@ -18,6 +18,7 @@ class TurnResult:
     usage: TokenUsage | None = None
     error: RuntimeErrorInfo | None = None
     startup_failed: bool = False
+    runtime_warnings: tuple[str, ...] = ()
 
 
 class TurnRunner:
@@ -80,6 +81,7 @@ class TurnRunner:
         plane = None
         memory = None
         started = False
+        warnings: list[str] = []
         try:
             plane = ensure_plane()
             assert plane.agent is not None
@@ -101,26 +103,24 @@ class TurnRunner:
                 try:
                     memory.reconcile_pending()
                 except Exception as error:
-                    plane.runtime_warnings = (
-                        *plane.runtime_warnings,
-                        f"Long-term memory update failed: {error}",
-                    )
-            return TurnResult("completed", usage=result.usage)
+                    warnings.append(f"Long-term memory update failed: {error}")
+            turn_result = TurnResult("completed", usage=result.usage)
         except (KeyboardInterrupt, AgentCancelled):
             if memory is not None:
                 memory.discard_pending()
-            return TurnResult("cancelled")
+            turn_result = TurnResult("cancelled")
         except Exception as error:
             if memory is not None:
                 memory.discard_pending()
-            return TurnResult("failed", error=runtime_error_info(error), startup_failed=not started)
+            turn_result = TurnResult("failed", error=runtime_error_info(error), startup_failed=not started)
         finally:
             try:
                 if plane is not None and plane.computer is not None:
                     plane.computer.release_input()
             except Exception as error:
-                self.callbacks.on_phase("running", (f"Desktop input cleanup failed: {error}",))
+                warnings.append(f"Desktop input cleanup failed: {error}")
             finally:
                 with self._lock:
                     self.control = None
                     self.turn_id = None
+        return replace(turn_result, runtime_warnings=tuple(warnings))

@@ -146,12 +146,15 @@ class DesktopComputer:
             self._check_input_geometry()
             self._check_layout()
 
-    def capture(self, label: str, selector: str | None = None) -> DesktopResult:
+    def capture(self, arguments: dict[str, JSONValue]) -> DesktopResult:
         with self._lock:
-            window = self._resolve_window(selector)
+            label = arguments.get("label", "computer")
+            if not isinstance(label, str) or not label.strip():
+                raise ValueError("computer_screenshot label must be a non-empty string")
+            window = self._resolve_window(arguments)
             image, _, _, rect = self._capture_image(window)
             self._check_input_geometry()
-            return self._save_observation(image, label, rect, _preview(image), DesktopResult(window=window))
+            return self._save_observation(image, label.strip(), rect, _preview(image), DesktopResult(window=window))
 
     def control(self, arguments: dict[str, JSONValue]) -> DesktopResult:
         with self._lock:
@@ -162,7 +165,7 @@ class DesktopComputer:
             screenshot = arguments.get("screenshot", True)
             if not isinstance(screenshot, bool):
                 raise ValueError("screenshot must be a boolean")
-            window = self._resolve_window(arguments.get("window"))
+            window = self._resolve_window(arguments)
             observation = self._referenced_observation(arguments.get("observation"), window)
             before, _, _, rect = self._capture_image(window)
             self._check_input_geometry()
@@ -337,11 +340,14 @@ class DesktopComputer:
         if _Screen(*self._windows.window_rect(window)) != rect:
             raise ValueError("Window geometry changed. Observe the window again before sending input.")
 
-    def _resolve_window(self, selector: JSONValue) -> DesktopWindow | None:
-        if selector is None:
+    def _resolve_window(self, arguments: dict[str, JSONValue]) -> DesktopWindow | None:
+        if "window" not in arguments:
             return None
-        if self._windows is None or not isinstance(selector, str) or not selector.strip():
-            raise ValueError("window requires a supported, non-empty window selector")
+        if self._windows is None:
+            raise ValueError("Window-scoped desktop operations are unavailable on this platform.")
+        selector = arguments["window"]
+        if not isinstance(selector, str) or not selector.strip():
+            raise ValueError("window must be a non-empty string")
         return self._windows.resolve_window(selector.strip())
 
     def _referenced_observation(
@@ -554,8 +560,8 @@ class DesktopCapability:
     def supports_windows(self) -> bool:
         return sys.platform == "win32"
 
-    def capture(self, label: str, window: str | None = None) -> DesktopResult:
-        return self._desktop().capture(label, window)
+    def capture(self, arguments: dict[str, JSONValue]) -> DesktopResult:
+        return self._desktop().capture(arguments)
 
     def control(self, arguments: dict[str, JSONValue]) -> DesktopResult:
         return self._desktop().control(arguments)

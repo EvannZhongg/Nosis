@@ -61,12 +61,4 @@ class ComputerScreenshotTool(Tool):
         capture = context.screenshot
         if capture is None:
             raise ValueError("computer screenshot capture is unavailable")
-        label = arguments.get("label", "computer")
-        if not isinstance(label, str) or not label.strip():
-            raise ValueError("computer_screenshot label must be a non-empty string")
-        window = arguments.get("window")
-        if window is not None and (
-            not context.computer_windows or not isinstance(window, str) or not window.strip()
-        ):
-            raise ValueError("window requires a supported, non-empty window selector")
-        return desktop_output(capture(label.strip(), window), context)
+        return desktop_output(capture(arguments), context)

@@ -44,7 +44,7 @@ class ComputerScreenshotToolTest(unittest.TestCase):
             screenshot=capture,
         )
 
-    def capture(self, _label: str, _window: str | None) -> DesktopResult:
+    def capture(self, _arguments) -> DesktopResult:
         path = self.root / ".nosis" / "attachments" / "desktop.png"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(png_bytes(40, 20))
@@ -84,7 +84,7 @@ class ComputerScreenshotToolTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "not readable"):
             ComputerScreenshotTool().execute(
-                {}, self.context(lambda _label, _window: DesktopResult(screenshot=outside))
+                {}, self.context(lambda _arguments: DesktopResult(screenshot=outside))
             )
 
 
@@ -137,7 +137,7 @@ class ComputerScreenshotContextTest(unittest.TestCase):
                 workspace=workspace,
                 session=session,
                 vision_input=True,
-                screenshot=lambda _label, _window: DesktopResult(screenshot=screenshot),
+                screenshot=lambda _arguments: DesktopResult(screenshot=screenshot),
             )
             config = AgentConfig(
                 max_same_tool_calls=5,

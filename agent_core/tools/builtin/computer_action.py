@@ -166,6 +166,4 @@ class ComputerActionTool(Tool):
             "wait",
         }:
             raise ValueError("computer_action requires a supported action")
-        if "window" in arguments and not context.computer_windows:
-            raise ValueError("window-scoped computer control is unavailable on this platform")
         return desktop_output(computer(arguments), context, action=action)

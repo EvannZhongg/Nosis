@@ -95,7 +95,7 @@ class ToolExecutionContext:
     tool_settings: ToolSettings = field(default_factory=ToolSettings)
     # Runtime-provided screenshot capture. Core owns the tool contract while
     # the Runtime chooses the platform-specific capture implementation.
-    screenshot: Callable[[str, str | None], DesktopResult] | None = None
+    screenshot: Callable[[dict[str, JSONValue]], DesktopResult] | None = None
     computer: Callable[[dict[str, JSONValue]], DesktopResult] | None = None
     computer_windows: bool = False
 

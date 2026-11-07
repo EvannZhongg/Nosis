@@ -7,8 +7,8 @@ from unittest.mock import Mock, call, patch
 
 from PIL import Image
 
-from agent_core import AgentCancelled, Workspace
-from agent_core.tools.context import DesktopResult, DesktopWindow
+from agent_core import AgentCancelled, ComputerActionTool, ComputerScreenshotTool, Session, Workspace
+from agent_core.tools.context import DesktopResult, DesktopWindow, ToolExecutionContext
 from agent_runtime.callbacks import RuntimeCallbacks
 from agent_runtime.desktop import DesktopCapability
 from agent_runtime.desktop.computer import DesktopComputer
@@ -151,7 +151,7 @@ class DesktopComputerTest(unittest.TestCase):
     def test_normalizes_each_display_into_virtual_desktop_coordinates(self) -> None:
         computer = self.computer()
 
-        path = computer.capture("desktop")
+        path = computer.capture({"label": "desktop"})
 
         with Image.open(path.screenshot) as image:
             self.assertEqual(image.size, (300, 150))
@@ -323,7 +323,7 @@ class DesktopComputerTest(unittest.TestCase):
         self.screenshots.scale = 1
 
         with self.assertRaisesRegex(RuntimeError, "screenshot scale changed"):
-            computer.capture("changed")
+            computer.capture({"label": "changed"})
 
     def test_startup_rejects_input_and_screenshot_dimension_mismatch(self) -> None:
         self.pyautogui.size.return_value = (100, 50)
@@ -351,7 +351,7 @@ class DesktopComputerTest(unittest.TestCase):
 
     def test_no_screenshot_skips_post_capture_without_replacing_reference(self) -> None:
         computer = self.computer()
-        shot = computer.capture("desktop")
+        shot = computer.capture({"label": "desktop"})
         source = shot.screenshot.relative_to(self.workspace.path).as_posix()
         self.screenshots.tint = 90
         with patch.object(computer, "_capture_image", wraps=computer._capture_image) as capture:
@@ -370,7 +370,7 @@ class DesktopComputerTest(unittest.TestCase):
 
     def test_pre_observation_and_post_action_changes_are_independent(self) -> None:
         computer = self.computer()
-        shot = computer.capture("desktop")
+        shot = computer.capture({"label": "desktop"})
         source = shot.screenshot.relative_to(self.workspace.path).as_posix()
         self.pyautogui.press.side_effect = lambda _: setattr(self.screenshots, "tint", 90)
         result = computer.control({"action": "key", "key": "enter", "observation": source})
@@ -400,7 +400,7 @@ class DesktopComputerTest(unittest.TestCase):
 
     def test_window_crop_and_action_use_same_negative_origin(self) -> None:
         computer, native, window, other = self.window_computer()
-        shot = computer.capture("editor", "editor")
+        shot = computer.capture({"label": "editor", "window": "editor"})
         self.assertEqual(shot.window, window)
         self.assertEqual(shot.origin, (-80, -40))
         with Image.open(shot.screenshot) as image:
@@ -413,9 +413,31 @@ class DesktopComputerTest(unittest.TestCase):
         self.assertEqual(result.window_at_point, window)
         self.assertEqual(result.foreground_after, other)
 
+    def test_window_parameter_is_rejected_by_runtime_for_both_tools(self) -> None:
+        windows_computer, _, _, _ = self.window_computer()
+        for computer, supports_windows, selector, error in (
+            (windows_computer, True, None, "window must be a non-empty string"),
+            (windows_computer, True, 100, "window must be a non-empty string"),
+            (windows_computer, True, "  ", "window must be a non-empty string"),
+            (self.computer(), False, "editor", "unavailable on this platform"),
+        ):
+            with self.subTest(supports_windows=supports_windows, selector=selector):
+                context = ToolExecutionContext(
+                    workspace=self.workspace, session=Session(), computer_windows=supports_windows,
+                    screenshot=computer.capture, computer=computer.control,
+                )
+                with patch.object(computer, "_capture_image", wraps=computer._capture_image) as capture:
+                    with self.assertRaisesRegex(ValueError, error):
+                        ComputerScreenshotTool().execute({"window": selector}, context)
+                    with self.assertRaisesRegex(ValueError, error):
+                        ComputerActionTool().execute({
+                            "action": "click", "x": 10, "y": 10, "window": selector,
+                        }, context)
+                    capture.assert_not_called()
+
     def test_window_scope_rejects_movement_occlusion_capture_and_wrong_foreground(self) -> None:
         computer, native, window, other = self.window_computer()
-        shot = computer.capture("editor", "editor")
+        shot = computer.capture({"label": "editor", "window": "editor"})
         source = shot.screenshot.relative_to(self.workspace.path).as_posix()
         args = {"action": "click", "window": "hwnd:100", "observation": source, "x": 10, "y": 12}
         native.window_rect.return_value = (-75, -40, 50, 35)
@@ -435,7 +457,7 @@ class DesktopComputerTest(unittest.TestCase):
         native.keys.assert_not_called()
         native.window_rect.return_value = (-20, 0, 50, 35)
         with self.assertRaisesRegex(ValueError, "single display"):
-            computer.capture("cross-screen", "editor")
+            computer.capture({"label": "cross-screen", "window": "editor"})
 
     def test_virtual_input_bounds_are_checked_before_injection(self) -> None:
         computer, native, _, _ = self.window_computer()
@@ -479,11 +501,11 @@ class DesktopCapabilityTest(unittest.TestCase):
             shot = DesktopResult(screenshot=Path("shot.png"))
             computer_class.return_value.capture.return_value = shot
 
-            self.assertEqual(capability.capture("desktop"), shot)
+            self.assertEqual(capability.capture({"label": "desktop"}), shot)
             capability.control({"action": "wait"})
 
         computer_class.assert_called_once_with(self.workspace, input_enabled=True)
-        computer_class.return_value.capture.assert_called_once_with("desktop", None)
+        computer_class.return_value.capture.assert_called_once_with({"label": "desktop"})
         computer_class.return_value.control.assert_called_once_with(
             {"action": "wait"}
         )
@@ -497,7 +519,7 @@ class DesktopCapabilityTest(unittest.TestCase):
     def test_close_closes_a_desktop_built_on_demand(self) -> None:
         with patch("agent_runtime.desktop.computer.DesktopComputer") as computer_class:
             capability = DesktopCapability(self.workspace, input_enabled=True)
-            capability.capture("desktop")
+            capability.capture({"label": "desktop"})
 
             capability.close()
             capability.close()

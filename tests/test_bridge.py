@@ -9,7 +9,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from tests.provider_fixtures import capabilities_stub, TEXT_MODEL, VISION_MODEL
 from tests.bridge_fixtures import BridgeTestCase, emitted, open_session_message
@@ -1065,7 +1065,7 @@ class BridgeCancellationTest(BridgeTestCase):
                             results.append(bridge.host.turns.run_turn(
                                 "t1", "work",
                                 lambda: SimpleNamespace(
-                                    agent=WaitingAgent(), memory=None, runtime_warnings=(),
+                                    agent=WaitingAgent(), memory=None, computer=None, runtime_warnings=(),
                                 ),
                                 lambda: (),
                             ))
@@ -1671,6 +1671,36 @@ class InterruptedTurnTest(BridgeTestCase):
 
         self.assertEqual(memory.calls, ["begin", "discard"])
 
+    def test_turn_cleanup_warnings_are_published_with_the_terminal_phase(self) -> None:
+        plane = self.bridge.host.planes.ensure(self.bridge.host.sessions)
+        cases = (
+            (SuccessfulAgent(self.session), "turn_completed"),
+            (ScriptedAgent(self.session, error=KeyboardInterrupt()), "turn_cancelled"),
+            (FailingAgent(self.session), "turn_failed"),
+        )
+        for index, (agent, event_type) in enumerate(cases):
+            with self.subTest(event=event_type):
+                plane.agent = agent
+                plane.memory = MemorySpy()
+                computer = SimpleNamespace(release_input=Mock(side_effect=OSError("release failed")))
+                start = len(emitted(self.stdout))
+                with (
+                    patch.object(plane, "computer", computer),
+                    patch.object(plane.memory, "reconcile_pending", side_effect=OSError("write failed")),
+                ):
+                    self.bridge.run_turn({"turn_id": f"cleanup-{index}", "text": "work"})
+
+                messages = emitted(self.stdout)[start:]
+                phases = [message for message in messages if message["type"] == "runtime_state"]
+                self.assertEqual([message["phase"] for message in phases], ["running", "idle"])
+                warnings = ["Desktop input cleanup failed: release failed"]
+                if event_type == "turn_completed":
+                    warnings.insert(0, "Long-term memory update failed: write failed")
+                self.assertEqual(phases[-1]["runtime_warnings"], warnings)
+                self.assertIsNone(phases[-1]["turn_id"])
+                self.assertEqual(messages[-1]["type"], event_type)
+                self.assertEqual(messages[-1]["runtime"]["runtime_warnings"], warnings)
+
     def test_stores_a_failed_turn(self) -> None:
         self.start_turn(
             ScriptedAgent(
@@ -2034,6 +2064,7 @@ class ScheduledTurnTest(unittest.TestCase):
                         "agent": ScheduledAgent(state.session),
                         "jobs": type("Jobs", (), {"snapshot": lambda self: []})(),
                         "memory": None,
+                        "computer": None,
                         "runtime_warnings": (),
                     },
                 )()

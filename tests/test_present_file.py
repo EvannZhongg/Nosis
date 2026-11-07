@@ -30,7 +30,7 @@ class PresentFileTest(unittest.TestCase):
             browser = McpTool("browser", "browser_screenshot", "Screenshot", {"type": "object"})
             context = ToolExecutionContext(
                 workspace=workspace, session=session, vision_input=True,
-                screenshot=lambda _label, _window: DesktopResult(screenshot=screenshot),
+                screenshot=lambda _arguments: DesktopResult(screenshot=screenshot),
                 mcp=SimpleNamespace(call_tool=lambda *args, **kwargs: {
                     "content": [{"type": "image", "data": base64.b64encode(png_bytes(2, 3)).decode(), "mime_type": "image/png"}],
                 }),

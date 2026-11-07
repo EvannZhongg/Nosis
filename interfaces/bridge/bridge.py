@@ -598,11 +598,12 @@ class Bridge:
             turn_id, str(message["text"]),
             attachments=lambda: parse_attachments(message.get("attachments"), self.host.sessions.workspace),
         )
-        self._phase = "failed" if result.startup_failed else "idle"
         self._approval = self._question = None
-        self._runtime_warnings = ()
         self._jobs.clear()
-        self._emit_runtime_state(self._phase)
+        self._emit_runtime_state(
+            "failed" if result.startup_failed else "idle",
+            runtime_warnings=result.runtime_warnings,
+        )
         if result.status == "failed":
             self.emit("turn_failed", turn_id=turn_id, error=runtime_failure_to_dict(result.error))
         elif result.status == "cancelled":
