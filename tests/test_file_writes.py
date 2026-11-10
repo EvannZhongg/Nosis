@@ -1,6 +1,7 @@
 import json
 import os
 import stat
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,6 +16,7 @@ from agent_core import (
     JsonlSessionStore,
     PermissionController,
     PermissionPreset,
+    ReadFileTool,
     Session,
     ToolCall,
     ToolCatalog,
@@ -22,9 +24,59 @@ from agent_core import (
     Workspace,
     WriteFileTool,
 )
-from agent_core.tools.files import write_file_bytes
+from agent_core.tools.builtin.apply_patch import _prepare_changes
+from agent_core.tools.files import BoundFile, bind_file, filesystem
 from agent_core.turn_control import AgentCancelled, TurnControl
 from tests.file_write_fixtures import patch_text, write_call
+
+
+class FileToolBoundaryTest(unittest.TestCase):
+    def test_tools_reject_a_stale_canonical_path_through_a_link(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            workspace = root / "workspace"
+            outside = root / "outside"
+            workspace.mkdir()
+            outside.mkdir()
+            original = outside / "file.txt"
+            original.write_bytes(b"old\n")
+            link = workspace / "linked"
+            if os.name == "nt":
+                subprocess.run(
+                    ["cmd", "/c", "mklink", "/J", str(link), str(outside)],
+                    check=True, capture_output=True,
+                )
+            else:
+                link.symlink_to(outside, target_is_directory=True)
+
+            try:
+                context = ToolExecutionContext(Workspace(workspace), Session())
+                for tool in (ReadFileTool(), WriteFileTool(), EditFileTool(), ApplyPatchTool()):
+                    with self.subTest(tool=tool.name):
+                        call = (
+                            ToolCall("read", "read_file", {"path": "file.txt"})
+                            if tool.name == "read_file"
+                            else write_call(tool.name)
+                        )
+                        catalog = ToolCatalog([tool]).select([tool.name], context)
+                        with patch.object(Workspace, "resolve_path", return_value=link / original.name):
+                            self.assertIsNotNone(catalog.execute(call).error)
+                        self.assertEqual(original.read_bytes(), b"old\n")
+                        self.assertEqual(list(outside.iterdir()), [original])
+            finally:
+                if os.name == "nt":
+                    link.rmdir()
+
+    def test_create_never_replaces_a_file_present_at_commit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            target = root / "file.txt"
+            target.write_bytes(b"old")
+            with bind_file(root, Path(target.name)) as file:
+                with self.assertRaises(FileExistsError):
+                    file.write(b"new", replace=False, mode=None)
+            self.assertEqual(target.read_bytes(), b"old")
+            self.assertEqual(list(root.iterdir()), [target])
 
 
 class FileWritePermissionTest(unittest.TestCase):
@@ -297,12 +349,14 @@ class ApplyPatchRegressionTest(unittest.TestCase):
             (self.root / name).write_bytes(b"old\n")
         body = "\n".join(f"*** Update File: {name}\n@@\n-old\n+new" for name in ("a", "b", "c"))
 
-        def fail_second(path, data):
-            if path.name == "b":
-                raise PermissionError("locked")
-            write_file_bytes(path, data)
+        write = BoundFile.write
 
-        with patch("agent_core.tools.builtin.apply_patch.write_file_bytes", side_effect=fail_second):
+        def fail_second(file, data, **kwargs):
+            if file.name == "b":
+                raise PermissionError("locked")
+            write(file, data, **kwargs)
+
+        with patch.object(BoundFile, "write", fail_second):
             result = self.apply(body)
 
         self.assertTrue(result.executed)
@@ -319,7 +373,8 @@ class ApplyPatchRegressionTest(unittest.TestCase):
     def test_failed_atomic_replace_keeps_original_file_and_cleans_temporary(self) -> None:
         target = self.root / "file.txt"
         target.write_bytes(b"old\n")
-        with patch("agent_core.atomic.os.replace", side_effect=PermissionError("locked")):
+        module, operation = (filesystem, "_rename") if os.name == "nt" else (os, "replace")
+        with patch.object(module, operation, side_effect=PermissionError("locked")):
             result = self.apply("*** Update File: file.txt\n@@\n-old\n+new")
         self.assertEqual(result.error.details["completed"], [])
         self.assertEqual(target.read_bytes(), b"old\n")
@@ -330,11 +385,12 @@ class ApplyPatchRegressionTest(unittest.TestCase):
         self.context = ToolExecutionContext(Workspace(self.root), Session(), cancellation=control)
         tools = ToolCatalog([ApplyPatchTool()]).select(["apply_patch"], self.context)
 
-        def cancel_during_validation(*args):
+        def cancel_after_validation(*args):
+            changes = _prepare_changes(*args)
             control.cancel()
-            return []
+            return changes
 
-        with patch("agent_core.tools.builtin.apply_patch.missing_parent_directories", side_effect=cancel_during_validation):
+        with patch("agent_core.tools.builtin.apply_patch._prepare_changes", side_effect=cancel_after_validation):
             with self.assertRaises(AgentCancelled):
                 tools.execute(ToolCall("patch", "apply_patch", {
                     "patch": patch_text("*** Add File: new/file.txt\n+new"),

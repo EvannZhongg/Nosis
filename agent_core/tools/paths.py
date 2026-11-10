@@ -6,12 +6,15 @@ though they live outside the workspace, so one resolver serves both and
 every tool enforces the same containment rules.
 """
 
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator
 
 from ..content import ImagePart
 from ..media import ImageInfo, probe_image
 from ..path_utils import relative_to_root
 from .context import ToolExecutionContext
+from .files import BoundFile, bind_file
 
 
 SESSION_MARKER = Path(".nosis", "sessions")
@@ -21,13 +24,23 @@ def resolve_readable_path(
     path: str,
     context: ToolExecutionContext,
 ) -> tuple[Path, str]:
-    """Resolve *path* to a real file location plus its display form.
+    """Resolve a workspace or Session artifact path for display."""
+    _root, resolved, display = _resolve_readable_location(path, context)
+    return resolved, display
 
-    A ``.nosis/sessions/...`` path is resolved against the Session root;
-    anything else is a workspace-relative path.  Both branches reject a
-    result that escapes its root, so a tool never has to repeat the
-    check.
-    """
+
+@contextmanager
+def bind_readable_file(
+    path: str, context: ToolExecutionContext
+) -> Iterator[tuple[BoundFile, str]]:
+    root, resolved, display = _resolve_readable_location(path, context)
+    with bind_file(root, relative_to_root(resolved, root)) as file:
+        yield file, display
+
+
+def _resolve_readable_location(
+    path: str, context: ToolExecutionContext
+) -> tuple[Path, Path, str]:
     relative = Path(path)
     if relative == SESSION_MARKER or SESSION_MARKER in relative.parents:
         sessions_directory = context.sessions_directory
@@ -40,10 +53,10 @@ def resolve_readable_path(
             raise ValueError(
                 "session artifact path must stay within sessions"
             ) from error
-        return resolved, relative.as_posix()
+        return sessions_directory, resolved, relative.as_posix()
     workspace = context.workspace
     resolved = workspace.resolve_path(path)
-    return resolved, relative_to_root(resolved, workspace.path).as_posix()
+    return workspace.path, resolved, relative_to_root(resolved, workspace.path).as_posix()
 
 
 def resolve_image(

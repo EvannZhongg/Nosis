@@ -69,13 +69,11 @@ class ReadSkillTool(Tool):
             raise ValueError("this runtime has no registered skills")
         skill = context.skills.get(name)
         file_path = _resolve_skill_path(skill.directory, path)
-        return read_text_file(
-            file_path,
-            {"name": skill.identifier, "path": path},
-            offset,
-            limit,
-            tool_name=self.name,
-        )
+        with file_path.open("r", encoding="utf-8") as file:
+            return read_text_file(
+                file, {"name": skill.identifier, "path": path},
+                offset, limit, tool_name=self.name,
+            )
 
 
 def _parse_arguments(

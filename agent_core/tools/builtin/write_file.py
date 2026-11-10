@@ -1,7 +1,7 @@
 from ..base import JSONValue, Tool, ToolDefinition
 from ..context import ToolExecutionContext
-from ..files import missing_parent_directories, write_file_bytes
-from ...path_utils import path_for_comparison
+from ..files import bind_file
+from ...path_utils import relative_to_root
 
 
 class WriteFileTool(Tool):
@@ -57,34 +57,18 @@ class WriteFileTool(Tool):
             )
 
         workspace = context.workspace
-        file_path = workspace.resolve_path(path)
-        existed = file_path.exists()
-        if existed and not overwrite:
-            raise ValueError(
-                "file already exists; use edit_file, or explicitly set overwrite=true"
-            )
-
-        missing_parent_dirs = missing_parent_directories(
-            file_path,
-            workspace.path,
-        )
-        for directory in missing_parent_dirs:
-            directory.mkdir()
-
+        relative = relative_to_root(workspace.resolve_path(path), workspace.path)
         data = content.encode("utf-8")
-        write_file_bytes(file_path, data)
-
-        workspace_path = path_for_comparison(workspace.path)
+        with bind_file(workspace.path, relative, create_parents=True) as file:
+            mode = file.mode()
+            if mode is not None and not overwrite:
+                raise ValueError(
+                    "file already exists; use edit_file, or explicitly set overwrite=true"
+                )
+            file.write(data, replace=overwrite, mode=mode)
         return {
-            "path": path_for_comparison(file_path).relative_to(
-                workspace_path
-            ).as_posix(),
-            "created": not existed,
-            "created_parent_dirs": [
-                path_for_comparison(directory)
-                .relative_to(workspace_path)
-                .as_posix()
-                for directory in missing_parent_dirs
-            ],
+            "path": relative.as_posix(),
+            "created": mode is None,
+            "created_parent_dirs": list(file.created_parents),
             "bytes_written": len(data),
         }

@@ -1,5 +1,6 @@
 """Bounded text views shared by file tools and Session artifacts."""
 
+import os
 from pathlib import Path
 from typing import TextIO
 
@@ -17,14 +18,14 @@ TRUNCATED_LINE_NOTICE = " …（该行被截断）"
 
 
 def read_text_file(
-    path: Path,
+    file: TextIO,
     metadata: dict[str, JSONValue],
     offset: int,
     limit: int,
     *,
     tool_name: str,
 ) -> dict[str, JSONValue]:
-    size = path.stat().st_size
+    size = os.fstat(file.fileno()).st_size
     if size > MAX_FILE_SIZE_BYTES:
         raise ValueError(
             f"{tool_name} refused file because its size is "
@@ -35,8 +36,7 @@ def read_text_file(
     }
     budget = MAX_TOOL_RESULT_CHARS - envelope_chars(output) - STATUS_RESERVE_CHARS
     try:
-        with path.open("r", encoding="utf-8", errors="strict", newline=None) as file:
-            output["content"] = read_text_range(file, offset, limit, budget)
+        output["content"] = read_text_range(file, offset, limit, budget)
     except UnicodeDecodeError as error:
         raise ValueError(f"{tool_name} requires a UTF-8 text file") from error
     return output

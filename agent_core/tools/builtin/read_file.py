@@ -1,6 +1,8 @@
+import os
+
 from ..base import JSONValue, Tool, ToolDefinition
 from ..context import ToolExecutionContext
-from ..paths import resolve_readable_path
+from ..paths import bind_readable_file
 from ..text import DEFAULT_READ_LIMIT, read_text_file
 
 
@@ -54,10 +56,11 @@ class ReadFileTool(Tool):
         context: ToolExecutionContext,
     ) -> JSONValue:
         path, offset, limit = _parse_arguments(arguments)
-        file_path, display_path = resolve_readable_path(path, context)
-        return read_text_file(
-            file_path, {"path": display_path}, offset, limit, tool_name=self.name
-        )
+        with bind_readable_file(path, context) as (file, display_path):
+            with os.fdopen(file.open_read(), "r", encoding="utf-8") as stream:
+                return read_text_file(
+                    stream, {"path": display_path}, offset, limit, tool_name=self.name
+                )
 
 
 def _parse_arguments(

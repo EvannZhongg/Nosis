@@ -1,7 +1,7 @@
 from ..base import JSONValue, Tool, ToolDefinition
 from ..context import ToolExecutionContext
-from ..files import write_file_bytes
-from ...path_utils import path_for_comparison
+from ..files import bind_file
+from ...path_utils import relative_to_root
 
 
 class EditFileTool(Tool):
@@ -57,23 +57,22 @@ class EditFileTool(Tool):
             )
 
         workspace = context.workspace
-        file_path = workspace.resolve_path(path)
-        content = file_path.read_bytes().decode("utf-8")
-        occurrences = content.count(old_text)
-        if occurrences == 0:
-            raise ValueError("old_text was not found in the file")
-        if occurrences > 1:
-            raise ValueError(
-                f"old_text appears {occurrences} times; it must be unique"
+        relative = relative_to_root(workspace.resolve_path(path), workspace.path)
+        with bind_file(workspace.path, relative) as file:
+            content = file.read_bytes().decode("utf-8")
+            occurrences = content.count(old_text)
+            if occurrences == 0:
+                raise ValueError("old_text was not found in the file")
+            if occurrences > 1:
+                raise ValueError(
+                    f"old_text appears {occurrences} times; it must be unique"
+                )
+            file.write(
+                content.replace(old_text, new_text, 1).encode("utf-8"),
+                replace=True,
+                mode=file.mode(),
             )
-
-        write_file_bytes(
-            file_path,
-            content.replace(old_text, new_text, 1).encode("utf-8")
-        )
         return {
-            "path": path_for_comparison(file_path).relative_to(
-                path_for_comparison(workspace.path)
-            ).as_posix(),
+            "path": relative.as_posix(),
             "replacements": 1,
         }

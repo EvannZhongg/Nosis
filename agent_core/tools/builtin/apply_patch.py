@@ -1,12 +1,14 @@
 import re
+import stat
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 
-from ...path_utils import path_for_comparison
+from ...path_utils import relative_to_root
 from ...turn_control import AgentCancelled
 from ..base import JSONValue, Tool, ToolDefinition, ToolError, ToolExecutionError
 from ..context import ToolExecutionContext
-from ..files import missing_parent_directories, write_file_bytes
+from ..files import bind_file
 
 
 @dataclass(frozen=True)
@@ -98,12 +100,18 @@ class ApplyPatchTool(Tool):
         # an unreported subset of its file changes applied.
         for index, change in enumerate(changes):
             try:
-                file_path = context.workspace.resolve_path(change.path)
-                if change.operation == "deleted":
-                    file_path.unlink()
-                else:
-                    assert change.content is not None
-                    write_file_bytes(file_path, change.content.encode("utf-8"))
+                adding = change.operation == "added"
+                with bind_file(
+                    context.workspace.path, Path(change.path), create_parents=adding,
+                ) as file:
+                    if change.operation == "deleted":
+                        file.unlink()
+                    else:
+                        assert change.content is not None
+                        file.write(
+                            change.content.encode("utf-8"),
+                            replace=not adding, mode=file.mode(),
+                        )
             except (OSError, ValueError) as error:
                 raise ToolExecutionError(ToolError(
                     type="PatchApplyError",
@@ -133,6 +141,7 @@ def _prepare_changes(
 
     changes: list[_FileChange] = []
     seen_paths: set[Path] = set()
+    root = context.workspace.path
     index = 1
     while index < len(lines) - 1:
         if not lines[index]:
@@ -141,10 +150,8 @@ def _prepare_changes(
         header = lines[index]
         index += 1
         operation, raw_path = _parse_file_header(header)
-        file_path = context.workspace.resolve_path(raw_path)
-        display_path = path_for_comparison(file_path).relative_to(
-            path_for_comparison(context.workspace.path)
-        ).as_posix()
+        file_path = relative_to_root(context.workspace.resolve_path(raw_path), root)
+        display_path = file_path.as_posix()
         if file_path in seen_paths:
             raise ValueError(
                 f"apply_patch contains multiple operations for '{display_path}'"
@@ -157,40 +164,43 @@ def _prepare_changes(
         body = lines[body_start:index]
         while body and not body[-1]:
             body.pop()
-        if operation == "added":
-            if file_path.exists():
+        with ExitStack() as opened:
+            try:
+                file = opened.enter_context(bind_file(root, file_path))
+            except FileNotFoundError:
+                file = None
+            mode = file.mode() if file is not None else None
+            if operation == "added":
+                if mode is not None:
+                    raise ValueError(
+                        f"apply_patch cannot add existing file '{display_path}'"
+                    )
+                if any(not line.startswith("+") for line in body):
+                    raise ValueError(
+                        f"apply_patch add lines for '{display_path}' must start with '+'"
+                    )
+                content = "\n".join(line[1:] for line in body)
+                if body:
+                    content += "\n"
+                changes.append(_FileChange(operation, display_path, content))
+                continue
+            if file is None or mode is None or not stat.S_ISREG(mode):
                 raise ValueError(
-                    f"apply_patch cannot add existing file '{display_path}'"
+                    f"apply_patch requires existing file '{display_path}'"
                 )
-            missing_parent_directories(file_path, context.workspace.path)
-            if any(not line.startswith("+") for line in body):
+            if operation == "deleted":
+                if body:
+                    raise ValueError(
+                        f"apply_patch delete for '{display_path}' must have no body"
+                    )
+                changes.append(_FileChange(operation, display_path))
+                continue
+            try:
+                original = file.read_bytes().decode("utf-8")
+            except UnicodeDecodeError as error:
                 raise ValueError(
-                    f"apply_patch add lines for '{display_path}' must start with '+'"
-                )
-            content = "\n".join(line[1:] for line in body)
-            if body:
-                content += "\n"
-            changes.append(_FileChange(operation, display_path, content))
-            continue
-
-        if not file_path.is_file():
-            raise ValueError(
-                f"apply_patch requires existing file '{display_path}'"
-            )
-        if operation == "deleted":
-            if body:
-                raise ValueError(
-                    f"apply_patch delete for '{display_path}' must have no body"
-                )
-            changes.append(_FileChange(operation, display_path))
-            continue
-
-        try:
-            original = file_path.read_bytes().decode("utf-8")
-        except UnicodeDecodeError as error:
-            raise ValueError(
-                f"apply_patch requires UTF-8 file '{display_path}'"
-            ) from error
+                    f"apply_patch requires UTF-8 file '{display_path}'"
+                ) from error
 
         if not body or not body[0].startswith("@@"):
             raise ValueError(
