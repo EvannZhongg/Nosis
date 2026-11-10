@@ -143,27 +143,35 @@ class FileBoundaryTest(unittest.TestCase):
         self.assertIsNotNone(result.error)
         self.assertEqual((self.outside / "file.txt").read_bytes(), b"OUTSIDE_SECRET\n")
 
-    def test_search_rejects_directory_and_leaf_swaps_after_enumeration(self):
-        for leaf in (False, True):
-            with self.subTest(leaf=leaf):
-                target = self.directory / "file.txt"
+    def test_search_reads_the_bound_directory_after_its_name_is_replaced(self):
+        open_read = filesystem.open_read
 
-                def candidates(*args):
-                    if leaf:
-                        target.rename(self.directory / "saved.txt")
-                        target.symlink_to(self.outside / "file.txt")
-                    else:
-                        self.swap()
-                    yield target
+        def swap_before_read(parent, name):
+            self.swap()
+            return open_read(parent, name)
 
-                with patch("agent_core.tools.builtin.search_files._iter_files", candidates):
-                    result = self.call(SearchFilesTool(), {"path": ".", "pattern": "OUTSIDE"})
-                self.assertIsNone(result.error)
-                self.assertEqual(result.output["matches"], [])
-                self.assertEqual(result.output["skipped_files"], 1)
-                if not leaf:
-                    self.directory.unlink()
-                    self.saved.rename(self.directory)
+        with patch.object(filesystem, "open_read", swap_before_read):
+            result = self.call(SearchFilesTool(), {"path": ".", "pattern": "old|OUTSIDE"})
+        self.assertIsNone(result.error)
+        self.assertEqual(
+            result.output["matches"],
+            [{"path": "d/file.txt", "line_number": 1, "line": "old"}],
+        )
+
+    def test_search_rejects_a_leaf_symlink_after_enumeration(self):
+        target = self.directory / "file.txt"
+        open_read = filesystem.open_read
+
+        def swap_before_read(parent, name):
+            target.unlink()
+            target.symlink_to(self.outside / "file.txt")
+            return open_read(parent, name)
+
+        with patch.object(filesystem, "open_read", swap_before_read):
+            result = self.call(SearchFilesTool(), {"path": ".", "pattern": "OUTSIDE"})
+        self.assertIsNone(result.error)
+        self.assertEqual(result.output["matches"], [])
+        self.assertEqual(result.output["skipped_files"], 1)
 
     def test_recursive_enumeration_does_not_follow_a_replaced_directory(self):
         (self.outside / "secret-name.txt").write_bytes(b"OUTSIDE_SECRET")

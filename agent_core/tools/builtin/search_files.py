@@ -2,17 +2,18 @@ import os
 import re
 import stat
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator, Iterator
+from contextlib import AbstractContextManager, closing
 from dataclasses import dataclass
 from pathlib import Path
 
 from ...execution.process import CancellationSignal
+from ...files import BoundDirectory, bind_directory
 from ...path_utils import path_for_comparison
 from ...turn_control import AgentCancelled
 from ..base import JSONValue, Tool, ToolDefinition
 from ..budget import output_fits
 from ..context import ToolExecutionContext
-from ...files import bind_file, scandir_directory
 from ..globs import matches_path_glob
 
 
@@ -196,66 +197,67 @@ class SearchFilesTool(Tool):
             options["case_insensitive"],
             options["fixed_strings"],
         )
-        files = _iter_files(directory_path, options["glob"], state)
-        workspace_root = path_for_comparison(workspace.path)
+        workspace_prefix = path_for_comparison(directory_path).relative_to(
+            path_for_comparison(workspace.path)
+        )
+        glob = options["glob"]
+        assert isinstance(glob, str)
         matches: list[dict[str, JSONValue]] = []
         scanned_files = 0
         seen_matches = 0
         has_more = False
 
-        for file_path in files:
-            state.check()
-            relative_search_path = file_path.relative_to(
-                directory_path
-            ).as_posix()
-            workspace_path = path_for_comparison(file_path).relative_to(
-                workspace_root
-            ).as_posix()
-            if options["mode"] == "files":
-                scanned_files += 1
-                candidates = (
-                    iter(({"path": workspace_path},))
-                    if matcher(relative_search_path)
-                    else iter(())
-                )
-            else:
-                try:
-                    with bind_file(directory_path, file_path.relative_to(directory_path)) as file:
-                        with os.fdopen(file.open_read(), "rb") as stream:
+        files = _iter_files(bind_directory(directory_path), Path(), glob, state)
+        with closing(files):
+            for relative_path, directory in files:
+                state.check()
+                workspace_path = (workspace_prefix / relative_path).as_posix()
+                if options["mode"] == "files":
+                    scanned_files += 1
+                    candidates = (
+                        iter(({"path": workspace_path},))
+                        if matcher(relative_path.as_posix())
+                        else iter(())
+                    )
+                else:
+                    try:
+                        with os.fdopen(
+                            directory.open_read(relative_path.name), "rb"
+                        ) as stream:
                             if os.fstat(stream.fileno()).st_size > MAX_FILE_SIZE_BYTES:
                                 state.skipped_files += 1
                                 continue
                             lines = stream.read().decode("utf-8").splitlines()
-                except (OSError, UnicodeDecodeError):
-                    state.skipped_files += 1
-                    continue
-                scanned_files += 1
-                candidates = _content_matches(
-                    workspace_path,
-                    lines,
-                    matcher,
-                    options["context_before"],
-                    options["context_after"],
-                    state,
-                )
+                    except (OSError, ValueError):
+                        state.skipped_files += 1
+                        continue
+                    scanned_files += 1
+                    candidates = _content_matches(
+                        workspace_path,
+                        lines,
+                        matcher,
+                        options["context_before"],
+                        options["context_after"],
+                        state,
+                    )
 
-            for match in candidates:
-                state.check()
-                if seen_matches < options["offset"]:
-                    seen_matches += 1
-                    continue
-                if len(matches) >= options["limit"]:
-                    has_more = True
-                    break
-                if not _result_fits([*matches, match], options["offset"]):
-                    if matches:
+                for match in candidates:
+                    state.check()
+                    if seen_matches < options["offset"]:
+                        seen_matches += 1
+                        continue
+                    if len(matches) >= options["limit"]:
                         has_more = True
                         break
-                    match = _truncate_match_to_fit(match, options["offset"])
-                matches.append(match)
-                seen_matches += 1
-            if has_more:
-                break
+                    if not _result_fits([*matches, match], options["offset"]):
+                        if matches:
+                            has_more = True
+                            break
+                        match = _truncate_match_to_fit(match, options["offset"])
+                    matches.append(match)
+                    seen_matches += 1
+                if has_more:
+                    break
 
         state.check()
         return {
@@ -386,62 +388,54 @@ def _create_matcher(
 
 
 def _iter_files(
-    directory_path: Path,
-    glob: object,
-    state: _SearchState,
-) -> Iterator[Path]:
-    assert isinstance(glob, str)
-    yield from _iter_directory_files(directory_path, directory_path, glob, state)
-
-
-def _iter_directory_files(
-    current_directory: Path,
-    search_root: Path,
+    binding: AbstractContextManager[BoundDirectory],
+    relative_directory: Path,
     glob: str,
     state: _SearchState,
-) -> Iterator[Path]:
+) -> Generator[tuple[Path, BoundDirectory], None, None]:
+    """Yield candidates with a parent binding borrowed until iteration resumes."""
     state.check()
     pending: list[tuple[Path, bool]] = []
     try:
-        with scandir_directory(current_directory) as iterator:
-            for entry in sorted(iterator, key=lambda entry: entry.name):
-                state.check()
-                entry_path = current_directory / entry.name
-                relative_path = entry_path.relative_to(search_root)
-                try:
-                    # Windows scandir caches the reparse tag; junctions are not
-                    # symlinks and must be rejected before following a directory.
-                    linked = entry.is_symlink() or (
-                        os.name == "nt"
-                        and entry.stat(follow_symlinks=False).st_reparse_tag
-                        == stat.IO_REPARSE_TAG_MOUNT_POINT
-                    )
-                    is_directory = not linked and entry.is_dir(follow_symlinks=False)
-                    is_file = not linked and entry.is_file(follow_symlinks=False)
-                except OSError:
-                    if matches_path_glob(relative_path, glob):
-                        state.skipped_files += 1
-                    continue
-                if linked:
-                    if matches_path_glob(relative_path, glob):
-                        state.skipped_files += 1
-                elif is_directory:
-                    if entry.name not in DEFAULT_EXCLUDED_DIRECTORIES:
-                        pending.append((entry_path, True))
-                elif is_file and matches_path_glob(relative_path, glob):
-                    pending.append((entry_path, False))
+        with binding as directory:
+            with directory.scandir() as iterator:
+                for entry in iterator:
+                    state.check()
+                    relative_path = relative_directory / entry.name
+                    try:
+                        # Windows reports junctions via their cached reparse tag.
+                        linked = entry.is_symlink() or (
+                            os.name == "nt"
+                            and entry.stat(follow_symlinks=False).st_reparse_tag
+                            == stat.IO_REPARSE_TAG_MOUNT_POINT
+                        )
+                        is_directory = not linked and entry.is_dir(follow_symlinks=False)
+                        is_file = not linked and entry.is_file(follow_symlinks=False)
+                    except OSError:
+                        if matches_path_glob(relative_path, glob):
+                            state.skipped_files += 1
+                        continue
+                    if linked:
+                        if matches_path_glob(relative_path, glob):
+                            state.skipped_files += 1
+                    elif is_directory:
+                        if entry.name not in DEFAULT_EXCLUDED_DIRECTORIES:
+                            pending.append((relative_path, True))
+                    elif is_file and matches_path_glob(relative_path, glob):
+                        pending.append((relative_path, False))
 
+            pending.sort(key=lambda candidate: candidate[0].name)
+            for relative_path, is_directory in pending:
+                if is_directory:
+                    yield from _iter_files(
+                        directory.open_child(relative_path.name), relative_path, glob, state,
+                    )
+                else:
+                    yield relative_path, directory
     except TimeoutError:
         raise
-    except OSError:
+    except (OSError, ValueError):
         return
-    # Descending after the handle closes keeps one directory's descriptors
-    # from accumulating along the depth of the tree.
-    for entry_path, is_directory in pending:
-        if is_directory:
-            yield from _iter_directory_files(entry_path, search_root, glob, state)
-        else:
-            yield entry_path
 
 
 def _content_matches(

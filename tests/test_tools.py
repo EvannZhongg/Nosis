@@ -42,6 +42,7 @@ from agent_core import (
     builtin_catalog,
 )
 from agent_core.tools.config import ToolSettings, WebSearchConfig
+from agent_core.files import bind_directory, filesystem
 from agent_core.permissions import PermissionPreset
 from agent_core.turn_control import AgentCancelled, TurnControl
 from agent_core.scheduler import CronTrigger, IntervalTrigger, SchedulerService
@@ -2903,21 +2904,16 @@ class SearchFilesToolTest(unittest.TestCase):
     def test_scans_past_the_previous_path_limit(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Workspace(Path(directory))
-            no_match = workspace.path / "no-match.txt"
-            no_match.write_text("nothing", encoding="utf-8")
-            match = workspace.path / "match.txt"
-            match.write_text("Nosis", encoding="utf-8")
+            no_match = Path("no-match.txt")
+            (workspace.path / no_match).write_text("nothing", encoding="utf-8")
+            match = Path("match.txt")
+            (workspace.path / match).write_text("Nosis", encoding="utf-8")
 
-            contents = {no_match: b"nothing", match: b"Nosis"}
-            sizes = {path: path.stat() for path in contents}
-            stat = Path.stat
             # This is a scan-count boundary, not a filesystem throughput test.
             with (
+                bind_directory(workspace.path) as bound,
                 patch("agent_core.tools.builtin.search_files._iter_files",
-                      return_value=iter([no_match] * 10_000 + [match])),
-                patch.object(Path, "stat", lambda path, *args, **kwargs:
-                             sizes[path] if path in sizes else stat(path, *args, **kwargs)),
-                patch.object(Path, "read_bytes", lambda path: contents[path]),
+                      return_value=((path, bound) for path in [no_match] * 10_000 + [match])),
             ):
                 result = _Bound(SearchFilesTool(), workspace).execute(
                     {"path": ".", "pattern": "Nosis"}
@@ -2929,6 +2925,34 @@ class SearchFilesToolTest(unittest.TestCase):
             )
             self.assertFalse(result["has_more"])
             self.assertEqual(result["scanned_files"], 10_001)
+
+    def test_reuses_directory_handles_and_closes_them_at_page_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+            nested = workspace.path / "search-child"
+            nested.mkdir()
+            for name in ("a.txt", "b.txt", "c.txt"):
+                (nested / name).write_text("Nosis", encoding="utf-8")
+
+            with (
+                patch.object(filesystem, "open_root", wraps=filesystem.open_root) as open_root,
+                patch.object(filesystem, "open_directory", wraps=filesystem.open_directory) as open_dir,
+                patch.object(filesystem, "open_read", wraps=filesystem.open_read) as open_read,
+                patch.object(filesystem, "close", wraps=filesystem.close) as close,
+            ):
+                result = _Bound(SearchFilesTool(), workspace).execute(
+                    {"path": ".", "pattern": "Nosis", "limit": 1}
+                )
+
+            self.assertTrue(result["has_more"])
+            self.assertEqual(result["matches"][0]["path"], "search-child/a.txt")
+            open_root.assert_called_once()
+            self.assertEqual(
+                [call.args[1] for call in open_dir.call_args_list].count(nested.name), 1
+            )
+            self.assertEqual([call.args[1] for call in open_read.call_args_list], ["a.txt", "b.txt"])
+            self.assertEqual(open_read.call_args_list[0].args[0], open_read.call_args_list[1].args[0])
+            self.assertEqual(close.call_count, open_root.call_count + open_dir.call_count)
 
     def test_returns_context_around_content_matches(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

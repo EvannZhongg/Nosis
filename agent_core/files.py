@@ -58,22 +58,52 @@ def bind_file(
         yield BoundFile(parent, relative.name, created)
 
 
-@contextmanager
-def scandir_directory(path: Path) -> Iterator[Iterator[os.DirEntry]]:
-    """Enumerate an absolute directory path without following a replaced component."""
-    with _bind_directory(path, Path()) as (directory, _created):
+@dataclass(frozen=True)
+class BoundDirectory:
+    """A scoped directory binding. Child names come from its enumeration."""
+
+    path: Path
+    handle: int
+
+    @contextmanager
+    def open_child(self, name: str) -> Iterator["BoundDirectory"]:
+        handle = filesystem.open_directory(self.handle, name)
+        try:
+            yield BoundDirectory(self.path / name, handle)
+        finally:
+            filesystem.close(handle)
+
+    def open_read(self, name: str) -> int:
+        return filesystem.open_read(self.handle, name)
+
+    @contextmanager
+    def scandir(self) -> Iterator[Iterator[os.DirEntry]]:
         if os.name == "nt":
             # All ancestors remain open without delete sharing on Windows.
-            with os.scandir(path) as entries:
+            with os.scandir(self.path) as entries:
                 yield entries
         else:
             # Linux traversal handles use O_PATH; scandir needs read access.
-            descriptor = os.open(".", os.O_RDONLY | os.O_DIRECTORY, dir_fd=directory)
+            descriptor = os.open(".", os.O_RDONLY | os.O_DIRECTORY, dir_fd=self.handle)
             try:
                 with os.scandir(descriptor) as entries:
                     yield entries
             finally:
                 os.close(descriptor)
+
+
+@contextmanager
+def bind_directory(path: Path) -> Iterator[BoundDirectory]:
+    """Keep an absolute directory and its ancestors bound for the operation."""
+    with _bind_directory(path, Path()) as (handle, _created):
+        yield BoundDirectory(path, handle)
+
+
+@contextmanager
+def scandir_directory(path: Path) -> Iterator[Iterator[os.DirEntry]]:
+    """Enumerate an absolute directory path without following a replaced component."""
+    with bind_directory(path) as directory, directory.scandir() as entries:
+        yield entries
 
 
 def _validate_relative(relative: Path) -> None:
