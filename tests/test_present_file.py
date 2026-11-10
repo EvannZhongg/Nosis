@@ -133,6 +133,42 @@ class PresentFileTest(unittest.TestCase):
             self.assertEqual(len(units), 1)
             self.assertEqual([m.role for m in units[0].messages], ["assistant", "tool"])
 
+    def test_snapshots_session_artifact_into_workspace(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "workspace").mkdir()
+            sessions = root / "sessions"
+            artifact = sessions / "session-id" / "report.txt"
+            artifact.parent.mkdir(parents=True)
+            artifact.write_bytes(b"report")
+            context = ToolExecutionContext(
+                workspace=Workspace(root / "workspace"), session=Session(),
+                sessions_directory=sessions,
+            )
+            result = PresentFileTool().execute(
+                {"path": ".nosis/sessions/session-id/report.txt"}, context,
+            )
+            part = result.attachments[0]
+            self.assertEqual(part.filename, "report.txt")
+            self.assertTrue(part.path.startswith(".nosis/attachments/"))
+            artifact.write_bytes(b"changed")
+            self.assertEqual((context.workspace.path / part.path).read_bytes(), b"report")
+            with self.assertRaisesRegex(ValueError, "within sessions"):
+                PresentFileTool().execute(
+                    {"path": ".nosis/sessions/../workspace/report.txt"}, context,
+                )
+
+    def test_normalizes_parent_components_within_workspace(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Workspace(Path(directory))
+            (workspace.path / "folder").mkdir()
+            (workspace.path / "report.txt").write_bytes(b"report")
+            result = PresentFileTool().execute(
+                {"path": "folder/../report.txt"},
+                ToolExecutionContext(workspace=workspace, session=Session()),
+            )
+            self.assertEqual((workspace.path / result.attachments[0].path).read_bytes(), b"report")
+
     def test_rejects_paths_outside_workspace_and_missing_files(self):
         with tempfile.TemporaryDirectory() as directory:
             context = ToolExecutionContext(workspace=Workspace(Path(directory)), session=Session())
@@ -140,7 +176,6 @@ class PresentFileTest(unittest.TestCase):
             for path, error in (
                 ("../secret.txt", ValueError),
                 (str(context.workspace.path / "secret.txt"), ValueError),
-                ("folder/../secret.txt", ValueError),
                 ("missing.txt", FileNotFoundError),
                 ("folder", OSError),
                 (".", ValueError),

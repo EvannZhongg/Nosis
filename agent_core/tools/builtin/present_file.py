@@ -1,4 +1,4 @@
-"""Publish a workspace deliverable through the shared attachment event stream."""
+"""Publish a readable file through the shared attachment event stream."""
 
 import mimetypes
 import os
@@ -10,6 +10,7 @@ from ...content import FilePart, ImagePart
 from ...media import UnsupportedImageError, image_extension, probe_image_stream
 from ..base import JSONValue, Tool, ToolDefinition, ToolOutput
 from ..context import ToolExecutionContext
+from ..paths import bind_readable_file
 from ...files import bind_file
 
 
@@ -20,13 +21,16 @@ class PresentFileTool(Tool):
         return ToolDefinition(
             name=self.name,
             description=(
-                "Deliver an existing workspace file to the user as a downloadable "
+                "Deliver an existing workspace file or Session artifact as a downloadable "
                 "attachment. Use this after creating a document, spreadsheet, archive "
                 "or other deliverable. This publishes a snapshot, not just a path."
             ),
             parameters={
                 "type": "object",
-                "properties": {"path": {"type": "string", "description": "Workspace-relative file path."}},
+                "properties": {"path": {
+                    "type": "string",
+                    "description": "Workspace-relative file path or .nosis/sessions/... Session artifact path.",
+                }},
                 "required": ["path"],
                 "additionalProperties": False,
             },
@@ -36,9 +40,9 @@ class PresentFileTool(Tool):
         path = arguments.get("path")
         if not isinstance(path, str) or not path or set(arguments) != {"path"}:
             raise ValueError("present_file requires only a non-empty string 'path'")
-        source = Path(path)
         workspace = context.workspace
-        with bind_file(workspace.path, source) as bound:
+        with bind_readable_file(path, context) as (bound, _display):
+            source = Path(bound.name)
             with os.fdopen(bound.open_read(), "rb") as stream:
                 size = os.fstat(stream.fileno()).st_size
                 try:
