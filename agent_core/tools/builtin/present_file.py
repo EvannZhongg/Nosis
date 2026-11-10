@@ -42,22 +42,22 @@ class PresentFileTool(Tool):
             raise ValueError("present_file requires only a non-empty string 'path'")
         workspace = context.workspace
         with bind_readable_file(path, context) as (bound, _display):
-            source = Path(bound.name)
+            name = bound.name
             with os.fdopen(bound.open_read(), "rb") as stream:
                 size = os.fstat(stream.fileno()).st_size
                 try:
                     info = probe_image_stream(stream, size, max_bytes=None)
                 except UnsupportedImageError:
                     info = None
-                suffix = image_extension(info.mime_type) if info else source.suffix
+                suffix = image_extension(info.mime_type) if info else Path(name).suffix
                 relative = Path(".nosis/attachments") / (uuid4().hex + suffix)
                 with bind_file(workspace.path, relative, create_parents=True) as output:
                     stream.seek(0)
                     output.write(stream, replace=False, mode=None)
                 part_type = ImagePart if info else FilePart
                 part = part_type(
-                    path=relative.as_posix(), filename=source.name,
-                    mime_type=info.mime_type if info else mimetypes.guess_type(source.name)[0] or "application/octet-stream",
+                    path=relative.as_posix(), filename=name,
+                    mime_type=info.mime_type if info else mimetypes.guess_type(name)[0] or "application/octet-stream",
                     size_bytes=size,
                 )
         return ToolOutput(output=asdict(part), attachments=(part,), present_to_user=True)
