@@ -167,6 +167,7 @@ On Windows the shell tool uses PowerShell 7, so PowerShell 7 has to be installed
 - [AKArrok](https://github.com/AKArrok): reported and verified the append-only journal tail-append issue ([#2](https://github.com/EvannZhongg/Nosis/pull/2)).
 - [George Pickett](https://github.com/georgeatparallel): contributed the Parallel Search MCP integration ([#4](https://github.com/EvannZhongg/Nosis/pull/4)).
 - [Pocket99](https://github.com/Pocket99): contributed the initial GUI, with sessions, workspace browsing, and model switching ([#1](https://github.com/EvannZhongg/Nosis/pull/1)).
+- [Guillermo Prieto Rodriguez](https://github.com/guillermop2002): reported the file-tool path race that let a sandboxed shell redirect workspace reads and writes outside the workspace.
 
 ## License
 
