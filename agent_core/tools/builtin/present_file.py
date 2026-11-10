@@ -50,8 +50,7 @@ class PresentFileTool(Tool):
                     info = None
                 suffix = image_extension(info.mime_type) if info else source.suffix
                 relative = Path(".nosis/attachments") / (uuid4().hex + suffix)
-                target = workspace.resolve_path(relative.as_posix())
-                with bind_file(workspace.path, relative_to_root(target, workspace.path), create_parents=True) as output:
+                with bind_file(workspace.path, relative, create_parents=True) as output:
                     stream.seek(0)
                     output.write(stream, replace=False, mode=None)
                 part_type = ImagePart if info else FilePart

@@ -11,7 +11,6 @@ from ...media import MAX_IMAGE_BYTES, image_extension, probe_image_stream
 from ..base import JSONValue, Tool, ToolDefinition, ToolOutput
 from ..context import ToolExecutionContext
 from ...files import bind_file
-from ...path_utils import relative_to_root
 from ..paths import bind_readable_file
 
 
@@ -137,16 +136,15 @@ class GenerateImageTool(Tool):
                 for image in generated:
                     info = probe_image_stream(BytesIO(image.data), len(image.data))
                     relative = Path(".nosis/attachments") / f"generated-{uuid4().hex}{image_extension(info.mime_type)}"
-                    path = workspace.resolve_path(relative.as_posix())
                     file = bindings.enter_context(bind_file(
-                        workspace.path, relative_to_root(path, workspace.path), create_parents=True,
+                        workspace.path, relative, create_parents=True,
                     ))
                     file.write(image.data, replace=False, mode=None)
                     stored.append(file)
                     relative_path = relative.as_posix()
                     attachments.append(ImagePart(
                         path=relative_path, mime_type=info.mime_type,
-                        filename=path.name, size_bytes=info.size_bytes,
+                        filename=relative.name, size_bytes=info.size_bytes,
                     ))
                     item: dict[str, JSONValue] = {
                         "path": relative_path, "mime_type": info.mime_type,
@@ -190,7 +188,8 @@ def _reference_images(
         with bind_readable_file(path, context) as (file, _display):
             with os.fdopen(file.open_read(), "rb") as stream:
                 data = stream.read(MAX_IMAGE_BYTES + 1)
-        probe_image_stream(BytesIO(data), len(data))
+                size = os.fstat(stream.fileno()).st_size
+        probe_image_stream(BytesIO(data), max(size, len(data)))
         resolved.append(data)
     return tuple(resolved)
 

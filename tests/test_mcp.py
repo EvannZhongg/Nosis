@@ -21,6 +21,7 @@ from agent_core.mcp.config import (
 )
 from agent_core.mcp.tool import McpTool, qualified_tool_name
 from agent_core.mcp.manager import McpClientManager, McpServerInstructions
+from agent_core.media import MAX_IMAGE_BYTES, UnsupportedImageError
 from agent_core.tools.policy import McpApprovalPolicy
 from tests.image_fixtures import png_bytes
 
@@ -336,10 +337,28 @@ class McpToolTest(unittest.TestCase):
             assert isinstance(output, ToolOutput)
             self.assertEqual(len(output.attachments), 1)
             self.assertIsInstance(output.attachments[0], ImagePart)
-            self.assertTrue(
-                (workspace.path / output.attachments[0].path).is_file()
+            self.assertEqual(
+                (workspace.path / output.attachments[0].path).read_bytes(),
+                png_bytes(12, 8),
             )
             self.assertNotIn("data", output.output["content"][0])
+
+    def test_rejects_invalid_images_before_writing_attachments(self) -> None:
+        for payload in (b"not an image", png_bytes(2, 3) + b"\0" * MAX_IMAGE_BYTES):
+            with self.subTest(size=len(payload)), tempfile.TemporaryDirectory() as directory:
+                workspace = Workspace(Path(directory))
+                context = ToolExecutionContext(
+                    workspace=workspace, session=Session(),
+                    mcp=SimpleNamespace(call_tool=lambda *args, **kwargs: {
+                        "content": [{
+                            "type": "image", "mime_type": "image/png",
+                            "data": base64.b64encode(payload).decode(),
+                        }],
+                    }),
+                )
+                with self.assertRaises(UnsupportedImageError):
+                    McpTool("demo", "screenshot", "Capture", {"type": "object"}).execute({}, context)
+                self.assertFalse((workspace.path / ".nosis" / "attachments").exists())
 
     def test_approval_policy_only_prompts_required_tools(self) -> None:
         prompts = []

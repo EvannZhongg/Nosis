@@ -9,6 +9,7 @@ from agent_core import (
     ToolExecutionContext,
     Workspace,
 )
+from agent_core.media import MAX_IMAGE_BYTES, UnsupportedImageError
 from tests.image_fixtures import png_bytes
 
 
@@ -114,6 +115,24 @@ class GenerateImageToolTest(unittest.TestCase):
 
         attachment_root = self.root / ".nosis" / "attachments"
         self.assertFalse(attachment_root.exists())
+
+    def test_oversized_reference_reports_full_file_size_before_calling_provider(self) -> None:
+        reference = self.root / "reference.png"
+        data = png_bytes(8, 8) + b"\0" * (MAX_IMAGE_BYTES + 1024)
+        reference.write_bytes(data)
+        generator = StubImageGenerator((GeneratedImage(png_bytes(10, 10)),))
+
+        with self.assertRaisesRegex(
+            UnsupportedImageError,
+            f"image is {len(data)} bytes, exceeding the maximum of {MAX_IMAGE_BYTES} bytes",
+        ):
+            GenerateImageTool().execute(
+                {"prompt": "edit this", "reference_images": ["reference.png"]},
+                self.context(generator),
+            )
+
+        self.assertEqual(generator.calls, [])
+        self.assertFalse((self.root / ".nosis" / "attachments").exists())
 
     def test_requires_the_requested_number_of_images(self) -> None:
         generator = StubImageGenerator((GeneratedImage(png_bytes(8, 8)),))

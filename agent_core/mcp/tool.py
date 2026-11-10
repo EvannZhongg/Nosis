@@ -2,11 +2,13 @@ import base64
 import binascii
 import re
 import uuid
+from io import BytesIO
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from ..media import UnsupportedImageError, image_extension, probe_image
+from ..media import image_extension, probe_image_stream
 from ..content import ImagePart
-from ..path_utils import path_for_comparison
+from ..files import bind_file
 from ..tools import JSONValue, Tool, ToolDefinition, ToolOutput
 from ..tools.context import ToolExecutionContext
 
@@ -100,23 +102,16 @@ def _adapt_result_media(
             raise ValueError(
                 f"MCP tool returned unsupported image type: {mime_type}"
             ) from error
-        directory = context.workspace.resolve_path(".nosis/attachments")
-        directory.mkdir(parents=True, exist_ok=True)
-        path = directory / f"mcp-{uuid.uuid4().hex}{suffix}"
-        path.write_bytes(payload)
-        try:
-            info = probe_image(path)
-        except (UnsupportedImageError, OSError):
-            path.unlink(missing_ok=True)
-            raise
-        stored = path_for_comparison(path).relative_to(
-            path_for_comparison(context.workspace.path)
-        ).as_posix()
+        info = probe_image_stream(BytesIO(payload), len(payload))
+        relative = Path(".nosis/attachments") / f"mcp-{uuid.uuid4().hex}{suffix}"
+        with bind_file(context.workspace.path, relative, create_parents=True) as file:
+            file.write(payload, replace=False, mode=None)
+        stored = relative.as_posix()
         attachments.append(
             ImagePart(
                 path=stored,
                 mime_type=info.mime_type,
-                filename=path.name,
+                filename=relative.name,
                 size_bytes=info.size_bytes,
             )
         )

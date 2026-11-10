@@ -50,6 +50,7 @@ class BoundFile:
 def bind_file(
     root: Path, relative: Path, *, create_parents: bool = False
 ) -> Iterator[BoundFile]:
+    """Bind a relative file path beneath an absolute root without following links."""
     _validate_relative(relative)
     if not relative.parts:
         raise ValueError("file path must name a file")
@@ -59,7 +60,7 @@ def bind_file(
 
 @contextmanager
 def scandir_directory(path: Path) -> Iterator[Iterator[os.DirEntry]]:
-    """Enumerate a pinned directory without following a replaced component."""
+    """Enumerate an absolute directory path without following a replaced component."""
     with _bind_directory(path, Path()) as (directory, _created):
         if os.name == "nt":
             # All ancestors remain open without delete sharing on Windows.
@@ -86,6 +87,7 @@ def _validate_relative(relative: Path) -> None:
 def _bind_directory(
     root: Path, relative: Path, *, create_parents: bool = False
 ) -> Iterator[tuple[int, tuple[str, ...]]]:
+    """Open a relative directory beneath an absolute root."""
     # Resolution selects a canonical spelling. Opening every component without
     # following links prevents a later name substitution from granting access.
     _validate_relative(relative)

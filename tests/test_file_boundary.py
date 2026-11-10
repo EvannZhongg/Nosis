@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from agent_core import (
@@ -15,6 +16,7 @@ from agent_core import (
 )
 from agent_core.files import bind_file, filesystem
 from agent_core.media import encode_data_url
+from agent_core.mcp.tool import McpTool
 from agent_core.tools.builtin.present_file import PresentFileTool
 from tests.file_write_fixtures import patch_text
 from tests.image_fixtures import png_bytes
@@ -192,22 +194,30 @@ class FileBoundaryTest(unittest.TestCase):
     def test_attachment_writers_reject_destination_directory_substitution(self):
         attachments = self.workspace / ".nosis" / "attachments"
         attachments.mkdir(parents=True)
-        resolve = Workspace.resolve_path
+        open_directory = filesystem.open_directory
         generator = StubImageGenerator((GeneratedImage(png_bytes(3, 2)),))
-        self.context = ToolExecutionContext(Workspace(self.workspace), Session(), image_generator=generator)
+        self.context = ToolExecutionContext(
+            Workspace(self.workspace), Session(), image_generator=generator,
+            mcp=SimpleNamespace(call_tool=lambda *args, **kwargs: {
+                "content": [{
+                    "type": "image", "mime_type": "image/png",
+                    "data": base64.b64encode(png_bytes(3, 2)).decode(),
+                }],
+            }),
+        )
         for tool, arguments in (
             (PresentFileTool(), {"path": "d/file.txt"}),
             (GenerateImageTool(), {"prompt": "draw"}),
+            (McpTool("demo", "screenshot", "Capture", {"type": "object"}), {}),
         ):
             with self.subTest(tool=tool.name):
-                def swap_after_check(workspace, path):
-                    resolved = resolve(workspace, path)
-                    if path.startswith(".nosis/attachments"):
+                def swap_before_open(parent, name):
+                    if name == "attachments":
                         attachments.rmdir()
                         attachments.symlink_to(self.outside, target_is_directory=True)
-                    return resolved
+                    return open_directory(parent, name)
 
-                with patch.object(Workspace, "resolve_path", swap_after_check):
+                with patch.object(filesystem, "open_directory", swap_before_open):
                     result = self.call(tool, arguments)
                 self.assertIsNotNone(result.error)
                 self.assertEqual([p.name for p in self.outside.iterdir()], ["file.txt"])
