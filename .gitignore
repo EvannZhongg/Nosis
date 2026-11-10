@@ -4,6 +4,7 @@ __pycache__/
 .pytest_cache/
 .tmp-review/
 build/
+dist/
 .venv/
 .env
 /provider_config.json
