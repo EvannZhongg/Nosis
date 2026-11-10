@@ -54,7 +54,6 @@ class FileBoundaryTest(unittest.TestCase):
             (ApplyPatchTool(), {"patch": patch_text("*** Update File: d/file.txt\n@@\n-old\n+new")}),
             (ApplyPatchTool(), {"patch": patch_text("*** Delete File: d/file.txt")}),
             (ApplyPatchTool(), {"patch": patch_text("*** Add File: d/new.txt\n+new")}),
-            (PresentFileTool(), {"path": "d/file.txt"}),
         )
         resolve = Workspace.resolve_path
         for tool, arguments in cases:
@@ -71,6 +70,29 @@ class FileBoundaryTest(unittest.TestCase):
                 self.assertEqual([p.name for p in self.outside.iterdir()], ["file.txt"])
                 self.directory.unlink()
                 self.saved.rename(self.directory)
+
+    def test_present_file_rejects_source_directory_substitution(self):
+        open_directory = filesystem.open_directory
+
+        def swap_before_open(parent, name):
+            if name == "d":
+                self.swap()
+            return open_directory(parent, name)
+
+        with patch.object(filesystem, "open_directory", swap_before_open):
+            result = self.call(PresentFileTool(), {"path": "d/file.txt"})
+        self.assertIsNotNone(result.error)
+        self.assertFalse((self.workspace / ".nosis").exists())
+        self.assertEqual((self.outside / "file.txt").read_bytes(), b"OUTSIDE_SECRET\n")
+
+    def test_present_file_rejects_source_symlinks_within_workspace(self):
+        (self.workspace / "link").symlink_to(self.directory, target_is_directory=True)
+        (self.workspace / "link.txt").symlink_to(self.directory / "file.txt")
+        for path in ("link/file.txt", "link.txt"):
+            with self.subTest(path=path):
+                result = self.call(PresentFileTool(), {"path": path})
+                self.assertIsNotNone(result.error)
+        self.assertFalse((self.workspace / ".nosis").exists())
 
     def test_open_directory_stays_bound_after_its_name_is_replaced(self):
         with bind_file(self.workspace, Path("d/file.txt")) as file:

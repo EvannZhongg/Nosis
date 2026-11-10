@@ -11,7 +11,6 @@ from ...media import UnsupportedImageError, image_extension, probe_image_stream
 from ..base import JSONValue, Tool, ToolDefinition, ToolOutput
 from ..context import ToolExecutionContext
 from ...files import bind_file
-from ...path_utils import relative_to_root
 
 
 class PresentFileTool(Tool):
@@ -37,11 +36,9 @@ class PresentFileTool(Tool):
         path = arguments.get("path")
         if not isinstance(path, str) or not path or set(arguments) != {"path"}:
             raise ValueError("present_file requires only a non-empty string 'path'")
-        source = context.workspace.resolve_path(path)
-        if not source.is_file():
-            raise ValueError(f"file does not exist: {path}")
+        source = Path(path)
         workspace = context.workspace
-        with bind_file(workspace.path, relative_to_root(source, workspace.path)) as bound:
+        with bind_file(workspace.path, source) as bound:
             with os.fdopen(bound.open_read(), "rb") as stream:
                 size = os.fstat(stream.fileno()).st_size
                 try:

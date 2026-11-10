@@ -136,7 +136,15 @@ class PresentFileTest(unittest.TestCase):
     def test_rejects_paths_outside_workspace_and_missing_files(self):
         with tempfile.TemporaryDirectory() as directory:
             context = ToolExecutionContext(workspace=Workspace(Path(directory)), session=Session())
-            for path in ("../secret.txt", "missing.txt", "."):
-                with self.subTest(path=path), self.assertRaises(ValueError):
+            (context.workspace.path / "folder").mkdir()
+            for path, error in (
+                ("../secret.txt", ValueError),
+                (str(context.workspace.path / "secret.txt"), ValueError),
+                ("folder/../secret.txt", ValueError),
+                ("missing.txt", FileNotFoundError),
+                ("folder", OSError),
+                (".", ValueError),
+            ):
+                with self.subTest(path=path), self.assertRaises(error):
                     PresentFileTool().execute({"path": path}, context)
             self.assertFalse((Path(directory) / ".nosis").exists())
