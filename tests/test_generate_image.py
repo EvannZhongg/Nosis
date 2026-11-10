@@ -86,7 +86,7 @@ class GenerateImageToolTest(unittest.TestCase):
         self.assertEqual(generator.calls[0]["aspect_ratio"], "16:9")
         self.assertEqual(generator.calls[0]["image_size"], "2K")
 
-    def test_resolves_reference_images_before_calling_provider(self) -> None:
+    def test_reads_reference_images_before_calling_provider(self) -> None:
         reference = self.root / "reference.png"
         reference.write_bytes(png_bytes(8, 8))
         generator = StubImageGenerator((GeneratedImage(png_bytes(10, 10)),))
@@ -101,7 +101,7 @@ class GenerateImageToolTest(unittest.TestCase):
 
         self.assertEqual(
             generator.calls[0]["reference_images"],
-            (reference.resolve(),),
+            (png_bytes(8, 8),),
         )
 
     def test_rejects_an_invalid_generated_image_without_leaving_a_file(self) -> None:
@@ -113,7 +113,7 @@ class GenerateImageToolTest(unittest.TestCase):
             )
 
         attachment_root = self.root / ".nosis" / "attachments"
-        self.assertEqual(list(attachment_root.iterdir()), [])
+        self.assertFalse(attachment_root.exists())
 
     def test_requires_the_requested_number_of_images(self) -> None:
         generator = StubImageGenerator((GeneratedImage(png_bytes(8, 8)),))

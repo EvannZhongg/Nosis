@@ -4,6 +4,7 @@ Two properties matter for cost: counting an image must never encode it,
 and sending the same image twice in a turn must not encode it twice.
 """
 
+import base64
 import tempfile
 import unittest
 from pathlib import Path
@@ -144,20 +145,18 @@ class ImageEncodingTest(ImageRequestTestCase):
         provider = self.provider()
         request = self.request(image)
 
-        real_open = Path.open
-        reads = []
-
-        def counting_open(self, *args, **kwargs):
-            if self.name == "a.png" and "b" in (args[0] if args else "r"):
-                reads.append(self.name)
-            return real_open(self, *args, **kwargs)
-
-        with patch.object(Path, "open", counting_open), patch("PIL.Image.open", wraps=Image.open) as image_open:
+        urls = set()
+        with (
+            patch("PIL.Image.open", wraps=Image.open) as image_open,
+            patch("agent_core.media.base64.b64encode", wraps=base64.b64encode) as encode,
+        ):
             for _ in range(4):
-                _request_messages(request, provider)
+                messages = _request_messages(request, provider)
+                urls.add(messages[1]["content"][0]["image_url"]["url"])
 
         self.assertEqual(image_open.call_count, 1)
-        self.assertEqual(len(reads), 1)
+        self.assertEqual(encode.call_count, 1)
+        self.assertEqual(len(urls), 1)
 
     def test_counting_then_sending_still_sends_the_bytes(self) -> None:
         """The count path must not poison the cache with a placeholder."""

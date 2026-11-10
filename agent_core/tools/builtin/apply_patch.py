@@ -8,7 +8,7 @@ from ...path_utils import relative_to_root
 from ...turn_control import AgentCancelled
 from ..base import JSONValue, Tool, ToolDefinition, ToolError, ToolExecutionError
 from ..context import ToolExecutionContext
-from ..files import bind_file
+from ...files import bind_file
 
 
 @dataclass(frozen=True)

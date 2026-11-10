@@ -1,14 +1,17 @@
 """Publish a workspace deliverable through the shared attachment event stream."""
 
 import mimetypes
-import shutil
+import os
+from pathlib import Path
 from dataclasses import asdict
 from uuid import uuid4
 
 from ...content import FilePart, ImagePart
-from ...media import UnsupportedImageError, image_extension, probe_image
+from ...media import UnsupportedImageError, image_extension, probe_image_stream
 from ..base import JSONValue, Tool, ToolDefinition, ToolOutput
 from ..context import ToolExecutionContext
+from ...files import bind_file
+from ...path_utils import relative_to_root
 
 
 class PresentFileTool(Tool):
@@ -37,23 +40,24 @@ class PresentFileTool(Tool):
         source = context.workspace.resolve_path(path)
         if not source.is_file():
             raise ValueError(f"file does not exist: {path}")
-        try:
-            info = probe_image(source, max_bytes=None)
-        except UnsupportedImageError:
-            info = None
-        root = context.workspace.resolve_path(".nosis/attachments")
-        root.mkdir(parents=True, exist_ok=True)
-        suffix = image_extension(info.mime_type) if info else source.suffix
-        target = root / (uuid4().hex + suffix)
-        try:
-            shutil.copyfile(source, target)
-            part_type = ImagePart if info else FilePart
-            part = part_type(
-                path=f".nosis/attachments/{target.name}", filename=source.name,
-                mime_type=info.mime_type if info else mimetypes.guess_type(source.name)[0] or "application/octet-stream",
-                size_bytes=target.stat().st_size,
-            )
-        except BaseException:
-            target.unlink(missing_ok=True)
-            raise
+        workspace = context.workspace
+        with bind_file(workspace.path, relative_to_root(source, workspace.path)) as bound:
+            with os.fdopen(bound.open_read(), "rb") as stream:
+                size = os.fstat(stream.fileno()).st_size
+                try:
+                    info = probe_image_stream(stream, size, max_bytes=None)
+                except UnsupportedImageError:
+                    info = None
+                suffix = image_extension(info.mime_type) if info else source.suffix
+                relative = Path(".nosis/attachments") / (uuid4().hex + suffix)
+                target = workspace.resolve_path(relative.as_posix())
+                with bind_file(workspace.path, relative_to_root(target, workspace.path), create_parents=True) as output:
+                    stream.seek(0)
+                    output.write(stream, replace=False, mode=None)
+                part_type = ImagePart if info else FilePart
+                part = part_type(
+                    path=relative.as_posix(), filename=source.name,
+                    mime_type=info.mime_type if info else mimetypes.guess_type(source.name)[0] or "application/octet-stream",
+                    size_bytes=size,
+                )
         return ToolOutput(output=asdict(part), attachments=(part,), present_to_user=True)

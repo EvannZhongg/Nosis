@@ -1,7 +1,6 @@
 """Image generation through LiteLLM's provider adapters."""
 
 import base64
-from pathlib import Path
 
 import httpx
 from litellm import image_edit, image_generation
@@ -37,7 +36,7 @@ class LiteLLMImageGenerator:
         self,
         *,
         prompt: str,
-        reference_images: tuple[Path, ...] = (),
+        reference_images: tuple[bytes, ...] = (),
         aspect_ratio: str | None = None,
         image_size: str | None = None,
         count: int = 1,

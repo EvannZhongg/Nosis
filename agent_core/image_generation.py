@@ -1,7 +1,6 @@
 """Provider-neutral image generation contracts."""
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Protocol
 
 
@@ -19,7 +18,7 @@ class ImageGenerator(Protocol):
         self,
         *,
         prompt: str,
-        reference_images: tuple[Path, ...] = (),
+        reference_images: tuple[bytes, ...] = (),
         aspect_ratio: str | None = None,
         image_size: str | None = None,
         count: int = 1,

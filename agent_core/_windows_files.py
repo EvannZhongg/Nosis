@@ -3,8 +3,10 @@
 import ctypes
 import msvcrt
 import os
+import shutil
 import stat
 from ctypes import wintypes as w
+from typing import BinaryIO
 from uuid import uuid4
 
 
@@ -203,7 +205,7 @@ def _rename(handle: int, parent: int, name: str, replace: bool) -> None:
 
 
 def write(
-    parent: int, name: str, data: bytes, *, replace: bool, permissions: int | None
+    parent: int, name: str, data: bytes | BinaryIO, *, replace: bool, permissions: int | None
 ) -> None:
     handle = _open(
         parent, f".nosis-{uuid4().hex}.tmp", _GENERIC_WRITE | _DELETE, 0,
@@ -219,7 +221,10 @@ def write(
         raise
     with os.fdopen(descriptor, "wb") as file:
         try:
-            file.write(data)
+            if isinstance(data, bytes):
+                file.write(data)
+            else:
+                shutil.copyfileobj(data, file)
             file.flush()
             os.fsync(file.fileno())
             _rename(handle, parent, name, replace)

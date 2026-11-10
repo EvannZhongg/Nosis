@@ -1,6 +1,6 @@
 from ..base import JSONValue, Tool, ToolDefinition
 from ..context import ToolExecutionContext
-from ..files import bind_file
+from ...files import bind_file
 from ...path_utils import relative_to_root
 
 

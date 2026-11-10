@@ -15,6 +15,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agent_core import (
+    ApplyPatchTool, EditFileTool, ReadFileTool, WriteFileTool,
+    SearchFilesTool, ListDirectoryTool, Session, ToolCatalog, ToolCall,
+    ToolExecutionContext, Workspace,
     CancellationToken,
     CommandCancelled,
     CommandExecutionResult,
@@ -151,6 +154,85 @@ class LinuxSandboxIntegrationTest(unittest.TestCase):
         self.assertEqual(result.exit_code, 0, result.stderr)
         self.assertFalse(result.timed_out)
         return result
+
+    def test_file_tools_resist_atomic_directory_exchange_from_sandbox(self) -> None:
+        outside = self.root / "outside"
+        outside.mkdir()
+        secret = outside / "file.txt"
+        secret.write_bytes(b"OUTSIDE_SECRET\n")
+        self.run_python(f"""
+            from pathlib import Path
+            assert not Path({str(outside)!r}).exists()
+            Path('d').mkdir()
+            Path('d/file.txt').write_text('old\\n')
+            Path('d_link').symlink_to({str(outside)!r}, target_is_directory=True)
+        """)
+        script = r"""
+            import ctypes
+            import os
+            from pathlib import Path
+            libc = ctypes.CDLL(None, use_errno=True)
+            exchange = libc.renameat2
+            exchange.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+            exchange.restype = ctypes.c_int
+            count = 0
+            while not Path('stop').exists():
+                if exchange(-100, b'd', -100, b'd_link', 2):
+                    raise OSError(ctypes.get_errno(), os.strerror(ctypes.get_errno()))
+                count += 1
+                if count == 1:
+                    Path('ready').touch()
+            Path('exchanges').write_text(str(count))
+        """
+        (self.workspace / "exchange.py").write_text(textwrap.dedent(script))
+        results = []
+        errors = []
+
+        def exchange():
+            try:
+                results.append(self.executor.execute(
+                    f"{self.sandbox_python} exchange.py", timeout_seconds=30,
+                ))
+            except BaseException as error:
+                errors.append(error)
+
+        thread = threading.Thread(target=exchange)
+        thread.start()
+        tools = [ReadFileTool(), WriteFileTool(), EditFileTool(), ApplyPatchTool(), SearchFilesTool(), ListDirectoryTool()]
+        context = ToolExecutionContext(Workspace(self.workspace), Session())
+        catalog = ToolCatalog(tools).select([tool.name for tool in tools], context)
+        calls = [
+            ToolCall("read", "read_file", {"path": "d/file.txt"}),
+            ToolCall("write", "write_file", {"path": "d/file.txt", "content": "old\n", "overwrite": True}),
+            ToolCall("edit", "edit_file", {"path": "d/file.txt", "old_text": "old", "new_text": "old"}),
+            ToolCall("patch", "apply_patch", {"patch": "*** Begin Patch\n*** Update File: d/file.txt\n@@\n-old\n+old\n*** End Patch"}),
+            ToolCall("search", "search_files", {"path": "d", "pattern": "OUTSIDE_SECRET"}),
+            ToolCall("list", "list_directory", {"path": "d", "recursive": True}),
+        ]
+        successes = {call.name: 0 for call in calls}
+        try:
+            deadline = time.monotonic() + 5
+            while not (self.workspace / "ready").exists() and thread.is_alive() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertTrue((self.workspace / "ready").exists(), errors or results)
+            for _ in range(500):
+                self.assertTrue(thread.is_alive(), errors or results)
+                for call in calls:
+                    result = catalog.execute(call)
+                    if result.error is None:
+                        successes[call.name] += 1
+                        self.assertNotIn("OUTSIDE_SECRET", str(result.output))
+        finally:
+            (self.workspace / "stop").touch()
+            thread.join(35)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(results[0].exit_code, 0, results[0].stderr)
+        self.assertFalse(results[0].timed_out)
+        self.assertGreater(int((self.workspace / "exchanges").read_text()), 0)
+        self.assertTrue(all(successes.values()), successes)
+        self.assertEqual(secret.read_bytes(), b"OUTSIDE_SECRET\n")
+        self.assertEqual(list(outside.iterdir()), [secret])
 
     def test_workspace_rw_and_host_files_denied_including_symlinks_and_home(self) -> None:
         outside = self.root / "secret"

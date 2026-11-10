@@ -1,16 +1,18 @@
 """Generate or edit images and persist them in the workspace."""
 
 import os
-import tempfile
+from contextlib import ExitStack
+from io import BytesIO
 from pathlib import Path
 from uuid import uuid4
 
 from ...content import ImagePart
-from ...media import ImageInfo, image_extension, probe_image
-from ...path_utils import path_for_comparison
+from ...media import MAX_IMAGE_BYTES, image_extension, probe_image_stream
 from ..base import JSONValue, Tool, ToolDefinition, ToolOutput
 from ..context import ToolExecutionContext
-from ..paths import resolve_readable_path
+from ...files import bind_file
+from ...path_utils import relative_to_root
+from ..paths import bind_readable_file
 
 
 MAX_IMAGES_PER_CALL = 4
@@ -126,40 +128,38 @@ class GenerateImageTool(Tool):
                 f"{len(generated)} image(s), expected {count}"
             )
 
-        attachment_root = context.workspace.resolve_path(".nosis/attachments")
-        attachment_root.mkdir(parents=True, exist_ok=True)
-        stored: list[Path] = []
+        workspace = context.workspace
         attachments = []
         output_images: list[JSONValue] = []
-        try:
-            for image in generated:
-                path, info = _store_image(attachment_root, image.data)
-                stored.append(path)
-                relative_path = path_for_comparison(path).relative_to(
-                    path_for_comparison(context.workspace.path)
-                ).as_posix()
-                attachments.append(
-                    ImagePart(
-                        path=relative_path,
-                        mime_type=info.mime_type,
-                        filename=path.name,
-                        size_bytes=info.size_bytes,
-                    )
-                )
-                item: dict[str, JSONValue] = {
-                    "path": relative_path,
-                    "mime_type": info.mime_type,
-                    "width": info.width,
-                    "height": info.height,
-                    "size_bytes": info.size_bytes,
-                }
-                if image.revised_prompt is not None:
-                    item["revised_prompt"] = image.revised_prompt
-                output_images.append(item)
-        except BaseException:
-            for path in stored:
-                path.unlink(missing_ok=True)
-            raise
+        with ExitStack() as bindings:
+            stored = []
+            try:
+                for image in generated:
+                    info = probe_image_stream(BytesIO(image.data), len(image.data))
+                    relative = Path(".nosis/attachments") / f"generated-{uuid4().hex}{image_extension(info.mime_type)}"
+                    path = workspace.resolve_path(relative.as_posix())
+                    file = bindings.enter_context(bind_file(
+                        workspace.path, relative_to_root(path, workspace.path), create_parents=True,
+                    ))
+                    file.write(image.data, replace=False, mode=None)
+                    stored.append(file)
+                    relative_path = relative.as_posix()
+                    attachments.append(ImagePart(
+                        path=relative_path, mime_type=info.mime_type,
+                        filename=path.name, size_bytes=info.size_bytes,
+                    ))
+                    item: dict[str, JSONValue] = {
+                        "path": relative_path, "mime_type": info.mime_type,
+                        "width": info.width, "height": info.height,
+                        "size_bytes": info.size_bytes,
+                    }
+                    if image.revised_prompt is not None:
+                        item["revised_prompt"] = image.revised_prompt
+                    output_images.append(item)
+            except BaseException:
+                for file in stored:
+                    file.unlink()
+                raise
 
         return ToolOutput(
             output={
@@ -173,7 +173,7 @@ class GenerateImageTool(Tool):
 def _reference_images(
     value: JSONValue,
     context: ToolExecutionContext,
-) -> tuple[Path, ...]:
+) -> tuple[bytes, ...]:
     if value is None:
         return ()
     if not isinstance(value, list):
@@ -187,9 +187,11 @@ def _reference_images(
     for path in value:
         if not isinstance(path, str) or not path:
             raise ValueError("each reference image path must be a non-empty string")
-        file_path, _display = resolve_readable_path(path, context)
-        probe_image(file_path)
-        resolved.append(file_path)
+        with bind_readable_file(path, context) as (file, _display):
+            with os.fdopen(file.open_read(), "rb") as stream:
+                data = stream.read(MAX_IMAGE_BYTES + 1)
+        probe_image_stream(BytesIO(data), len(data))
+        resolved.append(data)
     return tuple(resolved)
 
 
@@ -200,27 +202,3 @@ def _optional_string(arguments: dict[str, JSONValue], name: str) -> str | None:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"generate_image requires '{name}' to be a non-empty string")
     return value.strip()
-
-
-def _store_image(root: Path, data: bytes) -> tuple[Path, ImageInfo]:
-    temporary_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="wb",
-            dir=root,
-            prefix=".generated-",
-            suffix=".tmp",
-            delete=False,
-        ) as temporary:
-            temporary_path = Path(temporary.name)
-            temporary.write(data)
-            temporary.flush()
-            os.fsync(temporary.fileno())
-        info = probe_image(temporary_path)
-        path = root / f"generated-{uuid4().hex}{image_extension(info.mime_type)}"
-        os.replace(temporary_path, path)
-        temporary_path = None
-        return path, info
-    finally:
-        if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)

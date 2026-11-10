@@ -2429,7 +2429,7 @@ class ListDirectoryToolTest(unittest.TestCase):
             paths.append(child)
             with patch(
                 "agent_core.tools.builtin.list_directory._iter_entries",
-                return_value=iter(paths),
+                return_value=iter((path, "file") for path in paths),
             ):
                 first = _Bound(ListDirectoryTool(), workspace).execute(
                     {
@@ -2441,7 +2441,7 @@ class ListDirectoryToolTest(unittest.TestCase):
                 )
             with patch(
                 "agent_core.tools.builtin.list_directory._iter_entries",
-                return_value=iter(paths),
+                return_value=iter((path, "file") for path in paths),
             ):
                 result = _Bound(ListDirectoryTool(), workspace).execute(
                     {
@@ -2499,7 +2499,7 @@ class ListDirectoryToolTest(unittest.TestCase):
                 paths.append(path)
             with patch(
                 "agent_core.tools.builtin.list_directory._iter_entries",
-                return_value=iter(reversed(paths)),
+                return_value=iter((path, "file") for path in reversed(paths)),
             ):
                 result = _Bound(ListDirectoryTool(), workspace).execute(
                     {"path": ".", "limit": 2}

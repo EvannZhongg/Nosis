@@ -14,7 +14,7 @@ from ..content import ImagePart
 from ..media import ImageInfo, probe_image
 from ..path_utils import relative_to_root
 from .context import ToolExecutionContext
-from .files import BoundFile, bind_file
+from ..files import BoundFile, bind_file
 
 
 SESSION_MARKER = Path(".nosis", "sessions")

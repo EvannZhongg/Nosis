@@ -12,6 +12,7 @@ from ...turn_control import AgentCancelled
 from ..base import JSONValue, Tool, ToolDefinition
 from ..budget import output_fits
 from ..context import ToolExecutionContext
+from ...files import bind_file, scandir_directory
 from ..globs import matches_path_glob
 
 
@@ -219,10 +220,12 @@ class SearchFilesTool(Tool):
                 )
             else:
                 try:
-                    if file_path.stat().st_size > MAX_FILE_SIZE_BYTES:
-                        state.skipped_files += 1
-                        continue
-                    lines = file_path.read_bytes().decode("utf-8").splitlines()
+                    with bind_file(directory_path, file_path.relative_to(directory_path)) as file:
+                        with os.fdopen(file.open_read(), "rb") as stream:
+                            if os.fstat(stream.fileno()).st_size > MAX_FILE_SIZE_BYTES:
+                                state.skipped_files += 1
+                                continue
+                            lines = stream.read().decode("utf-8").splitlines()
                 except (OSError, UnicodeDecodeError):
                     state.skipped_files += 1
                     continue
@@ -398,44 +401,46 @@ def _iter_directory_files(
     state: _SearchState,
 ) -> Iterator[Path]:
     state.check()
+    pending: list[tuple[Path, bool]] = []
     try:
-        with os.scandir(current_directory) as iterator:
-            entries = []
-            for entry in iterator:
+        with scandir_directory(current_directory) as iterator:
+            for entry in sorted(iterator, key=lambda entry: entry.name):
                 state.check()
-                entries.append(entry)
-        entries.sort(key=lambda entry: entry.name)
+                entry_path = current_directory / entry.name
+                relative_path = entry_path.relative_to(search_root)
+                try:
+                    # Windows scandir caches the reparse tag; junctions are not
+                    # symlinks and must be rejected before following a directory.
+                    linked = entry.is_symlink() or (
+                        os.name == "nt"
+                        and entry.stat(follow_symlinks=False).st_reparse_tag
+                        == stat.IO_REPARSE_TAG_MOUNT_POINT
+                    )
+                    is_directory = not linked and entry.is_dir(follow_symlinks=False)
+                    is_file = not linked and entry.is_file(follow_symlinks=False)
+                except OSError:
+                    if matches_path_glob(relative_path, glob):
+                        state.skipped_files += 1
+                    continue
+                if linked:
+                    if matches_path_glob(relative_path, glob):
+                        state.skipped_files += 1
+                elif is_directory:
+                    if entry.name not in DEFAULT_EXCLUDED_DIRECTORIES:
+                        pending.append((entry_path, True))
+                elif is_file and matches_path_glob(relative_path, glob):
+                    pending.append((entry_path, False))
+
     except TimeoutError:
         raise
     except OSError:
         return
-    for entry in entries:
-        state.check()
-        entry_path = Path(entry.path)
-        relative_path = entry_path.relative_to(search_root)
-        try:
-            # Windows scandir caches the reparse tag; junctions are not
-            # symlinks and must be rejected before following a directory.
-            linked = entry.is_symlink() or (
-                os.name == "nt"
-                and entry.stat(follow_symlinks=False).st_reparse_tag
-                == stat.IO_REPARSE_TAG_MOUNT_POINT
-            )
-            is_directory = not linked and entry.is_dir(follow_symlinks=False)
-            is_file = not linked and entry.is_file(follow_symlinks=False)
-        except OSError:
-            if matches_path_glob(relative_path, glob):
-                state.skipped_files += 1
-            continue
-        if linked:
-            if matches_path_glob(relative_path, glob):
-                state.skipped_files += 1
-        elif is_directory:
-            if entry.name not in DEFAULT_EXCLUDED_DIRECTORIES:
-                yield from _iter_directory_files(
-                    entry_path, search_root, glob, state
-                )
-        elif is_file and matches_path_glob(relative_path, glob):
+    # Descending after the handle closes keeps one directory's descriptors
+    # from accumulating along the depth of the tree.
+    for entry_path, is_directory in pending:
+        if is_directory:
+            yield from _iter_directory_files(entry_path, search_root, glob, state)
+        else:
             yield entry_path
 
 

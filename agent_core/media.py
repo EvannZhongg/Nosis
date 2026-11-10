@@ -18,13 +18,18 @@ operations that need the file itself:
 
 import base64
 import math
+import os
 import threading
 from collections import OrderedDict
+from contextlib import contextmanager
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
+from typing import BinaryIO, Iterator
 
 from PIL import Image, ImageSequence
+
+from .files import bind_file
 
 
 #: Largest image accepted for inline delivery.  Base64 inflates payloads
@@ -91,59 +96,76 @@ def probe_image(path: Path, max_bytes: int | None = MAX_IMAGE_BYTES) -> ImageInf
     this for every image on every pass of the agent loop, and decoding
     it each time would be pure waste.
     """
-    if not path.is_file():
-        raise UnsupportedImageError(f"image does not exist: {path}")
-    stat = path.stat()
-    key = (str(path), stat.st_mtime_ns, stat.st_size)
+    with _open_image(path) as file:
+        return _probe_open_image(file, path, max_bytes)
+
+
+@contextmanager
+def _open_image(path: Path) -> Iterator[BinaryIO]:
+    path = path.absolute()
+    try:
+        with bind_file(Path(path.anchor), Path(*path.parts[1:])) as bound:
+            with os.fdopen(bound.open_read(), "rb") as file:
+                yield file
+    except FileNotFoundError as error:
+        raise UnsupportedImageError(f"image does not exist: {path}") from error
+
+
+def _image_key(file: BinaryIO, path: Path) -> tuple[str, int, int, int, int]:
+    info = os.fstat(file.fileno())
+    return (str(path), info.st_dev, info.st_ino, info.st_mtime_ns, info.st_size)
+
+
+def _probe_open_image(file: BinaryIO, path: Path, max_bytes: int | None) -> ImageInfo:
+    key = _image_key(file, path)
     with _cache_lock:
         cached = _probe_cache.get(key)
         if cached is not None:
             _probe_cache.move_to_end(key)
+    size = os.fstat(file.fileno()).st_size
+    _check_image_size(size, max_bytes)
     if cached is not None:
-        if max_bytes is not None and cached.size_bytes > max_bytes:
-            raise UnsupportedImageError(
-                f"image is {cached.size_bytes} bytes, exceeding the maximum "
-                f"of {max_bytes} bytes for inline delivery"
-            )
         return cached
-
-    size_bytes = stat.st_size
-    if size_bytes == 0:
-        raise UnsupportedImageError(f"image file is empty: {path}")
-    if max_bytes is not None and size_bytes > max_bytes:
-        raise UnsupportedImageError(
-            f"image is {size_bytes} bytes, exceeding the maximum of "
-            f"{max_bytes} bytes for inline delivery"
-        )
-    try:
-        with Image.open(path, formats=("PNG", "JPEG", "GIF", "WEBP")) as image:
-            mime_type = Image.MIME[image.format]
-            width, height = image.size
-            # Loading only the first frame can accept a broken animated image.
-            for frame in ImageSequence.Iterator(image):
-                pixels = frame.width * frame.height
-                if Image.MAX_IMAGE_PIXELS is not None and pixels > Image.MAX_IMAGE_PIXELS:
-                    raise Image.DecompressionBombError(
-                        f"image is {pixels} pixels, exceeding the maximum of "
-                        f"{Image.MAX_IMAGE_PIXELS} pixels"
-                    )
-                frame.load()
-    except (OSError, ValueError, SyntaxError,
-            Image.DecompressionBombError, Image.DecompressionBombWarning) as error:
-        raise UnsupportedImageError(
-            f"image is not a supported image or cannot be fully decoded: {path}: {error}"
-        ) from error
-    info = ImageInfo(
-        mime_type=mime_type,
-        width=width,
-        height=height,
-        size_bytes=size_bytes,
-    )
+    info = probe_image_stream(file, size, max_bytes=max_bytes)
     with _cache_lock:
         _probe_cache[key] = info
         while len(_probe_cache) > _PROBE_CACHE_ENTRIES:
             _probe_cache.popitem(last=False)
     return info
+
+
+def _check_image_size(size: int, max_bytes: int | None) -> None:
+    if size == 0:
+        raise UnsupportedImageError("image file is empty")
+    if max_bytes is not None and size > max_bytes:
+        raise UnsupportedImageError(
+            f"image is {size} bytes, exceeding the maximum of {max_bytes} bytes for inline delivery"
+        )
+
+
+def probe_image_stream(
+    file: BinaryIO, size_bytes: int, *, max_bytes: int | None = MAX_IMAGE_BYTES
+) -> ImageInfo:
+    """Decode an already opened file or an in-memory generated image."""
+    _check_image_size(size_bytes, max_bytes)
+    try:
+        file.seek(0)
+        with Image.open(file, formats=("PNG", "JPEG", "GIF", "WEBP")) as image:
+            mime_type = Image.MIME[image.format]
+            width, height = image.size
+            for frame in ImageSequence.Iterator(image):
+                pixels = frame.width * frame.height
+                if Image.MAX_IMAGE_PIXELS is not None and pixels > Image.MAX_IMAGE_PIXELS:
+                    raise Image.DecompressionBombError(
+                        f"image is {pixels} pixels, exceeding the maximum of {Image.MAX_IMAGE_PIXELS} pixels"
+                    )
+                frame.load()
+    except (OSError, ValueError, SyntaxError,
+            Image.DecompressionBombError, Image.DecompressionBombWarning) as error:
+        raise UnsupportedImageError(
+            f"image is not a supported image or cannot be fully decoded: {error}"
+        ) from error
+    return ImageInfo(mime_type, width, height, size_bytes)
 
 
 def estimate_image_tokens(width: int, height: int) -> int:
@@ -218,10 +240,14 @@ def encode_data_url(path: Path, *, max_edge: int | None = None) -> str:
     changing image limit cannot reuse a stale encoding. Resized images
     are encoded in memory; the original file stays unchanged.
     """
-    info = probe_image(path)
+    with _open_image(path) as file:
+        return _encode_open_image(file, path, max_edge=max_edge)
+
+
+def _encode_open_image(file: BinaryIO, path: Path, *, max_edge: int | None) -> str:
+    info = _probe_open_image(file, path, MAX_IMAGE_BYTES)
     mime_type = info.mime_type
-    stat = path.stat()
-    key = (str(path), stat.st_mtime_ns, stat.st_size, mime_type, max_edge)
+    key = (*_image_key(file, path), mime_type, max_edge)
     with _cache_lock:
         cached = _encoded_cache.get(key)
         if cached is not None:
@@ -239,7 +265,8 @@ def encode_data_url(path: Path, *, max_edge: int | None = None) -> str:
         if target != (info.width, info.height):
             size = target
     if size is not None:
-        with Image.open(path) as image:
+        file.seek(0)
+        with Image.open(file) as image:
             has_alpha = "A" in image.getbands() or "transparency" in image.info
             with image.convert("RGBA" if has_alpha else "RGB") as pixels:
                 resized = pixels.resize(size, Image.Resampling.LANCZOS)
@@ -258,8 +285,8 @@ def encode_data_url(path: Path, *, max_edge: int | None = None) -> str:
             payload = base64.b64encode(data).decode("ascii")
         mime_type = "image/jpeg" if image_format == "JPEG" else "image/png"
     else:
-        with path.open("rb") as file:
-            payload = base64.b64encode(file.read()).decode("ascii")
+        file.seek(0)
+        payload = base64.b64encode(file.read()).decode("ascii")
     encoded = f"data:{mime_type};base64,{payload}"
 
     with _cache_lock:
@@ -302,8 +329,8 @@ _CACHE_MAX_ENTRIES = 64
 _PROBE_CACHE_ENTRIES = 512
 
 _cache_lock = threading.Lock()
-_encoded_cache: "OrderedDict[tuple[str, int, int, str, int | None], str]" = OrderedDict()
-_probe_cache: "OrderedDict[tuple[str, int, int], ImageInfo]" = OrderedDict()
+_encoded_cache: "OrderedDict[tuple[str, int, int, int, int, str, int | None], str]" = OrderedDict()
+_probe_cache: "OrderedDict[tuple[str, int, int, int, int], ImageInfo]" = OrderedDict()
 
 #: Running total of ``_encoded_cache`` value lengths, maintained on
 #: insert and eviction so a write never has to re-sum the whole map.

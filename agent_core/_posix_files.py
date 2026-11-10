@@ -2,7 +2,9 @@
 
 import errno
 import os
+import shutil
 import stat
+from typing import BinaryIO
 from uuid import uuid4
 
 
@@ -46,7 +48,7 @@ def open_read(parent: int, name: str) -> int:
 
 
 def write(
-    parent: int, name: str, data: bytes, *, replace: bool, permissions: int | None
+    parent: int, name: str, data: bytes | BinaryIO, *, replace: bool, permissions: int | None
 ) -> None:
     temporary = f".nosis-{uuid4().hex}.tmp"
     descriptor = os.open(
@@ -54,7 +56,10 @@ def write(
     )
     try:
         with os.fdopen(descriptor, "wb") as file:
-            file.write(data)
+            if isinstance(data, bytes):
+                file.write(data)
+            else:
+                shutil.copyfileobj(data, file)
             file.flush()
             if permissions is not None:
                 os.fchmod(file.fileno(), permissions)

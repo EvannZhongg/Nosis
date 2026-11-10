@@ -1,6 +1,5 @@
 import base64
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -68,13 +67,13 @@ class LiteLLMImageGeneratorTest(unittest.TestCase):
         ) as edit:
             generator.generate(
                 prompt="edit",
-                reference_images=(Path("a.png"), Path("b.png")),
+                reference_images=(png_bytes(2, 3), png_bytes(3, 2)),
                 aspect_ratio="4:3",
                 image_size="2K",
             )
 
         edit.assert_called_once_with(
-            image=[Path("a.png"), Path("b.png")],
+            image=[png_bytes(2, 3), png_bytes(3, 2)],
             prompt="edit",
             extra_body={
                 "image_config": {"aspect_ratio": "4:3", "image_size": "2K"}

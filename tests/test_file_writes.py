@@ -25,7 +25,7 @@ from agent_core import (
     WriteFileTool,
 )
 from agent_core.tools.builtin.apply_patch import _prepare_changes
-from agent_core.tools.files import BoundFile, bind_file, filesystem
+from agent_core.files import BoundFile, bind_file, filesystem
 from agent_core.turn_control import AgentCancelled, TurnControl
 from tests.file_write_fixtures import patch_text, write_call
 
