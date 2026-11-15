@@ -1,57 +1,12 @@
 #!/usr/bin/env node
 import { render } from 'ink';
-import { resolve } from 'node:path';
 import { App } from './app.js';
 
-type Options = {
-  workspace: string;
-};
-
-const USAGE = `Usage: nosis [options]
-
-Options:
-  --workspace <path>      Workspace directory (default: current directory)
-  --config-directory <path>  Use this Nosis configuration directory
-  --temporary             Use a persistent Nosis-managed scratch workspace
-  -h, --help              Show this message
-`;
-
-function parseArguments(argv: string[]): Options {
-  const options: Options = {
-    workspace: process.cwd(),
-  };
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const argument = argv[index];
-    if (argument === '--help' || argument === '-h') {
-      process.stdout.write(USAGE);
-      process.exit(0);
-    }
-    const value = argv[index + 1];
-    if (value === undefined) {
-      process.stderr.write(`Missing value for ${argument}\n`);
-      process.exit(2);
-    }
-    index += 1;
-    switch (argument) {
-      case '--workspace':
-        options.workspace = resolve(value);
-        break;
-      default:
-        process.stderr.write(`Unknown option: ${argument}\n${USAGE}`);
-        process.exit(2);
-    }
-  }
-
-  return options;
-}
-
-const options = parseArguments(process.argv.slice(2));
-
+const workspace = process.argv[2];
 const python = process.env.NOSIS_PYTHON;
-if (!python) {
+if (!python || !workspace) {
   process.stderr.write(
-    'NOSIS_PYTHON is not set. Run Nosis through the "nosis" command.\n',
+    'Run the terminal UI through the "nosis" command.\n',
   );
   process.exit(2);
 }
@@ -78,7 +33,7 @@ function supportsKittyKeyboard(): boolean {
 render(
   <App
     python={python}
-    workspace={options.workspace}
+    workspace={workspace}
     configDirectory={process.env.NOSIS_CONFIG_DIRECTORY}
   />,
   {

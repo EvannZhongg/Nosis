@@ -194,8 +194,8 @@ class Agent:
             media_root=context.workspace.path,
         )
 
-    def context_window(self) -> ContextWindow:
-        request = self._context.build_request(self._tools.definitions)
+    def context_window(self, turn_control: TurnControl | None = None) -> ContextWindow:
+        request = self._context.build_request(self._tools.definitions_for(turn_control))
         return self._context.window(self._context.measure_input_tokens(request).tokens)
 
     def run(
@@ -461,7 +461,7 @@ class Agent:
                         model_call_index=model_call_index,
                     )
                 )
-                on_event(ContextWindowEvent(self.context_window()))
+                on_event(ContextWindowEvent(self.context_window(turn_control)))
                 on_event(UnitCompletedEvent(unit_start, len(self._session.items)))
             jobs = self._execution_context.jobs
 

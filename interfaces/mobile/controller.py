@@ -11,7 +11,7 @@ from uuid import uuid4
 
 from agent_core import JsonlSessionStore, Workspace
 from agent_runtime.attachments import store_attachment
-from interfaces.session_host import ActiveSession, ActiveSessionRegistry
+from interfaces.session_host import ActiveSession, ActiveSessionRegistry, SessionAttachment
 
 from .bindings import Bindings
 from .views import Button, Card, Transport
@@ -84,7 +84,7 @@ class Conversation:
     workspace: str | None = None
     session_id: str | None = None
     runtime: ActiveSession | None = None
-    queue: asyncio.Queue | None = None
+    attachment: SessionAttachment | None = None
     reader: asyncio.Task | None = None
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     actions: dict[str, tuple[dict, str | None]] = field(default_factory=dict)
@@ -519,6 +519,7 @@ class MobileController:
         bound = self.store.workspace_for(session_id)
         workspace = Workspace(Path(bound or c.workspace))
         runtime, created = await self.host.open_or_attach(
+            session_id,
             {
                 "type": "open_session",
                 "session_id": session_id,
@@ -530,37 +531,35 @@ class MobileController:
         )
         # Detach our old subscription before reattaching to the same Session.
         await self._detach(c)
-        attachment = await runtime.attach(0, c.attachment_id, takeover=takeover)
+        attachment = await self.host.subscribe(runtime, c.attachment_id, created=created, takeover=takeover)
         if attachment is None:
             c.workspace, c.session_id = str(workspace.path), session_id
             self._save(c)
             raise ValueError("会话由其他端控制。可使用 /takeover 接管。")
-        queue, events, state = attachment
         c.workspace, c.session_id = str(workspace.path), session_id
-        c.runtime, c.queue = runtime, queue
+        c.runtime, c.attachment = runtime, attachment
         c.actions.clear()
         self._save(c)
-        failures = [event for event in events if event["type"] in {"session_open_failed", "fatal"}]
-        if failures:
-            runtime.mark_failure_delivered()
+        if (failure := attachment.failure) is not None:
+            attachment.acknowledge(failure)
             await self._detach(c)
-            raise RuntimeError(failures[-1]["error"]["message"])
-        c.reader = asyncio.create_task(self._read(c, runtime, queue))
+            raise RuntimeError(failure["error"]["message"])
+        c.reader = asyncio.create_task(self._read(c, attachment))
         for field_name in ("approval", "question"):
-            request = state.get(field_name)
+            request = attachment.state.get(field_name)
             if request is not None:
                 await self._interaction(c, request)
 
     async def _detach(self, c: Conversation) -> None:
-        if c.runtime is not None and c.queue is not None:
-            await c.runtime.detach(c.queue, c.attachment_id)
+        if c.attachment is not None:
+            await c.attachment.close()
         if c.reader is not None and c.reader is not asyncio.current_task():
             c.reader.cancel()
             await asyncio.gather(c.reader, return_exceptions=True)
         c.interactions.clear()
         c.actions.clear()
         c.settings_requests.clear()
-        c.runtime = c.queue = c.reader = None
+        c.runtime = c.attachment = c.reader = None
 
     def _status(self, c: Conversation, state: dict | None = None) -> str:
         if state is None:
@@ -653,13 +652,15 @@ class MobileController:
                 )
             await self._show(c, "配置概览", text[:10000])
 
-    async def _read(self, c: Conversation, runtime: ActiveSession, queue: asyncio.Queue) -> None:
+    async def _read(self, c: Conversation, attachment: SessionAttachment) -> None:
+        async def deliver(event: dict) -> None:
+            try:
+                await self._deliver_event(c, attachment.runtime, event)
+            except Exception:
+                log.exception("Mobile event delivery failed: %s (%s)", c.key, event["type"])
+
         try:
-            while (event := await queue.get()) is not None:
-                try:
-                    await self._deliver_event(c, runtime, event)
-                except Exception:
-                    log.exception("Mobile event delivery failed: %s (%s)", c.key, event["type"])
+            await attachment.relay(deliver)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -669,7 +670,7 @@ class MobileController:
                 await stream.abort()
             c.streams.clear()
             await self._clear_receipt(c)
-            await runtime.detach(queue, c.attachment_id)
+            await attachment.close()
 
     async def _deliver_event(self, c: Conversation, runtime: ActiveSession, event: dict) -> None:
         kind = event["type"]

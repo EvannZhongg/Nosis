@@ -39,7 +39,7 @@ GUI、TUI 和 SDK 都使用这一常驻服务端。TUI 为访问过的会话保�
 
 附着失败通过 `session_open_failed` 返回。已经打开的其他通道仍可使用。
 
-`list_workspaces` 复用 Core 的历史会话分组，返回已有会话的工作区路径。选择工作区后发送该路径和 `session_id: null`，即可新建会话并在同步后直接对话；`list_sessions` 继续只列出当前工作区的历史会话。两种入口都通过 `open_session` 完成绑定，不使用会迁移当前会话的 `workspace_set`。
+`list_workspaces` 返回已有会话的工作区路径。新建时使用新的 `channel_id`、工作区路径和 `session_id: null`，恢复时两个 ID 都使用已保存的 Session ID。`list_sessions` 列出当前工作区的历史会话。
 
 Bridge 路由的输入包括：
 

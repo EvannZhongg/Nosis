@@ -3,6 +3,7 @@
 import asyncio
 from collections import deque
 from pathlib import Path
+from typing import Awaitable, Callable
 
 from agent_core import JsonlSessionStore, Workspace, message_to_dict, plan_snapshot_to_dict
 from interfaces.bridge.protocol import attachment_replaced_message, inactive_runtime_state
@@ -12,6 +13,9 @@ from interfaces.bridge_process import BridgeChannel, BridgeProcess
 
 
 EVENT_REPLAY_LIMIT = 512
+Event = dict[str, object]
+SendEvent = Callable[[Event], Awaitable[None]]
+FAILED_EVENTS = {"session_open_failed", "fatal"}
 
 
 class SessionRunningError(RuntimeError):
@@ -264,12 +268,12 @@ class ActiveSessionRegistry:
 
     async def open_or_attach(
         self,
+        session_id: str,
         opening_message: dict[str, object],
         workspace: Workspace,
         *,
         attach_only: bool,
     ) -> tuple[ActiveSession | None, bool]:
-        session_id = str(opening_message["session_id"])
         while True:
             async with self._lock:
                 closing = self._closing.get(session_id)
@@ -308,6 +312,21 @@ class ActiveSessionRegistry:
                     bridge.send(opening_message)
                     return runtime, True
             await asyncio.shield(closing)
+
+    async def subscribe(
+        self,
+        runtime: ActiveSession,
+        attachment_id: str,
+        *,
+        created: bool,
+        after_event: int = 0,
+        takeover: bool = False,
+    ) -> "SessionAttachment | None":
+        attached = await runtime.attach(0 if created else after_event, attachment_id, takeover=takeover)
+        if attached is None:
+            return None
+        queue, events, state = attached
+        return SessionAttachment(self, runtime, attachment_id, queue, events, state, created)
 
 
     async def get(self, session_id: str) -> ActiveSession | None:
@@ -377,3 +396,90 @@ class ActiveSessionRegistry:
             await self._bridge.close()
             self._bridge = None
         await asyncio.gather(*(runtime.close() for runtime in sessions), *closing)
+
+
+class SessionAttachment:
+    """Deliver one Session's cached checkpoint and live events to its controller."""
+
+    def __init__(
+        self, registry: ActiveSessionRegistry, runtime: ActiveSession, attachment_id: str,
+        queue: asyncio.Queue[Event | None], events: list[Event], state: Event, created: bool,
+    ) -> None:
+        self._registry = registry
+        self.runtime = runtime
+        self.attachment_id = attachment_id
+        self._queue = queue
+        self._events = events
+        self.state = state
+        self._created = created
+        self._cursor = runtime.event_sequence
+        self._delivery = asyncio.Lock()
+
+    @property
+    def failure(self) -> Event | None:
+        return next((event for event in reversed(self._events) if event["type"] in FAILED_EVENTS), None)
+
+    def acknowledge(self, event: Event) -> None:
+        if event["type"] in FAILED_EVENTS:
+            self.runtime.mark_failure_delivered()
+
+    def send(self, command: Event) -> None:
+        if self.runtime.owns_attachment(self.attachment_id):
+            self.runtime.send(command)
+
+    async def close(self) -> None:
+        await self.runtime.detach(self._queue, self.attachment_id)
+        await self._registry.remove_if_finished(self.runtime)
+
+    async def _deliver(self, event: Event, send: SendEvent, *, replayed: bool = False) -> None:
+        await send({**event, "replayed": True} if replayed else event)
+        self.acknowledge(event)
+
+    async def replay(self, send: SendEvent, *, checkpoint: bool = False) -> bool:
+        failure = self.failure
+        if failure is not None and failure["type"] == "session_open_failed":
+            await self._deliver(failure, send, replayed=not self._created)
+            return False
+        if checkpoint:
+            await self._checkpoint(send, self._events, self.state, replayed=not self._created)
+        else:
+            replayed = not self._created
+            fatal = failure is not None and failure["type"] == "fatal"
+            if replayed and fatal:
+                await send(self.state)
+            for event in self._events:
+                await self._deliver(event, send, replayed=replayed)
+            if replayed and not fatal:
+                await send(self.state)
+        return True
+
+    async def snapshot(self, send: SendEvent) -> None:
+        async with self._delivery:
+            events, state = await self.runtime.snapshot()
+            self._cursor = self.runtime.event_sequence
+            await self._checkpoint(send, events, state, replayed=True)
+
+    async def _checkpoint(
+        self, send: SendEvent, events: list[Event], state: Event, *, replayed: bool,
+    ) -> None:
+        ready = self.runtime.ready
+        transcript = self.runtime.transcript
+        if ready is not None:
+            await self._deliver({
+                **ready, "resumed": replayed or ready["resumed"],
+                "provider": state["provider"], "workspace": state["workspace"],
+                "permission_preset": state["permission_preset"],
+                "message_count": len(transcript["items"]), "transcript": transcript,
+            }, send, replayed=replayed)
+        for event in events:
+            if event["event_sequence"] > transcript["event_sequence"] and event["type"] != "runtime_state":
+                await self._deliver(event, send, replayed=replayed)
+        if ready is not None:
+            await send(state)
+
+    async def relay(self, send: SendEvent) -> None:
+        while (event := await self._queue.get()) is not None:
+            async with self._delivery:
+                sequence = event.get("event_sequence")
+                if sequence is None or sequence > self._cursor:
+                    await self._deliver(event, send)

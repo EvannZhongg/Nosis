@@ -4,17 +4,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock, Thread
 from typing import TextIO
-from uuid import uuid4
 
-from agent_core import SessionInUseError, runtime_error_info
+from agent_core import runtime_error_info
 from agent_runtime.services import RuntimeServices
-from agent_runtime.session_inbox import ScheduledTurn
+from agent_runtime.scheduled_turn import ScheduledTurn
 
 from .bridge import Bridge
 from .event_stream import EventStream
 from .protocol import (
     PROTOCOL_VERSION, ProtocolError, decode_bridge_command, encode,
-    runtime_failure_to_dict, session_open_failed_message,
+    check_open_session_id, runtime_failure_to_dict, session_open_failed_message,
 )
 
 
@@ -22,8 +21,6 @@ from .protocol import (
 class _Session:
     bridge: Bridge
     thread: Thread
-    channel_id: str | None
-    announced: bool = False
 
 
 class BridgeServer:
@@ -34,7 +31,6 @@ class BridgeServer:
         self._write_lock = Lock()
         self._lock = Lock()
         self._sessions: dict[str, _Session] = {}
-        self._channels: dict[str, _Session] = {}
         self._announce_sessions = announce_sessions
         self.services = RuntimeServices(config_directory)
 
@@ -56,10 +52,9 @@ class BridgeServer:
             channel_id = message["channel_id"]
             if message["type"] == "close_channel":
                 with self._lock:
-                    session = self._channels.get(channel_id)
-                    if session is not None:
-                        host = session.bridge.host
-                        if message.get("idle_only") and (host.turns.busy or host.inbox.scheduled):
+                    session = self._sessions.get(channel_id)
+                    if session is not None and session.bridge.attached:
+                        if message.get("idle_only") and session.bridge.host.busy:
                             self.emit(type="channel_busy", channel_id=channel_id)
                         else:
                             session.bridge.stop()
@@ -68,34 +63,29 @@ class BridgeServer:
                 continue
             self._submit_command(channel_id, message["command"])
 
-    def _submit_command(self, channel_id: str, command: dict[str, object]) -> None:
-        with self._lock:
-            session = self._channels.get(channel_id)
-            if (
-                session is not None and session.announced
-                and command["type"] == "open_session" and command.get("session_id") == channel_id
-            ):
-                # The scheduled owner already published (or will publish) its opening.
+    def _submit_command(self, session_id: str, command: dict[str, object]) -> None:
+        opening = command["type"] == "open_session"
+        if opening:
+            try:
+                check_open_session_id(session_id, command)
+            except ValueError as error:
+                event = session_open_failed_message(command.get("session_id"), error)
+                with self._lock:
+                    session = self._sessions.get(session_id)
+                    if session is not None and session.bridge.attached:
+                        session.bridge.emit(**event)
+                    else:
+                        self._emit_channel(session_id, EventStream().publish(event))
                 return
-            if session is None:
-                if command["type"] != "open_session":
-                    raise ProtocolError("first channel command must be 'open_session'")
-                session_id = command.get("session_id") or str(uuid4())
-                if not isinstance(session_id, str):
-                    raise ProtocolError("'session_id' must be a string or null")
-                session = self._sessions.get(session_id)
-                if session is not None and session.channel_id is not None:
-                    event = session_open_failed_message(session_id, SessionInUseError(session_id))
-                    self._emit_channel(channel_id, EventStream().publish(event))
-                    self.emit(type="channel_closed", channel_id=channel_id)
-                    return
+
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if opening:
                 if session is None:
-                    session = self._create_session(session_id, channel_id)
-                else:
-                    session.channel_id = channel_id
-                    self._channels[channel_id] = session
-                    session.bridge.attach(lambda event: self._emit_channel(channel_id, event))
-                    return
+                    session = self._create_session(session_id)
+                session.bridge.attach(lambda event: self._emit_channel(session_id, event))
+            elif session is None or not session.bridge.attached:
+                raise ProtocolError("first channel command must be 'open_session'")
             try:
                 session.bridge.submit(command)
             except Exception as error:
@@ -103,27 +93,24 @@ class BridgeServer:
                 session.bridge.stop()
 
     def _submit_scheduled(self, turn: ScheduledTurn) -> None:
+        session_id = turn.session_id
         with self._lock:
-            session = self._sessions.get(turn.session_id)
+            session = self._sessions.get(session_id)
             if session is None:
-                channel_id = turn.session_id if self._announce_sessions else None
-                if channel_id is not None:
-                    self.emit(type="session_channel", channel_id=channel_id)
-                session = self._create_session(turn.session_id, channel_id)
-                session.announced = channel_id is not None
-            session.bridge.host.inbox.submit(turn)
+                session = self._create_session(session_id)
+                if self._announce_sessions:
+                    self.emit(type="session_channel", channel_id=session_id)
+                    session.bridge.attach(lambda event: self._emit_channel(session_id, event))
+            session.bridge.host.submit_scheduled(turn)
 
-    def _create_session(self, session_id: str, channel_id: str | None) -> _Session:
+    def _create_session(self, session_id: str) -> _Session:
         bridge = Bridge(services=self.services, session_id=session_id)
         thread = Thread(
             target=self._serve_session, args=(session_id, bridge),
             name=f"bridge-session-{session_id}",
         )
-        session = _Session(bridge, thread, channel_id)
+        session = _Session(bridge, thread)
         self._sessions[session_id] = session
-        if channel_id is not None:
-            self._channels[channel_id] = session
-            bridge.attach(lambda event: self._emit_channel(channel_id, event))
         thread.start()
         return session
 
@@ -140,10 +127,9 @@ class BridgeServer:
                 bridge.close()
             finally:
                 with self._lock:
-                    channel_id = self._sessions.pop(session_id).channel_id
-                    if channel_id is not None:
-                        self._channels.pop(channel_id)
-                        self.emit(type="channel_closed", channel_id=channel_id)
+                    self._sessions.pop(session_id)
+                    if bridge.attached:
+                        self.emit(type="channel_closed", channel_id=session_id)
 
     def close(self) -> None:
         self.services.close()

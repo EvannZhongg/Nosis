@@ -19,7 +19,8 @@ queue, and the Bridge projects Runtime callbacks onto attached channels.
 | `session_snapshot` | Channel Bridge | Re-publish an already open channel's ready/snapshot pair without rebinding the Session, rebuilding the Agent or disconnecting MCP. Public. |
 | `runtime_state`, embedded `runtime` | Channel Bridge projection of Runtime callbacks | Authoritative state; the initial standalone snapshot is the synchronization barrier. Public. |
 | `user_turn`, `user_turn_received`, `scheduled_turn_started`, model/tool/context/plan/job events, terminal events | Channel Bridge + TurnRunner/Core | Each Session queue serializes accepted interactive and scheduled turns in arrival order. Public. |
-| `session_channel`, `idle_only`, `channel_busy` | Managed Bridge and Session Host | Register a Session opened by Scheduler and atomically reject an idle-only release while work is pending. Internal. |
+| `session_channel` | Managed Bridge and Session Host | Register a Session opened by Scheduler. Internal. |
+| `idle_only`, `channel_busy` | BridgeServer and resident Session Host | Atomically reject an idle-only release while work is pending. Public. |
 | `user_steer`, `cancel`, interaction responses, `permission_set` | Channel Bridge routing → existing Runtime controls | Routed while a turn runs; IDs address turns or outstanding interactions and are unique only within their channel. Public. |
 | `provider_set`, `workspace_set`, session listing/history | Channel serve loop → Runtime | Serialized with turns. Public. |
 | `settings_*` | Channel Bridge → Runtime SettingsStore | First-party configuration editor schema. Internal; not a stable configuration API. |

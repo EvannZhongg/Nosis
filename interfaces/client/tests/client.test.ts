@@ -77,7 +77,7 @@ describe('Bridge transport', () => {
     const launched = launch(`
       import {createInterface} from 'node:readline';
       const lines=createInterface({input:process.stdin});
-      console.log(JSON.stringify({type:'bridge_ready',protocol_version:4}));
+      console.log(JSON.stringify({type:'bridge_ready',protocol_version:5}));
       lines.on('line', line => {
         const packet=JSON.parse(line);
         if(packet.type==='channel_command') console.log(JSON.stringify({type:'channel_event',channel_id:packet.channel_id,event:packet.command}));

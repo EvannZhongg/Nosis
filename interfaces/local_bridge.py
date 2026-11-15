@@ -5,19 +5,18 @@ import json
 import os
 import secrets
 import tempfile
-from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from threading import Thread
 from typing import TextIO
 from uuid import uuid4
 
 from agent_core import SessionInUseError, Workspace
-from interfaces.bridge.event_stream import EventStream
 from interfaces.bridge.protocol import (
     PROTOCOL_VERSION, ProtocolError, decode_bridge_command, encode,
-    session_open_failed_message,
+    check_open_session_id, session_open_failed_message,
 )
-from interfaces.session_host import ActiveSession, ActiveSessionRegistry
+from interfaces.session_host import ActiveSessionRegistry, SessionAttachment, SessionRunningError
 
 
 ENDPOINT_FILENAME = "bridge-endpoint.json"
@@ -109,19 +108,6 @@ async def _proxy_resident(directory: Path, stdin: TextIO, stdout: TextIO) -> Non
         await writer.wait_closed()
 
 
-@dataclass
-class _Attachment:
-    runtime: ActiveSession
-    attachment_id: str
-    queue: asyncio.Queue[dict[str, object] | None]
-    task: asyncio.Task[None] | None = None
-    cursor: int = 0
-    stream: EventStream = field(default_factory=EventStream)
-
-    async def detach(self) -> None:
-        await self.runtime.detach(self.queue, self.attachment_id)
-
-
 class LocalBridge:
     def __init__(self, directory: Path, sessions: ActiveSessionRegistry) -> None:
         self._endpoint = directory / ENDPOINT_FILENAME
@@ -189,70 +175,33 @@ class LocalBridge:
                 pass
 
     async def _serve(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
-        channels: dict[str, _Attachment] = {}
+        channels: dict[str, tuple[SessionAttachment, asyncio.Task[None]]] = {}
 
-        def emit(message: dict[str, object]) -> None:
+        async def emit(message: dict[str, object]) -> None:
             writer.write((encode(message) + "\n").encode("utf-8"))
+            await writer.drain()
 
-        def event(channel_id: str, message: dict[str, object]) -> None:
-            emit({"type": "channel_event", "channel_id": channel_id, "event": message})
+        async def event(channel_id: str, message: dict[str, object]) -> None:
+            await emit({"type": "channel_event", "channel_id": channel_id, "event": message})
 
-        def forward(channel_id: str, attachment: _Attachment, message: dict[str, object]) -> None:
-            payload = message.copy()
-            payload.pop("event_sequence", None)
-            payload.pop("resume_after", None)
-            state = payload.pop("runtime", None)
-            transcript = payload.pop("transcript", None)
-            event(channel_id, attachment.stream.publish(
-                payload, state=state, items=transcript["items"] if transcript is not None else None,
-            ))
-
-        def snapshot(channel_id: str, attachment: _Attachment, state: dict[str, object],
-                     events: list[dict[str, object]], *, resumed: bool) -> None:
-            runtime = attachment.runtime
-            assert runtime.ready is not None
-            checkpoint = runtime.transcript
-            forward(channel_id, attachment, {
-                **runtime.ready, "resumed": resumed,
-                "provider": state["provider"], "workspace": state["workspace"],
-                "permission_preset": state["permission_preset"],
-                "message_count": len(checkpoint["items"]), "transcript": checkpoint,
-            })
-            for message in events:
-                if message["event_sequence"] > checkpoint["event_sequence"] and message["type"] != "runtime_state":
-                    forward(channel_id, attachment, message)
-                    if message["type"] in {"fatal", "session_open_failed"}:
-                        runtime.mark_failure_delivered()
-            forward(channel_id, attachment, state)
-            attachment.cursor = runtime.event_sequence
-
-        async def relay(channel_id: str, attachment: _Attachment) -> None:
+        async def relay(channel_id: str, attachment: SessionAttachment, send) -> None:
             try:
-                while (message := await attachment.queue.get()) is not None:
-                    if message.get("event_sequence", attachment.cursor + 1) <= attachment.cursor:
-                        continue
-                    forward(channel_id, attachment, message)
-                    if message["type"] in {"fatal", "session_open_failed"}:
-                        attachment.runtime.mark_failure_delivered()
-                    await writer.drain()
-                emit({"type": "channel_closed", "channel_id": channel_id})
-                await writer.drain()
+                await attachment.relay(send)
+                if channels.pop(channel_id, None) is not None:
+                    await emit({"type": "channel_closed", "channel_id": channel_id})
             except ConnectionError:
                 writer.close()
             finally:
-                await attachment.detach()
-                await self._sessions.remove_if_finished(attachment.runtime)
-                channels.pop(channel_id, None)
+                await attachment.close()
 
-        async def close_attachment(attachment: _Attachment) -> None:
-            assert attachment.task is not None
-            attachment.task.cancel()
-            await asyncio.gather(attachment.task, return_exceptions=True)
-            # A task cancelled before its first instruction cannot run its cleanup.
-            await attachment.detach()
+        async def detach(entry: tuple[SessionAttachment, asyncio.Task[None]]) -> None:
+            attachment, task = entry
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            # The relay may be cancelled before its first instruction.
+            await attachment.close()
 
-        emit({"type": "bridge_ready", "protocol_version": PROTOCOL_VERSION})
-        await writer.drain()
+        await emit({"type": "bridge_ready", "protocol_version": PROTOCOL_VERSION})
         try:
             while line := await _read_frame(reader):
                 if not line.strip():
@@ -263,53 +212,62 @@ class LocalBridge:
                 channel_id = packet["channel_id"]
                 current = channels.get(channel_id)
                 if packet["type"] == "close_channel":
+                    if current is not None and packet.get("idle_only"):
+                        try:
+                            await self._sessions.release_idle(
+                                channel_id, attachment_id=current[0].attachment_id,
+                            )
+                        except SessionRunningError:
+                            await emit({"type": "channel_busy", "channel_id": channel_id})
+                            continue
+                        if channel_id not in channels:
+                            # The live relay already sent the close notification.
+                            continue
                     if current is not None:
-                        await close_attachment(current)
-                        channels.pop(channel_id, None)
-                    emit({"type": "channel_closed", "channel_id": channel_id})
-                elif current is not None:
-                    runtime = current.runtime
-                    command = packet["command"]
-                    if runtime.owns_attachment(current.attachment_id):
-                        if command["type"] == "session_snapshot":
-                            events, state = await runtime.snapshot()
-                            snapshot(channel_id, current, state, events, resumed=True)
-                        else:
-                            runtime.send(command)
-                else:
-                    command = packet["command"]
-                    if command["type"] != "open_session":
-                        continue
-                    session_id = command.get("session_id")
-                    attachment_id = f"tui:{uuid4()}"
+                        channels.pop(channel_id)
+                        await detach(current)
+                    await emit({"type": "channel_closed", "channel_id": channel_id})
+                    continue
+
+                command = packet["command"]
+                send = partial(event, channel_id)
+                if command["type"] == "open_session":
                     try:
-                        workspace = Workspace(Path(command["workspace"]))
-                        runtime, _ = await self._sessions.open_or_attach(
-                            {**command, "session_id": session_id or str(uuid4())},
-                            workspace, attach_only=False,
-                        )
-                        assert runtime is not None
-                        opened = await runtime.attach(0, attachment_id, takeover=False)
-                        if opened is None:
-                            raise SessionInUseError(runtime.session_id)
-                    except (OSError, TypeError, ValueError, SessionInUseError) as error:
-                        event(channel_id, EventStream().publish(session_open_failed_message(session_id, error)))
+                        check_open_session_id(channel_id, command)
+                    except ValueError as error:
+                        cursor = current[0].runtime.event_sequence if current is not None else 0
+                        await send({**session_open_failed_message(command.get("session_id"), error),
+                                    "event_sequence": cursor})
+                        continue
+                if current is not None:
+                    attachment = current[0]
+                    if command["type"] == "session_snapshot":
+                        await attachment.snapshot(send)
                     else:
-                        queue, events, state = opened
-                        if runtime.ready is None:
-                            for message in events:
-                                event(channel_id, message)
-                            runtime.mark_failure_delivered()
-                            await runtime.detach(queue, attachment_id)
-                            await self._sessions.remove_if_finished(runtime)
-                        else:
-                            attachment = _Attachment(runtime, attachment_id, queue)
-                            snapshot(channel_id, attachment, state, events, resumed=bool(session_id))
-                            channels[channel_id] = attachment
-                            attachment.task = asyncio.create_task(relay(channel_id, attachment))
-                await writer.drain()
+                        attachment.send(command)
+                    continue
+                if command["type"] != "open_session":
+                    continue
+                try:
+                    workspace = Workspace(Path(command["workspace"]))
+                    runtime, created = await self._sessions.open_or_attach(
+                        channel_id, command, workspace, attach_only=False,
+                    )
+                    attachment = await self._sessions.subscribe(runtime, f"tui:{uuid4()}", created=created)
+                    if attachment is None:
+                        raise SessionInUseError(channel_id)
+                except (OSError, TypeError, ValueError, SessionInUseError) as error:
+                    await send({**session_open_failed_message(command.get("session_id"), error), "event_sequence": 0})
+                    continue
+                try:
+                    if await attachment.replay(send, checkpoint=True):
+                        channels[channel_id] = (attachment, asyncio.create_task(relay(channel_id, attachment, send)))
+                        continue
+                except BaseException:
+                    await attachment.close()
+                    raise
+                await attachment.close()
         except ProtocolError as error:
-            emit({"type": "fatal", "error": {"type": "ProtocolError", "message": str(error), "details": {}}})
-            await writer.drain()
+            await emit({"type": "fatal", "error": {"type": "ProtocolError", "message": str(error), "details": {}}})
         finally:
-            await asyncio.gather(*(close_attachment(channel) for channel in channels.values()))
+            await asyncio.gather(*(detach(entry) for entry in tuple(channels.values())))

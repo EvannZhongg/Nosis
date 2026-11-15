@@ -55,6 +55,7 @@ from agent_core.context_manager import (
     ARCHIVE_RETRY_COUNT,
     _validated_archive_summary,
 )
+from agent_core.tools.builtin.ask_user import AskUserTool
 from tests.agent_fixtures import (
     AGENT_CONFIG, CONSOLIDATOR_PROMPT, TEST_WORKSPACE, EchoTool, MockProvider, make_agent, tool_set,
 )
@@ -113,6 +114,29 @@ def clock(*values: datetime):
 
 
 class AgentTest(unittest.TestCase):
+    def test_scheduled_turn_window_uses_the_same_tools_as_the_model_request(self) -> None:
+        class ToolCountingProvider(MockProvider):
+            def count_input_tokens(self, request: LLMRequest) -> int:
+                return 100 if request.tools else 10
+
+        provider = ToolCountingProvider(["done"])
+        session = Session()
+        context = ToolExecutionContext(
+            workspace=TEST_WORKSPACE, session=session, ask_user=lambda *args: "yes",
+        )
+        tools = ToolCatalog((AskUserTool(),)).select(("ask_user",), context)
+        agent = Agent(provider, session, "system", CONSOLIDATOR_PROMPT, AGENT_CONFIG, tools, context)
+        events = []
+        agent.run("finish", turn_control=TurnControl(interactive=False),
+                  input_source="scheduled", on_event=events.append)
+
+        self.assertFalse(provider.requests[0].tools)
+        self.assertEqual(
+            [event.window.input_tokens for event in events if isinstance(event, ContextWindowEvent)],
+            [10, 10],
+        )
+        self.assertEqual(agent.context_window().input_tokens, 100)
+
     def test_invalid_plan_arguments_are_returned_and_corrected_in_the_same_turn(self):
         raw = '{"goal":"finish","steps":[{"id":"1","title":"work","status" "completed"}]}'
         invalid = ToolCall.from_raw_arguments("bad-plan", "update_plan", raw)

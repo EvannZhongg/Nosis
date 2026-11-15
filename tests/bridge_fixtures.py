@@ -4,6 +4,7 @@ import io
 import json
 import tempfile
 import unittest
+from functools import partial
 from pathlib import Path
 from typing import TextIO
 from unittest.mock import patch
@@ -15,7 +16,7 @@ from interfaces.bridge.bridge import Bridge as SessionBridge
 from interfaces.bridge.protocol import decode, encode
 from agent_runtime.config import default_config_directory
 from agent_runtime.services import RuntimeServices
-from agent_runtime.session_inbox import ScheduledTurn
+from agent_runtime.scheduled_turn import ScheduledTurn
 
 
 class Bridge(SessionBridge):
@@ -32,9 +33,9 @@ class Bridge(SessionBridge):
         )
         super().__init__(services=self._test_services, send=lambda event: stdout.write(encode(event) + "\n"))
 
-    def read_message(self):
+    def serve(self):
         self._start_reader()
-        return super().read_message()
+        return super().serve()
 
     def _register_interaction(self, request_id, turn_id):
         waiter = super()._register_interaction(request_id, turn_id)
@@ -61,7 +62,6 @@ class Bridge(SessionBridge):
 
     def _read_stdin(self) -> None:
         assert self._stdin is not None
-        first_message = not self._session_opened
         while True:
             try:
                 line = self._stdin.readline()
@@ -75,17 +75,10 @@ class Bridge(SessionBridge):
                         self.stop()
                         return
                     message = decode(stripped)
-                    if first_message:
-                        first_message = False
-                        if message["type"] == "open_session":
-                            self._messages.put(message)
-                        else:
-                            self.submit(message)
-                    else:
-                        self.submit(message)
+                    self.submit(message)
             except ValueError as error:
-                self._messages.put(error)
-                self._route_shutdown(notify_commands=False)
+                self.host.submit(partial(self._protocol_error, str(error)))
+                self.stop()
                 return
 
 

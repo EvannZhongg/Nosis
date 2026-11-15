@@ -1,6 +1,6 @@
-// Public stdio Bridge protocol, major 4. Keep Python senders and the reference in sync.
+// Public stdio Bridge protocol, major 5. Keep Python senders and the reference in sync.
 
-export const PROTOCOL_VERSION = 4;
+export const PROTOCOL_VERSION = 5;
 
 export type JSONValue =
   | string
@@ -220,7 +220,7 @@ export type Incoming = (
   | RuntimeState
   | {
       type: 'session_ready';
-      protocol_version: 4;
+      protocol_version: 5;
       session_id: string;
       workspace: string;
       provider: string;
@@ -314,6 +314,8 @@ export type Incoming = (
   | { type: 'session_open_failed'; session_id: string | null; error: ProtocolError }
 ) & {
   event_sequence: number;
+  /** The resident host is delivering an event from its Session cache. */
+  replayed?: boolean;
   runtime?: RuntimeState;
   /** Replaces the transcript through event_sequence, independent of phase. */
   transcript?: TranscriptCheckpoint;

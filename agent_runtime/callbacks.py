@@ -16,6 +16,8 @@ class RuntimeCallbacks:
     on_plan: Callable[[PlanSnapshot], None] = lambda snapshot: None
     on_session_title: Callable[[str, str, str], None] = lambda session_id, title, source: None
     on_mcp_status: Callable[["McpServerStatus"], None] = lambda status: None
+    on_session_opened: Callable[[bool], None] = lambda resumed: None
+    on_session_open_failed: Callable[[str, Exception], None] = lambda session_id, error: None
     on_turn_start: Callable[[str, str, str], None] = lambda turn_id, text, source: None
     on_turn_finish: Callable[[str, "TurnResult"], None] = lambda turn_id, result: None
     request_permission: Callable[..., bool] = lambda command, **kwargs: False

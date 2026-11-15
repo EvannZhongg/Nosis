@@ -88,8 +88,10 @@ export type State = {
   pendingSteers: number;
 };
 
+type TerminalEvent = Exclude<Incoming, { type: 'session_items' }>;
+
 export type Action =
-  | { type: 'message'; message: Incoming }
+  | { type: 'message'; message: TerminalEvent }
   | { type: 'submit'; turnId: string; text: string }
   | { type: 'steer_submitted' }
   | { type: 'refresh_submitted' }
@@ -453,7 +455,7 @@ function reduceAction(state: State, action: Action): State {
   }
 }
 
-function applyMessage(state: State, message: Incoming): State {
+function applyMessage(state: State, message: TerminalEvent): State {
   switch (message.type) {
     case 'runtime_state': {
       const startupNotices: Entry[] = (message.runtime_warnings ?? []).map((text) => ({
@@ -750,10 +752,6 @@ function applyMessage(state: State, message: Incoming): State {
         picker: { ...state.picker, list: state.picker.list?.map((item) =>
           item.session_id === message.session_id ? { ...item, title: message.title } : item) ?? null },
       };
-
-    case 'session_items':
-      // session_ready cleared the previous transcript and added the resumed notice.
-      return { ...state, entries: [...state.entries, ...historyEntries(message.items)] };
 
     case 'user_question': {
       return {

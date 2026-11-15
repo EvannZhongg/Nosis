@@ -22,7 +22,7 @@ from interfaces.bridge.protocol import (
 )
 
 from interfaces.session_host import (
-    ActiveSession,
+    SessionAttachment,
     ActiveSessionRegistry,
     SessionRunningError,
 )
@@ -346,6 +346,7 @@ def create_sessions_router(
             )
             return
         runtime, created = await active_sessions.open_or_attach(
+            opening_message["session_id"],
             opening_message,
             current_workspace,
             attach_only=attach_only,
@@ -365,60 +366,22 @@ def create_sessions_router(
             )
             await websocket.close()
             return
-        attachment = await runtime.attach(
-            0 if created else after_event,
-            attachment_id,
-            takeover=takeover,
+        attachment = await active_sessions.subscribe(
+            runtime, attachment_id, created=created, after_event=after_event, takeover=takeover,
         )
         if attachment is None:
-            await websocket.send_json(
-                attachment_replaced_message(phase=runtime.state["phase"])
-            )
+            await websocket.send_json(attachment_replaced_message(phase=runtime.state["phase"]))
             await websocket.close()
             return
-        queue, events, state = attachment
-        fatal_delivered = False
         try:
-            opening_failure = next(
-                (message for message in events if message["type"] == "session_open_failed"),
-                None,
-            )
-            if opening_failure is not None:
-                # No execution snapshot exists. Sending the placeholder state
-                # would incorrectly release the browser's queued commands.
-                await websocket.send_json(opening_failure)
-                runtime.mark_failure_delivered()
+            if await attachment.replay(websocket.send_json):
+                await _relay(websocket, attachment)
+            else:
                 await websocket.close()
-                return
-            replays_fatal = any(
-                message.get("type") == "fatal" for message in events
-            )
-            if not created and replays_fatal:
-                await websocket.send_json(state)
-            for message in events:
-                await websocket.send_json(
-                    message if created else {**message, "replayed": True}
-                )
-                fatal_delivered = message.get("type") == "fatal"
-            if not created and not replays_fatal:
-                await websocket.send_json(state)
-            try:
-                fatal_delivered = (
-                    await _relay(websocket, runtime, queue, attachment_id)
-                    or fatal_delivered
-                )
-            except asyncio.CancelledError:
-                # ASGI servers may cancel the handler when the browser drops
-                # the socket. Detaching must not cancel the runtime with it.
-                pass
-        except WebSocketDisconnect:
-            # A browser closing the socket during replay or relay is normal.
+        except (WebSocketDisconnect, asyncio.CancelledError):
             pass
         finally:
-            if fatal_delivered:
-                runtime.mark_failure_delivered()
-            await asyncio.shield(runtime.detach(queue, attachment_id))
-            await active_sessions.remove_if_finished(runtime)
+            await asyncio.shield(attachment.close())
 
     return router
 
@@ -462,61 +425,29 @@ def _open_session_message(
     }
 
 
-async def _relay(
-    websocket: WebSocket,
-    runtime: ActiveSession,
-    queue: asyncio.Queue[dict[str, object] | None],
-    attachment_id: str,
-) -> bool:
-    """Pump messages between one browser attachment and its runtime."""
+async def _relay(websocket: WebSocket, attachment: SessionAttachment) -> None:
+    """Pump the WebSocket side of a Session subscription."""
 
     async def browser_to_bridge() -> None:
         while True:
             message = await websocket.receive_json()
-            if not isinstance(message, dict):
-                continue
-            if not runtime.owns_attachment(attachment_id):
-                continue
-            message_type = message.get("type")
-            if message_type == "cancel":
-                runtime.send(message)
-            elif message_type in RELAYED_MESSAGE_TYPES:
-                runtime.send(message)
-
-    fatal_delivered = False
-
-    async def bridge_to_browser() -> None:
-        nonlocal fatal_delivered
-        while True:
-            message = await queue.get()
-            if message is None:
-                return
-            await websocket.send_json(message)
-            if message.get("type") == "fatal":
-                fatal_delivered = True
+            if isinstance(message, dict) and (
+                message.get("type") == "cancel" or message.get("type") in RELAYED_MESSAGE_TYPES
+            ):
+                attachment.send(message)
 
     tasks = [
         asyncio.create_task(browser_to_bridge()),
-        asyncio.create_task(bridge_to_browser()),
+        asyncio.create_task(attachment.relay(websocket.send_json)),
     ]
     try:
-        done, _ = await asyncio.wait(
-            tasks,
-            return_when=asyncio.FIRST_COMPLETED,
-        )
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for task in done:
-            if task.cancelled():
-                continue
-            error = task.exception()
-            # A page closing mid-turn is normal; anything else is a bug
-            # and belongs in the server log.
-            if error is not None and not isinstance(
-                error,
-                (WebSocketDisconnect, json.JSONDecodeError),
-            ):
-                raise error
+            if not task.cancelled():
+                error = task.exception()
+                if error is not None and not isinstance(error, (WebSocketDisconnect, json.JSONDecodeError)):
+                    raise error
     finally:
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
-    return fatal_delivered

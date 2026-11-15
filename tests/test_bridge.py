@@ -25,7 +25,6 @@ from agent_core import (
     CompressionCompletedEvent,
     ContextWindow,
     ContextWindowEvent,
-    ExecutionScope,
     JsonlSessionStore,
     JobStatusEvent,
     Message,
@@ -435,7 +434,7 @@ class ProtocolTest(unittest.TestCase):
             ),
             {
                 "type": "session_ready",
-                "protocol_version": 4,
+                "protocol_version": 5,
                 "session_id": "s1",
                 "workspace": "/tmp/work",
                 "provider": "test",
@@ -911,11 +910,11 @@ class BridgeApprovalTest(BridgeTestCase):
         )
         self.assertTrue(bridge.request_permission("ls"))
 
-        deferred = bridge.read_message()
-        assert deferred is not None
-        self.assertEqual(deferred["type"], "user_turn")
-        self.assertEqual(deferred["turn_id"], "t2")
-        self.assertIsNone(bridge.read_message())
+        executed = Mock()
+        bridge._session_opened = True
+        with patch.object(bridge, "run_turn", executed):
+            bridge.serve()
+        executed.assert_called_once_with({"type": "user_turn", "turn_id": "t2", "text": "later"})
 
     def test_ignores_stale_request_id(self) -> None:
         bridge, _ = self.make_bridge(
@@ -1026,8 +1025,7 @@ class BridgeApprovalTest(BridgeTestCase):
             ]
         )
 
-        message = bridge.read_message()
-        assert message is not None
+        bridge._start_reader()
         bridge._reader.join(2)
         self.assertFalse(bridge._reader.is_alive())
 
@@ -1245,9 +1243,9 @@ class BridgeServeTest(BridgeTestCase):
 
     def test_does_not_swallow_an_external_keyboard_interrupt(self) -> None:
         bridge, _ = self.make_bridge([])
-        with patch.object(bridge, "read_message", side_effect=KeyboardInterrupt):
-            with self.assertRaises(KeyboardInterrupt):
-                bridge.serve()
+        bridge.host.submit(Mock(side_effect=KeyboardInterrupt))
+        with self.assertRaises(KeyboardInterrupt):
+            bridge.serve()
 
     def test_rejects_turn_before_open_session(self) -> None:
         bridge, _ = self.make_bridge(
@@ -2151,11 +2149,9 @@ class BridgeSessionOpenTest(BridgeTestCase):
         tui._emit_runtime_state("idle")
         permissions, plan = tui.host.sessions.permissions, tui.host.sessions.plan
         with patch.object(plane.jobs, "close", wraps=plane.jobs.close) as close_jobs:
-            with patch.object(tui, "read_message", side_effect=[
-                opening, {"type": "load_session"},
-                {"type": "user_turn", "turn_id": "continued", "text": "continue TUI"}, None,
-            ]):
-                tui.serve()
+            tui._handle_command(opening)
+            tui._handle_command({"type": "load_session"})
+            tui._handle_command({"type": "user_turn", "turn_id": "continued", "text": "continue TUI"})
             close_jobs.assert_not_called()
         failed = next(message for message in emitted(output) if message["type"] == "session_open_failed")
         self.assertEqual(failed["runtime"]["phase"], "idle")
@@ -3651,11 +3647,9 @@ class RuntimeRefreshTest(BridgeTestCase):
             host.turns.turn_id = None
 
     def test_refresh_command_is_dispatched_without_a_user_turn(self) -> None:
-        with patch.object(self.bridge, "read_message", side_effect=[
-            {"type": "open_session", "workspace": str(self.root), "session_id": None},
-            decode('{"type":"runtime_refresh"}'), None,
-        ]):
-            self.bridge.serve()
+        self.bridge.submit({"type": "open_session", "workspace": str(self.root), "session_id": None})
+        self.bridge.submit(decode('{"type":"runtime_refresh"}'))
+        self.bridge.serve()
         self.assertEqual(emitted(self.stdout)[-1]["type"], "runtime_refreshed")
         self.assertEqual(self.bridge.host.sessions.session.items, [])
 

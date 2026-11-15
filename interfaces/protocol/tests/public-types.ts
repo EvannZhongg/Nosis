@@ -15,11 +15,12 @@ const replaced: Incoming = { type: 'attachment_replaced', phase: 'idle', event_s
 const hostOpen: HostOutgoing = { ...open, attachment_id: 'page' };
 const hostReplaced: HostIncoming = { type: 'attachment_replaced', phase: 'idle' };
 function inspect(message: Incoming): void {
-  // @ts-expect-error Host replay flags are not public event metadata.
   void message.replayed;
+  // @ts-expect-error Resume cursors are internal to the host.
+  void message.resume_after;
   if (message.type === 'assistant_delta') console.log(message.text);
   if (message.type === 'session_ready') {
-    const major: 4 = message.protocol_version;
+    const major: 5 = message.protocol_version;
     console.log(major);
   }
 }

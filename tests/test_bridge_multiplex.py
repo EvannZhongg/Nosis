@@ -133,11 +133,11 @@ class MultiplexBridgeTest(unittest.IsolatedAsyncioTestCase):
             if event["type"] == kind:
                 return event, events
 
-    async def open(self, key, session_id=None):
-        channel = self.bridge.open_channel(key)
-        channel.send({**self.opening, "session_id": session_id or key})
+    async def open(self, session_id):
+        channel = self.bridge.open_channel(session_id)
+        channel.send({**self.opening, "session_id": session_id})
         ready, _ = await self.until(channel, "session_ready")
-        self.assertEqual(ready["protocol_version"], 4)
+        self.assertEqual(ready["protocol_version"], 5)
         await self.until(channel, "runtime_state")
         return channel
 
@@ -160,7 +160,7 @@ class MultiplexBridgeTest(unittest.IsolatedAsyncioTestCase):
                 await asyncio.sleep(0.025)
 
     async def test_due_schedule_reuses_the_idle_interactive_session(self):
-        channel = await self.open("interactive", "shared")
+        channel = await self.open("shared")
         channel.send({"type": "user_turn", "turn_id": "warm", "text": "warm"})
         await self.until(channel, "turn_completed")
         store, schedule = self.schedule("shared", "scheduled")
@@ -175,7 +175,7 @@ class MultiplexBridgeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([item.content for item in session.items if item.role == "user"], ["warm", "scheduled"])
 
     async def test_schedule_queues_in_fifo_order_and_skips_overlapping_occurrences(self):
-        channel = await self.open("interactive", "shared")
+        channel = await self.open("shared")
         channel.send({"type": "user_turn", "turn_id": "first", "text": "blocked"})
         self.assertTrue(await asyncio.to_thread(self.http.entered.wait, 8))
         store, schedule = self.schedule("shared", "scheduled", trigger=IntervalTrigger(
@@ -197,7 +197,7 @@ class MultiplexBridgeTest(unittest.IsolatedAsyncioTestCase):
         self.assertGreater(complete.started_at, complete.scheduled_for)
 
     async def test_unattended_turn_keeps_approval_and_questions_disabled_on_warm_runtime(self):
-        channel = await self.open("interactive", "shared")
+        channel = await self.open("shared")
         channel.send({"type": "user_turn", "turn_id": "warm", "text": "warm"})
         await self.until(channel, "turn_completed")
         store, schedule = self.schedule("shared", "approval")
@@ -214,7 +214,7 @@ class MultiplexBridgeTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("ask_user", shown["next"])
 
     async def test_stopping_bridge_cancels_the_queued_schedule(self):
-        channel = await self.open("interactive", "shared")
+        channel = await self.open("shared")
         channel.send({"type": "user_turn", "turn_id": "first", "text": "blocked"})
         self.assertTrue(await asyncio.to_thread(self.http.entered.wait, 8))
         store, schedule = self.schedule("shared", "queued")
@@ -228,7 +228,7 @@ class MultiplexBridgeTest(unittest.IsolatedAsyncioTestCase):
         with application_lock(self.root):
             with self.assertRaisesRegex(RuntimeError, "close the standalone Bridge"):
                 await BridgeProcess.spawn(Workspace(self.root), self.root, on_session=lambda channel: None)
-            channel = await self.open("standalone", "standalone")
+            channel = await self.open("standalone")
             channel.send({"type": "user_turn", "turn_id": "turn", "text": "still-alive"})
             await self.until(channel, "turn_completed")
 
@@ -262,27 +262,48 @@ class MultiplexBridgeTest(unittest.IsolatedAsyncioTestCase):
 
                     self.assertEqual((await read())["type"], "bridge_ready")
                     terminal.stdin.write((json.dumps({
-                        "type": "channel_command", "channel_id": "terminal",
+                        "type": "channel_command", "channel_id": "scheduled",
                         "command": {**self.opening, "session_id": "scheduled"},
                     }) + "\n").encode())
                     ready = (await read())["event"]
                     self.assertEqual(ready["type"], "session_ready")
+                    self.assertTrue(ready["replayed"])
+                    self.assertEqual(ready["event_sequence"], runtime.ready["event_sequence"])
+                    self.assertEqual(ready["transcript"]["event_sequence"], runtime.transcript["event_sequence"])
                     self.assertEqual(ready["transcript"]["items"][0]["content"], "scheduled-first")
                     state = (await read())["event"]
                     self.assertEqual(state["phase"], "idle")
                     self.assertIs(await registry.get("scheduled"), runtime)
                     self.assertEqual(state["provider"], "native")
                     terminal.stdin.write((json.dumps({
-                        "type": "channel_command", "channel_id": "terminal",
-                        "command": {"type": "user_turn", "turn_id": "tui", "text": "from-terminal"},
+                        "type": "channel_command", "channel_id": "scheduled",
+                        "command": {"type": "user_turn", "turn_id": "tui", "text": "blocked"},
                     }) + "\n").encode())
+                    self.assertTrue(await asyncio.to_thread(self.http.entered.wait, 8))
+                    terminal.stdin.write(b'{"type":"close_channel","channel_id":"scheduled","idle_only":true}\n')
+                    while (packet := await read())["type"] == "channel_event":
+                        self.assertNotEqual(packet["event"]["type"], "fatal")
+                    self.assertEqual(packet, {"type": "channel_busy", "channel_id": "scheduled"})
+                    self.http.release.set()
                     while (packet := await read())["event"]["type"] != "turn_completed":
                         self.assertNotIn(packet["event"]["type"], {"fatal", "turn_failed", "session_open_failed"})
                     self.assertEqual(packet["event"]["turn_id"], "tui")
-                    terminal.stdin.write(b'{"type":"shutdown"}\n')
-                    self.assertEqual(await asyncio.wait_for(terminal.wait(), 10), 0)
+                    self.assertEqual(packet["event"]["event_sequence"], runtime.event_sequence)
+                    terminal.stdin.write(b'{"type":"close_channel","channel_id":"scheduled"}\n')
+                    self.assertEqual(await read(), {"type": "channel_closed", "channel_id": "scheduled"})
                     self.assertIs(await registry.get("scheduled"), runtime)
                     self.assertEqual(store.load("scheduled").turns["tui"].status, "completed")
+                    terminal.stdin.write((json.dumps({
+                        "type": "channel_command", "channel_id": "scheduled",
+                        "command": {**self.opening, "session_id": "scheduled"},
+                    }) + "\n").encode())
+                    self.assertTrue((await read())["event"]["replayed"])
+                    self.assertEqual((await read())["event"]["type"], "runtime_state")
+                    terminal.stdin.write(b'{"type":"close_channel","channel_id":"scheduled","idle_only":true}\n')
+                    self.assertEqual(await read(), {"type": "channel_closed", "channel_id": "scheduled"})
+                    terminal.stdin.write(b'{"type":"shutdown"}\n')
+                    self.assertEqual(await asyncio.wait_for(terminal.wait(), 10), 0)
+                    self.assertIsNone(await registry.get("scheduled"))
                 finally:
                     if terminal.returncode is None:
                         terminal.kill()
@@ -325,17 +346,17 @@ class MultiplexBridgeTest(unittest.IsolatedAsyncioTestCase):
         first.send({"type": "cancel", "turn_id": "same"})
         await self.until(first, "turn_cancelled")
 
-    async def test_writer_conflict_fails_only_the_contending_channel(self):
-        owner = await self.open("owner", "shared")
+    async def test_mismatched_session_id_fails_only_the_contending_channel(self):
+        owner = await self.open("shared")
         contender = self.bridge.open_channel("contender")
         contender.send({**self.opening, "session_id": "shared"})
         error, _ = await self.until(contender, "session_open_failed")
-        self.assertEqual(error["error"]["type"], "SessionInUseError")
+        self.assertIn("must match channel_id", error["error"]["message"])
         await contender.close()
         owner.send({"type": "user_turn", "turn_id": "t", "text": "owner"})
         await self.until(owner, "turn_completed")
         await owner.close()
-        reopened = await self.open("owner", "shared")
+        reopened = await self.open("shared")
         reopened.send({"type": "user_turn", "turn_id": "next", "text": "reopened"})
         await self.until(reopened, "turn_completed")
 

@@ -20,6 +20,7 @@ from agent_core import (
     HostCommandExecutor,
     SandboxedCommandExecutor,
     ToolExecutionContext,
+    TurnControl,
     Workspace,
     WorkspaceInstructions,
     builtin_catalog,
@@ -35,7 +36,6 @@ from agent_core.prompting import render_system_prompt
 from agent_core.llm import LLMProvider
 from agent_core.tools import ROLE_TOOL_NAMES
 from agent_core.hooks import HookRunner
-from agent_core.execution.process import CancellationSignal
 
 from .config import (
     configured_skill_sources,
@@ -75,7 +75,7 @@ class ExecutionPlaneManager:
 
     def ensure(
         self, session: SessionRuntimeController, *, force: bool = False,
-        cancellation: CancellationSignal | None = None,
+        cancellation: TurnControl | None = None,
     ) -> ExecutionPlane:
         if (
             session.session is None
@@ -117,7 +117,7 @@ class ExecutionPlaneManager:
             )
         ):
             if plane.agent is None:
-                self._bind_session(plane, session)
+                self._bind_session(plane, session, cancellation)
             return plane
         if plane is not None:
             self.close()
@@ -304,11 +304,13 @@ class ExecutionPlaneManager:
                             if host_executor is not None:
                                 host_executor.close()
             raise
-        self._bind_session(plane, session)
+        self._bind_session(plane, session, cancellation)
         self.current = plane
         return plane
 
-    def _bind_session(self, plane: ExecutionPlane, session: SessionRuntimeController) -> None:
+    def _bind_session(
+        self, plane: ExecutionPlane, session: SessionRuntimeController, turn_control: TurnControl | None,
+    ) -> None:
         try:
             agent_config = plane.agent_config
             workspace = plane.workspace
@@ -466,7 +468,7 @@ class ExecutionPlaneManager:
                     self.callbacks.on_session_title,
                 )
             plane.agent = agent
-            plane.context_window = agent.context_window()
+            plane.context_window = agent.context_window(turn_control)
         except BaseException:
             if self.current is plane:
                 self.current = None

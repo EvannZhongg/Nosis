@@ -5,6 +5,7 @@ import { PROTOCOL_VERSION } from '@nosis/protocol';
 
 const [workspace, text] = process.argv.slice(2);
 if (!workspace || !text) throw new Error('Usage: chat.mjs <workspace> <prompt>');
+const sessionId = randomUUID();
 let opened = false;
 let submitted = false;
 const client = new BridgeClient({
@@ -20,13 +21,13 @@ const client = new BridgeClient({
     }
     if (message.type === 'runtime_state' && opened && !submitted) {
       submitted = true;
-      client.send({ type: 'user_turn', turn_id: randomUUID(), text }, 'main');
+      client.send({ type: 'user_turn', turn_id: randomUUID(), text }, sessionId);
     }
     if (message.type === 'assistant_delta') process.stdout.write(message.text);
     if (message.type === 'approval_request') {
-      client.send({ type: 'approval_response', request_id: message.request_id, approved: false }, 'main');
+      client.send({ type: 'approval_response', request_id: message.request_id, approved: false }, sessionId);
     }
-    if (message.type === 'user_question' && message.turn_id) client.cancel(message.turn_id, 'main');
+    if (message.type === 'user_question' && message.turn_id) client.cancel(message.turn_id, sessionId);
     if (message.type === 'fatal' || message.type === 'turn_failed' || message.type === 'session_open_failed') {
       console.error(message.error);
       process.exitCode = 1;
@@ -41,5 +42,5 @@ const client = new BridgeClient({
   onProtocolError(error) { console.error(error); process.exitCode = 1; },
   onExit(code, signal) { if (code !== 0 || signal) process.exitCode = 1; },
 });
-client.send({ type: 'open_session', workspace: resolve(workspace), session_id: null }, 'main');
+client.send({ type: 'open_session', workspace: resolve(workspace), session_id: null }, sessionId);
 await client.closed;

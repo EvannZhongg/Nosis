@@ -53,7 +53,7 @@ async function until(channelId, kind) {
 
 function open(channelId) {
   client.send({
-    type: 'open_session', workspace: resolve(channelId), session_id: `sdk-${channelId}`, provider: 'fixture',
+    type: 'open_session', workspace: resolve(channelId), session_id: channelId, provider: 'fixture',
   }, channelId);
 }
 
@@ -77,7 +77,7 @@ try {
   client.send({ type: 'session_snapshot' }, 'one');
   const original = await until('one', 'session_ready');
   const snapshot = await until('one', 'runtime_state');
-  assert.equal(original.session_id, 'sdk-one');
+  assert.equal(original.session_id, 'one');
   assert.equal(snapshot.phase, 'idle');
   assert.deepEqual(snapshot.context_window, cancelled.runtime.context_window);
   client.closeChannel('one');

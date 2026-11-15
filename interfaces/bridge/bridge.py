@@ -1,5 +1,6 @@
 """One session channel's protocol adapter for the shared application runtime."""
 
+from functools import partial
 from itertools import count
 from pathlib import Path
 from queue import Queue
@@ -15,7 +16,6 @@ from agent_runtime.callbacks import RuntimeCallbacks
 from agent_runtime.attachments import parse_attachments
 from agent_runtime.config import load_model_options
 from agent_runtime.services import RuntimeServices
-from agent_runtime.session_inbox import ScheduledTurn
 from agent_runtime.turn_runner import TurnResult
 from .protocol import (
     event_to_message,
@@ -39,7 +39,7 @@ from .event_stream import EventStream
 
 class Bridge:
     def __init__(self, *, services: RuntimeServices,
-                 send: Callable[[dict[str, object]], None] = lambda event: None,
+                 send: Callable[[dict[str, object]], None] | None = None,
                  session_id: str | None = None) -> None:
         self._send = send
         self._bound_session_id = session_id
@@ -71,19 +71,28 @@ class Bridge:
                     **session_title_updated_message(session_id, title, source),
                 ),
                 on_mcp_status=self._emit_mcp_status,
+                on_session_opened=self._on_session_opened,
+                on_session_open_failed=lambda session_id, error: self.emit(
+                    **session_open_failed_message(session_id, error)
+                ),
                 on_turn_start=self._on_turn_start,
                 on_turn_finish=self._on_turn_finish,
                 request_permission=self.request_permission,
                 ask_user=self.request_user_choice,
             ),
         )
-        self._messages = self.host.inbox
 
     def attach(self, send: Callable[[dict[str, object]], None]) -> None:
         with self._event_lock:
+            if self._send is not None:
+                return
             self._send = send
             if self._session_opened:
                 self._emit_session_snapshot(resumed=True)
+
+    @property
+    def attached(self) -> bool:
+        return self._send is not None
 
     def emit(self, type: str, **fields: object) -> None:
         with self._event_lock:
@@ -123,17 +132,8 @@ class Bridge:
             published = self._stream.publish(
                 message, state=state, items=items,
             )
-            self._send(published)
-
-
-    def read_message(self) -> dict[str, object] | ScheduledTurn | None:
-        """Return the next command routed by the process transport."""
-        message = self._messages.get()
-        if isinstance(message, BaseException):
-            raise message
-        assert message is None or isinstance(message, (dict, ScheduledTurn))
-        return message
-
+            if self._send is not None:
+                self._send(published)
 
     def submit(self, message: dict[str, object]) -> None:
         """Route one decoded command without blocking the process transport."""
@@ -151,7 +151,7 @@ class Bridge:
             if self._session_opened:
                 self._set_permission_preset(message)
             else:
-                self._messages.put(message)
+                self.host.submit(partial(self._handle_command, message))
             return
         if message_type == "user_steer":
             self._route_steer(message)
@@ -164,7 +164,7 @@ class Bridge:
             if isinstance(turn_id, str):
                 self.host.turns.enqueue(turn_id)
                 self.emit(**user_turn_received_message(turn_id))
-        self._messages.put(message)
+        self.host.submit(partial(self._handle_command, message))
 
     def stop(self) -> None:
         self._route_shutdown()
@@ -201,16 +201,14 @@ class Bridge:
             waiter.put(Cancelled())
 
 
-    def _route_shutdown(self, *, notify_commands: bool = True) -> None:
+    def _route_shutdown(self) -> None:
         with self._router_lock:
             self._input_closed = True
             self._shutdown_requested = True
-            self.host.turns.shutdown()
+            self.host.stop()
             waiters = tuple(waiter for _, waiter in self._waiters.values())
         for waiter in waiters:
             waiter.put(Cancelled())
-        if notify_commands:
-            self._messages.put(None)
 
 
     def _register_interaction(
@@ -476,102 +474,60 @@ class Bridge:
 
 
     def serve(self) -> None:
-        opened = False
-        while True:
+        self.host.serve()
+
+    def _protocol_error(self, message: str) -> None:
+        self.emit("fatal", error={"type": "ProtocolError", "message": message, "details": {}})
+        raise SystemExit(1)
+
+    def _handle_command(self, message: dict[str, object]) -> None:
+        kind = message["type"]
+        if kind == "list_workspaces" and self.host.sessions.store is not None:
+            self._emit_workspaces()
+        elif kind == "open_session":
             try:
-                message = self.read_message()
-            except ValueError as error:
-                self.emit(
-                    "fatal",
-                    error={
-                        "type": "ProtocolError",
-                        "message": str(error),
-                        "details": {},
-                    },
-                )
-                raise SystemExit(1)
-
-            if message is None:
-                return
-            if isinstance(message, ScheduledTurn):
-                if self.host.turns.stopped:
-                    message.completion.cancel()
-                    continue
-                if not opened:
-                    try:
-                        self.open_session({
-                            "workspace": str(message.workspace), "session_id": message.session_id,
-                        })
-                    except (SessionInUseError, ValueError, OSError) as error:
-                        message.completion.set_exception(error)
-                        self.emit(**session_open_failed_message(message.session_id, error))
-                        continue
-                    opened = True
-                self.host.run_scheduled(message)
-                continue
-            if message["type"] == "list_workspaces" and self.host.sessions.store is not None:
-                self._emit_workspaces()
-                continue
-            if not opened or message["type"] == "open_session":
-                if message["type"] == "list_sessions" and self.host.sessions.workspace is not None:
-                    self._emit_sessions()
-                    continue
-                if message["type"] != "open_session":
-                    self.emit(
-                        "fatal",
-                        error={
-                            "type": "ProtocolError",
-                            "message": "first message must be 'open_session'",
-                            "details": {},
-                        },
-                    )
-                    raise SystemExit(1)
-                try:
-                    self.open_session(message)
-                except (SessionInUseError, ValueError, OSError) as error:
-                    opened = self.host.sessions.session is not None
-                    self._session_opened = opened
-                    self.emit(**session_open_failed_message(message.get("session_id"), error))
-                    continue
-                opened = True
-            elif message["type"] == "user_turn":
-                self.run_turn(message)
-            elif message["type"] == "permission_set":
-                self._set_permission_preset(message)
-            elif message["type"] == "provider_set":
-                self._set_provider(message)
-            elif message["type"] == "workspace_set":
-                self._set_workspace(message)
-            elif message["type"] == "runtime_refresh":
-                self._refresh_runtime()
-            elif message["type"] == "list_sessions":
-                self._emit_sessions()
-            elif message["type"] == "load_session":
-                self._emit_session_items()
-            elif message["type"] == "session_snapshot":
-                self._emit_session_snapshot(resumed=True)
-            elif message["type"] == "settings_get":
-                self._emit_settings(message)
-            elif message["type"] == "settings_provider_save":
-                self._save_provider_settings(message)
-            elif message["type"] == "settings_agent_save":
-                self._save_agent_settings(message)
-            elif message["type"] == "settings_routing_save":
-                self._save_routing_settings(message)
-
+                self.open_session(message)
+            except (SessionInUseError, ValueError, OSError) as error:
+                self.emit(**session_open_failed_message(message.get("session_id"), error))
+        elif kind == "list_sessions" and self.host.sessions.workspace is not None:
+            self._emit_sessions()
+        elif not self._session_opened:
+            self._protocol_error("first message must be 'open_session'")
+        elif kind == "user_turn":
+            self.run_turn(message)
+        elif kind == "permission_set":
+            self._set_permission_preset(message)
+        elif kind == "provider_set":
+            self._set_provider(message)
+        elif kind == "workspace_set":
+            self._set_workspace(message)
+        elif kind == "runtime_refresh":
+            self._refresh_runtime()
+        elif kind == "load_session":
+            self._emit_session_items()
+        elif kind == "session_snapshot":
+            self._emit_session_snapshot(resumed=True)
+        elif kind == "settings_get":
+            self._emit_settings(message)
+        elif kind == "settings_provider_save":
+            self._save_provider_settings(message)
+        elif kind == "settings_agent_save":
+            self._save_agent_settings(message)
+        elif kind == "settings_routing_save":
+            self._save_routing_settings(message)
 
     def open_session(self, message: dict[str, object]) -> None:
         session_id = message.get("session_id")
         if self._bound_session_id is not None and self._session_opened:
-            if session_id != self._bound_session_id:
-                raise ValueError("open a new channel to select another Session")
-            self._emit_session_snapshot(resumed=True)
             return
         resumed = self.host.open_session(
             Path(str(message["workspace"])),
             session_id=self._bound_session_id or session_id,
             provider=message.get("provider"),
         )
+        self._on_session_opened(resumed and bool(session_id))
+
+    def _on_session_opened(self, resumed: bool) -> None:
         with self._event_lock:
             self._phase = "inactive"
             self._approval = self._question = None
@@ -579,7 +535,7 @@ class Bridge:
             self._jobs.clear()
             self._checkpoint_turn = None
             self._session_opened = True
-            self._emit_session_snapshot(resumed=resumed and bool(session_id))
+            self._emit_session_snapshot(resumed=resumed)
 
     def _emit_session_snapshot(self, *, resumed: bool) -> None:
         state = self.host.sessions
@@ -654,5 +610,5 @@ class Bridge:
             self.emit("turn_completed", turn_id=turn_id, usage=usage_to_dict(result.usage))
 
     def close(self) -> None:
-        self._route_shutdown(notify_commands=False)
+        self.stop()
         self.host.close()

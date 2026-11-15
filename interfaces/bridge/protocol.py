@@ -30,7 +30,7 @@ from agent_core import (
 from agent_core.usage import cache_usage_to_dict, usage_to_dict
 
 
-PROTOCOL_VERSION = 4
+PROTOCOL_VERSION = 5
 
 
 class ProtocolError(ValueError):
@@ -82,6 +82,12 @@ def decode_bridge_command(line: str) -> dict[str, object]:
     elif "idle_only" in message and not isinstance(message["idle_only"], bool):
         raise ProtocolError("'idle_only' must be a boolean")
     return message
+
+
+def check_open_session_id(channel_id: str, command: dict[str, object]) -> None:
+    session_id = command.get("session_id")
+    if session_id is not None and session_id != channel_id:
+        raise ValueError("open_session session_id must match channel_id")
 
 
 def format_timestamp(value: datetime) -> str:

@@ -58,14 +58,13 @@ export function App(props: AppProps): React.ReactElement {
   const [draft, setDraft] = useState('');
   const [questionDraft, setQuestionDraft] = useState('');
   const [permissionChoice, setPermissionChoice] = useState<PermissionPreset | null>(null);
-  const [selection, setSelection] = useState<SessionSelection>({ workspace: props.workspace, sessionId: null, channelId: 'session-1' });
+  const [selection, setSelection] = useState<SessionSelection>(() => ({ workspace: props.workspace, sessionId: null, channelId: randomUUID() }));
   const [settingsMode, setSettingsMode] = useState<'model' | 'provider' | null>(null);
   const [modelChoice, setModelChoice] = useState(0);
   const [elapsed, setElapsed] = useState(0);
   const bridgeRef = useRef<BridgeClient<Incoming, Outgoing> | null>(null);
-  const activeChannel = useRef('session-1');
-  const channelCounter = useRef(1);
-  const sessionChannels = useRef(new Map<string, string>());
+  const activeChannel = useRef(selection.channelId);
+  const sessionChannels = useRef(new Set<string>());
   const previousView = useRef<{ channelId: string; state: State } | null>(null);
   const currentState = useRef(state);
   currentState.current = state;
@@ -76,6 +75,7 @@ export function App(props: AppProps): React.ReactElement {
    * The TUI owns one resident Bridge; each visited Session keeps its own Runtime channel.
    */
   useEffect(() => {
+    sessionChannels.current.clear();
     const client = new BridgeClient<Incoming, Outgoing>({
       command: props.python,
       args: [
@@ -84,9 +84,9 @@ export function App(props: AppProps): React.ReactElement {
       ],
       cwd: props.workspace,
       onMessage: (message, channelId) => {
-        if (bridgeRef.current !== client || channelId !== activeChannel.current) return;
+        if (bridgeRef.current !== client || channelId !== activeChannel.current || message.type === 'session_items') return;
         if (message.type === 'session_ready') {
-          sessionChannels.current.set(message.session_id, channelId);
+          sessionChannels.current.add(channelId);
           previousView.current = null;
         }
         if (message.type === 'session_open_failed' && previousView.current) {
@@ -102,9 +102,7 @@ export function App(props: AppProps): React.ReactElement {
         }
       },
       onChannelClosed: (channelId) => {
-        for (const [sessionId, channel] of sessionChannels.current) {
-          if (channel === channelId) sessionChannels.current.delete(sessionId);
-        }
+        sessionChannels.current.delete(channelId);
       },
       onExit: (code) => {
         if (bridgeRef.current !== client) return;
@@ -139,7 +137,7 @@ export function App(props: AppProps): React.ReactElement {
   useEffect(() => {
     const client = bridgeRef.current;
     if (!client) return;
-    if (selection.sessionId && sessionChannels.current.get(selection.sessionId) === selection.channelId) {
+    if (sessionChannels.current.has(selection.channelId)) {
       client.send({ type: 'session_snapshot' }, selection.channelId);
     } else {
       client.send({
@@ -290,8 +288,7 @@ export function App(props: AppProps): React.ReactElement {
     } else {
       bridgeRef.current?.closeChannel(activeChannel.current);
     }
-    const existing = sessionId ? sessionChannels.current.get(sessionId) : undefined;
-    const channelId = existing ?? `session-${++channelCounter.current}`;
+    const channelId = sessionId ?? randomUUID();
     activeChannel.current = channelId;
     dispatch({ type: 'session_opening' });
     setSelection({ workspace, sessionId, channelId });

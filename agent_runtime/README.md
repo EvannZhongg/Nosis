@@ -11,7 +11,7 @@ RuntimeHost
 ├── SessionRuntimeController   Session、Workspace、Provider、权限与计划
 ├── ExecutionPlaneManager     Agent、Tool、MCP 连接、Memory、Job 等原子装配
 ├── TurnRunner                Turn、steer、cancel 与结束结果
-└── SessionInbox              交互和定时 Turn 的串行队列
+└── 工作队列                   按顺序接收交互和定时 Turn
 ```
 
 交互式 Bridge 和 Scheduler 向同一 Session Runtime 提交 Turn。空闲时立即执行，忙碌时按接收顺序排队。不同 Session 独立执行。
@@ -236,7 +236,7 @@ Scheduler 使用任务的 `schedule_session_id` 提交 Turn，Runtime 使用该 
 | `plane_manager.py` | Execution Plane 创建、复用、失效与关闭 |
 | `session_controller.py` | Session、Workspace、Provider、权限与计划绑定 |
 | `turn_runner.py` | Turn、steer、cancel 和结果 |
-| `session_inbox.py` | Session 队列和定时 Turn 请求 |
+| `scheduled_turn.py` | 定时 Turn 请求与完成结果 |
 | `role_tools.py` | 把角色声明在装配完成的 Catalog 与 MCP 选择上展开为 ToolSet |
 | `session_title.py` | 执行面持有的 Session 命名任务 |
 | `config.py` | 配置目录初始化、Provider 与 Prompt 读取 |

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { initialRuntimeState, MessageDecoder, formatArguments } from '@nosis/protocol';
-import type { Incoming } from '@nosis/protocol/internal';
+import type { Incoming, SessionItem } from '@nosis/protocol/internal';
 import { initialState, reducer, type State } from '../src/state.js';
 
 it('shares protocol defaults while keeping initial UI state separate', () => {
@@ -23,7 +23,7 @@ it('shares protocol defaults while keeping initial UI state separate', () => {
 
 const READY = {
   type: 'session_ready' as const,
-  protocol_version: 4 as const,
+  protocol_version: 5 as const,
   session_id: 'abc12345-0000',
   workspace: '/tmp/work',
   provider: 'deepseek',
@@ -651,14 +651,23 @@ describe('reducer', () => {
   });
 });
 
+function restored(items: SessionItem[], resumed = false): State {
+  const opened = reducer(initialState, {
+    type: 'message',
+    message: {
+      ...READY, resumed, message_count: items.length,
+      transcript: { items, event_sequence: 1 },
+    },
+  });
+  return reducer(opened, { type: 'message', message: RUNTIME_READY });
+}
+
 describe('sessions', () => {
   it('keeps hook feedback out of the human transcript and shows hook denials', () => {
-    let state = reducer(ready(), { type: 'message', message: {
-      type: 'session_items', items: [
-        { role: 'user', content: 'work' },
-        { role: 'user', origin: 'hook_feedback', content: 'internal feedback' },
-      ],
-    } });
+    let state = restored([
+      { role: 'user', content: 'work' },
+      { role: 'user', origin: 'hook_feedback', content: 'internal feedback' },
+    ]);
     expect(state.entries.filter((entry) => entry.kind === 'user')).toHaveLength(1);
     state = reducer(state, { type: 'message', message: {
       type: 'hook_completed', turn_id: 't', session_id: 's', invocation_id: 'i',
@@ -718,20 +727,10 @@ describe('sessions', () => {
   });
 
   it('keeps the resumed notice above the replayed conversation', () => {
-    let state = reducer(ready(), {
-      type: 'message',
-      message: { ...READY, resumed: true, message_count: 2 },
-    });
-    state = reducer(state, {
-      type: 'message',
-      message: {
-        type: 'session_items',
-        items: [
-          { role: 'user', content: 'first question' },
-          { role: 'assistant', content: 'first answer', timestamp_utc: '2026-09-16T10:00:00Z' },
-        ],
-      },
-    });
+    const state = restored([
+      { role: 'user', content: 'first question' },
+      { role: 'assistant', content: 'first answer', timestamp_utc: '2026-09-16T10:00:00Z' },
+    ], true);
 
     expect(state.entries.map((entry) => entry.kind)).toEqual([
       'notice',
@@ -746,37 +745,31 @@ describe('sessions', () => {
   });
 
   it('rebuilds a stored turn as reasoning, a tool call and its outcome', () => {
-    const state = reducer(ready(), {
-      type: 'message',
-      message: {
-        type: 'session_items',
-        items: [
-          { role: 'user', content: [{ type: 'text', text: 'run it' }] },
-          {
-            role: 'assistant',
-            content: null,
-            reasoning: 'weighing it',
-            tool_calls: [
-              { id: 'call-1', name: 'shell', arguments: { command: 'ls' } },
-              { id: 'call-2', name: 'shell', arguments: { command: 'pwd' } },
-            ],
-          },
-          {
-            role: 'tool',
-            tool_call_id: 'call-1',
-            content: JSON.stringify({ ok: true, output: 'file.txt' }),
-          },
-          {
-            role: 'tool',
-            tool_call_id: 'call-2',
-            content: JSON.stringify({
-              ok: false,
-              error: { type: 'PermissionError', message: 'denied' },
-            }),
-          },
+    const state = restored([
+      { role: 'user', content: [{ type: 'text', text: 'run it' }] },
+      {
+        role: 'assistant',
+        content: null,
+        reasoning: 'weighing it',
+        tool_calls: [
+          { id: 'call-1', name: 'shell', arguments: { command: 'ls' } },
+          { id: 'call-2', name: 'shell', arguments: { command: 'pwd' } },
         ],
       },
-    });
+      {
+        role: 'tool',
+        tool_call_id: 'call-1',
+        content: JSON.stringify({ ok: true, output: 'file.txt' }),
+      },
+      {
+        role: 'tool',
+        tool_call_id: 'call-2',
+        content: JSON.stringify({
+          ok: false,
+          error: { type: 'PermissionError', message: 'denied' },
+        }),
+      },
+    ]);
 
     expect(state.entries).toMatchObject([
       { kind: 'user', text: 'run it' },
@@ -794,27 +787,21 @@ describe('sessions', () => {
   });
 
   it.each(['tool_media', 'tool_delivery'] as const)('renders an interrupted tool call and %s images as a notice', (origin) => {
-    const state = reducer(ready(), {
-      type: 'message',
-      message: {
-        type: 'session_items',
-        items: [
-          {
-            role: 'assistant',
-            content: null,
-            tool_calls: [{ id: 'call-1', name: 'shell', arguments: { command: 'ls' } }],
-          },
-          {
-            role: 'user',
-            origin,
-            content: [
-              { type: 'text', text: 'tool media' },
-              { type: 'image', path: '.nosis/a.png', mime_type: 'image/png' },
-            ],
-          },
+    const state = restored([
+      {
+        role: 'assistant',
+        content: null,
+        tool_calls: [{ id: 'call-1', name: 'shell', arguments: { command: 'ls' } }],
+      },
+      {
+        role: 'user',
+        origin,
+        content: [
+          { type: 'text', text: 'tool media' },
+          { type: 'image', path: '.nosis/a.png', mime_type: 'image/png' },
         ],
       },
-    });
+    ]);
 
     expect(state.entries).toMatchObject([
       { kind: 'tool', state: 'error' },
@@ -841,9 +828,7 @@ describe('sessions', () => {
   });
 
   it('keeps the current conversation usable when the bridge retains it after a failed switch', () => {
-    const original = reducer(ready(), { type: 'message', message: {
-      type: 'session_items', items: [{ role: 'user', content: 'original history' }],
-    } });
+    const original = restored([{ role: 'user', content: 'original history' }]);
     let state = reducer(original, { type: 'session_opening' });
     state = reducer(state, { type: 'message', message: {
       type: 'session_open_failed', session_id: 'occupied',

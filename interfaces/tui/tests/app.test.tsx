@@ -1,7 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import React from 'react';
 import { render } from 'ink-testing-library';
-import type { ApprovalKind, Incoming } from '@nosis/protocol/internal';
+import type { ApprovalKind, Incoming, SessionItem } from '@nosis/protocol/internal';
+
+let nextMockId = 0;
+vi.mock('node:crypto', () => ({
+  randomUUID: () => `session-${++nextMockId}`,
+}));
 
 const sent: any[] = [];
 let emit: (message: Incoming, channelId?: string) => void = () => {};
@@ -37,8 +42,8 @@ vi.mock('@nosis/client', () => ({
       if (autoReady && message.type === 'open_session') {
         setTimeout(() => {
             emit({
-              type: 'session_ready', protocol_version: 4,
-              session_id: message.session_id ?? (channelId === 'session-1' ? 'sess-1234' : `sess-${channelId}`),
+              type: 'session_ready', protocol_version: 5,
+              session_id: channelId,
               workspace: message.workspace,
               provider: 'test',
               model: 'test/model',
@@ -118,6 +123,13 @@ function renderApp() {
 const waitForReady = (lastFrame: Frame) =>
   waitFor(() => expect(lastFrame()).toContain('test/model'));
 
+async function emitHistory(items: SessionItem[]): Promise<void> {
+  const channel = activeMockChannel;
+  await waitFor(() => expect(readyByChannel.has(channel)).toBe(true));
+  emit({ ...readyByChannel.get(channel), transcript: { items, event_sequence: 1 } }, channel);
+  emit(stateByChannel.get(channel), channel);
+}
+
 const approvalResponse = () => sent.find((m) => m.type === 'approval_response');
 const questionResponse = () => sent.find((m) => m.type === 'user_question_response');
 const turns = () => sent.filter((m) => m.type === 'user_turn');
@@ -191,6 +203,7 @@ describe('App', () => {
     readyByChannel.clear();
     stateByChannel.clear();
     activeMockChannel = 'session-1';
+    nextMockId = 0;
     bridgeCount = 0;
     shutdownCount = 0;
     autoReady = true;
@@ -301,8 +314,8 @@ describe('App', () => {
     expect(lastFrame()).toContain('wait for sync');
 
     emit({
-      type: 'session_ready', protocol_version: 4,
-      session_id: 'sess-1234',
+      type: 'session_ready', protocol_version: 5,
+      session_id: 'session-1',
       workspace: '/w',
       provider: 'test',
       model: 'test/model',
@@ -464,17 +477,14 @@ describe('App', () => {
     expect(bridgeCount).toBe(1);
     expect(shutdownCount).toBe(0);
 
-    emit({
-      type: 'session_items',
-      items: [
+    await emitHistory([
         { role: 'user', content: 'earlier question' },
         {
           role: 'assistant',
           content: 'earlier answer',
           timestamp_utc: '2026-09-16T10:00:00Z',
         },
-      ],
-    });
+    ]);
     await waitFor(() => expect(lastFrame()).toContain('earlier question'));
     expect(lastFrame()).toContain('earlier answer');
     expect(turns()).toHaveLength(0);
@@ -502,7 +512,7 @@ describe('App', () => {
     await typeDraft(stdin, lastFrame, '/sessions');
     stdin.write('\r');
     await waitFor(() => expect(lastFrame()).toContain('Sessions'));
-    emit({ type: 'sessions_listed', sessions: [{ session_id: 'sess-1234', title: 'Original runtime' }] });
+    emit({ type: 'sessions_listed', sessions: [{ session_id: 'session-1', title: 'Original runtime' }] });
     await waitFor(() => expect(lastFrame()).toContain('Original runtime'));
     stdin.write('\r');
     await waitFor(() => expect(sent.some(message => message.type === 'session_snapshot')).toBe(true));
@@ -525,7 +535,7 @@ describe('App', () => {
   it('opens a fresh workspace session, chats immediately, then resumes a session there', async () => {
     const { stdin, lastFrame, unmount } = renderApp();
     await waitForReady(lastFrame);
-    emit({ type: 'session_items', items: [{ role: 'user', content: 'old workspace history' }] });
+    await emitHistory([{ role: 'user', content: 'old workspace history' }]);
     await waitFor(() => expect(lastFrame()).toContain('old workspace history'));
     await typeDraft(stdin, lastFrame, '/workspaces');
     stdin.write('\r');
@@ -547,7 +557,7 @@ describe('App', () => {
     await wait(30);
     expect(turns()).toHaveLength(0);
     emit({
-      type: 'session_ready', protocol_version: 4, session_id: 'fresh', workspace: '/next',
+      type: 'session_ready', protocol_version: 5, session_id: activeMockChannel, workspace: '/next',
       provider: 'test', model: 'test/model', resumed: false, message_count: 0,
       permission_preset: 'ask_for_approval',
     });
@@ -679,7 +689,7 @@ describe('App', () => {
   it('continues the original session after selecting an occupied GUI session and pressing Escape', async () => {
     const { stdin, lastFrame, unmount } = renderApp();
     await waitForReady(lastFrame);
-    emit({ type: 'session_items', items: [{ role: 'user', content: 'original conversation' }] });
+    await emitHistory([{ role: 'user', content: 'original conversation' }]);
     await waitFor(() => expect(lastFrame()).toContain('original conversation'));
     const snapshot = {
       type: 'runtime_state' as const, phase: 'idle' as const, turn_id: null,
@@ -740,13 +750,10 @@ describe('App', () => {
     // The whole conversation arrives in one message, so the transcript has
     // to commit it in one step: committing item by item from a single
     // update exhausts React's nested-update limit.
-    emit({
-      type: 'session_items',
-      items: Array.from({ length: 60 }, (_, index) => ({
+    await emitHistory(Array.from({ length: 60 }, (_, index) => ({
         role: index % 2 === 0 ? 'user' : 'assistant',
         content: `replayed line ${index + 1}`,
-      })),
-    });
+    })));
 
     await waitFor(() => expect(lastFrame()).toContain('replayed line 60'));
     expect(lastFrame()).toContain('ask anything…');
@@ -1066,8 +1073,8 @@ describe('App', () => {
     ).toBe(2);
 
     emit({
-      type: 'session_ready', protocol_version: 4,
-      session_id: 'sess-1234',
+      type: 'session_ready', protocol_version: 5,
+      session_id: 'session-1',
       workspace: '/w',
       provider: 'test',
       model: 'test/model',

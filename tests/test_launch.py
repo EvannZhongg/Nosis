@@ -34,8 +34,7 @@ class LaunchTest(unittest.TestCase):
             self.assertEqual(exit_error.exception.code, 0)
             arguments = call.call_args.args[0]
             self.assertEqual(arguments[:2], ["node", str(bundle)])
-            self.assertEqual(arguments[2], "--workspace")
-            workspace = Path(arguments[3])
+            workspace = Path(arguments[2])
             self.assertEqual(workspace.parent, (root / "scratch").resolve())
             self.assertTrue(workspace.is_dir())
 
@@ -57,9 +56,11 @@ class LaunchTest(unittest.TestCase):
                     "argv",
                     ["nosis", "--temporary", "--workspace", str(root)],
                 ),
-                self.assertRaisesRegex(SystemExit, "cannot be used"),
+                patch.object(launch.sys, "stderr") as stderr,
+                self.assertRaises(SystemExit),
             ):
                 launch.main()
+            self.assertIn("cannot be used with --workspace", stderr.write.call_args.args[0])
 
 
 if __name__ == "__main__":

@@ -36,7 +36,8 @@ node node_modules/@nosis/client/examples/chat.mjs /path/to/workspace "Hello"
   Supplying `env` replaces the child environment; spread `process.env` to extend it.
 - `onMessage(message, channelId)`: decoded channel events, including unknown additive session events.
 - `onReady()`: process warmup completed and the protocol major was checked.
-- `onChannelClosed(channelId)`: the runtime and its Journal writer have closed.
+- `onChannelClosed(channelId)`: the client channel closed.
+- `onChannelBusy(channelId)`: an idle-only release was refused while work was pending.
 - `onProtocolError`: invalid JSON/envelope or output truncated before newline;
   the SDK initiates shutdown. Unknown event kinds are delivered unchanged.
 - `onProcessError`: spawn or stdin errors. These are not Agent failures.
@@ -45,10 +46,12 @@ node node_modules/@nosis/client/examples/chat.mjs /path/to/workspace "Hello"
 `send(Outgoing, channelId)` wraps one channel command and writes it without synchronization, retries or synthetic
 responses. It throws after shutdown/input close; asynchronous pipe errors go to
 `onProcessError`. `cancel(turnId, channelId)` sends cancellation only to that runtime.
-`closeChannel(channelId)` closes one runtime; completion is `onChannelClosed`.
+`closeChannel(channelId)` closes one channel. To release the Runtime only when
+idle, pass `{ idleOnly: true }`.
 One client/process can host multiple concurrent channels. Callers keep session
 snapshots and event cursors separately for each channel.
-The channel ID is required; there is no implicit default session. Revisit an open
+The channel ID is the Session ID. Generate a new ID for a new Session and use
+the stored ID to resume an existing one. Revisit an open
 runtime with `send({type: 'session_snapshot'}, channelId)`: this returns its
 `session_ready` and authoritative `runtime_state` without rebinding the Session,
 reconstructing the Agent or disconnecting MCP.

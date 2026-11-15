@@ -9,7 +9,7 @@ from typing import Callable
 from agent_core import SchedulerService
 
 from .settings import EnvironmentReloader, SettingsStore
-from .session_inbox import ScheduledTurn
+from .scheduled_turn import ScheduledTurn
 from .session_controller import SessionRuntimeController
 
 

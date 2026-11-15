@@ -1,7 +1,6 @@
 import asyncio
 import json
 import os
-import subprocess
 import tempfile
 import time
 import unittest
@@ -165,15 +164,15 @@ class ActiveSessionTest(unittest.IsolatedAsyncioTestCase):
                 registry = session_host.ActiveSessionRegistry(JsonlSessionStore(root / "sessions"), Workspace(root), root)
                 registry._bridge = process
                 opening = {"type": "open_session", "session_id": "one", "workspace": str(root)}
-                await registry.open_or_attach(opening, Workspace(root), attach_only=False)
+                await registry.open_or_attach(opening["session_id"], opening, Workspace(root), attach_only=False)
                 closing = asyncio.create_task(registry.release_idle("one"))
                 await asyncio.wait_for(entered.wait(), 2)
                 closing.cancel()
                 with self.assertRaises(asyncio.CancelledError):
                     await closing
-                reopening = asyncio.create_task(registry.open_or_attach(opening, Workspace(root), attach_only=False))
+                reopening = asyncio.create_task(registry.open_or_attach(opening["session_id"], opening, Workspace(root), attach_only=False))
                 other, created = await asyncio.wait_for(registry.open_or_attach(
-                    {**opening, "session_id": "two"}, Workspace(root), attach_only=False,
+                    "two", {**opening, "session_id": "two"}, Workspace(root), attach_only=False,
                 ), 2)
                 self.assertTrue(created)
                 self.assertEqual(other.session_id, "two")

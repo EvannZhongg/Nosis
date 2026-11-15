@@ -1,7 +1,11 @@
 """Application runtime used directly by Bridge and scheduled workers."""
 
+from concurrent.futures import Future
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
+from queue import Queue
+from threading import Lock
 from typing import Callable
 
 from agent_core import (
@@ -17,7 +21,7 @@ from .callbacks import RuntimeCallbacks
 from .config import load_model_options
 from .plane_manager import ExecutionPlaneManager
 from .session_controller import SessionRuntimeController
-from .session_inbox import ScheduledTurn, SessionInbox
+from .scheduled_turn import ScheduledTurn
 from .services import RuntimeServices
 from .turn_runner import TurnResult, TurnRunner
 
@@ -62,7 +66,44 @@ class RuntimeHost:
             ),
         )
         self.turns = TurnRunner(runtime_callbacks)
-        self.inbox: SessionInbox[object] = SessionInbox()
+        self._work: Queue[Callable[[], None] | None] = Queue()
+        self._work_lock = Lock()
+        self._scheduled: set[Future[None]] = set()
+
+    def serve(self) -> None:
+        while (work := self._work.get()) is not None:
+            work()
+
+    def submit(self, work: Callable[[], None]) -> None:
+        with self._work_lock:
+            if not self.turns.stopped:
+                self._work.put(work)
+
+    def submit_scheduled(self, turn: ScheduledTurn) -> None:
+        with self._work_lock:
+            stopping = self.turns.stopped
+            if not stopping:
+                self._scheduled.add(turn.completion)
+                self._work.put(partial(self.run_scheduled, turn))
+        if stopping:
+            turn.completion.cancel()
+        else:
+            turn.completion.add_done_callback(self._scheduled_done)
+
+    def _scheduled_done(self, completion: Future[None]) -> None:
+        with self._work_lock:
+            self._scheduled.discard(completion)
+
+    @property
+    def busy(self) -> bool:
+        with self._work_lock:
+            return bool(self._scheduled) or self.turns.busy
+
+    def stop(self) -> None:
+        with self._work_lock:
+            if not self.turns.stopped:
+                self.turns.shutdown()
+                self._work.put(None)
 
     def _require_idle(self) -> None:
         if self.turns.turn_id is not None:
@@ -164,12 +205,23 @@ class RuntimeHost:
         return result
 
     def run_scheduled(self, turn: ScheduledTurn) -> None:
+        if self.turns.stopped:
+            turn.completion.cancel()
+            return
+        if self.sessions.session is None:
+            try:
+                resumed = self.open_session(turn.workspace, turn.session_id)
+            except (SessionInUseError, ValueError, OSError) as error:
+                turn.completion.set_exception(error)
+                self.callbacks.on_session_open_failed(turn.session_id, error)
+                return
+            self.callbacks.on_session_opened(resumed)
         try:
             if self.turns.stopped:
                 turn.completion.cancel()
                 return
-            if self.sessions.session is None or self.sessions.session.session_id != turn.session_id:
-                raise RuntimeError("scheduled turn has no bound Session Runtime")
+            if self.sessions.session.session_id != turn.session_id:
+                raise RuntimeError("scheduled turn belongs to another Session Runtime")
             turn.started()
             result = self.run_turn(turn.turn_id, turn.text, input_source="scheduled")
             if result.status == "cancelled":
@@ -182,8 +234,11 @@ class RuntimeHost:
             turn.completion.set_exception(error)
 
     def close(self) -> None:
-        self.turns.shutdown()
-        self.inbox.close()
+        self.stop()
+        with self._work_lock:
+            pending = tuple(self._scheduled)
+        for completion in pending:
+            completion.cancel()
         try:
             self.planes.close()
         finally:

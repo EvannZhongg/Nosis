@@ -12,6 +12,7 @@ export type BridgeOptions<Message = Incoming> = {
   onMessage: (message: Message, channelId: string) => void;
   onReady?: () => void;
   onChannelClosed?: (channelId: string) => void;
+  onChannelBusy?: (channelId: string) => void;
   onExit: (code: number | null, signal: NodeJS.Signals | null) => void;
   onProtocolError: (error: Error) => void;
   onProcessError: (error: Error) => void;
@@ -50,6 +51,7 @@ export class BridgeClient<Received = Incoming, Sent = Outgoing> {
       for (const message of messages) {
         if (message.type === 'channel_event') options.onMessage(message.event, message.channel_id);
         else if (message.type === 'channel_closed') options.onChannelClosed?.(message.channel_id);
+        else if (message.type === 'channel_busy') options.onChannelBusy?.(message.channel_id);
         else if (message.type === 'bridge_ready' && message.protocol_version === PROTOCOL_VERSION) options.onReady?.();
         else {
           this.protocolError(new Error(message.type === 'fatal' ? message.error.message : 'Unsupported Bridge event or protocol version'));
@@ -87,8 +89,8 @@ export class BridgeClient<Received = Incoming, Sent = Outgoing> {
     this.write({ type: 'channel_command', channel_id: channelId, command: message });
   }
 
-  closeChannel(channelId: string): void {
-    this.write({ type: 'close_channel', channel_id: channelId });
+  closeChannel(channelId: string, { idleOnly = false } = {}): void {
+    this.write({ type: 'close_channel', channel_id: channelId, ...(idleOnly ? { idle_only: true } : {}) });
   }
 
   private write(message: unknown): void {

@@ -31,6 +31,7 @@ class Peer:
         )
         self.events = Queue()
         self.messages = []
+        self.channel_id = "main"
         self.stderr = []
         self.reader = Thread(target=self._read, daemon=True)
         self.diagnostics = Thread(target=lambda: self.stderr.extend(self.process.stderr), daemon=True)
@@ -52,7 +53,9 @@ class Peer:
 
     def send(self, message):
         if message["type"] != "shutdown":
-            message = {"type": "channel_command", "channel_id": "main", "command": message}
+            if message["type"] == "open_session" and message.get("session_id"):
+                self.channel_id = message["session_id"]
+            message = {"type": "channel_command", "channel_id": self.channel_id, "command": message}
         self.process.stdin.write(json.dumps(message, ensure_ascii=False) + "\n")
         self.process.stdin.flush()
 
@@ -160,7 +163,7 @@ class ExternalBridgeClientTest(unittest.TestCase):
     def open(self, peer, session_id=None):
         peer.send({"type": "open_session", "workspace": str(self.external), "session_id": session_id})
         ready = peer.until("session_ready")
-        self.assertEqual(ready["protocol_version"], 4)
+        self.assertEqual(ready["protocol_version"], 5)
         self.assertEqual(peer.until("runtime_state")["phase"], "inactive")
         return ready
 

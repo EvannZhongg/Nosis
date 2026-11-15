@@ -1,4 +1,4 @@
-# Public Bridge protocol, major 4
+# Public Bridge protocol, major 5
 
 This is the local client API for third-party frontends. Install `nosis-agent`,
 start **`nosis-bridge`** as a child process, and exchange UTF-8 newline-delimited
@@ -15,19 +15,19 @@ There is no fixed small line limit: checkpoints can contain the full transcript.
 
 ## Stability and scope
 
-Every `session_ready` advertises `protocol_version: 4`. Clients must check this
+Every `session_ready` advertises `protocol_version: 5`. Clients must check this
 before using the session. A breaking change to documented public fields or
 semantics increments this major and is recorded in this document. Additive fields
 and event kinds may appear within a major; ignore unknown fields/events. This is
 version identification, without version negotiation or a compatibility layer.
-Major 4 binds each channel to one Session and allows the stdio client to attach
-through the resident host. Open a new channel to switch Sessions.
+In major 5 the channel ID is the Session ID. Use a new ID, preferably a UUID,
+for a new Session. Use the stored Session ID to resume one.
 
 ## Process transport
 
 The process initializes configuration and warms the default provider SDK, tokenizer
 and TLS trust context once, without resolving credentials or calling a model. It
-then emits `{"type":"bridge_ready","protocol_version":4}`. With a resident
+then emits `{"type":"bridge_ready","protocol_version":5}`. With a resident
 `nosis-server` for the same configuration directory, stdio relays protocol
 messages to that host over its authenticated local endpoint.
 
@@ -55,7 +55,9 @@ for the channel's existing Session.
 Send `{"type":"close_channel","channel_id":"chat-1"}` to close that channel.
 Wait for `{"type":"channel_closed","channel_id":"chat-1"}` before reusing its ID.
 For a standalone Bridge this cancels and releases that Session Runtime. With a
-resident host it only detaches the client. Other channels remain active.
+resident host it detaches the client. Send `idle_only: true` to release the
+Runtime only when idle. If work is queued or running, `channel_busy` leaves
+the attachment open. Other channels remain active.
 
 Send `{"type":"shutdown"}` or close stdin to end the stdio connection. A
 standalone Bridge also cancels and closes all its Session Runtimes.
@@ -76,7 +78,7 @@ The following are **internal**, with no public stability promise:
 - `@nosis/protocol/internal`, all `settings_*` messages, their configuration
   editor schemas, Python classes/module layout and session journal storage format.
 - GUI Host `open_session` fields `attach_only`, `after_event`, `attachment_id`,
-  `takeover`, and GUI events `attachment_replaced` / `replayed`.
+  `takeover`, and the `attachment_replaced` event.
 - `resume_after` delivery metadata, GUI HTTP/WebSocket routes, attachment
   ownership and host event caches.
 - Concrete Tool argument/output schemas, Job `details`, error `details` keys,
@@ -93,7 +95,8 @@ Send the opening command first:
 {"type":"open_session","workspace":"/absolute/workspace","session_id":null}
 ```
 
-`session_id: null` creates a session; an existing ID resumes a stored session.
+`session_id: null` opens a new session using the envelope's `channel_id`.
+To resume a stored Session, use its ID for both fields.
 Use an existing workspace directory accessible to the Bridge. Prefer absolute
 paths; relative paths resolve in the Bridge's cwd. A resumed session's stored
 workspace takes precedence. Optional `provider` selects a configured provider;
@@ -122,8 +125,8 @@ or filesystem error emit `session_open_failed` with the requested `session_id`
 (null when creating a session) and `error: {type, message}`. Writer conflicts
 use `type: "SessionInUseError"`. No ready/sync pair follows that failure.
 Another channel can be used to select a different Session after an opening
-failure. A bound channel accepts a new `open_session` only for its current
-Session. Use `session_snapshot` to refresh its ready/snapshot pair.
+failure. Repeating `open_session` on an open channel keeps its current binding.
+Use `session_snapshot` to refresh its ready/snapshot pair.
 
 `scheduled_turn_started` carries the scheduled prompt and `turn_id` before
 ordinary turn events. The scheduled Turn can send output and terminal events to
@@ -310,9 +313,10 @@ contain normalized user/assistant/tool content and Artifact references; they do
 not expose the append-only journal format or provider payloads. Tool-result live
 events deliberately omit output; read normalized content from checkpoints.
 
-The GUI Host separately caches Bridge events and supplies `after_event` replay,
-`replayed`, `resume_after` and attachment ownership. Those features do not change
-the public event order/checkpoint rules and are not available over this stdio API.
+The resident host marks cached events with `replayed: true` and preserves
+their original Bridge sequence numbers. A replayed `session_ready` can carry
+a newer transcript checkpoint. Use its checkpoint cursor for the transcript
+and the authoritative `runtime_state` for live controls.
 
 ## Errors and close
 
@@ -343,9 +347,9 @@ Forced termination cannot guarantee completed persistence.
 
 ```text
 spawn nosis-bridge (pipes)
-receive bridge_ready; check protocol_version == 4
+receive bridge_ready; check protocol_version == 5
 send channel_command(chat-1, open_session)
-receive channel_event(chat-1, session_ready); check protocol_version == 4; apply checkpoint
+receive channel_event(chat-1, session_ready); check protocol_version == 5; apply checkpoint
 receive channel_event(chat-1, runtime_state); apply snapshot
 send channel_command(chat-1, user_turn) with a fresh turn_id
 receive/render events; answer interactions by request_id
