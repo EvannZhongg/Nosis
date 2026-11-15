@@ -4,7 +4,6 @@ import io
 import json
 import tempfile
 import unittest
-from functools import partial
 from pathlib import Path
 from typing import TextIO
 from unittest.mock import patch
@@ -13,7 +12,7 @@ from agent_core import SchedulerService
 from agent_core.tools.config import TOOL_NAMES
 from threading import Lock, Thread
 from interfaces.bridge.bridge import Bridge as SessionBridge
-from interfaces.bridge.protocol import decode, encode
+from interfaces.bridge.protocol import ProtocolError, decode, encode
 from agent_runtime.config import default_config_directory
 from agent_runtime.services import RuntimeServices
 from agent_runtime.scheduled_turn import ScheduledTurn
@@ -77,7 +76,10 @@ class Bridge(SessionBridge):
                     message = decode(stripped)
                     self.submit(message)
             except ValueError as error:
-                self.host.submit(partial(self._protocol_error, str(error)))
+                def reject(problem=error):
+                    raise ProtocolError(str(problem)) from problem
+
+                self.host.submit(reject)
                 self.stop()
                 return
 

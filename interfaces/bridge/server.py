@@ -80,14 +80,17 @@ class BridgeServer:
 
         with self._lock:
             session = self._sessions.get(session_id)
+            allow_existing_open = False
             if opening:
                 if session is None:
                     session = self._create_session(session_id)
-                session.bridge.attach(lambda event: self._emit_channel(session_id, event))
+                first_attachment = session.bridge.attach(lambda event: self._emit_channel(session_id, event))
+                # The Scheduler may have opened this Runtime while the host was opening its channel.
+                allow_existing_open = first_attachment or self._announce_sessions
             elif session is None or not session.bridge.attached:
                 raise ProtocolError("first channel command must be 'open_session'")
             try:
-                session.bridge.submit(command)
+                session.bridge.submit(command, allow_existing_open=allow_existing_open)
             except Exception as error:
                 session.bridge.emit("fatal", error=runtime_failure_to_dict(runtime_error_info(error)))
                 session.bridge.stop()

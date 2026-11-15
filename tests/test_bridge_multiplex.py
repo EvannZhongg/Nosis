@@ -277,6 +277,14 @@ class MultiplexBridgeTest(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(state["provider"], "native")
                     terminal.stdin.write((json.dumps({
                         "type": "channel_command", "channel_id": "scheduled",
+                        "command": {**self.opening, "session_id": "scheduled"},
+                    }) + "\n").encode())
+                    duplicate = (await read())["event"]
+                    self.assertEqual(duplicate["type"], "session_open_failed")
+                    self.assertEqual(duplicate["error"]["type"], "SessionAlreadyOpenError")
+                    self.assertIs(await registry.get("scheduled"), runtime)
+                    terminal.stdin.write((json.dumps({
+                        "type": "channel_command", "channel_id": "scheduled",
                         "command": {"type": "user_turn", "turn_id": "tui", "text": "blocked"},
                     }) + "\n").encode())
                     self.assertTrue(await asyncio.to_thread(self.http.entered.wait, 8))
@@ -301,8 +309,13 @@ class MultiplexBridgeTest(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual((await read())["event"]["type"], "runtime_state")
                     terminal.stdin.write(b'{"type":"close_channel","channel_id":"scheduled","idle_only":true}\n')
                     self.assertEqual(await read(), {"type": "channel_closed", "channel_id": "scheduled"})
-                    terminal.stdin.write(b'{"type":"shutdown"}\n')
-                    self.assertEqual(await asyncio.wait_for(terminal.wait(), 10), 0)
+                    terminal.stdin.write(b'{"type":"channel_command","channel_id":"unopened",'
+                                         b'"command":{"type":"user_turn","turn_id":"t","text":"ignored"}}\n')
+                    fatal = await read()
+                    self.assertEqual(fatal["type"], "fatal")
+                    self.assertEqual(fatal["error"]["type"], "ProtocolError")
+                    self.assertEqual(await asyncio.wait_for(terminal.stdout.readline(), 10), b"")
+                    await asyncio.wait_for(terminal.wait(), 10)
                     self.assertIsNone(await registry.get("scheduled"))
                 finally:
                     if terminal.returncode is None:
@@ -359,6 +372,35 @@ class MultiplexBridgeTest(unittest.IsolatedAsyncioTestCase):
         reopened = await self.open("shared")
         reopened.send({"type": "user_turn", "turn_id": "next", "text": "reopened"})
         await self.until(reopened, "turn_completed")
+
+    async def test_repeated_open_is_rejected_without_waiting_for_the_active_turn(self):
+        store, schedule = self.schedule("shared", "scheduled-first")
+        await self.wait_for_run(store, schedule, "completed")
+        channel = await self.open("shared")
+        channel.send({"type": "user_turn", "turn_id": "t", "text": "blocked"})
+        self.assertTrue(await asyncio.to_thread(self.http.entered.wait, 8))
+        channel.send({**self.opening, "session_id": "shared"})
+        error, _ = await self.until(channel, "session_open_failed")
+        self.assertEqual(error["error"]["type"], "SessionAlreadyOpenError")
+        self.assertIn("session_snapshot", error["error"]["message"])
+        self.assertEqual(error["runtime"]["turn_id"], "t")
+        self.http.release.set()
+        await self.until(channel, "turn_completed")
+        channel.send({"type": "session_snapshot"})
+        await self.until(channel, "session_ready")
+        await self.until(channel, "runtime_state")
+
+    async def test_unopened_session_reports_one_channel_fatal(self):
+        channel = self.bridge.open_channel("unopened")
+        channel.send({**self.opening, "session_id": "unopened", "workspace": str(self.root / "missing")})
+        await self.until(channel, "session_open_failed")
+        channel.send({"type": "user_turn", "turn_id": "t", "text": "ignored"})
+        self.assertEqual((await asyncio.wait_for(channel.read(), 10))["type"], "user_turn_received")
+        failure = await asyncio.wait_for(channel.read(), 10)
+        self.assertEqual(failure["type"], "fatal")
+        self.assertEqual(failure["error"]["type"], "ProtocolError")
+        self.assertIsNone(await asyncio.wait_for(channel.read(), 10))
+        self.assertIsNone(self.bridge.returncode)
 
     async def test_process_failure_reaches_every_channel(self):
         first, second = await asyncio.gather(self.open("one"), self.open("two"))

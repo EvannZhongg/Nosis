@@ -13,7 +13,7 @@ from uuid import uuid4
 
 from agent_core import SessionInUseError, Workspace
 from interfaces.bridge.protocol import (
-    PROTOCOL_VERSION, ProtocolError, decode_bridge_command, encode,
+    PROTOCOL_VERSION, ProtocolError, SessionAlreadyOpenError, decode_bridge_command, encode,
     check_open_session_id, session_open_failed_message,
 )
 from interfaces.session_host import ActiveSessionRegistry, SessionAttachment, SessionRunningError
@@ -234,10 +234,16 @@ class LocalBridge:
                 if command["type"] == "open_session":
                     try:
                         check_open_session_id(channel_id, command)
+                        if current is not None:
+                            raise SessionAlreadyOpenError()
                     except ValueError as error:
-                        cursor = current[0].runtime.event_sequence if current is not None else 0
-                        await send({**session_open_failed_message(command.get("session_id"), error),
-                                    "event_sequence": cursor})
+                        failure = session_open_failed_message(command.get("session_id"), error)
+                        if current is None:
+                            failure["event_sequence"] = 0
+                        else:
+                            runtime = current[0].runtime
+                            failure.update(event_sequence=runtime.event_sequence, runtime=runtime.state)
+                        await send(failure)
                         continue
                 if current is not None:
                     attachment = current[0]
@@ -247,7 +253,9 @@ class LocalBridge:
                         attachment.send(command)
                     continue
                 if command["type"] != "open_session":
-                    continue
+                    if command["type"] in {"list_sessions", "list_workspaces"}:
+                        continue
+                    raise ProtocolError("first channel command must be 'open_session'")
                 try:
                     workspace = Workspace(Path(command["workspace"]))
                     runtime, created = await self._sessions.open_or_attach(

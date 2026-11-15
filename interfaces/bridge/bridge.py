@@ -18,6 +18,8 @@ from agent_runtime.config import load_model_options
 from agent_runtime.services import RuntimeServices
 from agent_runtime.turn_runner import TurnResult
 from .protocol import (
+    ProtocolError,
+    SessionAlreadyOpenError,
     event_to_message,
     context_window_to_dict,
     runtime_state_message,
@@ -82,13 +84,14 @@ class Bridge:
             ),
         )
 
-    def attach(self, send: Callable[[dict[str, object]], None]) -> None:
+    def attach(self, send: Callable[[dict[str, object]], None]) -> bool:
         with self._event_lock:
             if self._send is not None:
-                return
+                return False
             self._send = send
             if self._session_opened:
                 self._emit_session_snapshot(resumed=True)
+            return True
 
     @property
     def attached(self) -> bool:
@@ -135,9 +138,15 @@ class Bridge:
             if self._send is not None:
                 self._send(published)
 
-    def submit(self, message: dict[str, object]) -> None:
+    def submit(self, message: dict[str, object], *, allow_existing_open: bool = False) -> None:
         """Route one decoded command without blocking the process transport."""
         message_type = message["type"]
+        if message_type == "open_session":
+            if self._bound_session_id is not None and self._session_opened and not allow_existing_open:
+                self.emit(**session_open_failed_message(message.get("session_id"), SessionAlreadyOpenError()))
+            else:
+                self.host.submit(partial(self._handle_command, message, allow_existing_open=allow_existing_open))
+            return
         if message_type in {"approval_response", "user_question_response"}:
             request_id = message.get("request_id")
             if not isinstance(request_id, str):
@@ -476,23 +485,19 @@ class Bridge:
     def serve(self) -> None:
         self.host.serve()
 
-    def _protocol_error(self, message: str) -> None:
-        self.emit("fatal", error={"type": "ProtocolError", "message": message, "details": {}})
-        raise SystemExit(1)
-
-    def _handle_command(self, message: dict[str, object]) -> None:
+    def _handle_command(self, message: dict[str, object], *, allow_existing_open: bool = False) -> None:
         kind = message["type"]
         if kind == "list_workspaces" and self.host.sessions.store is not None:
             self._emit_workspaces()
         elif kind == "open_session":
             try:
-                self.open_session(message)
+                self.open_session(message, allow_existing=allow_existing_open)
             except (SessionInUseError, ValueError, OSError) as error:
                 self.emit(**session_open_failed_message(message.get("session_id"), error))
         elif kind == "list_sessions" and self.host.sessions.workspace is not None:
             self._emit_sessions()
         elif not self._session_opened:
-            self._protocol_error("first message must be 'open_session'")
+            raise ProtocolError("first message must be 'open_session'")
         elif kind == "user_turn":
             self.run_turn(message)
         elif kind == "permission_set":
@@ -516,10 +521,12 @@ class Bridge:
         elif kind == "settings_routing_save":
             self._save_routing_settings(message)
 
-    def open_session(self, message: dict[str, object]) -> None:
+    def open_session(self, message: dict[str, object], *, allow_existing: bool = False) -> None:
         session_id = message.get("session_id")
         if self._bound_session_id is not None and self._session_opened:
-            return
+            if allow_existing:
+                return
+            raise SessionAlreadyOpenError()
         resumed = self.host.open_session(
             Path(str(message["workspace"])),
             session_id=self._bound_session_id or session_id,

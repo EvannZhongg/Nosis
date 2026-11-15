@@ -71,6 +71,7 @@ from agent_runtime.host import RuntimeHost
 from agent_runtime.plane_manager import ExecutionPlaneManager
 from agent_runtime.execution_plane import ExecutionPlane
 from interfaces.bridge.protocol import (
+    ProtocolError,
     attachment_replaced_message,
     decode,
     event_to_message,
@@ -1251,14 +1252,13 @@ class BridgeServeTest(BridgeTestCase):
         bridge, _ = self.make_bridge(
             ['{"type": "user_turn", "turn_id": "t1", "text": "hi"}']
         )
-        with self.assertRaises(SystemExit):
+        with self.assertRaisesRegex(ProtocolError, "first message must be 'open_session'"):
             bridge.serve()
 
-    def test_reports_malformed_input_as_fatal(self) -> None:
-        bridge, stdout = self.make_bridge(["not json"])
-        with self.assertRaises(SystemExit):
+    def test_raises_protocol_error_for_malformed_input(self) -> None:
+        bridge, _ = self.make_bridge(["not json"])
+        with self.assertRaises(ProtocolError):
             bridge.serve()
-        self.assertEqual(emitted(stdout)[0]["type"], "fatal")
 
     def test_answers_the_workspace_sessions_and_the_stored_conversation(
         self,

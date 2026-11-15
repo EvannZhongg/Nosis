@@ -36,6 +36,12 @@ PROTOCOL_VERSION = 5
 class ProtocolError(ValueError):
     pass
 
+
+class SessionAlreadyOpenError(ProtocolError):
+    def __init__(self) -> None:
+        super().__init__("channel is already open. Use 'session_snapshot' to refresh it.")
+
+
 COMMAND_TYPES = frozenset({
     "open_session", "user_turn", "user_steer", "cancel", "approval_response",
     "user_question_response", "permission_set", "provider_set", "workspace_set",

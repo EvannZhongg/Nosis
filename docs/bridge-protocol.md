@@ -125,8 +125,9 @@ or filesystem error emit `session_open_failed` with the requested `session_id`
 (null when creating a session) and `error: {type, message}`. Writer conflicts
 use `type: "SessionInUseError"`. No ready/sync pair follows that failure.
 Another channel can be used to select a different Session after an opening
-failure. Repeating `open_session` on an open channel keeps its current binding.
-Use `session_snapshot` to refresh its ready/snapshot pair.
+failure. Repeating `open_session` on an open channel emits `session_open_failed`
+with `SessionAlreadyOpenError` and preserves the current binding. Use
+`session_snapshot` to refresh the ready/snapshot pair.
 
 `scheduled_turn_started` carries the scheduled prompt and `turn_id` before
 ordinary turn events. The scheduled Turn can send output and terminal events to
@@ -324,8 +325,9 @@ and the authoritative `runtime_state` for live controls.
 names and detail keys are diagnostic; branch on the event kind. `turn_failed`
 ends a turn and permits further valid commands; a startup failure has phase
 `failed`, while an execution failure can leave phase `idle`. A channel `fatal` makes that channel unusable and closes its Runtime, while other
-channels continue. A top-level process `fatal` closes the process with exit code 1. It may occur before any session
-opens or before a protocol major is available. Malformed JSON/envelopes, unknown
+channels continue. A top-level `fatal` closes the client connection. A standalone
+Bridge exits with code 1. This error may occur before any session opens or before
+a protocol major is available. Malformed JSON/envelopes, unknown
 command kinds and out-of-order Session commands produce fatal `ProtocolError`;
 invalid command arguments can produce other fatal error types. Interaction
 responses, steer and cancel require an opened Session; sending them before opening

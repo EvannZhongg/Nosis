@@ -229,16 +229,20 @@ print(json.dumps({'file': str(Path(local_tokens.__file__).resolve()), 'counts': 
         self.assertEqual(next_peer.process.returncode, 0)
 
     def test_installed_cli_protocol_errors(self):
-        for line in ('[]\n', '{broken\n', '{"type":"unknown_command"}\n', '{"type":"load_session"}\n'):
+        for line in (
+            '[]\n', '{broken\n', '{"type":"unknown_command"}\n', '{"type":"load_session"}\n',
+            '{"type":"channel_command","channel_id":"unopened","command":{"type":"user_turn","turn_id":"t","text":"ignored"}}\n',
+        ):
             with self.subTest(line=line):
                 result = subprocess.run(
                     [str(self.command)], input=line, cwd=self.external, env=self.env,
                     capture_output=True, text=True, encoding="utf-8", timeout=20,
                 )
                 self.assertEqual(result.returncode, 1, result.stderr)
-                message = json.loads(result.stdout.splitlines()[-1])
-                self.assertEqual(message["type"], "fatal")
-                self.assertEqual(message["error"]["type"], "ProtocolError")
+                messages = [json.loads(line) for line in result.stdout.splitlines()]
+                failures = [message for message in messages if message["type"] == "fatal"]
+                self.assertEqual(len(failures), 1, messages)
+                self.assertEqual(failures[0]["error"]["type"], "ProtocolError")
 
     def test_packaged_sdk_turn_interactions_steer_cancel_and_failure(self):
         bootstrap = self.peer()
