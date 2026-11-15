@@ -220,7 +220,8 @@ class FileWritePermissionTest(unittest.TestCase):
         body = "\n".join(f"*** Add File: path/{index}.txt\n+new" for index in range(20))
         call = ToolCall("patch", "apply_patch", {"patch": patch_text(body)})
 
-        FileWriteApprovalPolicy(request).authorize(call, None)
+        context = ToolExecutionContext(Workspace(Path.cwd()), Session())
+        FileWriteApprovalPolicy(request).authorize(call, context)
 
         description = request.call_args.args[0]
         self.assertIn("20 files", description)
@@ -238,7 +239,8 @@ class FileWritePermissionTest(unittest.TestCase):
             "new_text": "新" * 10000,
         })
 
-        FileWriteApprovalPolicy(request).authorize(call, None)
+        context = ToolExecutionContext(Workspace(Path.cwd()), Session())
+        FileWriteApprovalPolicy(request).authorize(call, context)
 
         description = request.call_args.args[0]
         self.assertIn("Old text: 30000 bytes, 1 lines", description)

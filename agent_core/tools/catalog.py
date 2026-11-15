@@ -86,8 +86,13 @@ class ToolSet:
 
     @property
     def definitions(self) -> tuple[ToolDefinition, ...]:
+        return self.definitions_for()
+
+    def definitions_for(self, turn_control: TurnControl | None = None) -> tuple[ToolDefinition, ...]:
+        context = self._context if turn_control is None else replace(self._context, cancellation=turn_control)
         return tuple(
-            tool.definition(self._context) for tool in self._tools.values()
+            tool.definition(context) for tool in self._tools.values()
+            if tool.available(context)
         )
 
     def is_concurrent(self, name: str) -> bool:

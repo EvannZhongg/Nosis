@@ -7,14 +7,18 @@ import tempfile
 import sys
 import time
 import unittest
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from threading import Event, Thread
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from agent_core import JsonlSessionStore, Workspace
+from agent_core import IntervalTrigger, JsonlSessionStore, OneShotTrigger, SchedulerService, Workspace
+from interfaces.application_host import application_lock
 from interfaces.bridge_process import BridgeProcess
+from interfaces.local_bridge import ENDPOINT_FILENAME, LocalBridge
+from interfaces.session_host import ActiveSessionRegistry
 from tests.bridge_fixtures import open_session_message
 
 
@@ -46,6 +50,7 @@ class ModelPeer(BaseHTTPRequestHandler):
         text = next(message["content"] for message in reversed(messages) if message["role"] == "user")
         if isinstance(text, list):
             text = "".join(part.get("text", "") for part in text)
+        self.server.requests.append((text, [tool["function"]["name"] for tool in body.get("tools", [])]))
         if text == "blocked":
             self.server.entered.set()
             self.server.release.wait(15)
@@ -89,6 +94,7 @@ class MultiplexBridgeTest(unittest.IsolatedAsyncioTestCase):
         self.http = ThreadingHTTPServer(("127.0.0.1", 0), ModelPeer)
         self.http.entered = Event()
         self.http.release = Event()
+        self.http.requests = []
         self.http_thread = Thread(target=self.http.serve_forever, daemon=True)
         self.http_thread.start()
         self.opening = open_session_message(self.root, provider_config={
@@ -131,9 +137,160 @@ class MultiplexBridgeTest(unittest.IsolatedAsyncioTestCase):
         channel = self.bridge.open_channel(key)
         channel.send({**self.opening, "session_id": session_id or key})
         ready, _ = await self.until(channel, "session_ready")
-        self.assertEqual(ready["protocol_version"], 3)
+        self.assertEqual(ready["protocol_version"], 4)
         await self.until(channel, "runtime_state")
         return channel
+
+    def schedule(self, session_id, prompt, *, trigger=None):
+        service = SchedulerService(self.root / "schedule.jsonl")
+        now = datetime.now(timezone.utc)
+        schedule = service.create_schedule(
+            trigger=trigger or OneShotTrigger(now), prompt=prompt,
+            workspace=str(self.root), origin_session_id="origin",
+            schedule_session_id=session_id,
+        )
+        return service, schedule
+
+    async def wait_for_run(self, store, schedule, status):
+        async with asyncio.timeout(12):
+            while True:
+                for run in store.runs:
+                    if run.schedule_id == schedule.schedule_id and run.status == status:
+                        return run
+                await asyncio.sleep(0.025)
+
+    async def test_due_schedule_reuses_the_idle_interactive_session(self):
+        channel = await self.open("interactive", "shared")
+        channel.send({"type": "user_turn", "turn_id": "warm", "text": "warm"})
+        await self.until(channel, "turn_completed")
+        store, schedule = self.schedule("shared", "scheduled")
+        started, events = await self.until(channel, "scheduled_turn_started")
+        self.assertEqual(started["text"], "scheduled")
+        done, events = await self.until(channel, "turn_completed")
+        run = await self.wait_for_run(store, schedule, "completed")
+        self.assertEqual(started["turn_id"], run.turn_id)
+        self.assertEqual(done["turn_id"], run.turn_id)
+        self.assertFalse(any(event.get("phase") == "starting" for event in events))
+        session = JsonlSessionStore(self.root / "sessions").load("shared")
+        self.assertEqual([item.content for item in session.items if item.role == "user"], ["warm", "scheduled"])
+
+    async def test_schedule_queues_in_fifo_order_and_skips_overlapping_occurrences(self):
+        channel = await self.open("interactive", "shared")
+        channel.send({"type": "user_turn", "turn_id": "first", "text": "blocked"})
+        self.assertTrue(await asyncio.to_thread(self.http.entered.wait, 8))
+        store, schedule = self.schedule("shared", "scheduled", trigger=IntervalTrigger(
+            1, datetime.now(timezone.utc) + timedelta(milliseconds=100),
+        ))
+        queued = await self.wait_for_run(store, schedule, "queued")
+        self.assertIsNone(queued.started_at)
+        skipped = await self.wait_for_run(store, schedule, "skipped")
+        self.assertIn("queued or running", skipped.error)
+        channel.send({"type": "user_turn", "turn_id": "last", "text": "last"})
+        self.assertFalse(await channel.close(idle_only=True))
+        store.update_schedule(schedule.schedule_id, enabled=False)
+        self.http.release.set()
+        for turn_id in ("first", queued.turn_id, "last"):
+            done, _ = await self.until(channel, "turn_completed")
+            self.assertEqual(done["turn_id"], turn_id)
+        complete = await self.wait_for_run(store, schedule, "completed")
+        self.assertEqual(complete.run_id, queued.run_id)
+        self.assertGreater(complete.started_at, complete.scheduled_for)
+
+    async def test_unattended_turn_keeps_approval_and_questions_disabled_on_warm_runtime(self):
+        channel = await self.open("interactive", "shared")
+        channel.send({"type": "user_turn", "turn_id": "warm", "text": "warm"})
+        await self.until(channel, "turn_completed")
+        store, schedule = self.schedule("shared", "approval")
+        _, events = await self.until(channel, "turn_completed")
+        self.assertFalse(any(event["type"] == "approval_request" for event in events))
+        result = next(event for event in events if event["type"] == "tool_result")
+        self.assertFalse(result["ok"])
+        await self.wait_for_run(store, schedule, "completed")
+        channel.send({"type": "user_turn", "turn_id": "next", "text": "next"})
+        await self.until(channel, "turn_completed")
+        shown = dict(self.http.requests)
+        self.assertIn("ask_user", shown["warm"])
+        self.assertNotIn("ask_user", shown["approval"])
+        self.assertIn("ask_user", shown["next"])
+
+    async def test_stopping_bridge_cancels_the_queued_schedule(self):
+        channel = await self.open("interactive", "shared")
+        channel.send({"type": "user_turn", "turn_id": "first", "text": "blocked"})
+        self.assertTrue(await asyncio.to_thread(self.http.entered.wait, 8))
+        store, schedule = self.schedule("shared", "queued")
+        queued = await self.wait_for_run(store, schedule, "queued")
+        await self.bridge.close()
+        cancelled = await self.wait_for_run(store, schedule, "cancelled")
+        self.assertEqual(cancelled.run_id, queued.run_id)
+        self.assertIsNone(cancelled.started_at)
+
+    async def test_managed_bridge_cannot_start_over_an_independent_owner(self):
+        with application_lock(self.root):
+            with self.assertRaisesRegex(RuntimeError, "close the standalone Bridge"):
+                await BridgeProcess.spawn(Workspace(self.root), self.root, on_session=lambda channel: None)
+            channel = await self.open("standalone", "standalone")
+            channel.send({"type": "user_turn", "turn_id": "turn", "text": "still-alive"})
+            await self.until(channel, "turn_completed")
+
+    async def test_tui_proxy_attaches_to_the_managed_scheduler_session(self):
+        await self.bridge.close()
+        workspace = Workspace(self.root)
+        store = JsonlSessionStore(self.root / "sessions")
+        registry = ActiveSessionRegistry(store, workspace, self.root)
+        local = LocalBridge(self.root, registry)
+        with application_lock(self.root):
+            await registry.start()
+            try:
+                await local.start()
+                endpoint = json.loads((self.root / ENDPOINT_FILENAME).read_text(encoding="utf-8"))
+                if os.name == "nt":
+                    self.assertTrue(endpoint["address"].startswith(r"\\.\pipe\nosis-"))
+                else:
+                    self.assertTrue(Path(endpoint["address"]).is_socket())
+                schedules, schedule = self.schedule("scheduled", "scheduled-first")
+                await self.wait_for_run(schedules, schedule, "completed")
+                runtime = await registry.get("scheduled")
+                self.assertIsNotNone(runtime)
+
+                terminal = await asyncio.create_subprocess_exec(
+                    sys.executable, "-m", "interfaces.bridge", "--config-directory", str(self.root),
+                    cwd=self.root, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+                )
+                try:
+                    async def read():
+                        return json.loads(await asyncio.wait_for(terminal.stdout.readline(), 10))
+
+                    self.assertEqual((await read())["type"], "bridge_ready")
+                    terminal.stdin.write((json.dumps({
+                        "type": "channel_command", "channel_id": "terminal",
+                        "command": {**self.opening, "session_id": "scheduled"},
+                    }) + "\n").encode())
+                    ready = (await read())["event"]
+                    self.assertEqual(ready["type"], "session_ready")
+                    self.assertEqual(ready["transcript"]["items"][0]["content"], "scheduled-first")
+                    state = (await read())["event"]
+                    self.assertEqual(state["phase"], "idle")
+                    self.assertIs(await registry.get("scheduled"), runtime)
+                    self.assertEqual(state["provider"], "native")
+                    terminal.stdin.write((json.dumps({
+                        "type": "channel_command", "channel_id": "terminal",
+                        "command": {"type": "user_turn", "turn_id": "tui", "text": "from-terminal"},
+                    }) + "\n").encode())
+                    while (packet := await read())["event"]["type"] != "turn_completed":
+                        self.assertNotIn(packet["event"]["type"], {"fatal", "turn_failed", "session_open_failed"})
+                    self.assertEqual(packet["event"]["turn_id"], "tui")
+                    terminal.stdin.write(b'{"type":"shutdown"}\n')
+                    self.assertEqual(await asyncio.wait_for(terminal.wait(), 10), 0)
+                    self.assertIs(await registry.get("scheduled"), runtime)
+                    self.assertEqual(store.load("scheduled").turns["tui"].status, "completed")
+                finally:
+                    if terminal.returncode is None:
+                        terminal.kill()
+                        await terminal.wait()
+            finally:
+                await local.close()
+                await registry.close_all()
+            self.assertFalse((self.root / ENDPOINT_FILENAME).exists())
 
     async def test_concurrent_requests_and_cancellation_are_isolated(self):
         first, second = await asyncio.gather(self.open("one"), self.open("two"))

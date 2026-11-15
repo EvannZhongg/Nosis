@@ -7,6 +7,7 @@ both then compete for console input.
 """
 
 import os
+import argparse
 import shutil
 import subprocess
 import sys
@@ -40,16 +41,18 @@ def main() -> None:
             "Run 'npm install && npm run build' in interfaces/tui."
         )
 
-    config_directory = default_config_directory()
-    initialize_config_directory(config_directory)
-
-    arguments = sys.argv[1:]
+    parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
+    parser.add_argument("--config-directory", type=Path, default=default_config_directory())
+    options, arguments = parser.parse_known_args()
+    config_directory = options.config_directory.expanduser().resolve()
     if "--temporary" in arguments:
         if "--workspace" in arguments:
             raise SystemExit("--temporary cannot be used with --workspace")
         if arguments.count("--temporary") > 1:
             raise SystemExit("--temporary may only be specified once")
         try:
+            if not (config_directory / "agent_config.json").is_file():
+                initialize_config_directory(config_directory)
             workspace = create_scratch_workspace(
                 load_scratch_workspace_root(
                     config_directory / "agent_config.json"
@@ -65,5 +68,8 @@ def main() -> None:
         arguments.extend(("--workspace", str(workspace.path)))
 
     # The bridge must run in the interpreter that owns agent_core.
-    os.environ["NOSIS_PYTHON"] = sys.executable
-    raise SystemExit(subprocess.call([node, str(bundle), *arguments]))
+    environment = {
+        **os.environ, "NOSIS_PYTHON": sys.executable,
+        "NOSIS_CONFIG_DIRECTORY": str(config_directory),
+    }
+    raise SystemExit(subprocess.call([node, str(bundle), *arguments], env=environment))

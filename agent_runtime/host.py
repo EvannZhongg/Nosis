@@ -7,7 +7,7 @@ from typing import Callable
 from agent_core import (
     AgentEvent, AttachmentPart, CompositeToolPolicy, ContextWindowEvent,
     McpApprovalPolicy,
-    PermissionPreset, SchedulerService, ShellApprovalPolicy,
+    PermissionPreset, SchedulerService, SessionInUseError, ShellApprovalPolicy,
     ComputerApprovalPolicy, Workspace,
     FileWriteApprovalPolicy,
     UnitCompletedEvent,
@@ -17,6 +17,7 @@ from .callbacks import RuntimeCallbacks
 from .config import load_model_options
 from .plane_manager import ExecutionPlaneManager
 from .session_controller import SessionRuntimeController
+from .session_inbox import ScheduledTurn, SessionInbox
 from .services import RuntimeServices
 from .turn_runner import TurnResult, TurnRunner
 
@@ -43,6 +44,7 @@ class RuntimeHost:
         self.planes = ExecutionPlaneManager(
             self.config_directory, self.environment, self.scheduler,
             runtime_callbacks,
+            session_permissions=lambda session_id: self.services.session_permissions(session_id, self.sessions),
         )
         self.sessions = SessionRuntimeController(
             self.config_directory, self.environment, runtime_callbacks,
@@ -60,6 +62,7 @@ class RuntimeHost:
             ),
         )
         self.turns = TurnRunner(runtime_callbacks)
+        self.inbox: SessionInbox[object] = SessionInbox()
 
     def _require_idle(self) -> None:
         if self.turns.turn_id is not None:
@@ -68,8 +71,17 @@ class RuntimeHost:
     def open_session(self, workspace: Path, session_id: str | None = None,
                      provider: str | None = None) -> bool:
         self._require_idle()
-        with self.sessions.open_session(workspace, session_id, provider) as resumed:
-            self.planes.unbind_session()
+        # Observe an existing writer before opening or mutating session metadata.
+        with self.services.session_lock:
+            owner = self.services.sessions.get(session_id)
+            if owner is not None and owner is not self.sessions:
+                raise SessionInUseError(session_id)
+            previous = self.sessions.session
+            with self.sessions.open_session(workspace, session_id, provider) as resumed:
+                self.planes.unbind_session()
+            if previous is not None:
+                self.services.sessions.pop(previous.session_id)
+            self.services.sessions[self.sessions.session.session_id] = self.sessions
         return resumed
 
     def change_provider(self, provider: str) -> tuple[bool, str]:
@@ -93,7 +105,8 @@ class RuntimeHost:
         changed = workspace != self.sessions.workspace
         if changed:
             self.planes.close()
-            self.sessions.change_workspace(workspace)
+            with self.services.session_lock:
+                self.sessions.change_workspace(workspace)
         return changed
 
     def refresh_runtime(self) -> tuple[str, str]:
@@ -135,19 +148,52 @@ class RuntimeHost:
         attachments: Callable[[], tuple[AttachmentPart, ...]] = lambda: (),
         input_source: str = "user",
     ) -> TurnResult:
-        return self.turns.run_turn(
+        self.callbacks.on_turn_start(turn_id, text, input_source)
+        result = self.turns.run_turn(
             turn_id, text,
             lambda: self.planes.ensure(self.sessions, cancellation=self.turns.control),
             attachments, input_source,
         )
+        if input_source == "scheduled" and result.startup_failed:
+            session = self.sessions.session
+            if session is not None and turn_id not in session.turns:
+                session.begin_turn(turn_id)
+                session.add_item("user", text)
+                session.finish_turn("failed", turn_id, error=result.error)
+        self.callbacks.on_turn_finish(turn_id, result)
+        return result
+
+    def run_scheduled(self, turn: ScheduledTurn) -> None:
+        try:
+            if self.turns.stopped:
+                turn.completion.cancel()
+                return
+            if self.sessions.session is None or self.sessions.session.session_id != turn.session_id:
+                raise RuntimeError("scheduled turn has no bound Session Runtime")
+            turn.started()
+            result = self.run_turn(turn.turn_id, turn.text, input_source="scheduled")
+            if result.status == "cancelled":
+                turn.completion.cancel()
+            elif result.status == "failed":
+                turn.completion.set_exception(RuntimeError(result.error.message))
+            else:
+                turn.completion.set_result(None)
+        except Exception as error:
+            turn.completion.set_exception(error)
 
     def close(self) -> None:
         self.turns.shutdown()
+        self.inbox.close()
         try:
             self.planes.close()
         finally:
             try:
-                self.sessions.close()
+                with self.services.session_lock:
+                    if self.sessions.session is not None:
+                        session_id = self.sessions.session.session_id
+                        if self.services.sessions.get(session_id) is self.sessions:
+                            self.services.sessions.pop(session_id)
+                    self.sessions.close()
             finally:
                 if self._owns_services:
                     self.services.close()

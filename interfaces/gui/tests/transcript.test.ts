@@ -358,7 +358,7 @@ describe("applyMessage", () => {
 
   it("reports permission state from session readiness and later changes", () => {
     const ready = applyMessage([], {
-      type: "session_ready", protocol_version: 3,
+      type: "session_ready", protocol_version: 4,
       session_id: "s1",
       workspace: "/tmp/work",
       provider: "test",
@@ -786,7 +786,7 @@ describe("applyMessage", () => {
     for (const message of [
       {
         type: "session_ready" as const,
-        protocol_version: 3 as const,
+        protocol_version: 4 as const,
         session_id: "s1",
         workspace: "/tmp",
         provider: "test",

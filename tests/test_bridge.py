@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from tests.provider_fixtures import capabilities_stub, TEXT_MODEL, VISION_MODEL
-from tests.bridge_fixtures import BridgeTestCase, emitted, open_session_message
+from tests.bridge_fixtures import BridgeTestCase, emitted, open_session_message, run_scheduled
 
 from agent_core import (
     AgentRunResult,
@@ -70,7 +70,6 @@ from tests.bridge_fixtures import Bridge
 from agent_runtime.attachments import parse_attachments as _parse_attachments
 from agent_runtime.host import RuntimeHost
 from agent_runtime.plane_manager import ExecutionPlaneManager
-from agent_runtime.scheduled_runner import ScheduledTurnRunner
 from agent_runtime.execution_plane import ExecutionPlane
 from interfaces.bridge.protocol import (
     attachment_replaced_message,
@@ -436,7 +435,7 @@ class ProtocolTest(unittest.TestCase):
             ),
             {
                 "type": "session_ready",
-                "protocol_version": 3,
+                "protocol_version": 4,
                 "session_id": "s1",
                 "workspace": "/tmp/work",
                 "provider": "test",
@@ -1933,8 +1932,13 @@ class ScheduledTaskPermissionTest(BridgeTestCase):
                     observed.append(worker.sessions.permissions.authority)
                     return SimpleNamespace(status="completed")
                 run = ScheduledRun(preset.value, self.schedule_id, self.session_id, preset.value, datetime.now(timezone.utc))
-                with patch.object(RuntimeHost, "run_turn", run_turn):
-                    ScheduledTurnRunner(self.root, self.bridge.host.scheduler)(schedule, run)
+                owner = RuntimeHost(self.root, services=self.bridge.host.services)
+                try:
+                    owner.open_session(self.root, self.session_id)
+                    with patch.object(RuntimeHost, "run_turn", run_turn):
+                        run_scheduled(owner, schedule, run)
+                finally:
+                    owner.close()
                 self.assertEqual(observed, [preset.authority])
         self.assertEqual(self.bridge.host.scheduler.path.read_text(encoding="utf-8"), before)
 
@@ -1972,6 +1976,15 @@ class ScheduledTaskPermissionTest(BridgeTestCase):
         self.assertEqual(plane.execution_router.authority, PermissionPreset.WORKSPACE_ACCESS.authority)
         self.assertEqual(self.store.load(self.session_id).permission_preset, PermissionPreset.WORKSPACE_ACCESS)
         self.assertEqual(self.bridge.host.scheduler.schedules[0].action.prompt, "updated")
+
+    def test_schedule_permission_update_uses_the_other_session_owner(self) -> None:
+        owner = RuntimeHost(self.root, services=self.bridge.host.services)
+        self.addCleanup(owner.close)
+        owner.open_session(self.root, self.session_id)
+        result = self.update({"permission_preset": "full_access"})
+        self.assertIsNone(result.error)
+        self.assertEqual(owner.sessions.permissions.preset, PermissionPreset.FULL_ACCESS)
+        self.assertEqual(self.store.load(self.session_id).permission_preset, PermissionPreset.FULL_ACCESS)
 
     @unittest.skipUnless(sys.platform == "win32", "Windows journal ownership")
     def test_occupied_target_rejects_permission_and_schedule_changes(self) -> None:
@@ -2019,14 +2032,14 @@ class ScheduledTurnTest(unittest.TestCase):
                     try:
                         interactive.open_session(root, session_id=schedule.schedule_session_id)
                         interactive.set_permission_preset(preset)
+                        before = len(store.load(schedule.schedule_session_id).journal)
+                        run = ScheduledRun(
+                            f"run-{index}", schedule.schedule_id, schedule.schedule_session_id,
+                            f"turn-{index}", datetime.now(timezone.utc),
+                        )
+                        run_scheduled(interactive, schedule, run)
                     finally:
                         interactive.close()
-                    before = len(store.load(schedule.schedule_session_id).journal)
-                    run = ScheduledRun(
-                        f"run-{index}", schedule.schedule_id, schedule.schedule_session_id,
-                        f"turn-{index}", datetime.now(timezone.utc),
-                    )
-                    ScheduledTurnRunner(root, scheduler)(schedule, run)
                     stored = store.load(schedule.schedule_session_id)
                     self.assertEqual(stored.permission_preset, preset)
                     self.assertFalse(any(
@@ -2099,7 +2112,8 @@ class ScheduledTurnTest(unittest.TestCase):
                         datetime.now(timezone.utc),
                     )
 
-                    ScheduledTurnRunner(root, scheduler)(schedule, run)
+                    bridge.host.open_session(root, schedule.schedule_session_id)
+                    run_scheduled(bridge.host, schedule, run)
                 bridge.close()
 
             store = JsonlSessionStore(root / "sessions")

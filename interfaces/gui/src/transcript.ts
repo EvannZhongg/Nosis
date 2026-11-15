@@ -76,6 +76,9 @@ export function applyMessage(
         permissionPreset: message.permission_preset,
       };
 
+    case "scheduled_turn_started":
+      return { items: [...items, { role: "user", content: message.text }] };
+
     case "runtime_state":
       return {
         items,

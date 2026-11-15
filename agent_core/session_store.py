@@ -11,6 +11,7 @@ from typing import BinaryIO, Callable, Iterable, Iterator, TextIO
 from .atomic import atomic_write_text
 from .content import text_content
 from .file_lock import acquire_file_lock
+from .jsonl import prepare_append
 from .permissions import PermissionPreset
 from .session import JournalEvent, JournalSink, Session, message_from_dict
 from .session_title import initial_session_title
@@ -442,7 +443,7 @@ class JsonlSessionStore:
             file = _open_journal_file(path)
         try:
             with self._locked_session(session_id):
-                _prepare_journal_append(file)
+                prepare_append(file)
 
             def append(events: tuple[JournalEvent, ...]) -> None:
                 with self._locked_session(session_id):
@@ -473,7 +474,7 @@ class JsonlSessionStore:
             _write_session_metadata(path.parent, _new_session_metadata())
         events = tuple(events)
         with _open_journal_file(path) as file:
-            _prepare_journal_append(file)
+            prepare_append(file)
             _write_journal_events(file, events)
         _update_session_metadata(path.parent, session_id, events)
 
@@ -578,38 +579,6 @@ def _event_to_dict(event: JournalEvent) -> dict[str, object]:
         "tool_call_id": event.tool_call_id,
         "payload": event.payload,
     }
-
-
-def _prepare_journal_append(file: BinaryIO) -> None:
-    end = file.seek(0, os.SEEK_END)
-    if not end:
-        return
-    file.seek(end - 1)
-    if file.read(1) == b"\n":
-        return
-
-    cursor = end
-    start = 0
-    while cursor:
-        chunk_start = max(0, cursor - 4096)
-        file.seek(chunk_start)
-        chunk = file.read(cursor - chunk_start)
-        newline = chunk.rfind(b"\n")
-        if newline != -1:
-            start = chunk_start + newline + 1
-            break
-        cursor = chunk_start
-
-    file.seek(start)
-    tail = file.read(end - start)
-    try:
-        json.loads(tail)
-    except json.JSONDecodeError:
-        # Only an unfinished final record can be discarded during replay.
-        file.truncate(start)
-    else:
-        file.write(b"\n")
-    file.seek(0, os.SEEK_END)
 
 
 def _editable_user_messages(session: Session) -> list[dict[str, object]]:

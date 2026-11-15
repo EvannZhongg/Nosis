@@ -1,5 +1,6 @@
 """Assembly, invalidation and resource ownership for one execution plane."""
 
+from contextlib import AbstractContextManager
 from functools import partial
 from pathlib import Path
 from typing import Callable
@@ -61,13 +62,15 @@ from .session_title import SessionTitleTask
 
 class ExecutionPlaneManager:
     def __init__(self, config_directory: Path, environment: EnvironmentReloader,
-                 scheduler: SchedulerService, callbacks: RuntimeCallbacks) -> None:
+                 scheduler: SchedulerService, callbacks: RuntimeCallbacks, *,
+                 session_permissions: Callable[[str], AbstractContextManager[PermissionController]]) -> None:
         self._config_directory = config_directory
         self._config_path = config_directory / "provider_config.json"
         self._agent_config_path = config_directory / "agent_config.json"
         self._environment = environment
         self.scheduler = scheduler
         self.callbacks = callbacks
+        self.session_permissions = session_permissions
         self.current: ExecutionPlane | None = None
 
     def ensure(
@@ -401,7 +404,7 @@ class ExecutionPlaneManager:
                     self.callbacks.ask_user
                 ),
                 scheduler=self.scheduler,
-                session_permissions=session.session_permissions,
+                session_permissions=self.session_permissions,
                 memory=memory,
                 hooks=plane.hooks,
                 on_hook_event=lambda event: self.callbacks.on_event(event, session.session.current_turn_id),

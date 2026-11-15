@@ -3,10 +3,10 @@
 `interfaces.bridge` 是前端与 [`agent_runtime`](../../agent_runtime/README.md) 之间的协议适配层，也是前端驱动 Agent、执行 Tool、授权、提问、steer 和取消的唯一通道。
 
 ```text
-TUI / GUI host
-  └─ python -m interfaces.bridge
-       ├─ channel A ── RuntimeHost A ── agent_core
-       └─ channel B ── RuntimeHost B ── agent_core
+TUI ── 本地 Bridge 协议 ── nosis-server ◀── GUI / IM
+                              └─ python -m interfaces.bridge
+                                   ├─ Session A ── RuntimeHost A ── agent_core
+                                   └─ Session B ── RuntimeHost B ── agent_core
 ```
 
 Bridge 作为独立 Python 进程运行，通过 stdin/stdout 交换每行一个 JSON 对象的 newline-delimited JSON。它不装配 Provider、Tool、MCP 或 Agent，也不包含 Agent Loop。
@@ -20,7 +20,7 @@ Bridge，无需了解内部模块路径。入口在保留协议 stdout 后调用
 
 `__main__.py` 在 import Provider 相关模块前保留专用 stdout 协议通道，并把普通 `print()` 和第三方库输出重定向到 stderr，防止日志破坏 JSON 消息流。它也统一处理 UTF-8 stdin、启动期中断和无法进入协议循环时的 `fatal` 错误。
 
-TUI 与 `nosis-server` 各自管理一个常驻 Bridge 进程；后者由 HTTP 和 IM 适配器共享。宿主通过协议关闭通道或整个进程，强制退出时终止进程树。
+`nosis-server` 管理同一配置目录的 Bridge 和 Scheduler，供 GUI、IM 和本地 TUI 共同使用。启动 TUI 时若常驻宿主尚未运行，TUI 可独立持有 Bridge。配置目录的执行锁限制一个 Bridge 取得 Runtime 执行权。
 
 ## 连接与路由
 
@@ -31,13 +31,13 @@ TUI 与 `nosis-server` 各自管理一个常驻 Bridge 进程；后者由 HTTP �
 
 Journal 写入权被占用、工作区或配置无效、文件系统错误导致打开失败时，Bridge 返回 `session_open_failed`，保持协议连接并允许 `list_workspaces` 或重新发送 `open_session`；存在工作区浏览上下文时也允许 `list_sessions`。前端在收到 `session_ready` 前不得请求历史记录；在初始 `runtime_state` 前不得提交执行命令。同一应用宿主内打开已有会话会附着原 Bridge，模型或工作区变更通过显式协议消息执行，不另建 Session 写者。
 
-Provider、MCP、Tool 和 Agent 仍由 Runtime 在首个 `user_turn` 到来时延迟初始化。
+Provider、MCP、Tool 和 Agent 由 Runtime 在首个交互或定时 Turn 到来时延迟初始化。
 
-每个通道持有独立 RuntimeHost、命令队列、事件序号与审批等待者，不同通道并发执行。空闲时可以再次发送 `open_session`，在同一个通道内切换会话。Runtime 释放旧会话的任务和 Journal，按装配输入决定是否复用重型资源；Bridge 重新发送 `session_ready` 和 `runtime_state` 同步新会话。
+每个 Session 由一个 RuntimeHost 持有，交互和定时 Turn 在该 Runtime 排队。Scheduler 先打开的 Session 可以附着，并复用它已经装配的执行面。不同 Session 并发执行。通道绑定单个 Session，切换时使用目标 Session 的通道。
 
 GUI、TUI 和 SDK 都使用这一常驻服务端。TUI 为访问过的会话保留独立通道，切回时发送 `session_snapshot`，由 Bridge 返回该 Runtime 的 ready/snapshot 对，不释放 Agent、Jobs、Journal 或 MCP。SDK 的发送与取消接口必须显式携带通道 ID。
 
-切换前先取得目标会话的 Journal 并完成加载，成功后才释放原会话的任务与 Journal。切换失败时原会话及执行状态保持可用，`session_open_failed` 携带原会话的 `runtime` 快照；首次打开失败则没有可保留的会话与快照。
+附着失败通过 `session_open_failed` 返回。已经打开的其他通道仍可使用。
 
 `list_workspaces` 复用 Core 的历史会话分组，返回已有会话的工作区路径。选择工作区后发送该路径和 `session_id: null`，即可新建会话并在同步后直接对话；`list_sessions` 继续只列出当前工作区的历史会话。两种入口都通过 `open_session` 完成绑定，不使用会迁移当前会话的 `workspace_set`。
 
@@ -48,7 +48,7 @@ Bridge 路由的输入包括：
 - `permission_set`、`provider_set` 和 `workspace_set`
 - Session 列表与历史加载
 - 设置读取及 Provider、Agent、路由更新
-- 进程级 `close_channel` 与 `shutdown`，分别关闭一个或全部 Runtime
+- 进程级 `close_channel` 是关闭通道，`shutdown` 是结束连接。常驻宿主继续管理已附着过的 Runtime。
 
 Bridge 把 Core 的 `AgentEvent`、Runtime phase、计划、MCP 状态和结束结果转换为协议消息。普通模型调用结束时立即推送 `model_completed`（本次用量与会话累计缓存快照），每次压缩尝试结束时推送 `compression_completed`（会话累计缓存快照），不等待 Tool 执行、压缩重试或 Turn 结束。实时 Tool 事件只包含执行状态；会话检查点包含 Core 已规范化的对话内容与 Artifact 引用，大输出仍由 Core 落盘。
 

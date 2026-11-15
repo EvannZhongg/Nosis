@@ -1,6 +1,6 @@
-// Public stdio Bridge protocol, major 3. Keep Python senders and the reference in sync.
+// Public stdio Bridge protocol, major 4. Keep Python senders and the reference in sync.
 
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 export type JSONValue =
   | string
@@ -220,7 +220,7 @@ export type Incoming = (
   | RuntimeState
   | {
       type: 'session_ready';
-      protocol_version: 3;
+      protocol_version: 4;
       session_id: string;
       workspace: string;
       provider: string;
@@ -278,6 +278,7 @@ export type Incoming = (
   | { type: 'user_steer_received'; turn_id: string | null; steer_id: string; text: string }
   | { type: 'user_steer_rejected'; turn_id: string | null; steer_id: string; text: string }
   | { type: 'user_turn_received'; turn_id: string }
+  | { type: 'scheduled_turn_started'; turn_id: string; text: string }
   | {
       type: 'user_steer_applied';
       turn_id: string;
@@ -345,13 +346,15 @@ export type Outgoing =
 /** A channel owns one independent Runtime, including its event cursors. */
 export type BridgeRequest<Command = Outgoing> =
   | { type: 'channel_command'; channel_id: string; command: Command }
-  | { type: 'close_channel'; channel_id: string }
+  | { type: 'close_channel'; channel_id: string; idle_only?: boolean }
   | { type: 'shutdown' };
 
 export type BridgeEvent<Event = Incoming> =
   | { type: 'bridge_ready'; protocol_version: number }
+  | { type: 'session_channel'; channel_id: string }
   | { type: 'channel_event'; channel_id: string; event: Event }
   | { type: 'channel_closed'; channel_id: string }
+  | { type: 'channel_busy'; channel_id: string }
   | { type: 'fatal'; error: RuntimeFailure };
 
 export { MessageDecoder } from './decoder.js';

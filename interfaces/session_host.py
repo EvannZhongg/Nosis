@@ -32,6 +32,7 @@ class ActiveSession:
         self.session_id = session_id
         self.bridge = bridge
         self.state = inactive_runtime_state(provider=provider, workspace=workspace)
+        self.ready: dict[str, object] | None = None
         self.transcript = {"items": items, "event_sequence": 0}
         self._pending_turn: str | None = None
         self._pending_refresh = False
@@ -110,6 +111,10 @@ class ActiveSession:
                     self._subscriber_detached.set()
                     self._subscriber_detached = None
 
+    async def snapshot(self) -> tuple[list[dict[str, object]], dict[str, object]]:
+        async with self._lock:
+            return list(self._events), {**self.state, "event_sequence": self._resume_after}
+
     def send(self, message: dict[str, object]) -> None:
         if message.get("type") == "user_turn":
             self._pending_turn = str(message["turn_id"])
@@ -148,17 +153,22 @@ class ActiveSession:
     def mark_failure_delivered(self) -> None:
         self._failure_pending = False
 
-    async def close(self) -> None:
+    async def close(self, *, idle_only: bool = False) -> bool:
         if not self._closed:
+            if idle_only:
+                if not await self.bridge.close(idle_only=True):
+                    return False
+            else:
+                await self.bridge.close()
             self._closed = True
             self.done = True
-            await self.bridge.close()
         if not self._reader.done() and self._reader is not asyncio.current_task():
             self._reader.cancel()
             await asyncio.gather(self._reader, return_exceptions=True)
         async with self._lock:
             if self._subscriber is not None:
                 self._subscriber.put_nowait(None)
+        return True
 
     async def _read_bridge(self) -> None:
         try:
@@ -185,11 +195,20 @@ class ActiveSession:
                         if self._pending_turn is None or self.state["turn_id"] == self._pending_turn:
                             self._pending_turn = None
                             self._snapshot_ready.set()
+                    if message["type"] == "session_ready":
+                        self.ready = message
+                    if message["type"] in {"provider_changed", "runtime_refreshed"} and self.ready is not None:
+                        self.ready = {**self.ready, "model": message["model"]}
                     if "transcript" in message:
                         self.transcript = message["transcript"]
                     if message["type"] in {"turn_completed", "turn_cancelled", "turn_failed", "fatal", "session_open_failed"}:
-                        self._pending_turn = None
-                        self._snapshot_ready.set()
+                        if (
+                            self._pending_turn is None
+                            or message.get("turn_id") == self._pending_turn
+                            or message["type"] in {"fatal", "session_open_failed"}
+                        ):
+                            self._pending_turn = None
+                            self._snapshot_ready.set()
                     if message["type"] in {"runtime_refreshed", "runtime_refresh_failed", "fatal", "session_open_failed"}:
                         self._pending_refresh = False
                     if message["type"] in {"fatal", "session_open_failed"}:
@@ -226,14 +245,22 @@ class ActiveSessionRegistry:
         self._workspace = workspace
         self._config_directory = config_directory
         self._bridge: BridgeProcess | None = None
-        self._closing: dict[str, asyncio.Task[None]] = {}
+        self._closing: dict[str, asyncio.Task[bool]] = {}
 
     async def start(self) -> None:
         if self._bridge is not None and not self._bridge.available:
             await self._bridge.close()
             self._bridge = None
         if self._bridge is None:
-            self._bridge = await BridgeProcess.spawn(self._workspace, self._config_directory)
+            self._bridge = await BridgeProcess.spawn(
+                self._workspace, self._config_directory, on_session=self._adopt_session,
+            )
+
+    def _adopt_session(self, channel: BridgeChannel) -> None:
+        session_id = channel.channel_id
+        self._sessions[session_id] = ActiveSession(
+            session_id, None, str(self._workspace.path), [], channel,
+        )
 
     async def open_or_attach(
         self,
@@ -315,12 +342,24 @@ class ActiveSessionRegistry:
                 return False
             if runtime.running:
                 raise SessionRunningError("session is running")
-            self._sessions.pop(session_id, None)
-            closing = asyncio.create_task(runtime.close())
-            self._closing[session_id] = closing
-            closing.add_done_callback(lambda task: self._closing.pop(session_id, None))
-        await asyncio.shield(closing)
+            closing = self._closing.get(session_id)
+            if closing is None:
+                closing = asyncio.create_task(self._release(runtime))
+                self._closing[session_id] = closing
+        if not await asyncio.shield(closing):
+            raise SessionRunningError("session is running")
         return True
+
+    async def _release(self, runtime: ActiveSession) -> bool:
+        released = False
+        try:
+            released = await runtime.close(idle_only=True)
+            return released
+        finally:
+            async with self._lock:
+                if released and self._sessions.get(runtime.session_id) is runtime:
+                    self._sessions.pop(runtime.session_id)
+                self._closing.pop(runtime.session_id, None)
 
     async def remove_if_finished(self, runtime: ActiveSession) -> None:
         if runtime.attachable:

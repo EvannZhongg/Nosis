@@ -58,6 +58,16 @@ class TurnRunner:
             self._shutdown = True
             return self.control.cancel() if self.control is not None else False
 
+    @property
+    def stopped(self) -> bool:
+        with self._lock:
+            return self._shutdown
+
+    @property
+    def busy(self) -> bool:
+        with self._lock:
+            return self.turn_id is not None or bool(self._queued)
+
     def run_turn(
         self,
         turn_id: str,
@@ -66,7 +76,7 @@ class TurnRunner:
         attachments: Callable[[], tuple[AttachmentPart, ...]],
         input_source: str = "user",
     ) -> TurnResult:
-        control = TurnControl()
+        control = TurnControl(interactive=input_source != "scheduled")
         with self._lock:
             if self.turn_id is not None:
                 raise RuntimeError("a turn is already running")

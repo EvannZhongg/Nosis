@@ -4,20 +4,21 @@
 
 ## Runtime 入口
 
-`RuntimeHost` 是共享入口，组合三个主要控制器：
+`RuntimeHost` 是共享入口，由会话控制、执行面、Turn 控制和队列组成。
 
 ```text
 RuntimeHost
 ├── SessionRuntimeController   Session、Workspace、Provider、权限与计划
 ├── ExecutionPlaneManager     Agent、Tool、MCP 连接、Memory、Job 等原子装配
-└── TurnRunner                turn、steer、cancel 与结束结果
+├── TurnRunner                Turn、steer、cancel 与结束结果
+└── SessionInbox              交互和定时 Turn 的串行队列
 ```
 
-交互式 Bridge 和无人值守的 Scheduled Runner 都通过这套装配进入 Core。前端不自行创建 Agent、执行 Tool 或维护另一套授权状态。
+交互式 Bridge 和 Scheduler 向同一 Session Runtime 提交 Turn。空闲时立即执行，忙碌时按接收顺序排队。不同 Session 独立执行。
 
 `RuntimeServices` 持有一个进程内共享的 EnvironmentReloader、SettingsStore 和
-SchedulerService。常驻 Bridge 为每个通道创建独立 RuntimeHost 并传入同一个 services；
-Host 关闭只释放自身执行面与 Journal，由进程宿主在全部 Host 关闭后释放共享服务。
+SchedulerService。每个打开的 Session 由一个 RuntimeHost 持有。RuntimeServices 也按 Session 查找其权限控制器，供定时任务在另一会话中更新权限。
+Bridge 退出时先停止 Scheduler 接收新触发，再取消并关闭各 Runtime。
 默认 Provider 的代码、tokenizer 与 TLS 信任上下文在进程启动时预热，不发送模型请求。
 
 ## Execution Plane
@@ -221,7 +222,9 @@ standalone Skill 与 MCP 使用同一套 Core registry / manager，不存在 Plu
 
 `attachments.py` 为 GUI 和 IM 共用上传落盘、文件命名与真实图片格式探测，并验证提交的附件位于当前 Workspace，转换为 Core 的 `ImagePart` 或 `FilePart`。主 Agent 的 `present_file` Tool 将交付文件快照保存为附件，沿用 Tool 执行、Journal 与 `tool_media` 事件链路。Tool 附件默认只用于模型观察，`present_file` 显式设置 `present_to_user=true`；Core 将观察附件写入 `tool_media` 消息，将交付附件写入 `tool_delivery` 消息，后者从模型上下文投影中排除，不受模型图片输入的字节限制。Core 按交付标记分开发出媒体事件，IM 仅发送显式交付的附件。`.nosis/attachments/` 是存储目录，不表达交付意图。
 
-`ScheduledTurnRunner` 为 Scheduler 创建独立 `RuntimeHost`，在任务绑定的 Workspace 中执行 Turn；Provider 沿用 Session 已保存或默认的选择。每次运行的授权由调度 Session 的权限 preset 决定，Runner 不写入也不覆盖该 preset，因此交互式修改会在下一次运行生效；无人值守运行不提供交互式授权或用户提问能力，需要审批的 Tool 不会因为运行无人值守而获得放行。
+Scheduler 使用任务的 `schedule_session_id` 提交 Turn，Runtime 使用该 Session 当前的 Workspace、Provider 和权限 preset。定时 Turn 的来源为 `scheduled`，人工审批按无人值守规则拒绝，工具列表隐藏 `ask_user`。通过 Bridge 附着的客户端可以看到定时 Turn 的事件和结果。
+
+触发先记录为 `queued`，取出执行时才记录 `started_at` 和 `running`。同一个 Schedule 已有待执行或正在执行的记录时，后续触发记为 `skipped`。正常关闭会取消尚未执行的定时 Turn，异常退出留下的 `queued` 或 `running` 记录在下次启动时标记为 `interrupted`。
 
 ## 模块索引
 
@@ -233,7 +236,7 @@ standalone Skill 与 MCP 使用同一套 Core registry / manager，不存在 Plu
 | `plane_manager.py` | Execution Plane 创建、复用、失效与关闭 |
 | `session_controller.py` | Session、Workspace、Provider、权限与计划绑定 |
 | `turn_runner.py` | Turn、steer、cancel 和结果 |
-| `scheduled_runner.py` | 无人值守定时 Turn 入口 |
+| `session_inbox.py` | Session 队列和定时 Turn 请求 |
 | `role_tools.py` | 把角色声明在装配完成的 Catalog 与 MCP 选择上展开为 ToolSet |
 | `session_title.py` | 执行面持有的 Session 命名任务 |
 | `config.py` | 配置目录初始化、Provider 与 Prompt 读取 |

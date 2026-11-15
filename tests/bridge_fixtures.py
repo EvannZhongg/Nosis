@@ -15,6 +15,7 @@ from interfaces.bridge.bridge import Bridge as SessionBridge
 from interfaces.bridge.protocol import decode, encode
 from agent_runtime.config import default_config_directory
 from agent_runtime.services import RuntimeServices
+from agent_runtime.session_inbox import ScheduledTurn
 
 
 class Bridge(SessionBridge):
@@ -113,6 +114,15 @@ def emitted(stdout: io.StringIO) -> list[dict]:
         for line in stdout.getvalue().splitlines()
         if line.strip()
     ]
+
+
+def run_scheduled(host, schedule, run):
+    turn = ScheduledTurn(
+        run.session_id, Path(schedule.workspace), run.turn_id, schedule.action.prompt,
+        started=lambda: None,
+    )
+    host.run_scheduled(turn)
+    return turn.completion.result()
 
 
 def open_session_message(

@@ -62,7 +62,10 @@ class TurnControl:
     def __init__(
         self,
         external_cancelled: Callable[[], bool] | None = None,
+        *,
+        interactive: bool = True,
     ) -> None:
+        self.interactive = interactive
         self._steering = UserSteeringMailbox()
         self._cancelled = False
         self._finished = False

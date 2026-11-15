@@ -1,6 +1,6 @@
 # TUI
 
-`interfaces/tui` 是使用 TypeScript、Ink 和 React 实现的终端交互层。它启动独立 Bridge 子进程，渲染协议消息并采集输入，不运行 Agent Loop，也不直接执行 Tool。
+`interfaces/tui` 是使用 TypeScript、Ink 和 React 实现的终端交互层，通过 Bridge 协议渲染事件并提交操作。
 
 ## 启动
 
@@ -12,13 +12,13 @@ nosis --temporary
 
 未传 `--workspace` 时使用当前目录。`--temporary` 由 Python 启动器在配置的 `scratch_workspace_root` 下创建持久保留的 Nosis-managed Workspace，再把解析后的路径交给 TUI；它不能与 `--workspace` 同时使用。
 
-`interfaces/launch.py` 负责初始化 `~/.nosis/`、定位 Node 和已构建的 TUI bundle，并通过 `NOSIS_PYTHON` 告诉前端应使用哪个 Python 解释器启动 Bridge。
+`interfaces/launch.py` 定位 Node、TUI bundle 和 Bridge 使用的 Python 解释器。`--config-directory` 选择配置目录，默认使用 `~/.nosis/`。
 
 ## 交互模型
 
 TUI 在启动或切换 Session 时先发送 `open_session`，收到首个 `runtime_state` 后才允许提交命令。普通消息通过 `user_turn` 发送；Turn 执行中提交的新输入转为 `user_steer`。
 
-一个 TUI 持有一个常驻 Bridge 进程。每个已打开的 Session 分配独立通道与 Runtime，切换界面不会关闭其他会话的执行面或 MCP。切回已打开会话时使用 `session_snapshot` 取得原 Runtime 的权威快照，不重绑 Session 或重建 Agent；仅把当前通道的事件渲染到界面。关闭 TUI 时统一关闭进程及所有 Runtime。
+同一配置目录启动了 `nosis-server` 时，TUI 通过本地协议附着已有会话，退出时解除自己的附着，会话和定时任务继续运行。没有常驻宿主时，TUI 启动独立 Bridge，退出时一并关闭。TUI 为访问过的 Session 保留通道，切回时使用 `session_snapshot`，界面渲染当前通道的事件。
 
 界面由结构化协议状态驱动，展示：
 

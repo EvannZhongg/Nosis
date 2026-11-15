@@ -227,7 +227,10 @@ class SubagentRuntime:
                     ),
                     attachments=_latest_attachments(parent.session),
                     turn_control=(
-                        TurnControl(external_cancelled=lambda: cancellation.cancelled)
+                        TurnControl(
+                            external_cancelled=lambda: cancellation.cancelled,
+                            interactive=parent.interactive,
+                        )
                         if cancellation is not None
                         else None
                     ),

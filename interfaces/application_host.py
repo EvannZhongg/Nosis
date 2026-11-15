@@ -13,6 +13,7 @@ from agent_core import JsonlSessionStore, Workspace
 from agent_core.file_lock import acquire_file_lock
 from agent_runtime.config import default_config_directory, initialize_config_directory
 from agent_runtime.settings import SettingsStore
+from interfaces.local_bridge import LocalBridge
 from interfaces.mobile.service import MobileService
 from interfaces.session_host import ActiveSessionRegistry
 
@@ -41,6 +42,7 @@ class ApplicationHost:
         self.store = store
         self.settings = settings
         self.active_sessions = ActiveSessionRegistry(store, workspace, settings.directory)
+        self.local_bridge = LocalBridge(settings.directory, self.active_sessions)
 
     async def _serve_mobile(self) -> None:
         mobile = MobileService(
@@ -71,6 +73,7 @@ class ApplicationHost:
         adapters: set[asyncio.Task[None]] = set()
         try:
             await self.active_sessions.start()
+            await self.local_bridge.start()
             adapters.add(asyncio.create_task(self._serve_mobile(), name="IM"))
             if http:
                 adapters.add(asyncio.create_task(self._serve_http(), name="HTTP"))
@@ -90,7 +93,10 @@ class ApplicationHost:
             try:
                 await asyncio.gather(*adapters, return_exceptions=True)
             finally:
-                await self.active_sessions.close_all()
+                try:
+                    await self.local_bridge.close()
+                finally:
+                    await self.active_sessions.close_all()
 
 
 def run_application_host(

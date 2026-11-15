@@ -25,7 +25,7 @@ class ShellApprovalPolicy:
             return False
         if call.name == "_hook_command":
             command = "[Hook] " + subprocess.list2cmdline([command, *call.arguments["args"]])
-        if not self._request_permission(command):
+        if not context.interactive or not self._request_permission(command):
             raise PermissionError("shell command was not approved")
         return True
 
@@ -37,7 +37,7 @@ class FileWriteApprovalPolicy:
     def authorize(self, call: ToolCall, context: ToolExecutionContext) -> bool:
         if call.name not in WORKSPACE_WRITE_TOOLS:
             return False
-        if not self._request_permission(
+        if not context.interactive or not self._request_permission(
             approval_description(call), kind="file", tool_name=call.name,
         ):
             raise PermissionError("file change was not approved")
@@ -71,7 +71,7 @@ class McpApprovalPolicy:
     ) -> bool:
         if not self._requires_approval(call.name):
             return False
-        if not self._request_permission(call):
+        if not context.interactive or not self._request_permission(call):
             raise PermissionError("MCP tool call was not approved")
         return True
 
@@ -85,7 +85,7 @@ class ComputerApprovalPolicy:
     def authorize(self, call: ToolCall, context: ToolExecutionContext) -> bool:
         if call.name not in {"computer_action", "computer_screenshot"}:
             return False
-        if not self._request_permission(
+        if not context.interactive or not self._request_permission(
             f"{call.name}({call.arguments})", kind="computer"
         ):
             raise PermissionError("computer action was not approved")

@@ -78,7 +78,6 @@ export function useSessionRuntime({
   const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const mountedRef = useRef(true);
   const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const turnCounter = useRef(0);
   const steerCounter = useRef(0);
   const activeTurnIdRef = useRef<string | null>(null);
   const eventCounterRef = useRef(session.event_sequence ?? 0);
@@ -485,8 +484,7 @@ export function useSessionRuntime({
     setAlerts({});
     setJobs({});
     setReconnecting(false);
-    turnCounter.current += 1;
-    activeTurnIdRef.current = `turn-${turnCounter.current}`;
+    activeTurnIdRef.current = crypto.randomUUID();
     const socket = socketRef.current ?? connect();
     awaitingSessionActivityRef.current = startsSession;
     try {

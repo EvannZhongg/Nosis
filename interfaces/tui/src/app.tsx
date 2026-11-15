@@ -2,6 +2,7 @@ import React, { useEffect, useReducer, useRef, useState } from 'react';
 import { Box, Text, useApp, useInput, useWindowSize } from 'ink';
 import type { Incoming, Outgoing, PermissionPreset } from '@nosis/protocol/internal';
 import { BridgeClient } from '@nosis/client';
+import { randomUUID } from 'node:crypto';
 import { COMMANDS, parseCommand } from './commands.js';
 import { Prompt } from './input.js';
 import {
@@ -20,6 +21,7 @@ import { initialState, reducer, type State } from './state.js';
 export type AppProps = {
   python: string;
   workspace: string;
+  configDirectory?: string;
 };
 
 type SessionSelection = {
@@ -67,7 +69,6 @@ export function App(props: AppProps): React.ReactElement {
   const previousView = useRef<{ channelId: string; state: State } | null>(null);
   const currentState = useRef(state);
   currentState.current = state;
-  const turnCounter = useRef(0);
   const steerCounter = useRef(0);
   const startedAt = useRef<number | null>(null);
 
@@ -77,7 +78,10 @@ export function App(props: AppProps): React.ReactElement {
   useEffect(() => {
     const client = new BridgeClient<Incoming, Outgoing>({
       command: props.python,
-      args: ['-m', 'interfaces.bridge'],
+      args: [
+        '-m', 'interfaces.bridge',
+        ...(props.configDirectory ? ['--config-directory', props.configDirectory] : []),
+      ],
       cwd: props.workspace,
       onMessage: (message, channelId) => {
         if (bridgeRef.current !== client || channelId !== activeChannel.current) return;
@@ -93,7 +97,6 @@ export function App(props: AppProps): React.ReactElement {
           client.closeChannel(channelId);
         }
         dispatch({ type: 'message', message });
-        if (message.type === 'session_ready') client.send({ type: 'load_session' }, channelId);
         if (message.type === 'session_open_failed') {
           client.send({ type: message.error.type === 'SessionInUseError' ? 'list_sessions' : 'list_workspaces' }, activeChannel.current);
         }
@@ -131,7 +134,7 @@ export function App(props: AppProps): React.ReactElement {
       bridgeRef.current = null;
       client.shutdown();
     };
-  }, [props.python, props.workspace]);
+  }, [props.python, props.workspace, props.configDirectory]);
 
   useEffect(() => {
     const client = bridgeRef.current;
@@ -145,7 +148,7 @@ export function App(props: AppProps): React.ReactElement {
         session_id: selection.sessionId,
       }, selection.channelId);
     }
-  }, [selection, props.python, props.workspace]);
+  }, [selection, props.python, props.workspace, props.configDirectory]);
 
   function send(message: Outgoing): void {
     bridgeRef.current?.send(message, activeChannel.current);
@@ -440,8 +443,7 @@ export function App(props: AppProps): React.ReactElement {
   };
 
   const sendTurn = (text: string): void => {
-    turnCounter.current += 1;
-    const turnId = `turn-${turnCounter.current}`;
+    const turnId = randomUUID();
     dispatch({ type: 'submit', turnId, text });
     send({ type: 'user_turn', turn_id: turnId, text });
   };

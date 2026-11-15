@@ -2,6 +2,7 @@ import io
 import json
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -11,12 +12,13 @@ from interfaces.bridge import __main__ as bridge_main
 class BridgeMainTest(unittest.TestCase):
     def test_reports_first_use_initialization_failure_over_protocol(self) -> None:
         protocol = io.StringIO()
+        directory = self.enterContext(tempfile.TemporaryDirectory())
         with (
             patch.object(bridge_main, "_claim_stdout", return_value=protocol),
             patch("agent_runtime.config.initialize_config_directory", side_effect=PermissionError("config directory")),
             self.assertRaises(SystemExit) as failure,
         ):
-            bridge_main.main([])
+            bridge_main.main(["--config-directory", directory])
         self.assertEqual(failure.exception.code, 1)
         message = json.loads(protocol.getvalue())
         self.assertEqual(message["type"], "fatal")
@@ -35,6 +37,7 @@ class BridgeMainTest(unittest.TestCase):
 
     def test_reports_bridge_construction_failure_over_protocol(self) -> None:
         protocol = io.StringIO()
+        directory = self.enterContext(tempfile.TemporaryDirectory())
 
         with (
             patch.object(bridge_main, "_claim_stdout", return_value=protocol),
@@ -45,7 +48,7 @@ class BridgeMainTest(unittest.TestCase):
             ),
             self.assertRaises(SystemExit),
         ):
-            bridge_main.main([])
+            bridge_main.main(["--config-directory", directory])
 
         message = json.loads(protocol.getvalue())
         self.assertEqual(message["type"], "fatal")

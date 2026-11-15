@@ -2,6 +2,7 @@ import errno
 import tempfile
 import time
 import unittest
+from concurrent.futures import Future
 from unittest.mock import patch
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -221,11 +222,55 @@ class SchedulerServiceTest(unittest.TestCase):
             self.assertEqual(run.error, "scheduled task runner is unavailable")
             self.assertIsNotNone(run.finished_at)
 
-    def test_multiple_services_observe_new_schedules_but_only_one_polls(self) -> None:
+    def test_restart_marks_queued_and_running_runs_interrupted_without_replaying(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "schedule.jsonl"
-            first = SchedulerService(path, runner=lambda schedule, run: None)
-            second = SchedulerService(path, runner=lambda schedule, run: None)
+            now = datetime.now(timezone.utc)
+
+            def runner(schedule, run, started):
+                if schedule.action.prompt == "started":
+                    started()
+                return Future()
+
+            first = SchedulerService(path, runner=runner)
+            for prompt in ("queued", "started"):
+                first.create_schedule(
+                    trigger=OneShotTrigger(now), prompt=prompt, workspace=directory,
+                    origin_session_id="origin", schedule_session_id=prompt,
+                )
+            self.assertEqual({run.status for run in first.poll_once(now)}, {"queued", "running"})
+            with path.open("ab") as file:
+                file.write(b'{"op":"run","broken":"\xe4\xbd')
+
+            calls = []
+            second = SchedulerService(path, runner=lambda *args: calls.append(args))
+            second.start(interval=0.01)
+            try:
+                deadline = time.monotonic() + 3
+                while time.monotonic() < deadline:
+                    if {run.status for run in second.runs} == {"interrupted"}:
+                        break
+                    time.sleep(0.01)
+            finally:
+                second.close()
+            runs = {run.session_id: run for run in second.runs}
+            self.assertEqual({run.status for run in runs.values()}, {"interrupted"})
+            self.assertTrue(all(run.finished_at for run in runs.values()))
+            self.assertIsNone(runs["queued"].started_at)
+            self.assertIsNotNone(runs["started"].started_at)
+            self.assertEqual(calls, [])
+
+    def test_multiple_services_observe_new_schedules_but_only_one_polls(self) -> None:
+        def runner(schedule, run, started):
+            started()
+            finished = Future()
+            finished.set_result(None)
+            return finished
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "schedule.jsonl"
+            first = SchedulerService(path, runner=runner)
+            second = SchedulerService(path, runner=runner)
             first_thread = first.start(interval=0.01)
             second_thread = second.start(interval=0.01)
             self.addCleanup(first.close)

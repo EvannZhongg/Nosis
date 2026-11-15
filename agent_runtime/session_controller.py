@@ -41,7 +41,9 @@ class SessionRuntimeController:
         store = JsonlSessionStore(sessions_directory)
         if self.session is None:
             self.store = store
-        workspace = Workspace(workspace)
+        resumed = isinstance(session_id, str) and bool(session_id)
+        bound_workspace = store.workspace_for(session_id) if resumed else None
+        workspace = Workspace(Path(bound_workspace) if bound_workspace else workspace)
         default_provider, models = load_model_options(config_path)
         stored_provider = (
             store.provider_for(str(session_id))
@@ -56,11 +58,6 @@ class SessionRuntimeController:
         if main_provider_name not in models:
             raise ValueError(f"provider '{main_provider_name}' is not configured")
 
-        resumed = isinstance(session_id, str) and bool(session_id)
-        if resumed:
-            bound_workspace = store.workspace_for(str(session_id))
-            if bound_workspace:
-                workspace = Workspace(Path(bound_workspace))
         if self.session is None:
             self.workspace = workspace
         current_session = self.session

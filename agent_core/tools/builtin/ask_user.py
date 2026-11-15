@@ -6,7 +6,7 @@ class AskUserTool(Tool):
     name = "ask_user"
 
     def available(self, context: ToolExecutionContext) -> bool:
-        return context.ask_user is not None
+        return context.interactive and context.ask_user is not None
 
     def definition(self, context: ToolExecutionContext) -> ToolDefinition:
         return ToolDefinition(
@@ -126,7 +126,7 @@ class AskUserTool(Tool):
         allow_free_text = arguments.get("allow_free_text", False)
         if not isinstance(allow_free_text, bool):
             raise ValueError("'allow_free_text' must be a boolean")
-        if context.ask_user is None:
+        if not context.interactive or context.ask_user is None:
             raise RuntimeError("user interaction is unavailable")
         question = question.strip()
         result = context.ask_user(question, options, allow_free_text)

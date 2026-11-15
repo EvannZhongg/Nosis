@@ -37,7 +37,7 @@ vi.mock('@nosis/client', () => ({
       if (autoReady && message.type === 'open_session') {
         setTimeout(() => {
             emit({
-              type: 'session_ready', protocol_version: 3,
+              type: 'session_ready', protocol_version: 4,
               session_id: message.session_id ?? (channelId === 'session-1' ? 'sess-1234' : `sess-${channelId}`),
               workspace: message.workspace,
               provider: 'test',
@@ -179,7 +179,7 @@ describe('App', () => {
     stdin.write('\r');
     await waitForReady(lastFrame);
     expect(sent.filter((m) => m.type === 'open_session')).toHaveLength(3);
-    expect(sent.filter((m) => m.type === 'load_session')).toHaveLength(1);
+    expect(sent.some((m) => m.type === 'load_session')).toBe(false);
     expect(turns()).toHaveLength(0);
     unmount();
   });
@@ -301,7 +301,7 @@ describe('App', () => {
     expect(lastFrame()).toContain('wait for sync');
 
     emit({
-      type: 'session_ready', protocol_version: 3,
+      type: 'session_ready', protocol_version: 4,
       session_id: 'sess-1234',
       workspace: '/w',
       provider: 'test',
@@ -547,11 +547,10 @@ describe('App', () => {
     await wait(30);
     expect(turns()).toHaveLength(0);
     emit({
-      type: 'session_ready', protocol_version: 3, session_id: 'fresh', workspace: '/next',
+      type: 'session_ready', protocol_version: 4, session_id: 'fresh', workspace: '/next',
       provider: 'test', model: 'test/model', resumed: false, message_count: 0,
       permission_preset: 'ask_for_approval',
     });
-    await waitFor(() => expect(sent.filter((m) => m.type === 'load_session')).toHaveLength(2));
     await waitFor(() => expect(lastFrame()).not.toContain('old workspace history'));
     stdin.write('\r');
     await wait(30);
@@ -717,7 +716,7 @@ describe('App', () => {
       emit({ type: 'turn_completed', turn_id: turns().at(-1).turn_id, usage: null });
       await waitForReady(lastFrame);
     }
-    expect(sent.filter((m) => m.type === 'load_session')).toHaveLength(1);
+    expect(sent.some((m) => m.type === 'load_session')).toBe(false);
     expect(bridgeCount).toBe(1);
     expect(shutdownCount).toBe(0);
     unmount();
@@ -881,7 +880,7 @@ describe('App', () => {
     await waitFor(() => expect(lastFrame()).toContain('esc to cancel'));
 
     stdin.write('\u001b');
-    await waitFor(() => expect(sent).toContainEqual({ type: '__cancel', turn_id: 'turn-1' }));
+    await waitFor(() => expect(sent).toContainEqual({ type: '__cancel', turn_id: turns()[0].turn_id }));
   });
 
   it('renders streamed reasoning before the answer', async () => {
@@ -1067,7 +1066,7 @@ describe('App', () => {
     ).toBe(2);
 
     emit({
-      type: 'session_ready', protocol_version: 3,
+      type: 'session_ready', protocol_version: 4,
       session_id: 'sess-1234',
       workspace: '/w',
       provider: 'test',

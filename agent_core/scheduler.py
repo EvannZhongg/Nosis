@@ -2,13 +2,15 @@
 
 Schedules are intentionally independent from JobManager/turn execution.  The
 service stores only JSON-serialisable definitions and run metadata; execution
-is supplied by a callback that builds the normal Agent runtime.
+is submitted through a callback supplied by the runtime.
 """
 from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
+from concurrent.futures import CancelledError, Future
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
@@ -17,6 +19,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .file_lock import acquire_file_lock
+from .jsonl import prepare_append
 
 
 logger = logging.getLogger(__name__)
@@ -107,8 +110,11 @@ class ScheduledRun:
     scheduled_for: datetime
     started_at: datetime | None = None
     finished_at: datetime | None = None
-    status: str = "scheduled"
+    status: str = "queued"
     error: str | None = None
+
+
+ScheduleRunner = Callable[[Schedule, ScheduledRun, Callable[[], None]], Future[None]]
 
 
 def _dt(value: datetime | None) -> str | None:
@@ -334,15 +340,17 @@ def _next_after_missed_interval(
 class SchedulerService:
     """Persistent schedules and a small in-process due checker."""
 
-    def __init__(self, path: Path | None = None, runner: Callable[[Schedule, ScheduledRun], None] | None = None) -> None:
+    def __init__(self, path: Path | None = None, runner: ScheduleRunner | None = None) -> None:
         self.path = (path or (Path.home() / ".nosis" / "schedule.jsonl")).expanduser().resolve()
         self.runner = runner
         self._schedules: dict[str, Schedule] = {}
         self._runs: dict[str, ScheduledRun] = {}
-        self._running: set[str] = set()
+        self._pending: set[str] = set()
         self._lock = threading.RLock()
+        self._write_lock = self.path.with_suffix(self.path.suffix + ".write.lock")
         self._stop = threading.Event()
         self._leader_lock: BinaryIO | None = None
+        self._thread: threading.Thread | None = None
         self._reload()
 
     @property
@@ -359,9 +367,11 @@ class SchedulerService:
 
     def _append(self, record: dict[str, object]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+        with self.path.open("a+b") as handle:
+            prepare_append(handle)
+            handle.write(json.dumps(record, ensure_ascii=False).encode("utf-8") + b"\n")
             handle.flush()
+            os.fsync(handle.fileno())
 
     def _reload(self) -> None:
         schedules: dict[str, Schedule] = {}
@@ -370,24 +380,24 @@ class SchedulerService:
             self._schedules = schedules
             self._runs = runs
             return
-        text = self.path.read_text(encoding="utf-8")
-        lines = text.splitlines()
+        text = self.path.read_bytes()
+        lines = text.split(b"\n")
         for index, line in enumerate(lines):
             if not line.strip():
                 continue
             try:
                 record = json.loads(line)
-            except json.JSONDecodeError:
-                if index == len(lines) - 1 and not text.endswith("\n"):
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                if index == len(lines) - 1:
                     break
                 raise
             op = record.get("op")
-            if op in {"create", "update"}:
+            if op in {"create", "update", "dispatch"}:
                 schedule = _schedule_from_dict(record["schedule"])
                 schedules[schedule.schedule_id] = schedule
             elif op == "delete":
                 schedules.pop(str(record["schedule_id"]), None)
-            elif op == "run":
+            if op in {"run", "dispatch"}:
                 run = _run_from_dict(record["run"])
                 runs[run.run_id] = run
         self._schedules = schedules
@@ -412,7 +422,7 @@ class SchedulerService:
             end_at=end_at,
             next_run_at=next_run_at,
         )
-        with self._lock:
+        with self._lock, acquire_file_lock(self._write_lock, blocking=True):
             self._reload()
             self._schedules[schedule.schedule_id] = schedule
             self._append({"op": "create", "schedule": _schedule_to_dict(schedule)})
@@ -428,7 +438,7 @@ class SchedulerService:
         end_at: datetime | None | _Unset = _UNSET,
     ) -> Schedule:
         schedule_id = parse_schedule_id_input(schedule_id)
-        with self._lock:
+        with self._lock, acquire_file_lock(self._write_lock, blocking=True):
             self._reload()
             schedule = self._schedules.get(schedule_id)
             if schedule is None:
@@ -452,12 +462,13 @@ class SchedulerService:
                     _require_aware(end_at, "schedule end_at")
                 updated_end_at = end_at
             now = datetime.now(timezone.utc)
-            if isinstance(updated_trigger, IntervalTrigger):
-                next_run_at = _next_occurrence(updated_trigger, updated_end_at, now)
-            else:
-                next_run_at = _next_occurrence(
-                    updated_trigger, updated_end_at, now - timedelta(seconds=1)
-                )
+            next_run_at = schedule.next_run_at
+            if (
+                updated_trigger != schedule.trigger or updated_end_at != schedule.end_at
+                or (updated_enabled and not schedule.enabled)
+            ):
+                after = now if isinstance(updated_trigger, IntervalTrigger) else now - timedelta(seconds=1)
+                next_run_at = _next_occurrence(updated_trigger, updated_end_at, after)
             updated = replace(
                 schedule,
                 action=action,
@@ -472,7 +483,7 @@ class SchedulerService:
 
     def delete_schedule(self, schedule_id: str) -> None:
         schedule_id = parse_schedule_id_input(schedule_id)
-        with self._lock:
+        with self._lock, acquire_file_lock(self._write_lock, blocking=True):
             self._reload()
             schedule = self._schedules.get(schedule_id)
             if schedule is None:
@@ -488,7 +499,8 @@ class SchedulerService:
         now = now or datetime.now(timezone.utc)
         _require_aware(now, "scheduler poll time")
         due: list[tuple[Schedule, datetime, str | None]] = []
-        with self._lock:
+        created: list[tuple[Schedule, ScheduledRun]] = []
+        with self._lock, acquire_file_lock(self._write_lock, blocking=True):
             self._reload()
             for schedule in self._schedules.values():
                 if schedule.enabled and schedule.next_run_at and schedule.next_run_at <= now:
@@ -516,61 +528,93 @@ class SchedulerService:
                     schedule.next_run_at = self.next_occurrence(schedule, scheduled_for)
                 if isinstance(schedule.trigger, OneShotTrigger):
                     schedule.enabled = False
-                self._append({"op": "update", "schedule": _schedule_to_dict(schedule)})
-        created: list[ScheduledRun] = []
-        for schedule, scheduled_for, missed_reason in due:
-            run = ScheduledRun(str(uuid4()), schedule.schedule_id, schedule.schedule_session_id, str(uuid4()), scheduled_for)
-            with self._lock:
-                if missed_reason:
-                    run.status, run.error = "skipped", missed_reason
-                elif schedule.schedule_id in self._running:
-                    run.status, run.error = "skipped", "previous scheduled run still running"
+                run = ScheduledRun(str(uuid4()), schedule.schedule_id, schedule.schedule_session_id, str(uuid4()), scheduled_for)
+                if missed:
+                    run.status, run.error = "skipped", missed
+                    run.finished_at = now
+                elif schedule.schedule_id in self._pending:
+                    run.status, run.error = "skipped", "previous scheduled run is queued or running"
+                    run.finished_at = now
                 elif self.runner is None:
                     run.status = "failed"
                     run.error = "scheduled task runner is unavailable"
-                    run.started_at = now
                     run.finished_at = now
                 else:
-                    self._running.add(schedule.schedule_id)
-                    run.status = "running"
-                    run.started_at = now
+                    self._pending.add(schedule.schedule_id)
                 self._runs[run.run_id] = run
-                self._append({"op": "run", "run": _run_to_dict(run)})
-            created.append(run)
-            if run.status == "running" and self.runner:
-                threading.Thread(target=self._execute, args=(schedule, run), daemon=True).start()
-        return created
+                self._append({
+                    "op": "dispatch", "schedule": _schedule_to_dict(schedule),
+                    "run": _run_to_dict(run),
+                })
+                created.append((schedule, run))
+        for schedule, run in created:
+            if run.status == "queued":
+                self._submit(schedule, run)
+        return [run for _, run in created]
 
-    def _execute(self, schedule: Schedule, run: ScheduledRun) -> None:
+    def _save_run(self, run: ScheduledRun) -> None:
+        self._runs[run.run_id] = run
+        self._append({"op": "run", "run": _run_to_dict(run)})
+
+    def _submit(self, schedule: Schedule, run: ScheduledRun) -> None:
+        def started() -> None:
+            with self._lock, acquire_file_lock(self._write_lock, blocking=True):
+                run.status = "running"
+                run.started_at = datetime.now(timezone.utc)
+                self._save_run(run)
+
+        def finished(future: Future[None]) -> None:
+            with self._lock, acquire_file_lock(self._write_lock, blocking=True):
+                try:
+                    future.result()
+                    run.status = "completed"
+                except CancelledError:
+                    run.status = "cancelled"
+                except Exception as error:
+                    run.status, run.error = "failed", str(error)
+                run.finished_at = datetime.now(timezone.utc)
+                self._pending.discard(schedule.schedule_id)
+                self._save_run(run)
+
+        assert self.runner is not None
         try:
-            self.runner(schedule, run)  # type: ignore[misc]
-            run.status = "completed"
+            future = self.runner(schedule, run, started)
         except Exception as error:
-            run.status, run.error = "failed", str(error)
-        finally:
-            run.finished_at = datetime.now(timezone.utc)
-            with self._lock:
-                self._running.discard(schedule.schedule_id)
-                self._runs[run.run_id] = run
-                self._append({"op": "run", "run": _run_to_dict(run)})
+            future = Future()
+            future.set_exception(error)
+        future.add_done_callback(finished)
+
+    def _interrupt_abandoned_runs(self) -> None:
+        with self._lock, acquire_file_lock(self._write_lock, blocking=True):
+            self._reload()
+            for run in self._runs.values():
+                if run.status in {"queued", "running"}:
+                    run.status = "interrupted"
+                    run.error = "scheduler stopped before the run finished"
+                    run.finished_at = datetime.now(timezone.utc)
+                    self._save_run(run)
 
     def start(self, interval: float = 1.0) -> threading.Thread:
         def loop() -> None:
             try:
                 while not self._stop.is_set():
-                    if self._leader_lock is not None or self._acquire_leader_lock():
+                    if self._leader_lock is None and self._acquire_leader_lock():
+                        self._interrupt_abandoned_runs()
+                    if self._leader_lock is not None and not self._stop.is_set():
                         self.poll_once()
                     self._stop.wait(interval)
             except OSError:
                 logger.exception("Scheduler stopped due to a filesystem error for %s", self.path)
             finally:
                 self._release_leader_lock()
-        thread = threading.Thread(target=loop, name="nosis-scheduler", daemon=True)
-        thread.start()
-        return thread
+        self._thread = threading.Thread(target=loop, name="nosis-scheduler", daemon=True)
+        self._thread.start()
+        return self._thread
 
     def close(self) -> None:
         self._stop.set()
+        if self._thread is not None:
+            self._thread.join()
 
     def _acquire_leader_lock(self) -> bool:
         lock_path = self.path.with_suffix(self.path.suffix + ".lock")
@@ -592,7 +636,7 @@ def _run_to_dict(run: ScheduledRun) -> dict[str, object]:
 
 
 def _run_from_dict(value: dict[str, object]) -> ScheduledRun:
-    return ScheduledRun(str(value["run_id"]), str(value["schedule_id"]), str(value["session_id"]), str(value["turn_id"]), _parse_dt(value.get("scheduled_for")) or datetime.now(timezone.utc), _parse_dt(value.get("started_at")), _parse_dt(value.get("finished_at")), str(value.get("status", "scheduled")), value.get("error") if isinstance(value.get("error"), str) else None)
+    return ScheduledRun(str(value["run_id"]), str(value["schedule_id"]), str(value["session_id"]), str(value["turn_id"]), _parse_dt(value.get("scheduled_for")) or datetime.now(timezone.utc), _parse_dt(value.get("started_at")), _parse_dt(value.get("finished_at")), str(value["status"]), value.get("error") if isinstance(value.get("error"), str) else None)
 
 
 def _cron_matches(expression: str, value: datetime) -> bool:

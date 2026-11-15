@@ -4,11 +4,25 @@ from fastapi import APIRouter, Body, HTTPException
 
 from agent_core import (
     JsonlSessionStore,
+    ScheduledRun,
     SchedulerService,
     parse_schedule_update_input,
     trigger_to_dict,
 )
 from agent_runtime.settings import SettingsStore
+
+
+def _run_summary(run: ScheduledRun | None) -> dict[str, object] | None:
+    if run is None:
+        return None
+    return {
+        "run_id": run.run_id,
+        "status": run.status,
+        "scheduled_for": run.scheduled_for.isoformat(),
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+        "error": run.error,
+    }
 
 
 def create_schedules_router(
@@ -21,10 +35,13 @@ def create_schedules_router(
     def list_schedules() -> list[dict[str, object]]:
         current = SchedulerService(settings.directory / "schedule.jsonl")
         latest_runs = {}
+        active_runs = {}
         for run in current.runs:
             previous = latest_runs.get(run.schedule_id)
             if previous is None or run.scheduled_for > previous.scheduled_for:
                 latest_runs[run.schedule_id] = run
+            if run.status in {"queued", "running"}:
+                active_runs[run.schedule_id] = run
         return [
             {
                 "schedule_id": item.schedule_id,
@@ -40,28 +57,8 @@ def create_schedules_router(
                 "next_run_at": (
                     item.next_run_at.isoformat() if item.next_run_at else None
                 ),
-                "latest_run": (
-                    {
-                        "run_id": latest_runs[item.schedule_id].run_id,
-                        "status": latest_runs[item.schedule_id].status,
-                        "scheduled_for": latest_runs[
-                            item.schedule_id
-                        ].scheduled_for.isoformat(),
-                        "started_at": (
-                            latest_runs[item.schedule_id].started_at.isoformat()
-                            if latest_runs[item.schedule_id].started_at
-                            else None
-                        ),
-                        "finished_at": (
-                            latest_runs[item.schedule_id].finished_at.isoformat()
-                            if latest_runs[item.schedule_id].finished_at
-                            else None
-                        ),
-                        "error": latest_runs[item.schedule_id].error,
-                    }
-                    if item.schedule_id in latest_runs
-                    else None
-                ),
+                "latest_run": _run_summary(latest_runs.get(item.schedule_id)),
+                "active_run": _run_summary(active_runs.get(item.schedule_id)),
             }
             for item in current.schedules
         ]

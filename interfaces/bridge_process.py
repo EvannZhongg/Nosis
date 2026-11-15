@@ -7,6 +7,7 @@ import signal
 import subprocess
 import sys
 from pathlib import Path
+from typing import Callable
 
 from agent_core import Workspace
 from interfaces.bridge.event_stream import EventStream
@@ -23,6 +24,7 @@ class BridgeChannel:
         self._messages: asyncio.Queue[dict[str, object] | None] = asyncio.Queue()
         self._closed = asyncio.Event()
         self._sequence = 0
+        self._idle_close: asyncio.Future[bool] | None = None
 
     def send(self, message: dict[str, object]) -> None:
         self.owner.send({
@@ -47,16 +49,34 @@ class BridgeChannel:
                 "error": {"type": type(error).__name__, "message": str(error), "details": {}},
             }))
         self._closed.set()
+        self._finish_idle_close(True)
         self._messages.put_nowait(None)
 
-    async def close(self) -> None:
-        if not self._closed.is_set():
-            self.owner.send({"type": "close_channel", "channel_id": self.channel_id})
-            await self._closed.wait()
+    def _finish_idle_close(self, released: bool) -> None:
+        if self._idle_close is not None:
+            self._idle_close.set_result(released)
+            self._idle_close = None
+
+    def busy(self) -> None:
+        self._finish_idle_close(False)
+
+    async def close(self, *, idle_only: bool = False) -> bool:
+        if self._closed.is_set():
+            return True
+        message = {"type": "close_channel", "channel_id": self.channel_id}
+        if idle_only:
+            if self._idle_close is None:
+                self.owner.send({**message, "idle_only": True})
+                self._idle_close = asyncio.get_running_loop().create_future()
+            return await asyncio.shield(self._idle_close)
+        self.owner.send(message)
+        await self._closed.wait()
+        return True
 
 
 class BridgeProcess:
-    def __init__(self, process: asyncio.subprocess.Process) -> None:
+    def __init__(self, process: asyncio.subprocess.Process,
+                 on_session: Callable[[BridgeChannel], None] | None = None) -> None:
         self._process = process
         self._read_buffer = bytearray()
         self._channels: dict[str, BridgeChannel] = {}
@@ -65,19 +85,22 @@ class BridgeProcess:
         self._reader: asyncio.Task[None] | None = None
         self._closing = False
         self._close_task: asyncio.Task[None] | None = None
+        self._on_session = on_session
 
     @classmethod
-    async def spawn(cls, workspace: Workspace, config_directory: Path) -> "BridgeProcess":
+    async def spawn(cls, workspace: Workspace, config_directory: Path, *,
+                    on_session: Callable[[BridgeChannel], None] | None = None) -> "BridgeProcess":
         process = await asyncio.create_subprocess_exec(
             sys.executable, "-m", "interfaces.bridge",
             "--config-directory", str(config_directory),
+            *(("--managed",) if on_session is not None else ()),
             cwd=workspace.path,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
             start_new_session=os.name != "nt",
         )
-        bridge = cls(process)
+        bridge = cls(process, on_session)
         bridge._reader = asyncio.create_task(bridge._dispatch())
         try:
             await bridge._ready.wait()
@@ -136,6 +159,10 @@ class BridgeProcess:
                     self._ready.set()
                 elif kind == "fatal":
                     raise RuntimeError(str(message["error"]["message"]))
+                elif kind == "session_channel" and self._on_session is not None:
+                    channel_id = message["channel_id"]
+                    if channel_id not in self._channels and not self._closing:
+                        self._on_session(self.open_channel(channel_id))
                 elif kind == "channel_event":
                     channel = self._channels.get(message["channel_id"])
                     if channel is not None:
@@ -144,6 +171,10 @@ class BridgeProcess:
                     channel = self._channels.pop(message["channel_id"], None)
                     if channel is not None:
                         channel.finish()
+                elif kind == "channel_busy":
+                    channel = self._channels.get(message["channel_id"])
+                    if channel is not None:
+                        channel.busy()
                 else:
                     raise ValueError(f"Unknown Bridge event: {kind}")
             if not self._closing:

@@ -11,6 +11,7 @@ const USAGE = `Usage: nosis [options]
 
 Options:
   --workspace <path>      Workspace directory (default: current directory)
+  --config-directory <path>  Use this Nosis configuration directory
   --temporary             Use a persistent Nosis-managed scratch workspace
   -h, --help              Show this message
 `;
@@ -78,6 +79,7 @@ render(
   <App
     python={python}
     workspace={options.workspace}
+    configDirectory={process.env.NOSIS_CONFIG_DIRECTORY}
   />,
   {
     // Ink would otherwise unmount on Ctrl+C; we use it to cancel a turn.

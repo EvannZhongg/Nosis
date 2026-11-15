@@ -292,7 +292,7 @@ class Agent:
         while True:
             continuation.raise_if_cancelled()
             continuation.apply_jobs()
-            request = self._context.build_request(self._tools.definitions)
+            request = self._context.build_request(self._tools.definitions_for(turn_control))
             token_estimate = self._context.measure_input_tokens(request)
             input_tokens = token_estimate.tokens
             if on_event is not None:

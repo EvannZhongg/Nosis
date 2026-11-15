@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 
 from ..session_paths import default_sessions_directory
+from ..turn_control import TurnControl
 from ..workspace import Workspace
 from .base import JSONValue
 from .config import ToolSettings
@@ -98,6 +99,10 @@ class ToolExecutionContext:
     screenshot: Callable[[dict[str, JSONValue]], DesktopResult] | None = None
     computer: Callable[[dict[str, JSONValue]], DesktopResult] | None = None
     computer_windows: bool = False
+
+    @property
+    def interactive(self) -> bool:
+        return not isinstance(self.cancellation, TurnControl) or self.cancellation.interactive
 
     def __post_init__(self) -> None:
         object.__setattr__(

@@ -11,13 +11,12 @@ from unittest.mock import patch
 from agent_core import (
     AgentTurnAction, HostCommandExecutor, JsonlSessionStore,
     LLMResponse, OneShotTrigger, PermissionPreset, Schedule, ScheduledRun,
-    SchedulerService, ToolCall,
+    ToolCall,
 )
 from agent_runtime.plane_manager import ExecutionPlaneManager
 from agent_runtime.plugins import PluginManager
-from agent_runtime.scheduled_runner import ScheduledTurnRunner
 from tests.agent_fixtures import MockProvider
-from tests.bridge_fixtures import BridgeTestCase, emitted, open_session_message
+from tests.bridge_fixtures import BridgeTestCase, emitted, open_session_message, run_scheduled
 from tests.plugin_fixtures import validator
 
 
@@ -136,7 +135,6 @@ class HookInteropTest(BridgeTestCase):
 
     def test_scheduled_turn_uses_same_hooks_and_records_input_source(self):
         bridge, _ = self.open()
-        bridge.close()
         self.main = MockProvider(["scheduled done"])
         now = datetime.now(timezone.utc)
         schedule = Schedule("schedule", OneShotTrigger(now), AgentTurnAction("scheduled work"),
@@ -145,9 +143,8 @@ class HookInteropTest(BridgeTestCase):
         store.bind_workspace(schedule.schedule_session_id, self.root)
         store.set_permission_preset(schedule.schedule_session_id, PermissionPreset.WORKSPACE_ACCESS, self.root)
         run = ScheduledRun("run", "schedule", "scheduled-session", "scheduled-turn", now)
-        scheduler = SchedulerService(self.root / "schedule.jsonl")
-        self.addCleanup(scheduler.close)
-        ScheduledTurnRunner(self.root, scheduler)(schedule, run)
+        bridge.host.open_session(self.root, schedule.schedule_session_id)
+        run_scheduled(bridge.host, schedule, run)
         session = store.load("scheduled-session")
         self.assertEqual(session.turns["scheduled-turn"].status, "completed")
         self.assertTrue(any(event.payload.get("input", {}).get("source") == "scheduled" for event in session.journal))

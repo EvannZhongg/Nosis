@@ -160,7 +160,7 @@ class ExternalBridgeClientTest(unittest.TestCase):
     def open(self, peer, session_id=None):
         peer.send({"type": "open_session", "workspace": str(self.external), "session_id": session_id})
         ready = peer.until("session_ready")
-        self.assertEqual(ready["protocol_version"], 3)
+        self.assertEqual(ready["protocol_version"], 4)
         self.assertEqual(peer.until("runtime_state")["phase"], "inactive")
         return ready
 
@@ -187,7 +187,7 @@ print(json.dumps({'file': str(Path(local_tokens.__file__).resolve()), 'counts': 
         self.assertTrue(Path(report["file"]).is_relative_to(self.site))
         self.assertTrue(all(value > 0 for value in report["counts"]))
 
-    def test_installed_cli_first_use_rebind_resume_and_eof(self):
+    def test_installed_cli_first_use_snapshot_resume_and_eof(self):
         # Verify imports resolve to the wheel, rather than an editable checkout.
         imported = subprocess.run(
             [sys.executable, "-c", "import interfaces; print(interfaces.__file__)"],
@@ -209,9 +209,11 @@ print(json.dumps({'file': str(Path(local_tokens.__file__).resolve()), 'counts': 
         self.assertIsInstance(peer.until("sessions_listed")["sessions"], list)
         peer.send({"type": "load_session"})
         self.assertEqual(peer.until("session_items")["items"], [])
-        rebound = self.open(peer, ready["session_id"])
-        self.assertTrue(rebound["resumed"])
-        self.assertEqual(rebound["permission_preset"], "workspace_access")
+        peer.send({"type": "session_snapshot"})
+        snapshot = peer.until("session_ready")
+        peer.until("runtime_state")
+        self.assertTrue(snapshot["resumed"])
+        self.assertEqual(snapshot["permission_preset"], "workspace_access")
         self.assertEqual([m["event_sequence"] for m in peer.messages], list(range(1, len(peer.messages) + 1)))
         peer.close()
         self.assertEqual(peer.process.returncode, 0)

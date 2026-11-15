@@ -30,7 +30,7 @@ from agent_core import (
 from agent_core.usage import cache_usage_to_dict, usage_to_dict
 
 
-PROTOCOL_VERSION = 3
+PROTOCOL_VERSION = 4
 
 
 class ProtocolError(ValueError):
@@ -79,6 +79,8 @@ def decode_bridge_command(line: str) -> dict[str, object]:
             message["command"] = decode(encode(message.get("command")))
         except ValueError as error:
             raise ProtocolError(str(error)) from error
+    elif "idle_only" in message and not isinstance(message["idle_only"], bool):
+        raise ProtocolError("'idle_only' must be a boolean")
     return message
 
 
@@ -231,6 +233,10 @@ def user_turn_received_message(turn_id: str) -> dict[str, object]:
         "type": "user_turn_received",
         "turn_id": turn_id,
     }
+
+
+def scheduled_turn_started_message(turn_id: str, text: str) -> dict[str, object]:
+    return {"type": "scheduled_turn_started", "turn_id": turn_id, "text": text}
 
 
 def sessions_listed_message(

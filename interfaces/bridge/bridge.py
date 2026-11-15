@@ -15,6 +15,8 @@ from agent_runtime.callbacks import RuntimeCallbacks
 from agent_runtime.attachments import parse_attachments
 from agent_runtime.config import load_model_options
 from agent_runtime.services import RuntimeServices
+from agent_runtime.session_inbox import ScheduledTurn
+from agent_runtime.turn_runner import TurnResult
 from .protocol import (
     event_to_message,
     context_window_to_dict,
@@ -29,6 +31,7 @@ from .protocol import (
     session_title_updated_message,
     settings_snapshot_message,
     settings_update_failed_message,
+    scheduled_turn_started_message,
     user_turn_received_message,
 )
 from .event_stream import EventStream
@@ -36,10 +39,11 @@ from .event_stream import EventStream
 
 class Bridge:
     def __init__(self, *, services: RuntimeServices,
-                 send: Callable[[dict[str, object]], None]) -> None:
+                 send: Callable[[dict[str, object]], None] = lambda event: None,
+                 session_id: str | None = None) -> None:
         self._send = send
+        self._bound_session_id = session_id
         self._event_lock = RLock()
-        self._messages: Queue[dict[str, object] | BaseException | None] = Queue()
         self._router_lock = Lock()
         self._waiters: dict[
             str, tuple[str | None, Queue[dict[str, object] | BaseException]]
@@ -67,10 +71,19 @@ class Bridge:
                     **session_title_updated_message(session_id, title, source),
                 ),
                 on_mcp_status=self._emit_mcp_status,
+                on_turn_start=self._on_turn_start,
+                on_turn_finish=self._on_turn_finish,
                 request_permission=self.request_permission,
                 ask_user=self.request_user_choice,
             ),
         )
+        self._messages = self.host.inbox
+
+    def attach(self, send: Callable[[dict[str, object]], None]) -> None:
+        with self._event_lock:
+            self._send = send
+            if self._session_opened:
+                self._emit_session_snapshot(resumed=True)
 
     def emit(self, type: str, **fields: object) -> None:
         with self._event_lock:
@@ -113,11 +126,12 @@ class Bridge:
             self._send(published)
 
 
-    def read_message(self) -> dict[str, object] | None:
+    def read_message(self) -> dict[str, object] | ScheduledTurn | None:
         """Return the next command routed by the process transport."""
         message = self._messages.get()
         if isinstance(message, BaseException):
             raise message
+        assert message is None or isinstance(message, (dict, ScheduledTurn))
         return message
 
 
@@ -479,6 +493,22 @@ class Bridge:
 
             if message is None:
                 return
+            if isinstance(message, ScheduledTurn):
+                if self.host.turns.stopped:
+                    message.completion.cancel()
+                    continue
+                if not opened:
+                    try:
+                        self.open_session({
+                            "workspace": str(message.workspace), "session_id": message.session_id,
+                        })
+                    except (SessionInUseError, ValueError, OSError) as error:
+                        message.completion.set_exception(error)
+                        self.emit(**session_open_failed_message(message.session_id, error))
+                        continue
+                    opened = True
+                self.host.run_scheduled(message)
+                continue
             if message["type"] == "list_workspaces" and self.host.sessions.store is not None:
                 self._emit_workspaces()
                 continue
@@ -531,18 +561,25 @@ class Bridge:
 
 
     def open_session(self, message: dict[str, object]) -> None:
+        session_id = message.get("session_id")
+        if self._bound_session_id is not None and self._session_opened:
+            if session_id != self._bound_session_id:
+                raise ValueError("open a new channel to select another Session")
+            self._emit_session_snapshot(resumed=True)
+            return
         resumed = self.host.open_session(
             Path(str(message["workspace"])),
-            session_id=message.get("session_id"),
+            session_id=self._bound_session_id or session_id,
             provider=message.get("provider"),
         )
-        self._phase = "inactive"
-        self._approval = self._question = None
-        self._runtime_warnings = ()
-        self._jobs.clear()
-        self._checkpoint_turn = None
-        self._session_opened = True
-        self._emit_session_snapshot(resumed=resumed)
+        with self._event_lock:
+            self._phase = "inactive"
+            self._approval = self._question = None
+            self._runtime_warnings = ()
+            self._jobs.clear()
+            self._checkpoint_turn = None
+            self._session_opened = True
+            self._emit_session_snapshot(resumed=resumed and bool(session_id))
 
     def _emit_session_snapshot(self, *, resumed: bool) -> None:
         state = self.host.sessions
@@ -592,12 +629,17 @@ class Bridge:
             self.emit("runtime_refreshed", provider=provider, model=model)
 
     def run_turn(self, message: dict[str, object]) -> None:
-        turn_id = str(message["turn_id"])
-        self._checkpoint_turn = turn_id
-        result = self.host.run_turn(
-            turn_id, str(message["text"]),
+        self.host.run_turn(
+            str(message["turn_id"]), str(message["text"]),
             attachments=lambda: parse_attachments(message.get("attachments"), self.host.sessions.workspace),
         )
+
+    def _on_turn_start(self, turn_id: str, text: str, source: str) -> None:
+        self._checkpoint_turn = turn_id
+        if source == "scheduled":
+            self.emit(**scheduled_turn_started_message(turn_id, text))
+
+    def _on_turn_finish(self, turn_id: str, result: TurnResult) -> None:
         self._approval = self._question = None
         self._jobs.clear()
         self._emit_runtime_state(

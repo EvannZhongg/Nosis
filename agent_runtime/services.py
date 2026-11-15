@@ -1,11 +1,16 @@
-"""Process resources shared by otherwise independent session runtimes."""
+"""Process resources shared by Session Runtimes."""
 
 from pathlib import Path
 import json
+from contextlib import contextmanager
+from threading import RLock
+from typing import Callable
 
 from agent_core import SchedulerService
 
 from .settings import EnvironmentReloader, SettingsStore
+from .session_inbox import ScheduledTurn
+from .session_controller import SessionRuntimeController
 
 
 class RuntimeServices:
@@ -18,17 +23,34 @@ class RuntimeServices:
         self.scheduler = scheduler or SchedulerService(
             self.config_directory / "schedule.jsonl",
         )
-        if self._owns_scheduler:
-            from .scheduled_runner import ScheduledTurnRunner
+        self._scheduler_started = False
+        self.session_lock = RLock()
+        self.sessions: dict[str, SessionRuntimeController] = {}
 
-            self.scheduler.runner = ScheduledTurnRunner(
-                self.config_directory, self.scheduler, services=self,
+    @contextmanager
+    def session_permissions(self, session_id: str, caller: SessionRuntimeController):
+        with self.session_lock:
+            owner = self.sessions.get(session_id, caller)
+            with owner.session_permissions(session_id) as controller:
+                yield controller
+
+    def start_scheduling(self, submit: Callable[[ScheduledTurn], None]) -> None:
+        def dispatch(schedule, run, started):
+            turn = ScheduledTurn(
+                run.session_id, Path(schedule.workspace), run.turn_id,
+                schedule.action.prompt, started,
             )
-            self.scheduler.start()
+            submit(turn)
+            return turn.completion
+
+        self.scheduler.runner = dispatch
+        self.scheduler.start()
+        self._scheduler_started = True
 
     def close(self) -> None:
-        if self._owns_scheduler:
+        if self._owns_scheduler or self._scheduler_started:
             self.scheduler.close()
+            self._scheduler_started = False
 
     def warmup(self) -> None:
         """Load the default provider's code and vocabulary before accepting sessions."""

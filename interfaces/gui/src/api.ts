@@ -38,6 +38,14 @@ export type ScheduleTrigger =
   | { type: "once"; at: string }
   | { type: "interval"; seconds: number; start_at?: string | null }
   | { type: "cron"; expression: string; timezone: string };
+type ScheduleRunSummary = {
+  run_id: string;
+  status: string;
+  scheduled_for: string;
+  started_at: string | null;
+  finished_at: string | null;
+  error: string | null;
+};
 export type ScheduleSummary = {
   schedule_id: string;
   prompt: string;
@@ -50,14 +58,8 @@ export type ScheduleSummary = {
   enabled: boolean;
   end_at?: string | null;
   next_run_at?: string | null;
-  latest_run?: {
-    run_id: string;
-    status: string;
-    scheduled_for: string;
-    started_at?: string | null;
-    finished_at?: string | null;
-    error?: string | null;
-  } | null;
+  latest_run: ScheduleRunSummary | null;
+  active_run: ScheduleRunSummary | null;
 };
 export type ModelOption = { id: string; model: string };
 export type ModelOptions = { default: string; models: ModelOption[] };

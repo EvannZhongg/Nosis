@@ -1,4 +1,4 @@
-# Public Bridge protocol, major 3
+# Public Bridge protocol, major 4
 
 This is the local client API for third-party frontends. Install `nosis-agent`,
 start **`nosis-bridge`** as a child process, and exchange UTF-8 newline-delimited
@@ -15,21 +15,21 @@ There is no fixed small line limit: checkpoints can contain the full transcript.
 
 ## Stability and scope
 
-Every `session_ready` advertises `protocol_version: 3`. Clients must check this
+Every `session_ready` advertises `protocol_version: 4`. Clients must check this
 before using the session. A breaking change to documented public fields or
 semantics increments this major and is recorded in this document. Additive fields
 and event kinds may appear within a major; ignore unknown fields/events. This is
 version identification, without version negotiation or a compatibility layer.
-Major 3 replaces the one-session process stream with independent runtime channels.
-There is no support for earlier wire formats. Every command and event belongs to
-an explicit channel, except process startup, fatal transport errors and shutdown.
+Major 4 binds each channel to one Session and allows the stdio client to attach
+through the resident host. Open a new channel to switch Sessions.
 
 ## Process transport
 
 The process initializes configuration and warms the default provider SDK, tokenizer
 and TLS trust context once, without resolving credentials or calling a model. It
-then emits `{"type":"bridge_ready","protocol_version":3}`. A host can start this
-process during application startup and keep it alive across session creation.
+then emits `{"type":"bridge_ready","protocol_version":4}`. With a resident
+`nosis-server` for the same configuration directory, stdio relays protocol
+messages to that host over its authenticated local endpoint.
 
 Create a channel by sending its first command:
 
@@ -45,23 +45,21 @@ events are returned as:
 ```
 
 The event above is abbreviated; actual snapshots carry all fields defined by
-`Incoming`. Each channel owns an independent RuntimeHost, command queue, event
-sequence, approvals, cancellation, Journal writer, execution plane and MCP clients.
-Channels execute concurrently. Request and turn IDs need only be unique within
-their channel; one channel waiting on HTTP, MCP or user input does not block others.
-GUI, TUI and SDK hosts use this same server and lifecycle. The TUI retains a
-separate channel for each visited Session. `session_snapshot` returns an existing
-channel's ready/snapshot pair without rebinding or rebuilding its Runtime.
+`Incoming`. Each Session has one RuntimeHost, Journal writer, execution plane
+and queue. Interactive and scheduled turns execute in the order accepted by that
+Session. Different Sessions can execute concurrently. Generate a fresh turn ID
+for every submission, including when a different client previously controlled
+the Session. `session_snapshot` returns the ready pair and transcript checkpoint
+for the channel's existing Session.
 
-Send `{"type":"close_channel","channel_id":"chat-1"}` to cancel and close only
-that runtime. Wait for `{"type":"channel_closed","channel_id":"chat-1"}` before
-reusing the channel ID or opening the same Journal elsewhere. Closing a channel
-keeps the process and the other channels alive. Shared process resources include
-configuration services, one scheduler, imported modules, tokenizer vocabularies
-and TLS trust contexts; mutable execution state is not shared.
+Send `{"type":"close_channel","channel_id":"chat-1"}` to close that channel.
+Wait for `{"type":"channel_closed","channel_id":"chat-1"}` before reusing its ID.
+For a standalone Bridge this cancels and releases that Session Runtime. With a
+resident host it only detaches the client. Other channels remain active.
 
-Send `{"type":"shutdown"}` or close stdin to cancel all channels and close the
-process. `BridgeRequest` / `BridgeEvent` define these process envelopes. The
+Send `{"type":"shutdown"}` or close stdin to end the stdio connection. A
+standalone Bridge also cancels and closes all its Session Runtimes.
+`BridgeRequest` / `BridgeEvent` define these process envelopes. The
 `Outgoing` / `Incoming` definitions below describe the nested channel payloads.
 All JSON examples in the remaining sections are channel payloads unless stated
 otherwise; raw stdio clients must wrap them.
@@ -84,9 +82,8 @@ The following are **internal**, with no public stability promise:
 - Concrete Tool argument/output schemas, Job `details`, error `details` keys,
   provider-specific errors and diagnostic text. Their envelopes remain public.
 
-These extra fields may be visible on the wire; their presence does not make them
-public. Stdio clients own a single Bridge process and do not attach to a GUI-owned
-Bridge. Stdio has no `after_event` replay command or reconnect-to-process API.
+Resident host attachments are exclusive. An existing GUI, TUI or IM controller
+can prevent a second controller from attaching to the same Session.
 
 ## Session initialization and Runtime synchronization
 
@@ -108,7 +105,8 @@ Successful open emits, in order:
 1. `session_ready`: protocol major, actual `session_id`, `workspace`, `provider`,
    `model`, `resumed`, `message_count`, and `permission_preset`. Its `transcript`
    contains the restored conversation.
-2. `runtime_state`: the initial authoritative snapshot, initially `inactive`.
+2. `runtime_state`: the authoritative snapshot, including any Turn already
+   running in the Session.
 
 `session_ready` confirms the control plane only. Apply the first standalone
 `runtime_state` before dispatching follow-up commands. Provider/Tool/MCP/Agent
@@ -123,14 +121,13 @@ Opening failures caused by a writer conflict, invalid workspace/configuration,
 or filesystem error emit `session_open_failed` with the requested `session_id`
 (null when creating a session) and `error: {type, message}`. Writer conflicts
 use `type: "SessionInUseError"`. No ready/sync pair follows that failure.
-The channel stays connected; `list_workspaces` or another `open_session` is
-allowed. `list_sessions` is also allowed when a workspace browsing context
-exists. A failed rebind retains the previously opened session and execution
-state; the failure event includes its complete `runtime` snapshot and commands
-can continue against that session. An initial opening failure has no retained
-session or runtime snapshot. Unexpected opening errors are fatal. A fresh
-`open_session` on an idle channel rebinds it and produces a new ready/sync pair;
-the channel's sequence continues. Do not pipeline a rebind with a turn.
+Another channel can be used to select a different Session after an opening
+failure. A bound channel accepts a new `open_session` only for its current
+Session. Use `session_snapshot` to refresh its ready/snapshot pair.
+
+`scheduled_turn_started` carries the scheduled prompt and `turn_id` before
+ordinary turn events. The scheduled Turn can send output and terminal events to
+an attached client. It uses the Session's permission preset and runs unattended.
 
 ## Explicit Runtime refresh
 
@@ -336,8 +333,7 @@ stderr and abnormal exit are transport diagnostics, not synthetic Agent events.
 An abrupt exit may occur without `fatal`; do not assume terminal events will arrive.
 
 To close, send `shutdown`, close stdin and continue draining stdout/stderr until
-process close. EOF also requests shutdown and cancels active work; do not close
-stdin immediately after submitting a turn you intend to finish. There is no
+process close. EOF requests shutdown on the same connection. There is no
 `shutdown_complete` event. The SDK allows 2 seconds of cooperative cleanup before
 terminating the process group/tree; `await client.shutdown()` resolves on drained
 process close. Any events still emitted during cleanup are delivered normally.
@@ -347,9 +343,9 @@ Forced termination cannot guarantee completed persistence.
 
 ```text
 spawn nosis-bridge (pipes)
-receive bridge_ready; check protocol_version == 3
+receive bridge_ready; check protocol_version == 4
 send channel_command(chat-1, open_session)
-receive channel_event(chat-1, session_ready); check protocol_version == 3; apply checkpoint
+receive channel_event(chat-1, session_ready); check protocol_version == 4; apply checkpoint
 receive channel_event(chat-1, runtime_state); apply snapshot
 send channel_command(chat-1, user_turn) with a fresh turn_id
 receive/render events; answer interactions by request_id

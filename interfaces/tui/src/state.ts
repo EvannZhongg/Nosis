@@ -146,6 +146,17 @@ function questionState(question: UserQuestion): UserQuestionState {
   };
 }
 
+function approvalState(request: Extract<Incoming, { type: 'approval_request' }>): State['approval'] {
+  return {
+    requestId: request.request_id,
+    command: request.command,
+    kind: request.kind,
+    server: request.server ?? undefined,
+    toolName: request.tool_name ?? undefined,
+    choice: 'allow',
+  };
+}
+
 /** Appends to the open assistant entry, creating it on the first delta. */
 function appendDelta(entries: Entry[], text: string): Entry[] {
   const last = entries[entries.length - 1];
@@ -471,15 +482,24 @@ function applyMessage(state: State, message: Incoming): State {
         cacheUsage: message.cache_usage,
         plan: visiblePlan(message.plan),
         mcpStatus: message.phase === 'starting' ? state.mcpStatus : null,
+        approval: message.approval ? approvalState(message.approval) : null,
         question: message.question ? questionState(message.question) : null,
         entries: [...state.entries, ...startupNotices],
       };
     }
 
-    // Attachment bookkeeping belongs to the GUI server; the bridge
-    // never sends it to this frontend.
     case 'attachment_replaced':
-      return state;
+      return {
+        ...state,
+        status: 'session_unavailable',
+        turnId: null,
+        approval: null,
+        question: null,
+        entries: [...state.entries, {
+          kind: 'notice', id: nextId('notice'), level: 'warning',
+          text: 'Another client took control of this session.',
+        }],
+      };
 
     case 'mcp_server_status':
       return {
@@ -514,16 +534,17 @@ function applyMessage(state: State, message: Incoming): State {
         provider: message.provider,
         model: message.model,
         permissionPreset: message.permission_preset,
-        entries: message.resumed
-          ? [
+        entries: [
+          ...(message.resumed ? [
               {
-                kind: 'notice',
+                kind: 'notice' as const,
                 id: nextId('notice'),
-                level: 'info',
+                level: 'info' as const,
                 text: `Resumed session with ${message.message_count} message(s).`,
               },
-            ]
-          : [],
+            ] : []),
+          ...historyEntries(message.transcript?.items ?? []),
+        ],
       };
 
     case 'assistant_delta':
@@ -625,6 +646,14 @@ function applyMessage(state: State, message: Incoming): State {
     case 'user_steer_received':
       return state;
 
+    case 'scheduled_turn_started':
+      return {
+        ...state,
+        turnId: message.turn_id,
+        status: 'starting',
+        entries: [...state.entries, { kind: 'user', id: nextId('user'), text: message.text }],
+      };
+
     case 'user_steer_applied':
       return {
         ...state,
@@ -654,14 +683,7 @@ function applyMessage(state: State, message: Incoming): State {
       return {
         ...state,
         status: 'awaiting_approval',
-        approval: {
-          requestId: message.request_id,
-          command: message.command,
-          kind: message.kind,
-          server: message.server ?? undefined,
-          toolName: message.tool_name ?? undefined,
-          choice: 'allow',
-        },
+        approval: approvalState(message),
       };
 
     case 'permission_changed':

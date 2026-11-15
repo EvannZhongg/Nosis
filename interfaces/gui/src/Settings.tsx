@@ -124,10 +124,11 @@ function formatScheduleTrigger(trigger: ScheduleTrigger) {
 }
 
 function scheduleStatus(item: ScheduleSummary) {
-  const status = item.latest_run?.status;
-  if (status === "running") return item.session_available
-    ? { label: "执行中", tone: "running" }
-    : { label: "执行未完成", tone: "failed" };
+  const status = (item.active_run ?? item.latest_run)?.status;
+  if (status === "queued") return { label: "排队中", tone: "running" };
+  if (status === "running") return { label: "执行中", tone: "running" };
+  if (status === "cancelled") return { label: "已取消", tone: "muted" };
+  if (status === "interrupted") return { label: "执行中断", tone: "failed" };
   if (status === "failed") return { label: "执行失败", tone: "failed" };
   if (status === "skipped") return { label: "已跳过", tone: "muted" };
   if (status === "completed" && !item.enabled) return { label: "已完成", tone: "complete" };
@@ -150,7 +151,7 @@ function ScheduleSettings({ refreshVersion, onOpenSession }: { refreshVersion: n
       return <section className="schedule-row" key={item.schedule_id}>
         <span className={`schedule-state ${status.tone}`} aria-hidden="true" />
         <div className="schedule-copy"><strong title={item.prompt}>{item.prompt}</strong><small title={item.workspace}>{formatScheduleTrigger(item.trigger)} · {{ ask_for_approval: "需要审批", workspace_access: "工作区访问", full_access: "完全访问" }[item.permission_preset]} · {item.workspace}{time ? ` · ${item.next_run_at ? "下次" : "最近"} ${time}` : ""}{end ? ` · 截止 ${end}` : ""}</small></div>
-        <span className={`schedule-status ${status.tone}`} title={item.latest_run?.error ?? undefined}>{status.label}</span>
+        <span className={`schedule-status ${status.tone}`} title={(item.active_run ?? item.latest_run)?.error ?? undefined}>{status.label}</span>
         <button className="schedule-session-button" disabled={!item.session_available} title={item.session_available ? `打开 Session ${item.schedule_session_id}` : "本次执行尚未生成会话记录"} onClick={() => onOpenSession(item.schedule_session_id)}><MessageSquare size={13} />{item.session_available ? "会话" : "无记录"}</button>
       </section>;
     })}</div>}

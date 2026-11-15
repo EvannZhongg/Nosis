@@ -123,8 +123,9 @@ class FakeBridge:
         self.cancelled += 1
         self._messages.put_nowait(None)
 
-    async def close(self) -> None:
+    async def close(self, *, idle_only: bool = False) -> bool:
         self.closed = True
+        return True
 
 
 class FakeBridgeProcess:
@@ -151,10 +152,10 @@ class ActiveSessionTest(unittest.IsolatedAsyncioTestCase):
         entered, release = asyncio.Event(), asyncio.Event()
 
         class ClosingChannel(FakeBridge):
-            async def close(self):
+            async def close(self, *, idle_only: bool = False):
                 entered.set()
                 await release.wait()
-                await super().close()
+                return await super().close(idle_only=idle_only)
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -2169,9 +2170,17 @@ class GuiTest(unittest.TestCase):
         self.assertEqual(response.status_code, 409)
 
     def test_schedule_listing_includes_latest_run_and_session_availability(self) -> None:
+        from concurrent.futures import Future
+
+        def runner(schedule, run, started):
+            started()
+            completion = Future()
+            completion.set_result(None)
+            return completion
+
         scheduler = SchedulerService(
             self.config / "schedule.jsonl",
-            runner=lambda schedule, run: None,
+            runner=runner,
         )
         schedule = scheduler.create_schedule(
             trigger=OneShotTrigger(datetime.now(timezone.utc)),
