@@ -6,12 +6,17 @@ use std::{
     fs,
     io::{Read, Write},
     net::TcpListener,
+    os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
     path::Path,
     process::{Command, Stdio},
     thread,
     time::{Duration, Instant},
 };
 use tempfile::TempDir;
+use windows_sys::Win32::{
+    Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT},
+    System::Threading::{OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject},
+};
 
 fn powershell() -> String {
     std::env::var("WINDIR").unwrap() + r"\System32\WindowsPowerShell\v1.0\powershell.exe"
@@ -88,6 +93,106 @@ fn sandbox_dirs() -> (TempDir, TempDir) {
     (workspace, private)
 }
 
+fn process_tree_request(workspace: &Path, private_tmp: &Path, timeout: u64) -> Value {
+    let mut value = request_timeout(workspace, private_tmp, "process tree", timeout);
+    value["argv"] = json!([
+        std::env::current_exe().unwrap(),
+        "--exact",
+        "process_tree_worker",
+        "--ignored",
+        "--nocapture"
+    ]);
+    value["environment"]["NOSIS_SANDBOX_TEST_DEPTH"] = json!("0");
+    value
+}
+
+#[test]
+#[ignore = "process fixture launched inside the sandbox by the process tree tests"]
+fn process_tree_worker() {
+    let depth: u32 = std::env::var("NOSIS_SANDBOX_TEST_DEPTH")
+        .unwrap()
+        .parse()
+        .unwrap();
+    let mut child = (depth < 2).then(|| {
+        Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "process_tree_worker", "--ignored", "--nocapture"])
+            .env("NOSIS_SANDBOX_TEST_DEPTH", (depth + 1).to_string())
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap()
+    });
+    fs::write(format!("ready-{depth}"), std::process::id().to_string()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while !Path::new("release").exists() {
+        assert!(Instant::now() < deadline, "process tree was not released");
+        thread::sleep(Duration::from_millis(10));
+    }
+    if let Some(child) = child.as_mut() {
+        assert!(child.wait().unwrap().success());
+    }
+    fs::write(format!("survived-{depth}"), "survived").unwrap();
+}
+
+fn wait_for_process_tree(workspace: &Path) -> Vec<OwnedHandle> {
+    let deadline = Instant::now() + Duration::from_secs(4);
+    (0..3)
+        .map(|depth| {
+            let ready = workspace.join(format!("ready-{depth}"));
+            let pid = loop {
+                if let Ok(contents) = fs::read_to_string(&ready) {
+                    if let Ok(pid) = contents.trim().parse::<u32>() {
+                        break pid;
+                    }
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "process at depth {depth} did not start"
+                );
+                thread::sleep(Duration::from_millis(10));
+            };
+            let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+            assert!(
+                !handle.is_null(),
+                "cannot open process {pid}: {}",
+                std::io::Error::last_os_error()
+            );
+            let handle = unsafe { OwnedHandle::from_raw_handle(handle) };
+            assert_eq!(
+                unsafe { WaitForSingleObject(handle.as_raw_handle(), 0) },
+                WAIT_TIMEOUT
+            );
+            handle
+        })
+        .collect()
+}
+
+fn assert_process_tree_stopped(processes: &[OwnedHandle]) {
+    for (depth, process) in processes.iter().enumerate() {
+        assert_eq!(
+            unsafe { WaitForSingleObject(process.as_raw_handle(), 2000) },
+            WAIT_OBJECT_0,
+            "process at depth {depth} survived"
+        );
+    }
+}
+
+#[test]
+fn process_tree_can_write_workspace_markers_when_released() {
+    let (workspace, private) = sandbox_dirs();
+    let value = process_tree_request(workspace.path(), private.path(), 20);
+    fs::write(workspace.path().join("release"), "go").unwrap();
+    let result = run(value);
+    assert_eq!(result["exit_code"], 0, "{}", result["stderr"]);
+    assert_eq!(result["timed_out"], false);
+    for depth in 0..3 {
+        let marker = workspace.path().join(format!("survived-{depth}"));
+        assert!(marker.exists(), "missing marker at depth {depth}: {result}");
+        assert_eq!(fs::read_to_string(marker).unwrap(), "survived");
+    }
+}
+
 #[test]
 fn workspace_and_private_temp_are_writable_and_acl_is_restored() {
     let (workspace, private) = sandbox_dirs();
@@ -117,17 +222,9 @@ fn control_pipe_cancellation_restores_acl_without_another_helper() {
         let (workspace, private) = sandbox_dirs();
         let workspace_before = acl(workspace.path());
         let private_before = acl(private.path());
-        let mut helper = spawn(request(
-            workspace.path(),
-            private.path(),
-            "Set-Content -LiteralPath ready -Value yes; Start-Sleep -Seconds 20; Set-Content -LiteralPath survived -Value yes",
-        ));
+        let mut helper = spawn(process_tree_request(workspace.path(), private.path(), 20));
         let mut control = Some(helper.stdin.take().unwrap());
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while !workspace.path().join("ready").exists() {
-            assert!(Instant::now() < deadline, "command did not start");
-            thread::sleep(Duration::from_millis(10));
-        }
+        let processes = wait_for_process_tree(workspace.path());
         if disconnect {
             drop(control.take());
         } else {
@@ -137,9 +234,12 @@ fn control_pipe_cancellation_restores_acl_without_another_helper() {
         let output = helper.wait_with_output().unwrap();
         assert!(!output.status.success());
         assert!(String::from_utf8_lossy(&output.stderr).contains("command cancelled"));
+        assert_process_tree_stopped(&processes);
         assert_eq!(acl(workspace.path()), workspace_before);
         assert_eq!(acl(private.path()), private_before);
-        assert!(!workspace.path().join("survived").exists());
+        for depth in 0..3 {
+            assert!(!workspace.path().join(format!("survived-{depth}")).exists());
+        }
     }
 }
 
@@ -250,25 +350,18 @@ fn network_access_remains_available() {
 #[test]
 fn timeout_terminates_the_entire_job_object_tree() {
     let (workspace, private) = sandbox_dirs();
-    let marker = workspace
-        .path()
-        .parent()
-        .unwrap()
-        .join("child-survived.txt");
-    let script = format!(
-        "$child = \"Start-Sleep -Seconds 2; Set-Content -LiteralPath '{}' -Value survived\"; Start-Process -FilePath '{}' -ArgumentList @('-NoProfile','-Command',$child); Start-Sleep -Seconds 30",
-        marker.display(),
-        powershell()
-    );
-    let result = run(request_timeout(
-        workspace.path(),
-        private.path(),
-        &script,
-        1,
-    ));
+    let workspace_before = acl(workspace.path());
+    let private_before = acl(private.path());
+    let helper = spawn(process_tree_request(workspace.path(), private.path(), 5));
+    let processes = wait_for_process_tree(workspace.path());
+    let result = finish(helper);
     assert!(result["timed_out"].as_bool().unwrap());
-    thread::sleep(Duration::from_secs(3));
-    assert!(!marker.exists());
+    assert_process_tree_stopped(&processes);
+    assert_eq!(acl(workspace.path()), workspace_before);
+    assert_eq!(acl(private.path()), private_before);
+    for depth in 0..3 {
+        assert!(!workspace.path().join(format!("survived-{depth}")).exists());
+    }
 }
 
 #[test]

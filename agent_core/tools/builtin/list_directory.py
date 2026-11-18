@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from heapq import nsmallest
 from pathlib import Path
 
-from ...execution.process import CancellationSignal
+from ...cancellation import CancellationSignal
 from ...path_utils import path_for_comparison
 from ...turn_control import AgentCancelled
 from ..base import JSONValue, Tool, ToolDefinition

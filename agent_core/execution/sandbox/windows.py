@@ -4,7 +4,8 @@ from pathlib import Path
 from typing import Collection
 
 from .. import process as command_process
-from ..process import CancellationSignal, CommandExecutionResult
+from ...cancellation import CancellationSignal
+from ..process import CommandExecutionResult
 from .base import (
     FilesystemAccess,
     NetworkAccess,

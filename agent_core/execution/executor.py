@@ -2,10 +2,10 @@ import os
 from pathlib import Path
 from typing import Collection, Protocol
 
+from ..cancellation import CancellationSignal
 from . import process as command_process
 from .process import (
     DEFAULT_COMMAND_TIMEOUT_SECONDS,
-    CancellationSignal,
     CommandExecutionResult,
     ShellLauncher,
 )

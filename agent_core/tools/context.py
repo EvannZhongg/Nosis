@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from contextlib import AbstractContextManager
     from ..hooks import HookRunner, HookInvocation, HookCompletedEvent
     from ..execution.router import ExecutionRouter, ResolvedExecution
-    from ..execution.process import CancellationSignal
+    from ..cancellation import CancellationSignal
     from ..llm import LLMProvider
     from ..mcp.manager import McpClientManager
     from ..plan import PlanManager

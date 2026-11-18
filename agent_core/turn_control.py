@@ -117,9 +117,20 @@ class TurnControl:
         )
 
     def subscribe(self, callback: Callable[[], None]) -> Callable[[], None]:
-        unsubscribe_local = self._cancellation.subscribe(callback)
+        notification_lock = Lock()
+        notified = False
+
+        def notify_once() -> None:
+            nonlocal notified
+            with notification_lock:
+                if notified:
+                    return
+                notified = True
+            callback()
+
+        unsubscribe_local = self._cancellation.subscribe(notify_once)
         unsubscribe_external = (
-            self._external_cancellation.subscribe(callback)
+            self._external_cancellation.subscribe(notify_once)
             if self._external_cancellation is not None else None
         )
 

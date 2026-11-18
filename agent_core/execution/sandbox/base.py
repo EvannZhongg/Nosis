@@ -5,8 +5,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Collection
 
+from ...cancellation import CancellationSignal
 from ..process import (
-    CancellationSignal,
     CommandExecutionResult,
     _windows_shell_environment,
 )

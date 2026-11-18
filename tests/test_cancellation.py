@@ -1,4 +1,5 @@
 import unittest
+from threading import Barrier, Thread
 
 from agent_core.jobs import CancellationToken
 from agent_core.turn_control import TurnControl
@@ -35,3 +36,49 @@ class CancellationNotificationsTest(unittest.TestCase):
         control.subscribe(lambda: calls.append(control.cancelled))
         self.assertTrue(control.cancel())
         self.assertEqual(calls, [True])
+
+    def test_subscribing_after_both_sources_cancelled_notifies_once(self):
+        parent = CancellationToken()
+        child = TurnControl(parent)
+        parent.cancel()
+        child.cancel()
+        calls = []
+        child.subscribe(lambda: calls.append("cancelled"))()
+        self.assertEqual(calls, ["cancelled"])
+
+    def test_both_cancellation_orders_notify_each_subscription_once(self):
+        for external_first in (False, True):
+            with self.subTest(external_first=external_first):
+                parent = CancellationToken()
+                child = TurnControl(parent)
+                calls = []
+                callback = lambda: calls.append("cancelled")
+                child.subscribe(callback)
+                child.subscribe(callback)
+                cancel_first, cancel_second = (
+                    (parent.cancel, child.cancel) if external_first
+                    else (child.cancel, parent.cancel)
+                )
+                cancel_first()
+                cancel_second()
+                self.assertEqual(calls, ["cancelled", "cancelled"])
+
+    def test_concurrent_local_and_external_cancellation_notifies_once(self):
+        parent = CancellationToken()
+        child = TurnControl(parent)
+        calls = []
+        child.subscribe(lambda: calls.append("cancelled"))
+        start = Barrier(3)
+
+        def cancel(source):
+            start.wait()
+            source.cancel()
+
+        workers = [Thread(target=cancel, args=(source,)) for source in (parent, child)]
+        for worker in workers:
+            worker.start()
+        start.wait()
+        for worker in workers:
+            worker.join(2)
+            self.assertFalse(worker.is_alive())
+        self.assertEqual(calls, ["cancelled"])

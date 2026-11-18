@@ -7,7 +7,7 @@ from contextlib import AbstractContextManager, closing
 from dataclasses import dataclass
 from pathlib import Path
 
-from ...execution.process import CancellationSignal
+from ...cancellation import CancellationSignal
 from ...files import BoundDirectory, bind_directory
 from ...path_utils import path_for_comparison
 from ...turn_control import AgentCancelled

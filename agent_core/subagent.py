@@ -8,6 +8,7 @@ Tool implementation.
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Callable, Iterable
 
+from .cancellation import CancellationSignal
 from .config import AgentConfig
 from .content import AttachmentPart
 from .llm import LLMProvider
@@ -21,7 +22,6 @@ from .tools.catalog import ToolCatalog
 from .tools.context import ToolExecutionContext
 from .tools.base import JSONValue, ToolPolicy
 from .tools.builtin import AnalyzeImageTool, ReadImageTool, ReadSkillTool
-from .execution.process import CancellationSignal
 from .turn_control import TurnControl
 from .workspace_instructions import WorkspaceInstructions
 

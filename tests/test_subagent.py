@@ -31,7 +31,7 @@ from agent_core import (
     builtin_catalog,
 )
 from agent_core.llm import LLMRequest
-from agent_core.execution.process import CancellationSignal
+from agent_core.cancellation import CancellationSignal
 from agent_core.session_paths import session_directory, workspace_key
 from agent_core.tools.config import ToolSettings, WebFetchConfig, WebSearchConfig
 

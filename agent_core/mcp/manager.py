@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, TYPE_CHECKING
 
 from ..tools import JSONValue, Tool
-from ..execution.process import CancellationSignal
+from ..cancellation import CancellationSignal
 from ..turn_control import AgentCancelled
 from .config import McpConfig, McpServerConfig
 from .tool import McpTool
