@@ -37,6 +37,7 @@ from agent_core.execution.process import (
     CommandOutputSpool,
     _SPOOL_PATHS,
     _cleanup_registered_spools,
+    _execute_process,
 )
 from agent_core.execution.sandbox.base import _sandbox_environment
 
@@ -54,6 +55,54 @@ def _python_script_command(working_directory: Path, script: str) -> str:
 
 
 class HostCommandExecutorTest(unittest.TestCase):
+    def test_rejects_incompatible_helper_before_sending_command(self) -> None:
+        real_popen = subprocess.Popen
+        for greeting in ('{"protocol_version": 999}', 'not json'):
+            with self.subTest(greeting=greeting), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                script = (
+                    "import sys\n"
+                    "from pathlib import Path\n"
+                    f"print({greeting!r}, flush=True)\n"
+                    "if sys.stdin.readline(): Path('executed').touch()\n"
+                )
+
+                def launch(_argv, **kwargs):
+                    return real_popen([sys.executable, "-c", script], cwd=root, **kwargs)
+
+                with patch("agent_core.execution.process._sandbox_executable", return_value=Path("wrong-helper")), patch(
+                    "agent_core.execution.process.subprocess.Popen", side_effect=launch,
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "protocol mismatch.*force-reinstall"):
+                        _execute_process(
+                            ["unused"], command="unused", working_directory=root,
+                            timeout_seconds=10, cancellation=None,
+                        )
+                self.assertFalse((root / "executed").exists())
+
+    def test_helper_without_handshake_cannot_execute_on_stdin_eof(self) -> None:
+        real_popen = subprocess.Popen
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            # An old helper waits for EOF before decoding and executing input.
+            script = (
+                "import sys\nfrom pathlib import Path\n"
+                "sys.stdin.read()\nPath('executed').touch()\n"
+            )
+
+            def launch(_argv, **kwargs):
+                return real_popen([sys.executable, "-c", script], cwd=root, **kwargs)
+
+            with patch("agent_core.execution.process._sandbox_executable", return_value=Path("old-helper")), patch(
+                "agent_core.execution.process.subprocess.Popen", side_effect=launch,
+            ), patch("agent_core.execution.process._HELPER_STARTUP_TIMEOUT_SECONDS", 0.1):
+                with self.assertRaisesRegex(RuntimeError, "missing handshake"):
+                    _execute_process(
+                        ["unused"], command="unused", working_directory=root,
+                        timeout_seconds=10, cancellation=None,
+                    )
+            self.assertFalse((root / "executed").exists())
+
     # Shell syntax follows the platform launcher selected by the executor.
     def test_uses_the_injected_shell_launcher(self) -> None:
         calls = []

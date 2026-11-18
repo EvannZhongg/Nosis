@@ -70,13 +70,12 @@ class LoopPolicyTest(unittest.TestCase):
         self.assertFalse(self.control.steer("late", "too late"))
 
     def test_external_cancel_at_finish_does_not_return_success(self) -> None:
-        cancelled = False
-        control = TurnControl(lambda: cancelled)
+        external = TurnControl()
+        control = TurnControl(external)
         original_finish = control.finish
 
         def finish():
-            nonlocal cancelled
-            cancelled = True
+            external.cancel()
             return original_finish()
 
         control.finish = finish

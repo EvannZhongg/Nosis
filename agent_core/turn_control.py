@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from threading import Lock
 from typing import Callable
 
+from .cancellation import CancellationSignal, CancellationSource
+
 
 class AgentCancelled(BaseException):
     """Unwind the Runtime when the interface cancels active work."""
@@ -61,7 +63,7 @@ class TurnControl:
 
     def __init__(
         self,
-        external_cancelled: Callable[[], bool] | None = None,
+        external_cancellation: CancellationSignal | None = None,
         *,
         interactive: bool = True,
     ) -> None:
@@ -70,7 +72,8 @@ class TurnControl:
         self._cancelled = False
         self._finished = False
         self._lock = Lock()
-        self._external_cancelled = external_cancelled
+        self._cancellation = CancellationSource()
+        self._external_cancellation = external_cancellation
 
     def steer(self, steer_id: str, text: str) -> bool:
         with self._lock:
@@ -101,16 +104,31 @@ class TurnControl:
                 return False
             self._cancelled = True
             self._steering.close()
-            return True
+        self._cancellation.cancel()
+        return True
 
     @property
     def cancelled(self) -> bool:
         with self._lock:
             cancelled = self._cancelled
         return cancelled or (
-            self._external_cancelled is not None
-            and self._external_cancelled()
+            self._external_cancellation is not None
+            and self._external_cancellation.cancelled
         )
+
+    def subscribe(self, callback: Callable[[], None]) -> Callable[[], None]:
+        unsubscribe_local = self._cancellation.subscribe(callback)
+        unsubscribe_external = (
+            self._external_cancellation.subscribe(callback)
+            if self._external_cancellation is not None else None
+        )
+
+        def unsubscribe() -> None:
+            unsubscribe_local()
+            if unsubscribe_external is not None:
+                unsubscribe_external()
+
+        return unsubscribe
 
     def raise_if_cancelled(self) -> None:
         if self.cancelled:

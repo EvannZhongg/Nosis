@@ -4,17 +4,25 @@ use std::collections::VecDeque;
 use std::{
     collections::HashMap,
     fs::{self, File},
-    io::{self, Read, Write},
+    io::{self, BufRead, Read, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::mpsc::{self, Receiver, Sender},
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 const OUTPUT_LIMIT: usize = 50 * 1024;
+const PROTOCOL_VERSION: u64 = 1;
+
+enum ProcessEvent {
+    Cancelled,
+    Exited,
+}
 
 #[derive(Deserialize)]
 struct Request {
+    protocol_version: u64,
     command: String,
     argv: Vec<String>,
     cwd: PathBuf,
@@ -23,7 +31,6 @@ struct Request {
     stdin_base64: Option<String>,
     timeout_seconds: u64,
     spool_directory: PathBuf,
-    cancel_file: Option<PathBuf>,
     policy: Policy,
 }
 
@@ -49,6 +56,7 @@ enum Policy {
 
 #[derive(Serialize)]
 struct ResultPayload {
+    protocol_version: u64,
     command: String,
     exit_code: i32,
     stdout: String,
@@ -74,12 +82,33 @@ fn main() {
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
+    println!("{{\"protocol_version\":{PROTOCOL_VERSION}}}");
+    io::stdout().flush()?;
+    let mut control = io::BufReader::new(io::stdin());
     let mut input = String::new();
-    io::stdin().read_to_string(&mut input)?;
-    let request: Request = serde_json::from_str(&input)?;
+    control.read_line(&mut input)?;
+    let value: serde_json::Value = serde_json::from_str(&input)?;
+    if value
+        .get("protocol_version")
+        .and_then(serde_json::Value::as_u64)
+        != Some(PROTOCOL_VERSION)
+    {
+        return Err(format!(
+            "nosis-sandbox protocol mismatch: expected {PROTOCOL_VERSION}; reinstall the matching nosis-agent wheel or rebuild with cargo build --release --manifest-path nosis-sandbox/Cargo.toml"
+        ).into());
+    }
+    let request: Request = serde_json::from_value(value)?;
+    debug_assert_eq!(request.protocol_version, PROTOCOL_VERSION);
     if request.argv.is_empty() || request.timeout_seconds == 0 {
         return Err("invalid sandbox request".into());
     }
+    let (events, receiver) = mpsc::channel();
+    let cancellation = events.clone();
+    thread::spawn(move || {
+        // EOF also cancels, so a disappearing parent releases sandbox resources.
+        let _ = control.read(&mut [0u8; 1]);
+        let _ = cancellation.send(ProcessEvent::Cancelled);
+    });
     fs::create_dir_all(&request.spool_directory)?;
     reap_stale_spools(&request.spool_directory);
     let (program, args, cwd, env, windows_policy) = prepare(&request)?;
@@ -97,10 +126,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         request.timeout_seconds,
         &request.locale_encoding,
         &request.spool_directory,
-        request.cancel_file.as_deref(),
+        events,
+        &receiver,
         windows_policy,
     )?;
     let payload = ResultPayload {
+        protocol_version: PROTOCOL_VERSION,
         command: request.command,
         exit_code: output.0,
         stdout: output.1,
@@ -402,7 +433,8 @@ fn execute(
     timeout: u64,
     locale_encoding: &str,
     spool_directory: &Path,
-    cancel_file: Option<&Path>,
+    events: Sender<ProcessEvent>,
+    receiver: &Receiver<ProcessEvent>,
     windows_policy: Option<WindowsPolicy>,
 ) -> Result<(i32, String, String, bool, Option<Spool>, Option<Spool>), Box<dyn std::error::Error>> {
     #[cfg(windows)]
@@ -416,7 +448,8 @@ fn execute(
             timeout,
             locale_encoding,
             spool_directory,
-            cancel_file,
+            events,
+            receiver,
             policy,
         );
     }
@@ -452,25 +485,19 @@ fn execute(
     let err_path = spool_directory.join(format!("nosis-shell-{}-stderr", uuid::Uuid::new_v4()));
     let out_thread = thread::spawn(move || capture(stdout, &out_path));
     let err_thread = thread::spawn(move || capture(stderr, &err_path));
-    let deadline = Instant::now() + Duration::from_secs(timeout);
-    let mut timed_out = false;
-    let mut cancelled = false;
-    let status = loop {
-        if let Some(status) = child.try_wait()? {
-            break status;
-        }
-        if cancel_file.is_some_and(Path::exists) {
-            cancelled = true;
-            kill_tree(&mut child);
-            break child.wait()?;
-        }
-        if Instant::now() >= deadline {
-            timed_out = true;
-            kill_tree(&mut child);
-            break child.wait()?;
-        }
-        thread::sleep(Duration::from_millis(50));
-    };
+    let pid = child.id();
+    let waiter = thread::spawn(move || {
+        let status = child.wait();
+        let _ = events.send(ProcessEvent::Exited);
+        status
+    });
+    let event = receiver.recv_timeout(Duration::from_secs(timeout));
+    let cancelled = matches!(event, Ok(ProcessEvent::Cancelled));
+    let timed_out = matches!(event, Err(mpsc::RecvTimeoutError::Timeout));
+    if cancelled || timed_out {
+        kill_tree(pid);
+    }
+    let status = waiter.join().map_err(|_| "process wait failed")??;
     let out = out_thread.join().map_err(|_| "stdout capture failed")??;
     let err = err_thread.join().map_err(|_| "stderr capture failed")??;
     let (stdout, stdout_spool) = output(out, locale_encoding)?;
@@ -636,31 +663,21 @@ fn decode_output(
 }
 
 #[cfg(unix)]
-fn kill_tree(child: &mut std::process::Child) {
-    unsafe {
-        libc_killpg(child.id() as i32);
-    }
-    let _ = child.kill();
-}
-#[cfg(unix)]
-unsafe fn libc_killpg(pid: i32) {
+fn kill_tree(pid: u32) {
     unsafe extern "C" {
         fn killpg(pgrp: i32, sig: i32) -> i32;
     }
-    let _ = killpg(pid, 9);
+    unsafe {
+        let _ = killpg(pid as i32, 9);
+    }
 }
 #[cfg(windows)]
-fn kill_tree(child: &mut std::process::Child) {
+fn kill_tree(pid: u32) {
     let _ = Command::new("taskkill")
-        .args(["/F", "/T", "/PID", &child.id().to_string()])
+        .args(["/F", "/T", "/PID", &pid.to_string()])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();
-    let _ = child.kill();
-}
-#[cfg(not(any(unix, windows)))]
-fn kill_tree(child: &mut std::process::Child) {
-    let _ = child.kill();
 }
 
 #[cfg(windows)]

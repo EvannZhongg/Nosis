@@ -68,7 +68,8 @@ pub(super) fn execute(
     timeout: u64,
     locale_encoding: &str,
     spool: &Path,
-    cancel_file: Option<&Path>,
+    events: Sender<ProcessEvent>,
+    receiver: &Receiver<ProcessEvent>,
     policy: WindowsPolicy,
 ) -> Result<(i32, String, String, bool, Option<Spool>, Option<Spool>), Box<dyn std::error::Error>> {
     let mut sandbox = Sandbox::new(&policy.workspace, &policy.private_tmp)?;
@@ -81,7 +82,8 @@ pub(super) fn execute(
         timeout,
         locale_encoding,
         spool,
-        cancel_file,
+        events,
+        receiver,
     );
     let cleanup = sandbox.close();
     match (result, cleanup) {
@@ -280,7 +282,8 @@ impl Sandbox {
         timeout: u64,
         locale_encoding: &str,
         spool: &Path,
-        cancel_file: Option<&Path>,
+        events: Sender<ProcessEvent>,
+        receiver: &Receiver<ProcessEvent>,
     ) -> Result<(i32, String, String, bool, Option<Spool>, Option<Spool>), Box<dyn std::error::Error>>
     {
         let input_path = spool.join(format!("nosis-shell-{}-stdin", uuid::Uuid::new_v4()));
@@ -384,37 +387,26 @@ impl Sandbox {
         unsafe {
             CloseHandle(info.hThread);
         }
-        let started = Instant::now();
-        let mut timed_out = false;
-        let mut cancelled = false;
-        loop {
-            let status = unsafe { WaitForSingleObject(info.hProcess, 50) };
-            if status == WAIT_OBJECT_0 {
-                break;
-            }
-            if status != WAIT_TIMEOUT {
-                unsafe {
-                    CloseHandle(info.hProcess);
-                }
-                return Err(last_error("WaitForSingleObject").into());
-            }
-            if cancel_file.is_some_and(Path::exists) {
-                cancelled = true;
-                unsafe {
-                    TerminateJobObject(self.job, 1);
-                    WaitForSingleObject(info.hProcess, INFINITE);
-                }
-                break;
-            }
-            if started.elapsed() >= Duration::from_secs(timeout) {
-                timed_out = true;
-                unsafe {
-                    TerminateJobObject(self.job, 1);
-                    WaitForSingleObject(info.hProcess, INFINITE);
-                }
-                break;
+        let process_handle = info.hProcess as usize;
+        let waiter = thread::spawn(move || {
+            let status = unsafe { WaitForSingleObject(process_handle as HANDLE, INFINITE) };
+            let result = if status == WAIT_OBJECT_0 {
+                Ok(())
+            } else {
+                Err(last_error("WaitForSingleObject"))
+            };
+            let _ = events.send(ProcessEvent::Exited);
+            result
+        });
+        let event = receiver.recv_timeout(Duration::from_secs(timeout));
+        let cancelled = matches!(event, Ok(ProcessEvent::Cancelled));
+        let timed_out = matches!(event, Err(mpsc::RecvTimeoutError::Timeout));
+        if cancelled || timed_out {
+            unsafe {
+                TerminateJobObject(self.job, 1);
             }
         }
+        let waited = waiter.join().map_err(|_| "process wait failed")?;
         let mut code = 1u32;
         let exit_read = unsafe { GetExitCodeProcess(info.hProcess, &mut code) };
         unsafe {
@@ -422,6 +414,7 @@ impl Sandbox {
             CloseHandle(self.job);
         }
         self.job = null_mut();
+        waited?;
         if exit_read == 0 {
             return Err(last_error("GetExitCodeProcess").into());
         }

@@ -3,11 +3,12 @@
 from concurrent.futures import Future, ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import dataclass, field
-from threading import Condition, Event, Lock
+from threading import Condition, Lock
 from time import monotonic
 from typing import Callable, Literal, TypeAlias
 from uuid import uuid4
 
+from .cancellation import CancellationSource
 from .session import JobExecutionStatus, Session
 from .tools.base import JSONValue, ToolError, ToolOutput, ToolResult
 from .tool_result import ToolResultNormalizer
@@ -21,17 +22,7 @@ class JobCancelled(BaseException):
     """Raised by cooperative background work after cancellation."""
 
 
-class CancellationToken:
-    def __init__(self) -> None:
-        self._event = Event()
-
-    @property
-    def cancelled(self) -> bool:
-        return self._event.is_set()
-
-    def cancel(self) -> None:
-        self._event.set()
-
+class CancellationToken(CancellationSource):
     def raise_if_cancelled(self) -> None:
         if self.cancelled:
             raise JobCancelled

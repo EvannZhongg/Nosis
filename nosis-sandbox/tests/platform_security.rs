@@ -18,24 +18,21 @@ fn run(request: Value) -> Value {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    helper
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(request.to_string().as_bytes())
-        .unwrap();
+    let mut control = helper.stdin.take().unwrap();
+    writeln!(control, "{request}").unwrap();
     let output = helper.wait_with_output().unwrap();
     assert!(
         output.status.success(),
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    serde_json::from_slice(&output.stdout).unwrap()
+    serde_json::from_slice(output.stdout.splitn(2, |b| *b == b'\n').nth(1).unwrap()).unwrap()
 }
 
 #[cfg(target_os = "linux")]
 fn linux_request(workspace: &Path, plugin: &Path, script: &str) -> Value {
     json!({
+        "protocol_version": 1,
         "command": script,
         "argv": ["/bin/sh", "-c", script],
         "cwd": workspace,
@@ -103,6 +100,7 @@ fn macos_request(workspace: &Path, private_tmp: &Path, plugin: &Path, script: &s
     environment.insert("TMP".into(), private_tmp.to_string_lossy().into_owned());
     environment.insert("TEMP".into(), private_tmp.to_string_lossy().into_owned());
     json!({
+        "protocol_version": 1,
         "command": script,
         "argv": ["/bin/sh", "-c", script],
         "cwd": workspace,

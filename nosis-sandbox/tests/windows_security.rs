@@ -28,6 +28,7 @@ fn request_timeout(workspace: &Path, private_tmp: &Path, script: &str, timeout: 
     environment.insert("TEMP", private_tmp.to_string_lossy().into_owned());
     environment.insert("TMP", private_tmp.to_string_lossy().into_owned());
     json!({
+        "protocol_version": 1,
         "command": script,
         "argv": [powershell(), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
         "cwd": workspace,
@@ -53,21 +54,22 @@ fn spawn(request: Value) -> std::process::Child {
         .unwrap();
     child
         .stdin
-        .take()
+        .as_mut()
         .unwrap()
-        .write_all(request.to_string().as_bytes())
+        .write_all(format!("{request}\n").as_bytes())
         .unwrap();
     child
 }
 
-fn finish(child: std::process::Child) -> Value {
+fn finish(mut child: std::process::Child) -> Value {
+    let _control = child.stdin.take().unwrap();
     let output = child.wait_with_output().unwrap();
     assert!(
         output.status.success(),
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    serde_json::from_slice(&output.stdout).unwrap()
+    serde_json::from_slice(output.stdout.splitn(2, |b| *b == b'\n').nth(1).unwrap()).unwrap()
 }
 
 fn acl(path: &Path) -> Vec<u8> {
@@ -107,6 +109,38 @@ fn workspace_and_private_temp_are_writable_and_acl_is_restored() {
     );
     let workspace_acl_after = acl(workspace.path());
     assert_eq!(workspace_acl_after, workspace_acl_before);
+}
+
+#[test]
+fn control_pipe_cancellation_restores_acl_without_another_helper() {
+    for disconnect in [false, true] {
+        let (workspace, private) = sandbox_dirs();
+        let workspace_before = acl(workspace.path());
+        let private_before = acl(private.path());
+        let mut helper = spawn(request(
+            workspace.path(),
+            private.path(),
+            "Set-Content -LiteralPath ready -Value yes; Start-Sleep -Seconds 20; Set-Content -LiteralPath survived -Value yes",
+        ));
+        let mut control = Some(helper.stdin.take().unwrap());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !workspace.path().join("ready").exists() {
+            assert!(Instant::now() < deadline, "command did not start");
+            thread::sleep(Duration::from_millis(10));
+        }
+        if disconnect {
+            drop(control.take());
+        } else {
+            control.as_mut().unwrap().write_all(&[0]).unwrap();
+            // Keep the pipe open: the notification itself must cancel.
+        }
+        let output = helper.wait_with_output().unwrap();
+        assert!(!output.status.success());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("command cancelled"));
+        assert_eq!(acl(workspace.path()), workspace_before);
+        assert_eq!(acl(private.path()), private_before);
+        assert!(!workspace.path().join("survived").exists());
+    }
 }
 
 #[test]

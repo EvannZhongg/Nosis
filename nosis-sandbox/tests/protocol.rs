@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 use std::{
-    io::Write,
+    io::{BufRead, BufReader, Write},
     path::Path,
     process::{Command, Stdio},
 };
@@ -26,6 +26,7 @@ fn argv(script: &str) -> Vec<String> {
 
 fn request(workspace: &Path, script: &str) -> Value {
     json!({
+        "protocol_version": 1,
         "command": script,
         "argv": argv(script),
         "cwd": workspace,
@@ -45,19 +46,78 @@ fn run(request: Value) -> Value {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    helper
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(request.to_string().as_bytes())
-        .unwrap();
+    let mut control = helper.stdin.take().unwrap();
+    writeln!(control, "{request}").unwrap();
     let output = helper.wait_with_output().unwrap();
     assert!(
         output.status.success(),
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    serde_json::from_slice(&output.stdout).unwrap()
+    serde_json::from_slice(output.stdout.splitn(2, |b| *b == b'\n').nth(1).unwrap()).unwrap()
+}
+
+#[test]
+fn handshake_precedes_request_and_rejects_missing_or_wrong_version() {
+    for version in [None, Some(999)] {
+        let mut helper = Command::new(env!("CARGO_BIN_EXE_nosis-sandbox"))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut output = BufReader::new(helper.stdout.take().unwrap());
+        let mut greeting = String::new();
+        output.read_line(&mut greeting).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(&greeting).unwrap()["protocol_version"],
+            1
+        );
+        // Other required fields are deliberately absent: version validation
+        // must happen before schema decoding, platform setup or execution.
+        let input = match version {
+            Some(version) => json!({"protocol_version": version}),
+            None => json!({}),
+        };
+        writeln!(helper.stdin.as_mut().unwrap(), "{input}").unwrap();
+        let result = helper.wait_with_output().unwrap();
+        assert!(!result.status.success());
+        let error = String::from_utf8_lossy(&result.stderr);
+        assert!(error.contains("protocol mismatch"), "{error}");
+        assert!(error.contains("cargo build --release"), "{error}");
+    }
+}
+
+#[test]
+fn closing_control_pipe_cancels_a_running_command() {
+    let workspace = tempdir().unwrap();
+    #[cfg(windows)]
+    let script = "[IO.File]::WriteAllText('ready', 'yes'); Start-Sleep 20; [IO.File]::WriteAllText('finished', 'yes')";
+    #[cfg(not(windows))]
+    let script = "touch ready; sleep 20; touch finished";
+    let mut helper = Command::new(env!("CARGO_BIN_EXE_nosis-sandbox"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut control = helper.stdin.take().unwrap();
+    writeln!(control, "{}", request(workspace.path(), script)).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !workspace.path().join("ready").exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "command did not start"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let cancelled_at = std::time::Instant::now();
+    drop(control);
+    let output = helper.wait_with_output().unwrap();
+    assert!(cancelled_at.elapsed() < std::time::Duration::from_secs(3));
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("command cancelled"));
+    assert!(!workspace.path().join("finished").exists());
 }
 
 #[test]

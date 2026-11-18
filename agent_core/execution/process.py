@@ -3,16 +3,17 @@ import base64
 import json
 import locale
 import os
+import queue
 import shutil
 import subprocess
 import tempfile
 import threading
-import time
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Protocol
+from typing import Callable
 
+from ..cancellation import CancellationSignal
 from ..turn_control import AgentCancelled
 
 
@@ -20,6 +21,13 @@ DEFAULT_COMMAND_TIMEOUT_SECONDS = 60
 MAX_COMMAND_TIMEOUT_SECONDS = 24 * 60 * 60
 MAX_COMMAND_OUTPUT_CHARS = 50 * 1024
 _SPOOL_PATHS: set[Path] = set()
+HELPER_PROTOCOL_VERSION = 1
+_HELPER_STARTUP_TIMEOUT_SECONDS = 5
+_HELPER_REPAIR = (
+    "Reinstall the matching wheel with `python -m pip install --force-reinstall "
+    "--no-cache-dir nosis-agent`, or, for a source checkout, run "
+    "`cargo build --release --manifest-path nosis-sandbox/Cargo.toml`."
+)
 
 
 @dataclass(frozen=True)
@@ -72,11 +80,6 @@ class CommandOutputSpool:
             _SPOOL_PATHS.discard(self.path)
 
 
-class CancellationSignal(Protocol):
-    @property
-    def cancelled(self) -> bool: ...
-
-
 class CommandCancelled(AgentCancelled):
     """The Runtime cancelled a running command and its process tree."""
 
@@ -111,6 +114,7 @@ def _execute_process(
 
     helper = _sandbox_executable()
     request = {
+        "protocol_version": HELPER_PROTOCOL_VERSION,
         "command": command,
         "argv": argv,
         "cwd": str(working_directory),
@@ -121,42 +125,70 @@ def _execute_process(
         "spool_directory": str(spool_directory or tempfile.gettempdir()),
         "policy": policy or {"platform": "host"},
     }
-    cancel_descriptor, cancel_name = tempfile.mkstemp(prefix="nosis-cancel-")
-    os.close(cancel_descriptor)
-    cancel_file = Path(cancel_name)
-    cancel_file.unlink()
-    request["cancel_file"] = str(cancel_file)
-    try:
-        process = subprocess.Popen(
-            [str(helper)],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
-            start_new_session=os.name != "nt",
-        )
-    except BaseException:
-        cancel_file.unlink(missing_ok=True)
-        raise
+    process = subprocess.Popen(
+        [str(helper)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        start_new_session=os.name != "nt",
+    )
     assert process.stdin is not None
-    process.stdin.write(json.dumps(request, ensure_ascii=False).encode("utf-8"))
-    process.stdin.close()
     output: dict[str, bytes] = {}
+    hello: queue.Queue[bytes] = queue.Queue(maxsize=1)
+
+    def read_stdout() -> None:
+        assert process.stdout is not None
+        hello.put(process.stdout.readline())
+        output["stdout"] = process.stdout.read()
+
     readers = [
-        threading.Thread(target=lambda key=key, stream=stream: output.__setitem__(key, stream.read()), daemon=True)
-        for key, stream in (("stdout", process.stdout), ("stderr", process.stderr))
+        threading.Thread(target=read_stdout, daemon=True),
+        threading.Thread(target=lambda: output.__setitem__("stderr", process.stderr.read()), daemon=True),
     ]
     for reader in readers:
         reader.start()
+    unsubscribe = None
+    pipe_lock = threading.Lock()
+
+    def cancel_process() -> None:
+        with pipe_lock:
+            if not process.stdin.closed:
+                try:
+                    process.stdin.write(b"\x00")
+                    process.stdin.flush()
+                except OSError:
+                    pass  # The helper may have exited concurrently.
+
     try:
-        while process.poll() is None:
-            if cancellation is not None and cancellation.cancelled:
-                cancel_file.touch()
-            time.sleep(0.05)
+        try:
+            greeting = json.loads(hello.get(timeout=_HELPER_STARTUP_TIMEOUT_SECONDS))
+            if greeting.get("protocol_version") != HELPER_PROTOCOL_VERSION:
+                raise ValueError(f"helper reported {greeting.get('protocol_version')!r}")
+        except (queue.Empty, ValueError, AttributeError) as error:
+            # No request is sent until the handshake succeeds, including to
+            # binaries that predate the handshake and wait for stdin EOF.
+            process.kill()
+            raise RuntimeError(
+                f"nosis-sandbox protocol mismatch or missing handshake "
+                f"(expected {HELPER_PROTOCOL_VERSION}, executable: {helper}; "
+                f"{str(error) or 'no handshake received'}). {_HELPER_REPAIR}"
+            ) from error
+        process.stdin.write(json.dumps(request, ensure_ascii=False).encode("utf-8") + b"\n")
+        process.stdin.flush()
+        if cancellation is not None:
+            unsubscribe = cancellation.subscribe(cancel_process)
+        process.wait()
+    finally:
+        if unsubscribe is not None:
+            unsubscribe()
+        with pipe_lock:
+            process.stdin.close()
+        process.wait()
         for reader in readers:
             reader.join()
-    finally:
-        cancel_file.unlink(missing_ok=True)
+        process.stdout.close()
+        process.stderr.close()
     if process.returncode:
         if cancellation is not None and cancellation.cancelled:
             raise CommandCancelled
@@ -164,6 +196,8 @@ def _execute_process(
         raise RuntimeError(diagnostic or f"nosis-sandbox exited with status {process.returncode}")
 
     payload = json.loads(output["stdout"])
+    if payload.get("protocol_version") != HELPER_PROTOCOL_VERSION:
+        raise RuntimeError(f"nosis-sandbox result protocol mismatch. {_HELPER_REPAIR}")
     stderr = payload["stderr"]
     if (
         policy is not None
