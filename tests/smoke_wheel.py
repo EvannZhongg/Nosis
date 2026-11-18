@@ -1,5 +1,6 @@
 """Check a platform wheel's assets and run its installed helper without Rust."""
 
+import argparse
 import base64
 from email.parser import Parser
 import json
@@ -12,9 +13,32 @@ import tempfile
 import zipfile
 
 
+def run_helper(helper: Path, request: dict) -> dict:
+    with subprocess.Popen(
+        [str(helper)], stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    ) as process:
+        assert json.loads(process.stdout.readline()) == {"protocol_version": 1}
+        process.stdin.write(json.dumps(request).encode("utf-8") + b"\n")
+        process.stdin.flush()
+        # Keep the control pipe open: EOF cancels the command.
+        process.wait(timeout=15)
+        assert process.returncode == 0, process.stderr.read().decode("utf-8")
+        result = json.loads(process.stdout.read())
+    assert result["protocol_version"] == 1, result
+    assert result["command"] == request["command"], result
+    assert not result["timed_out"], result
+    return result
+
+
 def main() -> None:
-    directory, platform = sys.argv[1:]
-    wheels = list(Path(directory).glob("*.whl"))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("directory", type=Path)
+    parser.add_argument("platform")
+    parser.add_argument("--sandbox", action="store_true", help="Also check workspace confinement on this host")
+    args = parser.parse_args()
+    platform = args.platform
+    wheels = list(args.directory.glob("*.whl"))
     assert len(wheels) == 1, wheels
     wheel = wheels[0].resolve()
     assert wheel.name.endswith(f"-py3-none-{platform}.whl"), wheel.name
@@ -79,24 +103,51 @@ def main() -> None:
             "spool_directory": str(root),
             "policy": {"platform": "host"},
         }
-        with subprocess.Popen(
-            [str(site / helper_path)], stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        ) as helper:
-            assert json.loads(helper.stdout.readline()) == {"protocol_version": 1}
-            helper.stdin.write(json.dumps(request).encode("utf-8") + b"\n")
-            helper.stdin.flush()
-            # Keep the control pipe open: EOF cancels the command.
-            helper.wait(timeout=15)
-            assert helper.returncode == 0, helper.stderr.read().decode("utf-8")
-            result = json.loads(helper.stdout.read())
-        assert result["protocol_version"] == 1, result
-        assert result["command"] == request["command"], result
+        helper = site / helper_path
+        result = run_helper(helper, request)
         assert result["exit_code"] == 0, result
         assert result["stdout"] == "stdout\n", result
         assert result["stderr"] == "stderr\n", result
-        assert not result["timed_out"], result
         assert (workspace / "result.txt").read_text(encoding="utf-8") == "wheel 输入"
+        if args.sandbox:
+            outside = root / "outside.txt"
+            outside.write_text("host-secret", encoding="utf-8")
+            private_tmp = root / "private"
+            private_tmp.mkdir()
+            policy = {"workspace": str(workspace)}
+            if sys.platform == "win32":
+                policy.update(platform="windows", private_tmp=str(private_tmp))
+                powershell = Path(os.environ["SystemRoot"]) / "System32/WindowsPowerShell/v1.0/powershell.exe"
+                argv = [str(powershell), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
+                        "$ErrorActionPreference='Stop'; "
+                        "[IO.File]::WriteAllText('confined.txt', 'workspace'); "
+                        "[IO.File]::WriteAllText($env:NOSIS_WHEEL_OUTSIDE, 'escaped')"]
+            else:
+                policy.update(platform="linux" if sys.platform == "linux" else "macos", read_only_paths=[])
+                if sys.platform == "darwin":
+                    policy["private_tmp"] = str(private_tmp)
+                argv = ["/bin/sh", "-c",
+                        'printf workspace > confined.txt; printf escaped > "$NOSIS_WHEEL_OUTSIDE"']
+            probe = {
+                **request, "command": "workspace confinement probe", "argv": argv,
+                "environment": {**request["environment"], "NOSIS_WHEEL_OUTSIDE": str(outside)},
+                "stdin_base64": None,
+            }
+            # Prove the same command can change the host file without confinement.
+            control = run_helper(helper, probe)
+            assert control["exit_code"] == 0, control
+            marker = workspace / "confined.txt"
+            assert marker.read_text(encoding="utf-8") == "workspace", control
+            assert outside.read_text(encoding="utf-8") == "escaped", control
+            marker.unlink()
+            outside.write_text("host-secret", encoding="utf-8")
+            confined = run_helper(helper, {**probe, "policy": policy})
+            assert marker.read_text(encoding="utf-8") == "workspace", confined
+            assert outside.read_text(encoding="utf-8") == "host-secret", confined
+            if sys.platform != "linux":
+                assert confined["exit_code"] != 0, confined
+            # Linux may write to a private tmpfs shadow at the same path.
+            print(f"Verified {policy['platform']} workspace confinement")
     print(f"Verified {wheel.name}")
 
 

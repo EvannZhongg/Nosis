@@ -15,7 +15,8 @@
   "scripts": {
     "pretypecheck": "npm run build --workspace @nosis/protocol && npm run build --workspace @nosis/client",
     "pretest": "npm run build --workspace @nosis/protocol && npm run build --workspace @nosis/client",
-    "build": "npm run build --workspaces --if-present",
+    "prebuild": "npm run build --workspace @nosis/protocol && npm run build --workspace @nosis/client",
+    "build": "npm run build --workspace @nosis/mobile --workspace nosis-tui --workspace nosis-gui",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "vitest run"
   },

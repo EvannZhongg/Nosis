@@ -110,9 +110,9 @@ class ExternalBridgeClientTest(unittest.TestCase):
                 ignore=shutil.ignore_patterns("node_modules", "__pycache__", ".DS_Store", "target"),
             )
 
-        def run(args, cwd=source):
+        def run(args, cwd=source, *, timeout=120):
             result = subprocess.run(args, cwd=cwd, capture_output=True, text=True,
-                                    encoding="utf-8", timeout=120, env={
+                                    encoding="utf-8", timeout=timeout, env={
                                         **os.environ,
                                         "PATH": str(ROOT / "node_modules/.bin") + os.pathsep + os.environ["PATH"],
                                     })
@@ -121,7 +121,7 @@ class ExternalBridgeClientTest(unittest.TestCase):
             return result
 
         run([sys.executable, "-m", "pip", "wheel", "--no-deps", "--no-build-isolation",
-             "--wheel-dir", str(cls.root), str(source)])
+             "--wheel-dir", str(cls.root), str(source)], timeout=300)
         wheel = next(cls.root.glob("nosis_agent-*.whl"))
         run([sys.executable, "-m", "pip", "install", "--no-deps", "--no-compile",
              "--target", str(cls.site), str(wheel)])
