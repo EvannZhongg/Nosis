@@ -641,6 +641,7 @@ class McpClientManagerTest(unittest.TestCase):
         with (
             patch.object(manager._ready, "wait", record_wait),
             patch.object(manager, "_start_server", start_server),
+            patch("agent_core.mcp.manager.time", SimpleNamespace(monotonic=lambda: 100.0)),
         ):
             try:
                 manager.start()

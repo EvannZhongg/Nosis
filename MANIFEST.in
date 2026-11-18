@@ -1,1 +1,4 @@
-recursive-include nosis-sandbox Cargo.toml Cargo.lock *.rs
+include nosis-sandbox/Cargo.toml nosis-sandbox/Cargo.lock
+recursive-include nosis-sandbox/src *.rs
+recursive-include nosis-sandbox/tests *.rs
+prune nosis-sandbox/target

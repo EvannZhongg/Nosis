@@ -10,7 +10,7 @@ from setuptools.command.bdist_wheel import bdist_wheel
 from setuptools.command.build_py import build_py
 
 
-ROOT = Path(__file__).parent
+ROOT = Path(__file__).resolve().parent
 CRATE = ROOT / "nosis-sandbox"
 
 
@@ -22,7 +22,9 @@ class BuildPyWithSandbox(build_py):
             command.extend(["--target", target])
         subprocess.run(command, cwd=ROOT, check=True)
         super().run()
-        target_dir = CRATE / "target"
+        target_dir = Path(os.environ.get("CARGO_TARGET_DIR", CRATE / "target"))
+        if not target_dir.is_absolute():
+            target_dir = ROOT / target_dir
         if target:
             target_dir /= target
         executable = "nosis-sandbox.exe" if os.name == "nt" else "nosis-sandbox"

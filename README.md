@@ -142,7 +142,7 @@ python -m venv .venv
 source .venv/bin/activate
 rustup toolchain install stable
 cargo build --release --manifest-path nosis-sandbox/Cargo.toml
-python -m pip install -e ".[gui,test]"
+python -m pip install -e ".[server,test]"
 python -m pytest --durations=20
 ```
 
@@ -164,7 +164,9 @@ The Linux sandbox integration tests require a working bubblewrap and user namesp
 
 Run the native helper and sandbox permission tests with `cargo test --manifest-path nosis-sandbox/Cargo.toml`. Platform wheels are built in the `build-platform-wheels` workflow.
 
-The internal helper protocol starts with a JSON `protocol_version` greeting, followed by one newline-terminated JSON request and one JSON result carrying the same version. Python validates the greeting before sending a command; the helper validates the request version before decoding execution fields or initializing the sandbox. Keep `HELPER_PROTOCOL_VERSION` in `agent_core/execution/process.py` and `PROTOCOL_VERSION` in `nosis-sandbox/src/main.rs` aligned, and increment both when changing the contract. After the request, stdin is a cancellation channel: a byte or EOF cancels the command. Keep it open until execution finishes.
+The wheel matrix covers x86-64 and ARM64 on Windows, macOS 11+, and Linux with glibc 2.28+. Each `py3-none-<platform>` wheel supports Python 3.11+ and includes the native helper and the built TUI, GUI, and IM assets. The workflow installs each wheel and executes its helper to check the package and protocol.
+
+The internal helper protocol starts with a JSON `protocol_version` greeting, followed by one newline-terminated JSON request and one JSON result carrying the same version. Python validates the greeting before sending a command; the helper validates the request version before decoding execution fields or initializing the sandbox. Keep `HELPER_PROTOCOL_VERSION` in `agent_core/execution/process.py`, `PROTOCOL_VERSION` in `nosis-sandbox/src/main.rs` and the request in `tests/smoke_wheel.py` aligned, and increment them together when changing the contract. After the request, stdin is a cancellation channel: a byte or EOF cancels the command. Keep it open until execution finishes.
 
 On Windows the shell tool uses PowerShell 7, so PowerShell 7 has to be installed separately.
 

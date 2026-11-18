@@ -78,17 +78,22 @@ fn linux_bubblewrap_enforces_workspace_and_read_only_mounts() {
     let plugin_file = plugin.join("policy.txt");
     std::fs::write(&plugin_file, "read-only").unwrap();
     let script = format!(
-        "printf workspace > inside.txt; cat '{}' > escaped.txt; printf changed > '{}'",
+        "printf workspace > inside.txt && cat '{}' > plugin.txt && ! cat '{}' > escaped.txt && ! printf changed > '{}'",
+        plugin_file.display(),
         outside.display(),
         plugin_file.display()
     );
     let result = run(linux_request(&workspace, &plugin, &script));
-    assert_ne!(result["exit_code"], 0);
+    assert_eq!(result["exit_code"], 0, "{}", result["stderr"]);
     assert_eq!(
         std::fs::read_to_string(workspace.join("inside.txt")).unwrap(),
         "workspace"
     );
-    assert!(!workspace.join("escaped.txt").exists());
+    assert_eq!(std::fs::read(workspace.join("escaped.txt")).unwrap(), b"");
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("plugin.txt")).unwrap(),
+        "read-only"
+    );
     assert_eq!(std::fs::read_to_string(&plugin_file).unwrap(), "read-only");
 }
 
@@ -138,12 +143,13 @@ fn macos_seatbelt_enforces_workspace_private_temp_and_read_only_mounts() {
     let plugin_file = plugin.join("policy.txt");
     std::fs::write(&plugin_file, "read-only").unwrap();
     let script = format!(
-        "printf workspace > inside.txt; printf temporary > \"$TMPDIR/value.txt\"; cat '{}' > escaped.txt; printf changed > '{}'",
+        "printf workspace > inside.txt && printf temporary > \"$TMPDIR/value.txt\" && cat '{}' > plugin.txt && ! cat '{}' > escaped.txt && ! printf changed > '{}'",
+        plugin_file.display(),
         outside.display(),
         plugin_file.display()
     );
     let result = run(macos_request(&workspace, &private_tmp, &plugin, &script));
-    assert_ne!(result["exit_code"], 0);
+    assert_eq!(result["exit_code"], 0, "{}", result["stderr"]);
     assert_eq!(
         std::fs::read_to_string(workspace.join("inside.txt")).unwrap(),
         "workspace"
@@ -152,6 +158,10 @@ fn macos_seatbelt_enforces_workspace_private_temp_and_read_only_mounts() {
         std::fs::read_to_string(private_tmp.join("value.txt")).unwrap(),
         "temporary"
     );
-    assert!(!workspace.join("escaped.txt").exists());
+    assert_eq!(std::fs::read(workspace.join("escaped.txt")).unwrap(), b"");
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("plugin.txt")).unwrap(),
+        "read-only"
+    );
     assert_eq!(std::fs::read_to_string(&plugin_file).unwrap(), "read-only");
 }

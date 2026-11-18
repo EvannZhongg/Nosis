@@ -1,6 +1,6 @@
 """Installed CLI + packaged SDK black-box tests. No production imports or patches.
 
-Prerequisites: npm install, Python runtime dependencies, pip and setuptools>=68.
+Prerequisites: npm install, Rust stable, Python runtime dependencies, pip and setuptools>=70.1.
 Run: python -m unittest tests.test_bridge_client -v
 """
 
@@ -102,11 +102,12 @@ class ExternalBridgeClientTest(unittest.TestCase):
         cls.external.mkdir()
         source = cls.root / "source"
         source.mkdir()
-        shutil.copyfile(ROOT / "pyproject.toml", source / "pyproject.toml")
-        for directory in ("agent_core", "agent_runtime", "interfaces"):
+        for filename in ("pyproject.toml", "setup.py", "MANIFEST.in", "README.md"):
+            shutil.copyfile(ROOT / filename, source / filename)
+        for directory in ("agent_core", "agent_runtime", "interfaces", "nosis-sandbox"):
             shutil.copytree(
                 ROOT / directory, source / directory,
-                ignore=shutil.ignore_patterns("node_modules", "__pycache__", ".DS_Store"),
+                ignore=shutil.ignore_patterns("node_modules", "__pycache__", ".DS_Store", "target"),
             )
 
         def run(args, cwd=source):
@@ -189,6 +190,30 @@ print(json.dumps({'file': str(Path(local_tokens.__file__).resolve()), 'counts': 
         report = json.loads(result.stdout)
         self.assertTrue(Path(report["file"]).is_relative_to(self.site))
         self.assertTrue(all(value > 0 for value in report["counts"]))
+
+    def test_installed_executor_uses_packaged_sandbox(self):
+        result = subprocess.run(
+            [sys.executable, "-c", """
+import json, sys
+from pathlib import Path
+from agent_core import HostCommandExecutor
+from agent_core.execution.process import _sandbox_executable
+result = HostCommandExecutor(Path.cwd()).execute(
+    (sys.executable, '-c', "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read()+bytes([10])); sys.stderr.buffer.write(b'diagnostic'+bytes([10]))"),
+    stdin='wheel 输入'.encode('utf-8'),
+)
+print(json.dumps({'helper': str(_sandbox_executable()), 'exit_code': result.exit_code,
+                  'stdout': result.stdout, 'stderr': result.stderr}))
+"""],
+            cwd=self.external, env=self.env, capture_output=True, text=True,
+            encoding="utf-8", timeout=15,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(result.stdout)
+        self.assertTrue(Path(report["helper"]).is_relative_to(self.site))
+        self.assertEqual(report["exit_code"], 0, report)
+        self.assertEqual(report["stdout"], "wheel 输入\n")
+        self.assertEqual(report["stderr"], "diagnostic\n")
 
     def test_installed_cli_first_use_snapshot_resume_and_eof(self):
         # Verify imports resolve to the wheel, rather than an editable checkout.

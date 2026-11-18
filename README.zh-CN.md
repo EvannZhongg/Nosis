@@ -140,11 +140,13 @@ Python 测试使用 Mock Provider，不需要真实 API Key：
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install -e ".[gui,test]"
+rustup toolchain install stable
+cargo build --release --manifest-path nosis-sandbox/Cargo.toml
+python -m pip install -e ".[server,test]"
 python -m pytest --durations=20
 ```
 
-在 Windows 上改用 `.venv\Scripts\Activate.ps1` 激活环境。
+在 Windows 上改用 `.venv\Scripts\Activate.ps1` 激活环境。从源码安装需要 Rust stable 工具链；平台 wheel 已包含对应的 `nosis-sandbox` 可执行文件。
 
 Pytest 默认用 4 个独立进程按测试类并行运行；串行调试使用 `-n 0`，资源较少时使用 `-n 2`。完整测试包含安装包验证及真实本地 MCP/沙箱进程；日常迭代可用 `--ignore=tests/test_bridge_client.py` 跳过安装包验证。独立插件测试包的运行方式见 [docs/plugin-interop.md](docs/plugin-interop.md)。
 
@@ -159,6 +161,8 @@ npm test
 ```
 
 Linux 沙箱集成测试需要可用的 bubblewrap 和 user namespace；未满足运行条件时测试会明确 skip。
+
+运行 `cargo test --manifest-path nosis-sandbox/Cargo.toml` 检查原生 helper 协议及沙箱权限。`build-platform-wheels` 工作流覆盖 Windows、macOS 11+、Linux（glibc 2.28+）的 x86-64 与 ARM64，共六个平台。每个 `py3-none-<platform>` wheel 支持 Python 3.11+，包含原生 helper 以及构建后的 TUI、GUI 和 IM 资源，并在安装后实际执行 helper 验证打包与协议。
 
 Windows 上 Shell Tool 使用 PowerShell 7，因此需要另外安装 PowerShell 7。
 
