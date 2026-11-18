@@ -19,6 +19,7 @@ struct Request {
     argv: Vec<String>,
     cwd: PathBuf,
     environment: HashMap<String, String>,
+    locale_encoding: String,
     stdin_base64: Option<String>,
     timeout_seconds: u64,
     spool_directory: PathBuf,
@@ -62,7 +63,7 @@ struct ResultPayload {
 struct Spool {
     path: PathBuf,
     size_chars: usize,
-    encoding: &'static str,
+    encoding: String,
 }
 
 fn main() {
@@ -94,6 +95,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         &env,
         stdin,
         request.timeout_seconds,
+        &request.locale_encoding,
         &request.spool_directory,
         request.cancel_file.as_deref(),
         windows_policy,
@@ -398,6 +400,7 @@ fn execute(
     env: &HashMap<String, String>,
     stdin: Option<Vec<u8>>,
     timeout: u64,
+    locale_encoding: &str,
     spool_directory: &Path,
     cancel_file: Option<&Path>,
     windows_policy: Option<WindowsPolicy>,
@@ -411,6 +414,7 @@ fn execute(
             env,
             stdin,
             timeout,
+            locale_encoding,
             spool_directory,
             cancel_file,
             policy,
@@ -469,8 +473,8 @@ fn execute(
     };
     let out = out_thread.join().map_err(|_| "stdout capture failed")??;
     let err = err_thread.join().map_err(|_| "stderr capture failed")??;
-    let (stdout, stdout_spool) = output(out)?;
-    let (stderr, stderr_spool) = output(err)?;
+    let (stdout, stdout_spool) = output(out, locale_encoding)?;
+    let (stderr, stderr_spool) = output(err, locale_encoding)?;
     if cancelled {
         if let Some(spool) = stdout_spool {
             let _ = fs::remove_file(spool.path);
@@ -504,23 +508,105 @@ fn capture<R: Read>(mut stream: R, path: &Path) -> io::Result<(PathBuf, usize)> 
     }
     Ok((path.to_path_buf(), size))
 }
-fn output((path, _bytes): (PathBuf, usize)) -> io::Result<(String, Option<Spool>)> {
+fn output(
+    (path, _bytes): (PathBuf, usize),
+    locale_encoding: &str,
+) -> io::Result<(String, Option<Spool>)> {
+    let locale = output_encoding(locale_encoding).unwrap_or(encoding_rs::UTF_8);
+    let (mut decoded, had_errors) = decode_output(&path, encoding_rs::UTF_8)?;
+    let used = if !had_errors {
+        "utf-8"
+    } else if locale != encoding_rs::UTF_8 {
+        let (localized, _) = decode_output(&path, locale)?;
+        decoded = localized;
+        locale.name()
+    } else {
+        "utf-8"
+    };
+    let preview = decoded.preview();
+    if decoded.size_chars <= OUTPUT_LIMIT {
+        fs::remove_file(path)?;
+        return Ok((preview, None));
+    }
+    Ok((
+        preview,
+        Some(Spool {
+            path,
+            size_chars: decoded.size_chars,
+            encoding: used.to_string(),
+        }),
+    ))
+}
+
+fn output_encoding(label: &str) -> Option<&'static encoding_rs::Encoding> {
+    // Python reports Windows code pages by number; encoding_rs knows them only
+    // under their WHATWG labels.
+    let normalized = label.trim().to_ascii_lowercase().replace('_', "-");
+    let canonical = match normalized.as_str() {
+        "cp65001" => "utf-8",
+        "cp932" => "shift_jis",
+        "cp936" | "gb2312" => "gbk",
+        "cp949" => "euc-kr",
+        "cp950" => "big5",
+        "ansi-x3.4-1968" | "ascii" | "us-ascii" => "utf-8",
+        other => other,
+    };
+    encoding_rs::Encoding::for_label(canonical.as_bytes())
+}
+
+struct DecodedOutput {
+    head: Vec<char>,
+    tail: VecDeque<char>,
+    size_chars: usize,
+}
+
+impl DecodedOutput {
+    fn preview(&self) -> String {
+        if self.size_chars <= OUTPUT_LIMIT {
+            return self.head.iter().collect();
+        }
+        let mut kept = OUTPUT_LIMIT;
+        loop {
+            let head_count = kept.div_ceil(2);
+            let tail_count = kept / 2;
+            let marker = format!(
+                "\n... [truncated {} characters] ...\n",
+                self.size_chars - kept
+            );
+            let mut rendered = self.head.iter().take(head_count).collect::<String>();
+            rendered.push_str(&marker);
+            rendered.extend(self.tail.iter().skip(OUTPUT_LIMIT - tail_count));
+            let length = rendered.chars().count();
+            if length <= OUTPUT_LIMIT {
+                return rendered;
+            }
+            kept = kept.saturating_sub(length - OUTPUT_LIMIT);
+        }
+    }
+}
+
+fn decode_output(
+    path: &Path,
+    encoding: &'static encoding_rs::Encoding,
+) -> io::Result<(DecodedOutput, bool)> {
     let mut file = File::open(&path)?;
-    let mut decoder = encoding_rs::UTF_8.new_decoder();
+    let mut decoder = encoding.new_decoder();
     let mut bytes = [0u8; 8192];
     let mut pending: Vec<u8> = Vec::new();
     let mut decoded = String::new();
     let mut head = Vec::with_capacity(OUTPUT_LIMIT);
     let mut tail = VecDeque::with_capacity(OUTPUT_LIMIT);
     let mut size_chars = 0;
+    let mut had_errors = false;
     loop {
         let read = file.read(&mut bytes)?;
         let last = read == 0;
         // A chunk can end inside a multi-byte sequence, so the decoder keeps
         // the bytes it did not consume for the next round.
         pending.extend_from_slice(&bytes[..read]);
-        decoded.reserve(pending.len().saturating_mul(3).max(16));
-        let (status, consumed, _) = decoder.decode_to_string(&pending, &mut decoded, last);
+        decoded.reserve(pending.len().saturating_mul(4).max(64));
+        let (status, consumed, errors) = decoder.decode_to_string(&pending, &mut decoded, last);
+        had_errors |= errors;
         if matches!(status, encoding_rs::CoderResult::OutputFull) {
             return Err(io::Error::other("sandbox output decoder buffer exhausted"));
         }
@@ -539,31 +625,13 @@ fn output((path, _bytes): (PathBuf, usize)) -> io::Result<(String, Option<Spool>
             break;
         }
     }
-    if size_chars <= OUTPUT_LIMIT {
-        fs::remove_file(path)?;
-        return Ok((head.into_iter().collect(), None));
-    }
-    let mut kept = OUTPUT_LIMIT;
-    let preview = loop {
-        let head_count = (kept + 1) / 2;
-        let tail_count = kept / 2;
-        let marker = format!("\n... [truncated {} characters] ...\n", size_chars - kept);
-        let mut rendered = head.iter().take(head_count).collect::<String>();
-        rendered.push_str(&marker);
-        rendered.extend(tail.iter().skip(OUTPUT_LIMIT - tail_count));
-        let length = rendered.chars().count();
-        if length <= OUTPUT_LIMIT {
-            break rendered;
-        }
-        kept = kept.saturating_sub(length - OUTPUT_LIMIT);
-    };
     Ok((
-        preview,
-        Some(Spool {
-            path,
+        DecodedOutput {
+            head,
+            tail,
             size_chars,
-            encoding: "utf-8",
-        }),
+        },
+        had_errors,
     ))
 }
 

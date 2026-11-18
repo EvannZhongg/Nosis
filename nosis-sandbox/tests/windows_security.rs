@@ -32,6 +32,7 @@ fn request_timeout(workspace: &Path, private_tmp: &Path, script: &str, timeout: 
         "argv": [powershell(), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
         "cwd": workspace,
         "environment": environment,
+        "locale_encoding": "utf-8",
         "stdin_base64": null,
         "timeout_seconds": timeout,
         "spool_directory": std::env::temp_dir(),

@@ -30,6 +30,7 @@ fn request(workspace: &Path, script: &str) -> Value {
         "argv": argv(script),
         "cwd": workspace,
         "environment": std::env::vars().collect::<std::collections::HashMap<_,_>>(),
+        "locale_encoding": "gbk",
         "stdin_base64": null,
         "timeout_seconds": 10,
         "spool_directory": std::env::temp_dir(),
@@ -104,4 +105,34 @@ fn oversized_streams_keep_bounded_previews_and_complete_spools() {
         );
         std::fs::remove_file(spool["path"].as_str().unwrap()).unwrap();
     }
+}
+
+#[test]
+fn locale_fallback_decodes_preview_and_keeps_spool_encoding() {
+    let workspace = tempdir().unwrap();
+    let mut payload = Vec::with_capacity(120_001);
+    payload.push(b'A');
+    for _ in 0..30_000 {
+        payload.extend_from_slice(&[0xD6, 0xD0, 0xCE, 0xC4]);
+    }
+    std::fs::write(workspace.path().join("payload.bin"), &payload).unwrap();
+    #[cfg(windows)]
+    let script = "$b = [IO.File]::ReadAllBytes('payload.bin'); [Console]::OpenStandardOutput().Write($b, 0, $b.Length)";
+    #[cfg(not(windows))]
+    let script = "cat payload.bin";
+    let result = run(request(workspace.path(), script));
+    assert_eq!(result["exit_code"], 0, "{}", result["stderr"]);
+    assert!(result["stdout"].as_str().unwrap().starts_with("A中文中文"));
+    assert_eq!(
+        result["stdout"].as_str().unwrap().chars().count(),
+        50 * 1024
+    );
+    let spool = &result["stdout_spool"];
+    assert_eq!(spool["encoding"], "GBK");
+    assert_eq!(spool["size_chars"], 60_001);
+    assert_eq!(
+        std::fs::read(spool["path"].as_str().unwrap()).unwrap(),
+        payload
+    );
+    std::fs::remove_file(spool["path"].as_str().unwrap()).unwrap();
 }

@@ -1,6 +1,7 @@
 import os
 import sys
 import platform
+import locale
 import subprocess
 import tempfile
 import threading
@@ -34,6 +35,8 @@ from agent_core import (
 from agent_core.execution.process import (
     MAX_COMMAND_OUTPUT_CHARS,
     CommandOutputSpool,
+    _SPOOL_PATHS,
+    _cleanup_registered_spools,
 )
 from agent_core.execution.sandbox.base import _sandbox_environment
 
@@ -308,14 +311,40 @@ class HostCommandExecutorTest(unittest.TestCase):
                 working_directory,
                 "import sys\n"
                 "sys.stdout.buffer.write(b'\\xd6\\xd0\\xce\\xc4')\n"
-                "sys.stderr.buffer.write(b'\\xd2\\xbb')\n",
+                "sys.stderr.buffer.write(b'\\xd6\\xd0')\n",
             )
 
             result = executor.execute(command)
 
             self.assertEqual(result.exit_code, 0)
-            self.assertNotEqual(result.stdout, "")
-            self.assertNotEqual(result.stderr, "")
+            encoding = locale.getpreferredencoding(False)
+            expected_stdout = b"\xd6\xd0\xce\xc4".decode(encoding, errors="replace")
+            expected_stderr = b"\xd6\xd0".decode(encoding, errors="replace")
+            self.assertEqual(result.stdout, expected_stdout)
+            self.assertEqual(result.stderr, expected_stderr)
+
+    def test_registered_spools_are_removed_at_exit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "nosis-shell-output"
+            path.write_text("pending", encoding="utf-8")
+            _SPOOL_PATHS.add(path)
+
+            _cleanup_registered_spools()
+
+            self.assertFalse(path.exists())
+            self.assertNotIn(path, _SPOOL_PATHS)
+
+    def test_spool_excerpt_uses_detected_locale_encoding(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "nosis-shell-output"
+            path.write_bytes(b"\xd6\xd0\xce\xc4")
+            spool = CommandOutputSpool(path, 2, "GBK")
+
+            excerpt = spool.excerpt(10)
+
+            self.assertEqual(excerpt.head, "中文")
+            self.assertEqual(excerpt.size_chars, 2)
+            spool.cleanup()
 
 
 class ExecutionAuthorityTest(unittest.TestCase):

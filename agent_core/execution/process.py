@@ -1,5 +1,7 @@
+import atexit
 import base64
 import json
+import locale
 import os
 import shutil
 import subprocess
@@ -17,6 +19,7 @@ from ..turn_control import AgentCancelled
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 60
 MAX_COMMAND_TIMEOUT_SECONDS = 24 * 60 * 60
 MAX_COMMAND_OUTPUT_CHARS = 50 * 1024
+_SPOOL_PATHS: set[Path] = set()
 
 
 @dataclass(frozen=True)
@@ -62,9 +65,11 @@ class CommandOutputSpool:
         try:
             self.path.unlink()
         except FileNotFoundError:
-            pass
+            _SPOOL_PATHS.discard(self.path)
         except PermissionError:
             pass
+        else:
+            _SPOOL_PATHS.discard(self.path)
 
 
 class CancellationSignal(Protocol):
@@ -110,6 +115,7 @@ def _execute_process(
         "argv": argv,
         "cwd": str(working_directory),
         "environment": environment if environment is not None else os.environ.copy(),
+        "locale_encoding": locale.getpreferredencoding(False),
         "stdin_base64": base64.b64encode(stdin).decode("ascii") if stdin is not None else None,
         "timeout_seconds": timeout_seconds,
         "spool_directory": str(spool_directory or tempfile.gettempdir()),
@@ -198,9 +204,20 @@ def _sandbox_executable() -> Path:
 def _spool_from_payload(value: dict[str, object] | None) -> CommandOutputSpool | None:
     if value is None:
         return None
-    return CommandOutputSpool(
+    spool = CommandOutputSpool(
         Path(value["path"]), int(value["size_chars"]), str(value["encoding"])
     )
+    _SPOOL_PATHS.add(spool.path)
+    return spool
+
+
+def _cleanup_registered_spools() -> None:
+    for path in tuple(_SPOOL_PATHS):
+        try:
+            path.unlink(missing_ok=True)
+        except PermissionError:
+            continue
+        _SPOOL_PATHS.discard(path)
 
 
 def command_argv(command: str | tuple[str, ...], working_directory: Path) -> list[str]:
@@ -260,3 +277,6 @@ def _read_text_excerpt(path: Path, limit: int, encoding: str, errors: str) -> Te
                 head.extend(chunk[: limit - len(head)])
             tail.extend(chunk)
     return TextExcerpt("".join(head), "".join(tail), size_chars)
+
+
+atexit.register(_cleanup_registered_spools)

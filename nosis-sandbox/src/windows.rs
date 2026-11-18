@@ -66,6 +66,7 @@ pub(super) fn execute(
     environment: &HashMap<String, String>,
     stdin: Option<Vec<u8>>,
     timeout: u64,
+    locale_encoding: &str,
     spool: &Path,
     cancel_file: Option<&Path>,
     policy: WindowsPolicy,
@@ -78,6 +79,7 @@ pub(super) fn execute(
         environment,
         stdin,
         timeout,
+        locale_encoding,
         spool,
         cancel_file,
     );
@@ -276,6 +278,7 @@ impl Sandbox {
         env: &HashMap<String, String>,
         stdin: Option<Vec<u8>>,
         timeout: u64,
+        locale_encoding: &str,
         spool: &Path,
         cancel_file: Option<&Path>,
     ) -> Result<(i32, String, String, bool, Option<Spool>, Option<Spool>), Box<dyn std::error::Error>>
@@ -426,8 +429,8 @@ impl Sandbox {
         if input_path.exists() {
             let _ = fs::remove_file(input_path);
         }
-        let a = capture_existing(spool, "stdout", out_path)?;
-        let b = capture_existing(spool, "stderr", err_path)?;
+        let a = capture_existing(out_path, locale_encoding)?;
+        let b = capture_existing(err_path, locale_encoding)?;
         if cancelled {
             if let Some(spool) = a.1 {
                 let _ = fs::remove_file(spool.path);
@@ -464,12 +467,8 @@ impl Sandbox {
     }
 }
 
-fn capture_existing(
-    _dir: &Path,
-    _stream: &str,
-    path: PathBuf,
-) -> io::Result<(String, Option<Spool>)> {
-    super::output((path, 0))
+fn capture_existing(path: PathBuf, locale_encoding: &str) -> io::Result<(String, Option<Spool>)> {
+    super::output((path, 0), locale_encoding)
 }
 fn wide(value: &OsStr) -> Vec<u16> {
     value.encode_wide().chain(Some(0)).collect()
