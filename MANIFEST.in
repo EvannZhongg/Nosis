@@ -1,0 +1,1 @@
+recursive-include nosis-sandbox Cargo.toml Cargo.lock *.rs

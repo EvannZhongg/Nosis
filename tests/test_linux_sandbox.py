@@ -27,55 +27,6 @@ from agent_core import (
 )
 
 
-class LinuxSandboxFailureTest(unittest.TestCase):
-    def setUp(self) -> None:
-        self.directory = tempfile.TemporaryDirectory()
-        self.addCleanup(self.directory.cleanup)
-        self.workspace = Path(self.directory.name)
-        self.backend = LinuxSandboxBackend()
-        self.addCleanup(self.backend.close)
-        self.executor = SandboxedCommandExecutor(self.workspace, self.backend)
-
-    def test_missing_bwrap_fails_without_launching_a_command(self) -> None:
-        with (
-            patch(
-                "agent_core.execution.sandbox.linux.shutil.which",
-                return_value=None,
-            ),
-            patch(
-                "agent_core.execution.process._execute_process"
-            ) as execute,
-        ):
-            with self.assertRaisesRegex(RuntimeError, "requires bubblewrap"):
-                self.executor.execute("touch escaped")
-        execute.assert_not_called()
-        self.assertFalse((self.workspace / "escaped").exists())
-
-    def test_namespace_failure_preserves_diagnostic_without_host_retry(self) -> None:
-        diagnostic = (
-            "bwrap: Creating new namespace failed: Operation not permitted\n"
-        )
-        failure = CommandExecutionResult("touch escaped", 1, "", diagnostic)
-        with (
-            patch(
-                "agent_core.execution.sandbox.linux.shutil.which",
-                return_value="/usr/bin/bwrap",
-            ),
-            patch(
-                "agent_core.execution.process._execute_process",
-                return_value=failure,
-            ) as execute,
-        ):
-            result = self.executor.execute("touch escaped")
-        self.assertIs(result, failure)
-        execute.assert_called_once()
-        argv = execute.call_args.args[0]
-        for namespace in ("user", "pid", "net", "ipc", "uts"):
-            self.assertIn(f"--unshare-{namespace}", argv)
-            self.assertNotIn(f"--unshare-{namespace}-try", argv)
-        self.assertNotIn("--unshare-all", argv)
-        self.assertEqual(argv[argv.index("--cap-drop") + 1], "ALL")
-        self.assertFalse((self.workspace / "escaped").exists())
 
 
 @unittest.skipUnless(

@@ -19,11 +19,29 @@ from agent_core import (
     ToolResultNormalizer,
     Workspace,
 )
-from agent_core.execution.process import _read_spooled_output
+from agent_core.execution.process import (
+    MAX_COMMAND_OUTPUT_CHARS,
+    CommandOutputSpool,
+    _read_text_excerpt,
+)
 from agent_core.session_paths import workspace_key
 from agent_core.tools.base import ToolError
 from agent_core.tools.budget import MAX_TOOL_RESULT_CHARS
 from agent_core.tools.text import MAX_ARTIFACT_LINE_CHARS
+
+
+def _preview_and_spool(path: Path) -> tuple[str, CommandOutputSpool | None]:
+    """Mirror the bounded preview ``nosis-sandbox`` returns for a stream."""
+    excerpt = _read_text_excerpt(path, MAX_COMMAND_OUTPUT_CHARS, "utf-8", "replace")
+    if excerpt.size_chars <= MAX_COMMAND_OUTPUT_CHARS:
+        return excerpt.head, None
+    kept_chars = MAX_COMMAND_OUTPUT_CHARS
+    while True:
+        preview = excerpt.render(kept_chars)
+        overflow = len(preview) - MAX_COMMAND_OUTPUT_CHARS
+        if overflow <= 0:
+            return preview, CommandOutputSpool(path, excerpt.size_chars, "utf-8")
+        kept_chars = max(0, kept_chars - overflow)
 
 
 class ToolResultNormalizerTest(unittest.TestCase):
@@ -311,7 +329,7 @@ class ShellArtifactTest(unittest.TestCase):
         for name, text in (("stdout", stdout), ("stderr", stderr)):
             path = self.root / f"{name}.txt"
             path.write_text(text, encoding="utf-8", newline="")
-            streams[name], spools[name] = _read_spooled_output(path)
+            streams[name], spools[name] = _preview_and_spool(path)
             if spools[name] is not None:
                 self.spool_paths.append(path)
         execution = CommandExecutionResult(

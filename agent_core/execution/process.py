@@ -1,10 +1,10 @@
-import atexit
-import locale
+import base64
+import json
 import os
 import shutil
-import signal
 import subprocess
 import tempfile
+import threading
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -17,9 +17,6 @@ from ..turn_control import AgentCancelled
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 60
 MAX_COMMAND_TIMEOUT_SECONDS = 24 * 60 * 60
 MAX_COMMAND_OUTPUT_CHARS = 50 * 1024
-SPOOL_FILE_PREFIX = "nosis-shell-"
-STALE_SPOOL_AGE_SECONDS = 24 * 60 * 60
-_SPOOL_PATHS: set[Path] = set()
 
 
 @dataclass(frozen=True)
@@ -36,8 +33,6 @@ class CommandExecutionResult:
 
 @dataclass(frozen=True)
 class TextExcerpt:
-    """Original stream ends and length, before any truncation markers."""
-
     head: str
     tail: str
     size_chars: int
@@ -56,8 +51,6 @@ class TextExcerpt:
 
 @dataclass(frozen=True)
 class CommandOutputSpool:
-    """A complete command stream retained on disk for artifact creation."""
-
     path: Path
     size_chars: int
     encoding: str
@@ -69,15 +62,9 @@ class CommandOutputSpool:
         try:
             self.path.unlink()
         except FileNotFoundError:
-            _SPOOL_PATHS.discard(self.path)
-        except PermissionError:
-            # A child process can briefly retain an inherited handle on
-            # Windows after the parent shell has exited.  Cleanup is
-            # best-effort here; callers must not lose an otherwise valid
-            # command result because a temporary file is still locked.
             pass
-        else:
-            _SPOOL_PATHS.discard(self.path)
+        except PermissionError:
+            pass
 
 
 class CancellationSignal(Protocol):
@@ -86,19 +73,9 @@ class CancellationSignal(Protocol):
 
 
 class CommandCancelled(AgentCancelled):
-    """The Runtime cancelled a running command and its process group."""
+    """The Runtime cancelled a running command and its process tree."""
 
 
-class RunningProcess(Protocol):
-    pid: int
-    returncode: int | None
-
-    def poll(self) -> int | None: ...
-
-    def wait(self, timeout: float | None = None) -> int: ...
-
-
-ProcessLauncher = Callable[..., RunningProcess]
 ShellLauncher = Callable[[str, Path], list[str]]
 
 
@@ -111,9 +88,8 @@ def _execute_process(
     cancellation: CancellationSignal | None,
     environment: dict[str, str] | None = None,
     spool_directory: Path | None = None,
-    reports_sandbox_entry_failure: bool = False,
-    process_launcher: ProcessLauncher | None = None,
     stdin: bytes | None = None,
+    policy: dict[str, object] | None = None,
 ) -> CommandExecutionResult:
     if cancellation is not None and cancellation.cancelled:
         raise CommandCancelled
@@ -128,124 +104,102 @@ def _execute_process(
             f"{MAX_COMMAND_TIMEOUT_SECONDS} seconds"
         )
 
-    _reap_stale_spools()
-    stdout_file = None
-    stderr_file = None
+    helper = _sandbox_executable()
+    request = {
+        "command": command,
+        "argv": argv,
+        "cwd": str(working_directory),
+        "environment": environment if environment is not None else os.environ.copy(),
+        "stdin_base64": base64.b64encode(stdin).decode("ascii") if stdin is not None else None,
+        "timeout_seconds": timeout_seconds,
+        "spool_directory": str(spool_directory or tempfile.gettempdir()),
+        "policy": policy or {"platform": "host"},
+    }
+    cancel_descriptor, cancel_name = tempfile.mkstemp(prefix="nosis-cancel-")
+    os.close(cancel_descriptor)
+    cancel_file = Path(cancel_name)
+    cancel_file.unlink()
+    request["cancel_file"] = str(cancel_file)
     try:
-        stdout_file = tempfile.NamedTemporaryFile(
-            prefix=SPOOL_FILE_PREFIX,
-            suffix="-stdout",
-            dir=spool_directory,
-            delete=False,
+        process = subprocess.Popen(
+            [str(helper)],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+            start_new_session=os.name != "nt",
         )
-        stdout_path = Path(stdout_file.name)
-        _SPOOL_PATHS.add(stdout_path)
-        stderr_file = tempfile.NamedTemporaryFile(
-            prefix=SPOOL_FILE_PREFIX,
-            suffix="-stderr",
-            dir=spool_directory,
-            delete=False,
-        )
-        stderr_path = Path(stderr_file.name)
-        _SPOOL_PATHS.add(stderr_path)
     except BaseException:
-        if stdout_file is not None:
-            stdout_file.close()
-        if stderr_file is not None:
-            stderr_file.close()
-        if stdout_file is not None:
-            _unlink_best_effort(stdout_path)
-        if stderr_file is not None:
-            _unlink_best_effort(stderr_path)
+        cancel_file.unlink(missing_ok=True)
         raise
-
-    process = None
-    input_file = None
-    timed_out = False
+    assert process.stdin is not None
+    process.stdin.write(json.dumps(request, ensure_ascii=False).encode("utf-8"))
+    process.stdin.close()
+    output: dict[str, bytes] = {}
+    readers = [
+        threading.Thread(target=lambda key=key, stream=stream: output.__setitem__(key, stream.read()), daemon=True)
+        for key, stream in (("stdout", process.stdout), ("stderr", process.stderr))
+    ]
+    for reader in readers:
+        reader.start()
     try:
-        if stdin is not None:
-            input_file = tempfile.TemporaryFile()
-            input_file.write(stdin)
-            input_file.seek(0)
-        if process_launcher is None:
-            process = subprocess.Popen(
-                argv,
-                cwd=working_directory,
-                env=environment,
-                # Commands must never read the stream the UI protocol uses.
-                stdin=input_file if input_file is not None else subprocess.DEVNULL,
-                stdout=stdout_file,
-                stderr=stderr_file,
-                start_new_session=True,
-            )
-        else:
-            process = process_launcher(
-                argv,
-                cwd=working_directory,
-                environment=environment,
-                stdout=stdout_file,
-                stderr=stderr_file,
-                stdin=input_file,
-            )
-        deadline = time.monotonic() + timeout_seconds
         while process.poll() is None:
             if cancellation is not None and cancellation.cancelled:
-                _kill_process_tree(process)
-                process.wait()
-                raise CommandCancelled
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                timed_out = True
-                _kill_process_tree(process)
-                process.wait()
-                break
-            try:
-                process.wait(timeout=min(0.1, remaining))
-            except subprocess.TimeoutExpired:
-                pass
-    except BaseException:
-        if process is not None:
-            _kill_process_tree(process)
-            process.wait()
-        stdout_file.close()
-        stderr_file.close()
-        _unlink_best_effort(stdout_path)
-        _unlink_best_effort(stderr_path)
-        raise
+                cancel_file.touch()
+            time.sleep(0.05)
+        for reader in readers:
+            reader.join()
     finally:
-        if input_file is not None:
-            input_file.close()
-        stdout_file.close()
-        stderr_file.close()
+        cancel_file.unlink(missing_ok=True)
+    if process.returncode:
+        if cancellation is not None and cancellation.cancelled:
+            raise CommandCancelled
+        diagnostic = output["stderr"].decode("utf-8", errors="replace").strip()
+        raise RuntimeError(diagnostic or f"nosis-sandbox exited with status {process.returncode}")
 
-    try:
-        stdout, stdout_spool = _read_spooled_output(stdout_path)
-        stderr, stderr_spool = _read_spooled_output(stderr_path)
-    except BaseException:
-        _unlink_best_effort(stdout_path)
-        _unlink_best_effort(stderr_path)
-        raise
-    if stdout_spool is None:
-        _unlink_best_effort(stdout_path)
-    if stderr_spool is None:
-        _unlink_best_effort(stderr_path)
+    payload = json.loads(output["stdout"])
+    stderr = payload["stderr"]
     if (
-        reports_sandbox_entry_failure
-        and process.returncode == 71
+        policy is not None
+        and policy.get("platform") == "macos"
+        and payload["exit_code"] == 71
         and "sandbox_apply: Operation not permitted" in stderr
     ):
-        raise RuntimeError(
-            "workspace sandbox could not be entered: Operation not permitted"
-        )
+        raise RuntimeError("workspace sandbox could not be entered: Operation not permitted")
     return CommandExecutionResult(
-        command=command,
-        exit_code=process.returncode,
-        stdout=stdout,
+        command=payload["command"],
+        exit_code=payload["exit_code"],
+        stdout=payload["stdout"],
         stderr=stderr,
-        timed_out=timed_out,
-        timeout_seconds=timeout_seconds,
-        stdout_spool=stdout_spool,
-        stderr_spool=stderr_spool,
+        timed_out=payload["timed_out"],
+        timeout_seconds=payload["timeout_seconds"],
+        stdout_spool=_spool_from_payload(payload["stdout_spool"]),
+        stderr_spool=_spool_from_payload(payload["stderr_spool"]),
+    )
+
+
+def _sandbox_executable() -> Path:
+    packaged = Path(__file__).parents[1] / "bin" / (
+        "nosis-sandbox.exe" if os.name == "nt" else "nosis-sandbox"
+    )
+    if packaged.is_file():
+        return packaged
+    source = Path(__file__).parents[2] / "nosis-sandbox" / "target" / "release" / (
+        "nosis-sandbox.exe" if os.name == "nt" else "nosis-sandbox"
+    )
+    if source.is_file():
+        return source
+    raise RuntimeError(
+        "nosis-sandbox is not built; install a platform wheel or run "
+        "cargo build --release --manifest-path nosis-sandbox/Cargo.toml"
+    )
+
+
+def _spool_from_payload(value: dict[str, object] | None) -> CommandOutputSpool | None:
+    if value is None:
+        return None
+    return CommandOutputSpool(
+        Path(value["path"]), int(value["size_chars"]), str(value["encoding"])
     )
 
 
@@ -265,27 +219,19 @@ def platform_shell_launcher(command: str, working_directory: Path) -> list[str]:
 
 
 def _windows_shell_environment(environment: dict[str, str]) -> dict[str, str]:
-    """Keep PowerShell output plain for both host and workspace commands."""
     environment.pop("TERM", None)
     environment["NO_COLOR"] = "1"
     return environment
 
 
-def _windows_powershell_argv(
-    command: str, working_directory: Path
-) -> list[str]:
+def _windows_powershell_argv(command: str, working_directory: Path) -> list[str]:
     location = str(working_directory).replace("'", "''")
     return [
-        _powershell_7(),
-        "-NoLogo",
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
+        _powershell_7(), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
         "$ErrorActionPreference = 'Stop'\n"
         "Set-StrictMode -Version Latest\n"
         "$PSNativeCommandUseErrorActionPreference = $true\n"
-        f"Set-Location -LiteralPath '{location}'\n"
-        + command,
+        f"Set-Location -LiteralPath '{location}'\n" + command,
     ]
 
 
@@ -293,145 +239,24 @@ def _powershell_7() -> str:
     candidates: list[str | None] = []
     program_files = os.environ.get("ProgramFiles")
     if program_files:
-        candidates.append(
-            str(Path(program_files) / "PowerShell" / "7" / "pwsh.exe")
-        )
+        candidates.append(str(Path(program_files) / "PowerShell" / "7" / "pwsh.exe"))
     candidates.append(shutil.which("pwsh.exe"))
     for candidate in candidates:
-        if candidate is None:
-            continue
-        executable = Path(candidate).resolve()
-        if executable.is_file():
-            return str(executable)
+        if candidate is not None:
+            executable = Path(candidate).resolve()
+            if executable.is_file():
+                return str(executable)
     raise RuntimeError("Windows shell requires PowerShell 7 (pwsh.exe)")
 
 
-def _kill_process_tree(process: RunningProcess) -> None:
-    """Kill a command tree using its native lifecycle container when present."""
-    terminate_tree = getattr(process, "terminate_tree", None)
-    if callable(terminate_tree):
-        try:
-            terminate_tree()
-            return
-        except OSError:
-            # A process may have exited and released its job between polling
-            # and cancellation.  Keep the platform fallback for that race.
-            pass
-    if os.name == "nt":
-        subprocess.run(
-            ["taskkill", "/F", "/T", "/PID", str(process.pid)],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        return
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-
-
-def _read_spooled_output(
-    path: Path,
-) -> tuple[str, CommandOutputSpool | None]:
-    """Return a bounded preview and retain oversized streams on disk."""
-    preview, size_chars, encoding = _read_text_preview(
-        path, MAX_COMMAND_OUTPUT_CHARS
-    )
-    if size_chars <= MAX_COMMAND_OUTPUT_CHARS:
-        return preview, None
-    return preview, CommandOutputSpool(path, size_chars, encoding)
-
-
-def _unlink_best_effort(path: Path) -> None:
-    try:
-        path.unlink(missing_ok=True)
-    except PermissionError:
-        # See CommandOutputSpool.cleanup: a transient Windows sharing
-        # violation must not turn a successful command into a tool error.
-        pass
-    else:
-        _SPOOL_PATHS.discard(path)
-
-
-def _reap_stale_spools() -> None:
-    cutoff = time.time() - STALE_SPOOL_AGE_SECONDS
-    temp_directory = Path(tempfile.gettempdir())
-    try:
-        candidates = temp_directory.glob(f"{SPOOL_FILE_PREFIX}*")
-    except OSError:
-        return
-    for path in candidates:
-        if path in _SPOOL_PATHS:
-            continue
-        try:
-            if path.is_file() and path.stat().st_mtime < cutoff:
-                _unlink_best_effort(path)
-        except OSError:
-            continue
-
-
-def _cleanup_registered_spools() -> None:
-    for path in tuple(_SPOOL_PATHS):
-        _unlink_best_effort(path)
-
-
-def _read_text_preview(path: Path, budget: int) -> tuple[str, int, str]:
-    """Read a bounded head/tail preview without loading the whole file."""
-    preferred_encoding = locale.getpreferredencoding(False)
-    for encoding in ("utf-8", preferred_encoding):
-        try:
-            preview, size_chars = _read_text_preview_with_encoding(
-                path, budget, encoding, "strict"
-            )
-            return preview, size_chars, encoding
-        except UnicodeDecodeError:
-            continue
-    preview, size_chars = _read_text_preview_with_encoding(
-        path, budget, preferred_encoding, "replace"
-    )
-    return preview, size_chars, preferred_encoding
-
-
-def _read_text_preview_with_encoding(
-    path: Path,
-    budget: int,
-    encoding: str,
-    errors: str,
-) -> tuple[str, int]:
-    excerpt = _read_text_excerpt(path, budget, encoding, errors)
-    if excerpt.size_chars <= budget:
-        return excerpt.head, excerpt.size_chars
-    kept_chars = budget
-    while True:
-        preview = excerpt.render(kept_chars)
-        overflow = len(preview) - budget
-        if overflow <= 0:
-            return preview, excerpt.size_chars
-        kept_chars = max(0, kept_chars - overflow)
-
-
-def _read_text_excerpt(
-    path: Path,
-    limit: int,
-    encoding: str,
-    errors: str,
-) -> TextExcerpt:
+def _read_text_excerpt(path: Path, limit: int, encoding: str, errors: str) -> TextExcerpt:
     head: list[str] = []
     tail: deque[str] = deque(maxlen=limit)
     size_chars = 0
     with path.open("r", encoding=encoding, errors=errors, newline="") as file:
-        while True:
-            chunk = file.read(8192)
-            if not chunk:
-                break
+        while chunk := file.read(8192):
             size_chars += len(chunk)
-            remaining_head = limit - len(head)
-            if remaining_head > 0:
-                head.extend(chunk[:remaining_head])
+            if len(head) < limit:
+                head.extend(chunk[: limit - len(head)])
             tail.extend(chunk)
-
     return TextExcerpt("".join(head), "".join(tail), size_chars)
-
-
-atexit.register(_cleanup_registered_spools)
-_reap_stale_spools()

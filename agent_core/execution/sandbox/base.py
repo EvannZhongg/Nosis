@@ -91,27 +91,17 @@ def _require_supported_policy(
 
 
 def _sandbox_environment(
-    private_tmp: Path,
     excluded_environment_names: Collection[str] = (),
 ) -> dict[str, str]:
+    # The runtime sandbox helper owns the temporary-directory variables,
+    # because only it knows the path the sandboxed child can actually use.
     environment = os.environ.copy()
     for name in excluded_environment_names:
         environment.pop(name, None)
-    environment.update(
-        {
-            "HOME": str(private_tmp),
-            "TMPDIR": str(private_tmp),
-            "TMP": str(private_tmp),
-            "TEMP": str(private_tmp),
-        }
-    )
     return environment
 
 
 def _windows_sandbox_environment(
-    private_tmp: Path,
     excluded_environment_names: Collection[str] = (),
 ) -> dict[str, str]:
-    return _windows_shell_environment(
-        _sandbox_environment(private_tmp, excluded_environment_names)
-    )
+    return _windows_shell_environment(_sandbox_environment(excluded_environment_names))

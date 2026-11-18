@@ -132,14 +132,13 @@ Shell 通过 `ExecutionRouter` 根据 `ExecutionScope` 和当前 `ExecutionAutho
 
 `approval.py` 生成审批提示与审批历史的有界摘要：路径、字节与行数、每个文本字段的前 3 行预览，整体不超过 2048 字符，patch 最多列出 8 个文件操作并说明省略数量。完整参数保留在原始 Tool Call 中，不重复写入用户交互记录。
 
-`execution/` 负责进程超时、取消、输出 spool、平台 shell 和沙箱路由：
+`execution/` 构造 `nosis-sandbox` 的策略 JSON 并解析结构化结果。Rust helper 负责子进程生命周期、超时、取消、输出 spool 和平台沙箱：
 
-- macOS 使用 Seatbelt。
-- Linux 使用 bubblewrap；缺失时报错，namespace 初始化失败时保留原始诊断，两者都不回退宿主执行。
-- Windows 使用 Restricted Token（`windows_sandbox.py`），Shell 方言为 PowerShell 7。
+- macOS 使用 Seatbelt；Linux 使用 bubblewrap，缺失或 namespace 初始化失败时保留错误，不回退宿主执行。
+- Windows 使用 Restricted Token、受限 SID、目录 capability ACL、可回收 lease 和 kill-on-close Job Object；Shell 方言为 PowerShell 7。
 - Windows 的 host/workspace Shell 统一启用 `ErrorActionPreference=Stop`、严格模式与原生命令错误处理；清理脚本须使用任务专用变量并先验证目标路径边界，不得吞掉初始化或删除错误。
 
-沙箱策略使用结构化的文件系统、网络、临时目录和进程隔离能力描述；平台 backend 负责把策略翻译成具体 OS 约束。
+平台授权行为由 Rust 集成测试启动 helper 并检查真实子进程的文件访问结果；Python 单测只覆盖策略装配与 JSON 结果解析。
 
 ## Provider 与模型协议
 

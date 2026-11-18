@@ -1,0 +1,51 @@
+name: build-platform-wheels
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  windows-macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: cargo test --manifest-path nosis-sandbox/Cargo.toml
+      - run: python -m pip install build
+      - run: python -m build --wheel
+      - run: python -c "import glob,zipfile; p=glob.glob('dist/*.whl')[0]; z=zipfile.ZipFile(p); n=z.namelist(); assert any(x.endswith('agent_core/bin/nosis-sandbox.exe' if '${{ runner.os }}' == 'Windows' else 'agent_core/bin/nosis-sandbox') for x in n); assert 'none-any' not in p"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nosis-agent-${{ runner.os }}
+          path: dist/*.whl
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test and build manylinux wheel
+        run: |
+          docker run --rm \
+            -v "$PWD:/io" -w /io \
+            quay.io/pypa/manylinux_2_28_x86_64 \
+            bash -lc '
+              curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+              export PATH="$HOME/.cargo/bin:$PATH"
+              /opt/python/cp311-cp311/bin/python -m pip install build
+              cargo test --manifest-path nosis-sandbox/Cargo.toml
+              /opt/python/cp311-cp311/bin/python -m build --wheel
+              /opt/python/cp311-cp311/bin/python -m wheel tags --platform-tag manylinux_2_28_x86_64 --remove dist/*.whl
+              /opt/python/cp311-cp311/bin/python -c "import glob,zipfile; p=glob.glob('dist/*.whl')[0]; z=zipfile.ZipFile(p); assert 'manylinux_2_28_x86_64' in p; assert any(x.endswith('agent_core/bin/nosis-sandbox') for x in z.namelist())"
+            '
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nosis-agent-Linux
+          path: dist/*.whl

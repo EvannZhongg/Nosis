@@ -34,68 +34,23 @@ class LinuxSandboxBackend(SandboxBackend):
         read_only_paths: tuple[Path, ...] = (),
     ) -> CommandExecutionResult:
         _require_supported_policy(policy, self.default_policy)
-        executable = shutil.which("bwrap")
-        if executable is None:
-            raise RuntimeError(
-                "workspace shell requires bubblewrap (bwrap) on Linux; "
-                "install bwrap and enable unprivileged user namespaces"
-            )
         workspace = working_directory.resolve()
         private_tmp = self._temporary_directory.resolve()
-        argv = [
-            executable,
-            "--die-with-parent",
-            # Bubblewrap always creates a mount namespace. These additional
-            # namespaces are required: failure must never weaken isolation.
-            "--unshare-user",
-            "--unshare-pid",
-            "--unshare-net",
-            "--unshare-ipc",
-            "--unshare-uts",
-            # Cgroup isolation is optional, as with bwrap's --unshare-all.
-            "--unshare-cgroup-try",
-            "--cap-drop",
-            "ALL",
-            "--new-session",
-            "--tmpfs",
-            "/",
-            "--proc",
-            "/proc",
-            "--dev",
-            "/dev",
-        ]
-        for path in ("/usr", "/bin", "/sbin", "/lib", "/lib64"):
-            if Path(path).exists():
-                argv.extend(("--ro-bind", path, path))
-        argv.extend(("--tmpfs", "/tmp"))
-        _append_parent_directories(argv, workspace)
-        argv.extend(("--bind", str(workspace), str(workspace)))
-        for path in read_only_paths:
-            path = path.resolve()
-            _append_parent_directories(argv, path)
-            argv.extend(("--ro-bind", str(path), str(path)))
-        argv.extend(("--chdir", str(workspace), *command_process.command_argv(command, workspace)))
-        # Preserve bwrap's nonzero status and setup diagnostic on failure;
-        # never retry the command outside the sandbox.
         return command_process._execute_process(
-            argv,
+            command_process.command_argv(command, workspace),
             command=command_process.command_display(command),
             working_directory=workspace,
             timeout_seconds=timeout_seconds,
             cancellation=cancellation,
-            environment=_sandbox_environment(
-                Path("/tmp"), excluded_environment_names
-            ),
+            environment=_sandbox_environment(excluded_environment_names),
             spool_directory=private_tmp,
             stdin=stdin,
+            policy={
+                "platform": "linux",
+                "workspace": str(workspace),
+                "read_only_paths": [str(path.resolve()) for path in read_only_paths],
+            },
         )
 
     def close(self) -> None:
         shutil.rmtree(self._temporary_directory, ignore_errors=True)
-
-
-def _append_parent_directories(argv: list[str], path: Path) -> None:
-    parents = tuple(reversed(path.parents))
-    for parent in (*parents, path):
-        if parent != Path("/"):
-            argv.extend(("--dir", str(parent)))

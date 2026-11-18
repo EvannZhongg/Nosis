@@ -140,11 +140,13 @@ Python tests use a mock provider and need no real API key:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
+rustup toolchain install stable
+cargo build --release --manifest-path nosis-sandbox/Cargo.toml
 python -m pip install -e ".[gui,test]"
 python -m pytest --durations=20
 ```
 
-On Windows, activate the environment with `.venv\Scripts\Activate.ps1`.
+On Windows, activate the environment with `.venv\Scripts\Activate.ps1`. Installing from a source checkout requires the Rust stable toolchain; release wheels contain the matching `nosis-sandbox` executable for Windows, macOS, or Linux.
 
 Pytest distributes test classes across four isolated worker processes. Use `-n 0` for a serial run or `-n 2` on smaller machines. The full suite includes package installation and real local MCP/sandbox processes; `--ignore=tests/test_bridge_client.py` omits the package installation check during iteration. The standalone plugin testkit has its own command in [docs/plugin-interop.md](docs/plugin-interop.md).
 
@@ -159,6 +161,8 @@ npm test
 ```
 
 The Linux sandbox integration tests require a working bubblewrap and user namespaces; when the runtime conditions are not met, the tests explicitly skip.
+
+Run the native helper and sandbox permission tests with `cargo test --manifest-path nosis-sandbox/Cargo.toml`. Platform wheels are built in the `build-platform-wheels` workflow.
 
 On Windows the shell tool uses PowerShell 7, so PowerShell 7 has to be installed separately.
 

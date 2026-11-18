@@ -1,7 +1,6 @@
 import os
 import sys
 import platform
-import shutil
 import subprocess
 import tempfile
 import threading
@@ -368,7 +367,7 @@ class SandboxedCommandExecutorTest(unittest.TestCase):
                 with self.subTest(backend=backend_type.__name__):
                     backend = backend_type()
                     self.addCleanup(backend.close)
-                    with patch("agent_core.execution.sandbox.linux.shutil.which", return_value="/usr/bin/bwrap"), patch(
+                    with patch(
                         "agent_core.execution.process._execute_process",
                         return_value=CommandExecutionResult("hook", 0, "{}", ""),
                     ) as execute:
@@ -376,14 +375,12 @@ class SandboxedCommandExecutorTest(unittest.TestCase):
                             command, stdin=b"{}", read_only_paths=(plugin,),
                         )
                     argv = execute.call_args.args[0]
-                    self.assertEqual(argv[-2:], list(command))
+                    self.assertEqual(argv, list(command))
                     self.assertEqual(execute.call_args.kwargs["stdin"], b"{}")
-                    if backend_type is LinuxSandboxBackend:
-                        self.assertIn(["--ro-bind", str(plugin.resolve()), str(plugin.resolve())],
-                                      [argv[i:i+3] for i in range(len(argv)-2)])
-                    else:
-                        profile = argv[argv.index("-p") + 1]
-                        self.assertIn(str(plugin.resolve()).replace("\\", "\\\\"), profile)
+                    policy = execute.call_args.kwargs["policy"]
+                    self.assertEqual(policy["platform"], "linux" if backend_type is LinuxSandboxBackend else "macos")
+                    self.assertEqual(policy["workspace"], str(workspace.resolve()))
+                    self.assertEqual(policy["read_only_paths"], [str(plugin.resolve())])
 
     def test_platform_policies_describe_their_filesystem_boundary(self) -> None:
         for backend_type, filesystem, network in (
@@ -414,8 +411,6 @@ class SandboxedCommandExecutorTest(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "does not support"):
                     executor.execute("should not run")
                 execute.assert_not_called()
-                self.assertIsNone(backend._sandbox)
-                self.assertIsNone(backend._temporary_directory)
 
     def test_sandbox_environment_excludes_only_named_variables(self) -> None:
         with patch.dict(
@@ -426,24 +421,10 @@ class SandboxedCommandExecutorTest(unittest.TestCase):
             },
             clear=True,
         ):
-            environment = _sandbox_environment(
-                Path("/private/tmp"), {"NOSIS_PROVIDER_KEY"}
-            )
+            environment = _sandbox_environment({"NOSIS_PROVIDER_KEY"})
 
         self.assertNotIn("NOSIS_PROVIDER_KEY", environment)
         self.assertEqual(environment["USER_API_KEY"], "developer-value")
-
-    @unittest.skipUnless(platform.system() == "Darwin", "macOS Seatbelt test")
-    def test_macos_profile_limits_process_interaction_to_same_sandbox(self) -> None:
-        profile = MacOSSandboxBackend._PROFILE
-        self.assertIn("(allow process-exec)", profile)
-        self.assertIn("(allow process-fork)", profile)
-        self.assertIn("(allow signal (target same-sandbox))", profile)
-        self.assertIn(
-            "(allow process-info* (target same-sandbox))",
-            profile,
-        )
-        self.assertNotIn("(allow process*)", profile)
 
     def test_delegates_policy_and_lifecycle_to_backend(self) -> None:
         class RecordingBackend(SandboxBackend):
@@ -501,240 +482,6 @@ class SandboxedCommandExecutorTest(unittest.TestCase):
             ("pwd", working_directory, executor.policy, 12),
         )
         self.assertTrue(backend.closed)
-
-    @unittest.skipUnless(platform.system() == "Darwin", "macOS Seatbelt test")
-    def test_macos_backend_enforces_workspace_boundary_and_private_tmp(self) -> None:
-        probe = subprocess.run(
-            [
-                "/usr/bin/sandbox-exec",
-                "-p",
-                "(version 1) (allow default)",
-                "/usr/bin/true",
-            ],
-            capture_output=True,
-        )
-        if probe.returncode == 71 and b"Operation not permitted" in probe.stderr:
-            self.skipTest("the test runner already forbids nested Seatbelt")
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            workspace = root / "workspace"
-            workspace.mkdir()
-            outside = root / "outside.txt"
-            outside.write_text("secret", encoding="utf-8")
-            executor = SandboxedCommandExecutor(
-                workspace,
-                platform_workspace_sandbox_backend(),
-            )
-            try:
-                clean_result = executor.execute("true")
-                write_result = executor.execute(
-                    "printf workspace > inside.txt; "
-                    "printf temporary > \"$TMPDIR/value.txt\"; "
-                    "printf '%s' \"$TMPDIR\""
-                )
-                private_tmp = Path(write_result.stdout)
-                self.assertEqual(
-                    (private_tmp / "value.txt").read_text(encoding="utf-8"),
-                    "temporary",
-                )
-                read_result = executor.execute(f'cat "{outside}"')
-                network_result = executor.execute(
-                    "/usr/bin/curl --connect-timeout 1 http://127.0.0.1:9"
-                )
-            finally:
-                executor.close()
-
-            self.assertEqual(write_result.exit_code, 0)
-            self.assertEqual(clean_result.exit_code, 0)
-            self.assertEqual(clean_result.stderr, "")
-            self.assertEqual(
-                (workspace / "inside.txt").read_text(encoding="utf-8"),
-                "workspace",
-            )
-            self.assertNotEqual(private_tmp, Path(tempfile.gettempdir()))
-            self.assertFalse(private_tmp.exists())
-            self.assertNotEqual(read_result.exit_code, 0)
-            self.assertNotIn("secret", read_result.stdout)
-            self.assertNotEqual(network_result.exit_code, 0)
-
-    @unittest.skipUnless(platform.system() == "Windows", "Windows ACL test")
-    def test_windows_backend_allows_workspace_writes_and_host_reads(self) -> None:
-        test_root = Path.cwd() / f".sandbox-test-{time.time_ns()}"
-        workspace = test_root / "workspace"
-        outside = test_root / "outside.txt"
-        blocked = test_root / "blocked.txt"
-        world_writable = test_root / "world-writable"
-        workspace.mkdir(parents=True)
-        world_writable.mkdir()
-        self.addCleanup(shutil.rmtree, test_root, ignore_errors=True)
-        outside.write_text("host-readable", encoding="utf-8")
-        subprocess.run(
-            ["icacls", str(world_writable), "/grant", "*S-1-1-0:(OI)(CI)M"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        backend = platform_workspace_sandbox_backend()
-        executor = SandboxedCommandExecutor(workspace, backend)
-        acl_before = subprocess.run(
-            ["icacls", str(workspace)], capture_output=True, text=True, check=True,
-        ).stdout
-        self.assertEqual(
-            executor.policy.host_filesystem, FilesystemAccess.WRITE_RESTRICTED
-        )
-        self.assertEqual(executor.policy.network, NetworkAccess.ALLOW)
-        try:
-            allowed = executor.execute(
-                f"Get-Content -LiteralPath '{outside}'; "
-                "Set-Content -LiteralPath inside.txt workspace; "
-                "Set-Content -LiteralPath "
-                "(Join-Path $env:TEMP temp.txt) temporary; "
-                "Set-Content chain-a.txt a && Set-Content chain-b.txt b"
-            )
-            denied = executor.execute(
-                "$ErrorActionPreference = 'Stop'; "
-                f"Set-Content -LiteralPath '{blocked}' blocked"
-            )
-            world_denied = executor.execute(
-                "$ErrorActionPreference = 'Stop'; "
-                f"Set-Content -LiteralPath '{world_writable / 'blocked.txt'}' blocked"
-            )
-            private_tmp = backend._temporary_directory
-            capability_sid = backend._sandbox._workspace_sid_value
-            acl_during = subprocess.run(
-                ["icacls", str(workspace)],
-                capture_output=True,
-                text=True,
-                check=True,
-            ).stdout
-            workspace_text = (workspace / "inside.txt").read_text(
-                encoding="utf-8"
-            ).strip()
-            temporary_text = (private_tmp / "temp.txt").read_text(
-                encoding="utf-8"
-            ).strip()
-            blocked_exists = blocked.exists()
-        finally:
-            executor.close()
-        acl_after = subprocess.run(
-            ["icacls", str(workspace)],
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout
-        child_acl_after = subprocess.run(
-            ["icacls", str(workspace / "inside.txt")],
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout
-
-        self.assertEqual(allowed.exit_code, 0)
-        self.assertIn("host-readable", allowed.stdout)
-        self.assertEqual(workspace_text, "workspace")
-        self.assertTrue((workspace / "chain-a.txt").exists())
-        self.assertTrue((workspace / "chain-b.txt").exists())
-        self.assertIsNotNone(private_tmp)
-        self.assertEqual(temporary_text, "temporary")
-        self.assertNotEqual(denied.exit_code, 0)
-        # World SID is required for CLR/Pwsh startup on Windows; a directory
-        # explicitly writable by Everyone remains a documented exception.
-        self.assertEqual(world_denied.exit_code, 0)
-        self.assertTrue((world_writable / "blocked.txt").exists())
-        self.assertFalse(blocked_exists)
-        self.assertFalse(private_tmp.exists())
-        self.assertNotEqual(private_tmp.parent, workspace)
-        self.assertIn(capability_sid, acl_during)
-        self.assertNotIn(capability_sid, acl_after)
-        self.assertNotIn(capability_sid, child_acl_after)
-        self.assertEqual(acl_after, acl_before)
-
-    @unittest.skipUnless(platform.system() == "Windows", "Windows ACL test")
-    def test_workspace_capability_survives_until_last_session_close(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            workspace = Path(directory)
-            user = "*" + subprocess.run(
-                ["whoami", "/user", "/fo", "csv", "/nh"], capture_output=True, check=True,
-            ).stdout.split(b",")[-1].strip(b'"\r\n ').decode("ascii")
-            subprocess.run(
-                ["icacls", str(workspace), "/grant", f"{user}:(OI)(CI)F"],
-                capture_output=True, check=True,
-            )
-            first_backend = platform_workspace_sandbox_backend()
-            second_backend = platform_workspace_sandbox_backend()
-            first = SandboxedCommandExecutor(workspace, first_backend)
-            second = SandboxedCommandExecutor(workspace, second_backend)
-            before = subprocess.run(
-                ["icacls", str(workspace)], capture_output=True, check=True,
-            ).stdout
-            try:
-                self.assertEqual(first.execute("Set-Content first.txt one").exit_code, 0)
-                self.assertEqual(second.execute("Set-Content second.txt two").exit_code, 0)
-                first.close()
-                result = second.execute("Set-Content after.txt after")
-                self.assertEqual(result.exit_code, 0)
-                self.assertEqual(
-                    (workspace / "after.txt").read_text(encoding="utf-8"),
-                    "after\n",
-                )
-            finally:
-                first.close()
-                second.close()
-            after = subprocess.run(
-                ["icacls", str(workspace)], capture_output=True, check=True,
-            ).stdout
-            self.assertEqual(after, before)
-
-    @unittest.skipUnless(platform.system() == "Windows", "Windows ACL test")
-    def test_crashed_session_workspace_grant_is_reclaimed(self) -> None:
-        child = (
-            "import os\n"
-            "from pathlib import Path\n"
-            "from agent_core import (\n"
-            "    SandboxedCommandExecutor,\n"
-            "    platform_workspace_sandbox_backend,\n"
-            ")\n"
-            "workspace = Path(os.environ['CRASH_WORKSPACE'])\n"
-            "executor = SandboxedCommandExecutor(\n"
-            "    workspace, platform_workspace_sandbox_backend()\n"
-            ")\n"
-            "result = executor.execute('$null = 1')\n"
-            "if result.exit_code:\n"
-            "    raise SystemExit(result.stderr)\n"
-            "os._exit(0)\n"
-        )
-        with tempfile.TemporaryDirectory() as directory:
-            workspace = Path(directory)
-            environment = os.environ.copy()
-            environment["CRASH_WORKSPACE"] = str(workspace)
-            before = subprocess.run(
-                ["icacls", str(workspace)], capture_output=True, text=True, check=True,
-            ).stdout
-            subprocess.run(
-                [sys.executable, "-c", child],
-                check=True,
-                env=environment,
-            )
-            abandoned = subprocess.run(
-                ["icacls", str(workspace)],
-                capture_output=True, text=True, check=True,
-            ).stdout
-            executor = SandboxedCommandExecutor(
-                workspace, platform_workspace_sandbox_backend()
-            )
-            try:
-                self.assertEqual(executor.execute("$null = 1").exit_code, 0)
-            finally:
-                executor.close()
-            recovered = subprocess.run(
-                ["icacls", str(workspace)],
-                capture_output=True,
-                text=True,
-                check=True,
-            ).stdout
-
-        self.assertNotEqual(abandoned, before)
-        self.assertEqual(recovered, before)
 
 if __name__ == "__main__":
     unittest.main()
