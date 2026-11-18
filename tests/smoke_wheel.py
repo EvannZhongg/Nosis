@@ -6,10 +6,12 @@ from email.parser import Parser
 import json
 import os
 from pathlib import Path
+import shutil
 import struct
 import subprocess
 import sys
 import tempfile
+from uuid import uuid4
 import zipfile
 
 
@@ -78,8 +80,12 @@ def main() -> None:
         if os.name != "nt":
             assert archive.getinfo(helper_path).external_attr >> 16 & 0o111
 
-    with tempfile.TemporaryDirectory(prefix="nosis-wheel-") as temporary:
-        root = Path(temporary)
+    root = Path(tempfile.gettempdir()) / f"nosis-wheel-{uuid4().hex}"
+    # Windows mkdtemp() leaves a protected DACL that grants only SYSTEM,
+    # Administrators and OWNER RIGHTS, so the helper's write-restricted token
+    # cannot traverse into it. An ordinary workspace inherits the user's ACEs.
+    root.mkdir(mode=0o777 if os.name == "nt" else 0o700)
+    try:
         site = root / "site"
         subprocess.run(
             [sys.executable, "-m", "pip", "install", "--no-deps", "--no-compile",
@@ -114,12 +120,16 @@ def main() -> None:
             outside.write_text("host-secret", encoding="utf-8")
             private_tmp = root / "private"
             private_tmp.mkdir()
+            temporary_marker = private_tmp / "temporary.txt"
             policy = {"workspace": str(workspace)}
+            environment = {**request["environment"], "NOSIS_WHEEL_OUTSIDE": str(outside)}
             if sys.platform == "win32":
                 policy.update(platform="windows", private_tmp=str(private_tmp))
+                environment.update(TEMP=str(private_tmp), TMP=str(private_tmp))
                 powershell = Path(os.environ["SystemRoot"]) / "System32/WindowsPowerShell/v1.0/powershell.exe"
                 argv = [str(powershell), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command",
                         "$ErrorActionPreference='Stop'; "
+                        "[IO.File]::WriteAllText((Join-Path $env:TEMP 'temporary.txt'), 'temporary'); "
                         "[IO.File]::WriteAllText('confined.txt', 'workspace'); "
                         "[IO.File]::WriteAllText($env:NOSIS_WHEEL_OUTSIDE, 'escaped')"]
             else:
@@ -130,24 +140,34 @@ def main() -> None:
                         'printf workspace > confined.txt; printf escaped > "$NOSIS_WHEEL_OUTSIDE"']
             probe = {
                 **request, "command": "workspace confinement probe", "argv": argv,
-                "environment": {**request["environment"], "NOSIS_WHEEL_OUTSIDE": str(outside)},
+                "environment": environment,
                 "stdin_base64": None,
             }
             # Prove the same command can change the host file without confinement.
             control = run_helper(helper, probe)
             assert control["exit_code"] == 0, control
             marker = workspace / "confined.txt"
+            assert marker.is_file(), control
             assert marker.read_text(encoding="utf-8") == "workspace", control
             assert outside.read_text(encoding="utf-8") == "escaped", control
             marker.unlink()
+            if sys.platform == "win32":
+                assert temporary_marker.read_text(encoding="utf-8") == "temporary", control
+                temporary_marker.unlink()
             outside.write_text("host-secret", encoding="utf-8")
             confined = run_helper(helper, {**probe, "policy": policy})
+            assert marker.is_file(), confined
             assert marker.read_text(encoding="utf-8") == "workspace", confined
+            if sys.platform == "win32":
+                assert temporary_marker.is_file(), confined
+                assert temporary_marker.read_text(encoding="utf-8") == "temporary", confined
             assert outside.read_text(encoding="utf-8") == "host-secret", confined
             if sys.platform != "linux":
                 assert confined["exit_code"] != 0, confined
             # Linux may write to a private tmpfs shadow at the same path.
             print(f"Verified {policy['platform']} workspace confinement")
+    finally:
+        shutil.rmtree(root)
     print(f"Verified {wheel.name}")
 
 
