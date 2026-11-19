@@ -133,7 +133,7 @@ Frontends and SDK:
 
 The default configuration and built-in resources live in [`agent_runtime/defaults/`](agent_runtime/defaults). See [`agent_runtime/README.md`](agent_runtime/README.md) for how assembly works.
 
-`default_permission_preset` in `agent_config.json` sets initial permissions for new sessions: `ask_for_approval`, `workspace_access`, or `full_access`. It ships as `ask_for_approval`, falls back to it when the field is absent, and can also be changed under Settings → Agent → Default permissions in the GUI. Changes apply to new sessions; existing sessions retain their saved permissions.
+`default_permission_preset` in `agent_config.json` sets initial permissions for new sessions: `ask_for_approval`, `workspace_access`, or `full_access`. It ships as `ask_for_approval`, falls back to it when the field is absent, and can also be changed under Settings → Agent → 默认权限 in the GUI. Changes apply to new sessions; existing sessions retain their saved permissions.
 
 ## Development and testing
 

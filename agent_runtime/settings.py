@@ -5,15 +5,15 @@ from __future__ import annotations
 import json
 import os
 import re
-import tempfile
 from hashlib import sha256
 from pathlib import Path
 from threading import RLock
 
 from dotenv import dotenv_values
 
-from agent_core import SkillLoader, load_agent_config
+from agent_core import SkillLoader
 from agent_core.atomic import atomic_write_text
+from agent_core.config import parse_agent_config
 from agent_core.providers import (
     OPENAI_APIS,
     normalize_semantic_effort,
@@ -24,9 +24,10 @@ from agent_core.tools import ROLE_TOOL_NAMES, TOOL_NAMES
 from .config import (
     EXECUTION_CONFIG_FILENAMES,
     configured_skill_sources,
-    load_default_permission_preset,
     load_model_options,
-    load_scratch_workspace_root,
+    parse_default_permission_preset,
+    parse_model_options,
+    parse_scratch_workspace_root,
 )
 from .plugins import PluginManager
 
@@ -152,8 +153,8 @@ class SettingsStore:
         self._environment.reload()
         provider_document = _read_json(self.provider_path)
         agent_document = _read_json(self.agent_path)
-        default_provider, models = load_model_options(self.provider_path)
-        agent_config = load_agent_config(self.agent_path)
+        default_provider, models = parse_model_options(provider_document)
+        agent_config = parse_agent_config(agent_document)
         env = load_environment(self.directory)
         providers_value = provider_document.get("providers")
         assert isinstance(providers_value, dict)
@@ -257,7 +258,7 @@ class SettingsStore:
                 "output_reserve_tokens": agent_config.output_reserve_tokens,
                 "max_generation_tokens": agent_config.max_generation_tokens,
                 "generate_session_title": agent_config.generate_session_title,
-                "default_permission_preset": load_default_permission_preset(self.agent_path).value,
+                "default_permission_preset": parse_default_permission_preset(agent_document).value,
                 "workspace_instruction_files": list(agent_config.workspace_instruction_files),
                 "tools": {name: agent_config.tools.is_enabled(name) for name in TOOL_NAMES},
                 "context": {
@@ -568,99 +569,85 @@ class SettingsStore:
             raise ValueError("configuration changed; reload settings before saving")
 
     def _validate_provider_document(self, document: dict[str, object]) -> None:
-        descriptor, name = tempfile.mkstemp(dir=self.directory, suffix=".json")
-        path = Path(name)
-        try:
-            with os.fdopen(descriptor, "w", encoding="utf-8") as file:
-                json.dump(document, file)
-            default, models = load_model_options(path)
-            if default not in models:
-                raise ValueError("default provider is not configured")
-            providers = document.get("providers")
-            assert isinstance(providers, dict)
-            for provider, value in providers.items():
-                if not isinstance(provider, str) or not _PROVIDER_NAME.fullmatch(provider):
-                    raise ValueError(f"invalid provider id: {provider}")
-                if not isinstance(value, dict):
-                    raise ValueError(f"provider '{provider}' must be an object")
-                url = value.get("url")
-                key = value.get("key")
-                limit = value.get("max_context_tokens")
-                if url is not None and (not isinstance(url, str) or not url.strip()):
-                    raise ValueError(f"provider '{provider}' url must be a non-empty string")
-                if key is not None and (not isinstance(key, str) or not key.strip()):
-                    raise ValueError(f"provider '{provider}' key must be a non-empty string")
-                if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or limit < 1):
-                    raise ValueError(f"provider '{provider}' max_context_tokens must be positive")
-                effort = value.get("reasoning_effort")
-                if effort is not None:
-                    normalize_semantic_effort(effort)
-                parameters = value.get("reasoning_parameters")
-                if parameters is not None and not isinstance(parameters, dict):
-                    raise ValueError(
-                        f"provider '{provider}' reasoning_parameters must be an object"
-                    )
-                if parameters is not None:
-                    validate_reasoning_parameters(parameters)
-                api = value.get("api")
-                if api is not None and (not isinstance(api, str) or api not in OPENAI_APIS):
-                    raise ValueError("provider api must be responses or chat_completions")
-            for label in ("main_agent", "subagent", "fast_model"):
-                route = document.get(label, {})
-                if not isinstance(route, dict):
-                    raise ValueError(f"config field '{label}' must be an object")
-                self._validate_routes(route, providers, label)
-            roles = document.get("subagent_roles", {})
-            if not isinstance(roles, dict):
-                raise ValueError("config field 'subagent_roles' must be an object")
-            for role, route in roles.items():
-                if not isinstance(route, dict):
-                    raise ValueError(f"config field 'subagent_roles.{role}' must be an object")
-                self._validate_routes(route, providers, f"subagent_roles.{role}")
-            image_generation = document.get("image_generation")
-            if image_generation is not None:
-                if not isinstance(image_generation, dict):
-                    raise ValueError(
-                        "config field 'image_generation' must be an object"
-                    )
-                provider = image_generation.get("provider")
-                model = image_generation.get("model")
-                if not isinstance(provider, str) or provider not in providers:
-                    raise ValueError(
-                        "config field 'image_generation.provider' must name "
-                        "a configured provider"
-                    )
-                if not isinstance(model, str) or not model.strip():
-                    raise ValueError(
-                        "config field 'image_generation.model' must be a "
-                        "non-empty string"
-                    )
-                for field in (
-                    "default_aspect_ratio",
-                    "default_image_size",
+        default, models = parse_model_options(document)
+        if default not in models:
+            raise ValueError("default provider is not configured")
+        providers = document.get("providers")
+        assert isinstance(providers, dict)
+        for provider, value in providers.items():
+            if not isinstance(provider, str) or not _PROVIDER_NAME.fullmatch(provider):
+                raise ValueError(f"invalid provider id: {provider}")
+            if not isinstance(value, dict):
+                raise ValueError(f"provider '{provider}' must be an object")
+            url = value.get("url")
+            key = value.get("key")
+            limit = value.get("max_context_tokens")
+            if url is not None and (not isinstance(url, str) or not url.strip()):
+                raise ValueError(f"provider '{provider}' url must be a non-empty string")
+            if key is not None and (not isinstance(key, str) or not key.strip()):
+                raise ValueError(f"provider '{provider}' key must be a non-empty string")
+            if limit is not None and (isinstance(limit, bool) or not isinstance(limit, int) or limit < 1):
+                raise ValueError(f"provider '{provider}' max_context_tokens must be positive")
+            effort = value.get("reasoning_effort")
+            if effort is not None:
+                normalize_semantic_effort(effort)
+            parameters = value.get("reasoning_parameters")
+            if parameters is not None and not isinstance(parameters, dict):
+                raise ValueError(
+                    f"provider '{provider}' reasoning_parameters must be an object"
+                )
+            if parameters is not None:
+                validate_reasoning_parameters(parameters)
+            api = value.get("api")
+            if api is not None and (not isinstance(api, str) or api not in OPENAI_APIS):
+                raise ValueError("provider api must be responses or chat_completions")
+        for label in ("main_agent", "subagent", "fast_model"):
+            route = document.get(label, {})
+            if not isinstance(route, dict):
+                raise ValueError(f"config field '{label}' must be an object")
+            self._validate_routes(route, providers, label)
+        roles = document.get("subagent_roles", {})
+        if not isinstance(roles, dict):
+            raise ValueError("config field 'subagent_roles' must be an object")
+        for role, route in roles.items():
+            if not isinstance(route, dict):
+                raise ValueError(f"config field 'subagent_roles.{role}' must be an object")
+            self._validate_routes(route, providers, f"subagent_roles.{role}")
+        image_generation = document.get("image_generation")
+        if image_generation is not None:
+            if not isinstance(image_generation, dict):
+                raise ValueError(
+                    "config field 'image_generation' must be an object"
+                )
+            provider = image_generation.get("provider")
+            model = image_generation.get("model")
+            if not isinstance(provider, str) or provider not in providers:
+                raise ValueError(
+                    "config field 'image_generation.provider' must name "
+                    "a configured provider"
+                )
+            if not isinstance(model, str) or not model.strip():
+                raise ValueError(
+                    "config field 'image_generation.model' must be a "
+                    "non-empty string"
+                )
+            for field in (
+                "default_aspect_ratio",
+                "default_image_size",
+            ):
+                value = image_generation.get(field)
+                if value is not None and (
+                    not isinstance(value, str) or not value.strip()
                 ):
-                    value = image_generation.get(field)
-                    if value is not None and (
-                        not isinstance(value, str) or not value.strip()
-                    ):
-                        raise ValueError(
-                            f"config field 'image_generation.{field}' must "
-                            "be a non-empty string"
-                        )
-        finally:
-            path.unlink(missing_ok=True)
+                    raise ValueError(
+                        f"config field 'image_generation.{field}' must "
+                        "be a non-empty string"
+                    )
 
     def _validate_agent_document(self, document: dict[str, object]) -> None:
-        descriptor, name = tempfile.mkstemp(dir=self.directory, suffix=".json")
-        path = Path(name)
-        try:
-            with os.fdopen(descriptor, "w", encoding="utf-8") as file:
-                json.dump(document, file)
-            load_agent_config(path)
-            load_default_permission_preset(path)
-            load_scratch_workspace_root(path)
-        finally:
-            path.unlink(missing_ok=True)
+        parse_agent_config(document)
+        parse_default_permission_preset(document)
+        parse_scratch_workspace_root(document, self.agent_path)
 
     @staticmethod
     def _provider_env_name(provider_id: str) -> str:

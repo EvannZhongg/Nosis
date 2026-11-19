@@ -2,6 +2,7 @@ import { useEffect, useId, useLayoutEffect, useRef, useState, type ClipboardEven
 import { ComposerPrimitive, unstable_useComposerInput } from "@assistant-ui/react";
 import { AlertTriangle, ArrowUp, Check, ChevronDown, Folder, LoaderCircle, MessageCircleQuestion, Paperclip, Plus, RefreshCw, ShieldCheck, X } from "lucide-react";
 import type { PermissionPreset } from "@nosis/protocol";
+import { PERMISSION_OPTIONS } from "../permissions";
 import { shouldBlockRunningAttachmentSubmit, shouldSubmitAttachmentOnly, shouldSubmitComposerEnter } from "./composerState";
 import { PendingAttachment } from "./Messages/Attachments";
 import { ContextWindowIndicator, RuntimeIndicators } from "./RuntimeIndicators";
@@ -264,9 +265,7 @@ export function Composer({ runtime }: { runtime: SessionRuntime }) {
         <label className="permission-selector" title="权限模式">
           <ShieldCheck size={13} />
           <select aria-label="权限模式" value={runtime.displayedPermissionPreset} disabled={!runtime.workspaceSelected || runtime.controlsDisabled || runtime.permissionSaving} onChange={(event) => runtime.changePermissionPreset(event.target.value as PermissionPreset)}>
-            <option value="ask_for_approval">请求批准</option>
-            <option value="workspace_access">工作区访问</option>
-            <option value="full_access">完全访问</option>
+            {PERMISSION_OPTIONS.map(({ value, label }) => <option key={value} value={value}>{label}</option>)}
           </select>{runtime.permissionSaving ? <LoaderCircle size={12} className="spin" aria-label="正在保存权限" /> : <ChevronDown size={12} />}
         </label>
         <div className="composer-actions"><ContextWindowIndicator window={runtime.contextWindow} cacheUsage={runtime.cacheUsage} />

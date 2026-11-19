@@ -45,10 +45,13 @@ it("loads and saves the default permissions for new sessions", async () => {
       <Settings section="agent" onClose={() => {}} onChanged={() => {}} onOpenSession={() => {}} />,
     ));
     const select = container.querySelector<HTMLSelectElement>("select")!;
-    expect(select.labels?.[0].textContent).toContain("Default permissions");
+    expect(select.labels?.[0].textContent).toContain("默认权限");
     expect(select.value).toBe("workspace_access");
     expect(Array.from(select.options, (option) => option.value)).toEqual([
       "ask_for_approval", "workspace_access", "full_access",
+    ]);
+    expect(Array.from(select.options, (option) => option.text)).toEqual([
+      "请求批准", "工作区访问", "完全访问",
     ]);
     await act(async () => {
       select.value = "full_access";

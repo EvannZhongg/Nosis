@@ -62,6 +62,17 @@ class SettingsStoreTest(unittest.TestCase):
             "workspace_max_tokens": 3000,
         })
 
+    def test_snapshot_decodes_each_configuration_once(self) -> None:
+        with patch("json.load", wraps=json.load) as decode:
+            self.store.snapshot()
+        for path in (self.store.agent_path, self.store.provider_path):
+            with self.subTest(path=path):
+                reads = [
+                    call.args[0].name for call in decode.call_args_list
+                    if Path(call.args[0].name) == path
+                ]
+                self.assertEqual(len(reads), 1)
+
     def test_snapshot_loads_configured_global_skill_paths(self) -> None:
         external = self.root / "shared-skills" / "demo"
         external.mkdir(parents=True)

@@ -1,6 +1,7 @@
 import type { ThreadMessageLike } from "@assistant-ui/react";
 import type { ApprovalKind, CacheUsage, ContextWindow, Incoming, PermissionPreset, UserQuestion } from "@nosis/protocol/internal";
 import { attachmentDownloadUrl, type SessionItem } from "./api";
+import { PERMISSION_LABELS } from "./permissions";
 
 /** A transcript item, plus the streaming state the live turn needs. */
 export type TranscriptItem = SessionItem & { streaming?: boolean };
@@ -201,18 +202,13 @@ export function applyMessage(
       };
 
     case "permission_changed":
-      const permissionLabel = message.preset === "full_access"
-        ? "完全访问"
-        : message.preset === "workspace_access"
-          ? "工作区访问"
-          : "请求批准";
       return {
         items,
         permissionPreset: message.preset,
         feedback: {
           kind: "toast",
           level: "info",
-          text: `权限模式已切换为${permissionLabel}。`,
+          text: `权限模式已切换为${PERMISSION_LABELS[message.preset]}。`,
         },
       };
 

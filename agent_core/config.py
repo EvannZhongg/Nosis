@@ -72,6 +72,11 @@ class AgentConfig:
 def load_agent_config(path: Path) -> AgentConfig:
     with path.open(encoding="utf-8") as file:
         data = json.load(file)
+    return parse_agent_config(data)
+
+
+def parse_agent_config(data: dict[str, object]) -> AgentConfig:
+    """Parse Core settings from an already decoded configuration document."""
 
     max_same_tool_calls = _positive_integer(
         data,

@@ -141,6 +141,10 @@ def load_default_permission_preset(path: Path) -> PermissionPreset:
         document = json.load(file)
     if not isinstance(document, dict):
         raise ValueError(f"configuration must be a JSON object: {path}")
+    return parse_default_permission_preset(document)
+
+
+def parse_default_permission_preset(document: dict[str, object]) -> PermissionPreset:
     value = document.get(
         "default_permission_preset",
         PermissionPreset.ASK_FOR_APPROVAL.value,
@@ -159,6 +163,10 @@ def load_scratch_workspace_root(path: Path) -> Path:
         document = json.load(file)
     if not isinstance(document, dict):
         raise ValueError(f"configuration must be a JSON object: {path}")
+    return parse_scratch_workspace_root(document, path)
+
+
+def parse_scratch_workspace_root(document: dict[str, object], path: Path) -> Path:
     value = document.get("scratch_workspace_root")
     if value is None:
         raise ValueError(
@@ -341,7 +349,13 @@ def _read_config(
     """Return main provider, providers, main_agent, subagent, role overrides."""
     with path.open(encoding="utf-8") as file:
         data = json.load(file)
+    return _parse_config(data)
 
+
+def _parse_config(
+    data: dict[str, object],
+) -> tuple[str, dict[str, object], dict[str, object], dict[str, object], dict[str, object]]:
+    """Parse provider routing without reading files or resolving credentials."""
     main_agent = data.get("main_agent")
     if not isinstance(main_agent, dict):
         raise ValueError("config field 'main_agent' must be an object")
@@ -427,12 +441,18 @@ def _model_name(selected: dict[str, object], provider: str) -> str:
 
 
 def load_model_options(path: Path) -> tuple[str, dict[str, str]]:
+    with path.open(encoding="utf-8") as file:
+        document = json.load(file)
+    return parse_model_options(document)
+
+
+def parse_model_options(document: dict[str, object]) -> tuple[str, dict[str, str]]:
     """Return the default provider name and every provider's model name.
 
     Keys are deliberately not resolved: listing the choices must not
     require a key for providers the user is not using.
     """
-    default, providers, _, _, _ = _read_config(path)
+    default, providers, _, _, _ = _parse_config(document)
     return default, {
         name: _model_name(_provider_entry(providers, name), name)
         for name in providers

@@ -133,7 +133,7 @@ Runtime 层：
 
 默认配置与内置资源位于 [`agent_runtime/defaults/`](agent_runtime/defaults)。具体装配方式见 [`agent_runtime/README.md`](agent_runtime/README.md)。
 
-`agent_config.json` 中的 `default_permission_preset` 控制新 Session 的初始权限，可选 `ask_for_approval`、`workspace_access`、`full_access`，出厂值为 `ask_for_approval`，字段缺失时同样取该值。也可在 GUI 的 Settings → Agent → Default permissions 中修改；保存后对新建 Session 生效，已有 Session 保留其保存的权限。
+`agent_config.json` 中的 `default_permission_preset` 控制新 Session 的初始权限，可选 `ask_for_approval`、`workspace_access`、`full_access`，出厂值为 `ask_for_approval`，字段缺失时同样取该值。也可在 GUI 的 Settings → Agent → 默认权限 中修改；保存后对新建 Session 生效，已有 Session 保留其保存的权限。
 
 ## 开发与测试
 
