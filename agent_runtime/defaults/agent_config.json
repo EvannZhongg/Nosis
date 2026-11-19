@@ -3,6 +3,7 @@
   "output_reserve_tokens": 8192,
   "max_generation_tokens": null,
   "generate_session_title": true,
+  "default_permission_preset": "ask_for_approval",
   "provider": {
     "request_timeout_seconds": 300,
     "max_retries": 2

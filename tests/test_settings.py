@@ -22,6 +22,7 @@ PROVIDERS = {
 }
 
 AGENT = {
+    "default_permission_preset": "ask_for_approval",
     "max_same_tool_calls": 5,
     "output_reserve_tokens": 100,
     "generate_session_title": False,
@@ -95,6 +96,22 @@ class SettingsStoreTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.store.save_agent({"max_same_tool_calls": 0})
         self.assertEqual((self.root / "agent_config.json").read_text(), before)
+
+    def test_saves_and_reads_default_permissions(self) -> None:
+        for preset in ("workspace_access", "full_access", "ask_for_approval"):
+            with self.subTest(preset=preset):
+                snapshot = self.store.save_agent({"default_permission_preset": preset})
+                self.assertEqual(snapshot["agent"]["default_permission_preset"], preset)
+                self.assertEqual(self.store.snapshot()["agent"]["default_permission_preset"], preset)
+                self.assertEqual(json.loads(self.store.agent_path.read_text())["default_permission_preset"], preset)
+
+    def test_rejects_invalid_default_permissions_without_writing(self) -> None:
+        before = self.store.agent_path.read_bytes()
+        for preset in (None, "invalid", True, [], {}):
+            with self.subTest(preset=preset):
+                with self.assertRaisesRegex(ValueError, "default_permission_preset"):
+                    self.store.save_agent({"default_permission_preset": preset})
+                self.assertEqual(self.store.agent_path.read_bytes(), before)
 
     def test_clearing_provider_secret_removes_its_dotenv_reference(self) -> None:
         (self.root / ".env").write_text("FIRST_KEY=secret\nOTHER=kept\n", encoding="utf-8")

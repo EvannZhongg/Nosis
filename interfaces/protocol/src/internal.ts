@@ -2,6 +2,7 @@
 import type {
   Incoming as BridgeIncoming, Outgoing as BridgeOutgoing, JSONValue,
   ProtocolError, RuntimePhase, RuntimeState, TranscriptCheckpoint,
+  PermissionPreset,
 } from './protocol.js';
 export * from './protocol.js';
 
@@ -25,6 +26,7 @@ export type AgentSettings = {
   output_reserve_tokens: number;
   max_generation_tokens: number | null;
   generate_session_title: boolean;
+  default_permission_preset: PermissionPreset;
   workspace_instruction_files: string[];
   tools: Record<string, boolean>;
   context: { compression: { enabled: boolean; trigger_ratio: number | null; keep_recent_units: number; user_anchor_token_budget: number } };

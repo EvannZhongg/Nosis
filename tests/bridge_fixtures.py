@@ -169,6 +169,7 @@ def open_session_message(
         }), encoding="utf-8",
     )
     resolved_agent_config = {
+        "default_permission_preset": "ask_for_approval",
         "generate_session_title": False,
         "provider": {
             "request_timeout_seconds": 300,

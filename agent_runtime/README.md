@@ -111,7 +111,7 @@ stdio 的相对 cwd 基于 Workspace 解析，未配置时使用当前 Workspace
 | 路径 | 用途 |
 | --- | --- |
 | `provider_config.json` | Provider 定义，主 Agent、视觉、图片生成和角色路由 |
-| `agent_config.json` | Tool、上下文、记忆、Skill 路径、子 Agent、MCP、Instructions 与 scratch Workspace |
+| `agent_config.json` | Tool、上下文、记忆、Skill 路径、子 Agent、MCP、Instructions、新 Session 默认权限与 scratch Workspace |
 | `tool_config.json` | Web Search、Web Fetch 的 provider 与密钥配置 |
 | `im_channels.json` | 移动端 / IM 通道配置，默认提供禁用的飞书模板；由对应前端读取 |
 | `.env` | `${ENV_NAME}` 引用的密钥，由 `settings.py` 读写 |

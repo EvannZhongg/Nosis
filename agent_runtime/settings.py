@@ -24,6 +24,7 @@ from agent_core.tools import ROLE_TOOL_NAMES, TOOL_NAMES
 from .config import (
     EXECUTION_CONFIG_FILENAMES,
     configured_skill_sources,
+    load_default_permission_preset,
     load_model_options,
     load_scratch_workspace_root,
 )
@@ -256,6 +257,7 @@ class SettingsStore:
                 "output_reserve_tokens": agent_config.output_reserve_tokens,
                 "max_generation_tokens": agent_config.max_generation_tokens,
                 "generate_session_title": agent_config.generate_session_title,
+                "default_permission_preset": load_default_permission_preset(self.agent_path).value,
                 "workspace_instruction_files": list(agent_config.workspace_instruction_files),
                 "tools": {name: agent_config.tools.is_enabled(name) for name in TOOL_NAMES},
                 "context": {
@@ -485,6 +487,7 @@ class SettingsStore:
         if not isinstance(payload, dict):
             raise ValueError("agent settings must be an object")
         allowed = {
+            "default_permission_preset",
             "max_same_tool_calls", "output_reserve_tokens", "max_generation_tokens",
             "workspace_instruction_files", "tools", "context", "memory", "subagent_roles", "mcp_enabled", "generate_session_title",
         }
@@ -496,6 +499,7 @@ class SettingsStore:
             "max_same_tool_calls", "output_reserve_tokens", "max_generation_tokens",
             "workspace_instruction_files",
             "generate_session_title",
+            "default_permission_preset",
         ):
             if field in payload:
                 document[field] = payload[field]
@@ -653,6 +657,7 @@ class SettingsStore:
             with os.fdopen(descriptor, "w", encoding="utf-8") as file:
                 json.dump(document, file)
             load_agent_config(path)
+            load_default_permission_preset(path)
             load_scratch_workspace_root(path)
         finally:
             path.unlink(missing_ok=True)

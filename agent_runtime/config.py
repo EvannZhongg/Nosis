@@ -6,7 +6,7 @@ from importlib.resources import files
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from agent_core import AgentConfig, DirectorySkillSource
+from agent_core import AgentConfig, DirectorySkillSource, PermissionPreset
 from agent_core.memory import MemoryStore
 from agent_core.tools.config import (
     WEB_FETCH_PROVIDERS,
@@ -133,6 +133,25 @@ def _load_tool_provider(
                 raise ValueError(f"{tool} key has an empty environment variable reference")
             key = os.environ.get(variable)
     return provider, (key.strip() or None) if key else None
+
+
+def load_default_permission_preset(path: Path) -> PermissionPreset:
+    """Read the initial permission for application-created Sessions."""
+    with path.open(encoding="utf-8") as file:
+        document = json.load(file)
+    if not isinstance(document, dict):
+        raise ValueError(f"configuration must be a JSON object: {path}")
+    value = document.get(
+        "default_permission_preset",
+        PermissionPreset.ASK_FOR_APPROVAL.value,
+    )
+    choices = tuple(preset.value for preset in PermissionPreset)
+    if not isinstance(value, str) or value not in choices:
+        raise ValueError(
+            "config field 'default_permission_preset' must be one of: "
+            + ", ".join(choices)
+        )
+    return PermissionPreset(value)
 
 
 def load_scratch_workspace_root(path: Path) -> Path:

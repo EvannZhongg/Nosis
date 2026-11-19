@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from tests.provider_fixtures import capabilities_stub, TEXT_MODEL, VISION_MODEL
 
-from agent_core import DirectorySkillSource, SkillLoader, load_agent_config
+from agent_core import DirectorySkillSource, PermissionPreset, SkillLoader, load_agent_config
 from agent_core.providers import ModelProvider
 from agent_runtime.config import (
     DEFAULT_CONFIG_FILENAMES,
@@ -17,6 +17,7 @@ from agent_runtime.config import (
     default_config_directory,
     initialize_config_directory,
     load_config,
+    load_default_permission_preset,
     load_fast_config,
     load_image_generation_config,
     load_model_options,
@@ -29,6 +30,41 @@ from agent_runtime.plugins import PluginManager
 
 
 class ConfigTest(unittest.TestCase):
+    def test_loads_default_permission_presets(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "agent_config.json"
+            for preset in PermissionPreset:
+                with self.subTest(preset=preset):
+                    path.write_text(json.dumps({"default_permission_preset": preset.value}), encoding="utf-8")
+                    self.assertIs(load_default_permission_preset(path), preset)
+
+    def test_requires_a_valid_default_permission_preset(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "agent_config.json"
+            for document in ({"default_permission_preset": value} for value in (None, "invalid", "", True, [], {})):
+                with self.subTest(document=document):
+                    path.write_text(json.dumps(document), encoding="utf-8")
+                    with self.assertRaisesRegex(ValueError, "default_permission_preset.*must be one of"):
+                        load_default_permission_preset(path)
+
+    def test_existing_agent_config_can_omit_default_permissions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config_directory = Path(directory)
+            initialize_config_directory(config_directory)
+            path = config_directory / "agent_config.json"
+            document = json.loads(path.read_text(encoding="utf-8"))
+            del document["default_permission_preset"]
+            path.write_text(json.dumps(document), encoding="utf-8")
+            preserved = path.read_bytes()
+
+            initialize_config_directory(config_directory)
+
+            self.assertEqual(path.read_bytes(), preserved)
+            self.assertIs(
+                load_default_permission_preset(path),
+                PermissionPreset.ASK_FOR_APPROVAL,
+            )
+
     def test_existing_agent_config_can_omit_session_title_generation_switch(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config_directory = Path(directory)
@@ -254,6 +290,7 @@ class ConfigTest(unittest.TestCase):
                 },
             )
             self.assertEqual(agent_config["max_same_tool_calls"], 5)
+            self.assertEqual(agent_config["default_permission_preset"], "ask_for_approval")
             self.assertEqual(
                 agent_config["provider"],
                 {"request_timeout_seconds": 300, "max_retries": 2},

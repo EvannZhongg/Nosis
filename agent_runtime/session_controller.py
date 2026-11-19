@@ -4,7 +4,7 @@ from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Iterator
 from agent_core import JsonlSessionStore, Session, Workspace, PlanManager, PermissionController, CompositeToolPolicy
-from .config import load_model_options
+from .config import load_default_permission_preset, load_model_options
 from .settings import EnvironmentReloader
 from .callbacks import RuntimeCallbacks
 
@@ -43,6 +43,10 @@ class SessionRuntimeController:
             self.store = store
         resumed = isinstance(session_id, str) and bool(session_id)
         bound_workspace = store.workspace_for(session_id) if resumed else None
+        initial_permission = (
+            load_default_permission_preset(self._config_directory / "agent_config.json")
+            if bound_workspace is None else None
+        )
         workspace = Workspace(Path(bound_workspace) if bound_workspace else workspace)
         default_provider, models = load_model_options(config_path)
         stored_provider = (
@@ -76,6 +80,8 @@ class SessionRuntimeController:
                 store.bind_workspace(opening_id, workspace.path)
                 session.workspace = str(workspace.path)
                 session.attach_journal_sink(sink)
+                if initial_permission is not None:
+                    session.set_permission_preset(initial_permission)
                 session.recover()
             yield resumed
             if not reuse_writer:

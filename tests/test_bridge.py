@@ -2235,6 +2235,41 @@ class BridgeSessionOpenTest(BridgeTestCase):
         self.assertEqual(bridge.host.sessions.session.permission_preset, PermissionPreset.FULL_ACCESS)
         self.assertEqual(bridge.host.sessions.plan.snapshot.goal, "original plan")
 
+    def test_new_sessions_use_current_default_permissions_and_resume_keeps_saved_permissions(self) -> None:
+        for preset in PermissionPreset:
+            for requested_id in (None, "new-session"):
+                with self.subTest(preset=preset, session_id=requested_id):
+                    root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+                    bridge, output = self.make_bridge([], root)
+                    opening = open_session_message(root, session_id=requested_id)
+                    bridge.host.settings.save_agent({"default_permission_preset": preset.value})
+                    bridge.open_session(opening)
+                    session = bridge.host.sessions.session
+                    session_id = session.session_id
+                    self.assertIs(session.permission_preset, preset)
+                    self.assertIs(bridge.host.sessions.permissions.preset, preset)
+                    self.assertEqual(emitted(output)[-1]["permission_preset"], preset.value)
+                    self.assertIs(bridge.host.sessions.store.load(session_id).permission_preset, preset)
+
+                    changed = (
+                        PermissionPreset.WORKSPACE_ACCESS
+                        if preset is PermissionPreset.ASK_FOR_APPROVAL
+                        else PermissionPreset.ASK_FOR_APPROVAL
+                    )
+                    bridge.host.settings.save_agent({"default_permission_preset": changed.value})
+                    bridge.open_session({**opening, "session_id": session_id})
+                    self.assertIs(bridge.host.sessions.session.permission_preset, preset)
+                    bridge.open_session({**opening, "session_id": None})
+                    self.assertIs(bridge.host.sessions.session.permission_preset, changed)
+                    bridge.open_session({**opening, "session_id": session_id})
+                    self.assertIs(bridge.host.sessions.session.permission_preset, preset)
+
+                    bridge.host.set_permission_preset(changed)
+                    bridge.close()
+                    reopened, _ = self.make_bridge([], root)
+                    reopened.open_session({**opening, "session_id": session_id})
+                    self.assertIs(reopened.host.sessions.session.permission_preset, changed)
+
     def test_switching_sessions_reuses_resources_and_rebinds_all_session_state(self) -> None:
         root = Path(self.enterContext(tempfile.TemporaryDirectory()))
         bridge, output = self.make_bridge([], root)

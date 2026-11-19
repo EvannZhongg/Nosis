@@ -676,6 +676,7 @@ class GuiTest(unittest.TestCase):
             },
         }), encoding="utf-8")
         (self.config / "agent_config.json").write_text(json.dumps({
+            "default_permission_preset": "ask_for_approval",
             "max_same_tool_calls": 5,
             "output_reserve_tokens": 100,
             "generate_session_title": False,
@@ -1917,6 +1918,20 @@ class GuiTest(unittest.TestCase):
 
         self.assertEqual(response["default"], "second")
         self.assertIn({"id": "third", "model": "openai/third"}, response["models"])
+
+    def test_agent_settings_api_saves_default_permissions(self) -> None:
+        with self.client() as client:
+            before = client.get("/api/settings").json()
+            response = client.put("/api/settings/agent", json={
+                "expected_revision": before["revision"],
+                "default_permission_preset": "workspace_access",
+            })
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["agent"]["default_permission_preset"], "workspace_access")
+            self.assertEqual(client.get("/api/settings").json()["agent"]["default_permission_preset"], "workspace_access")
+            invalid = client.put("/api/settings/agent", json={"default_permission_preset": "invalid"})
+            self.assertEqual(invalid.status_code, 400)
+            self.assertEqual(client.get("/api/settings").json()["agent"]["default_permission_preset"], "workspace_access")
 
     def test_settings_api_redacts_and_updates_provider(self) -> None:
         with self.client() as client:
