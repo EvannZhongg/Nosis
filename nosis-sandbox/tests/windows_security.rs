@@ -27,11 +27,11 @@ fn request(workspace: &Path, private_tmp: &Path, script: &str) -> Value {
 }
 
 fn request_timeout(workspace: &Path, private_tmp: &Path, script: &str, timeout: u64) -> Value {
-    let mut environment = HashMap::new();
-    environment.insert("PATH", std::env::var("PATH").unwrap_or_default());
-    environment.insert("SystemRoot", std::env::var("SystemRoot").unwrap());
-    environment.insert("TEMP", private_tmp.to_string_lossy().into_owned());
-    environment.insert("TMP", private_tmp.to_string_lossy().into_owned());
+    // The Runtime hands the helper its own environment; a minimal one makes
+    // PowerShell block on profile and proxy lookups even for a plain write.
+    let mut environment: HashMap<String, String> = std::env::vars().collect();
+    environment.insert("TEMP".into(), private_tmp.to_string_lossy().into_owned());
+    environment.insert("TMP".into(), private_tmp.to_string_lossy().into_owned());
     json!({
         "protocol_version": 1,
         "command": script,
