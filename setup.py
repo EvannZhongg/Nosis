@@ -3,7 +3,9 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
+from platform import machine
 
 from setuptools import Distribution, setup
 from setuptools.command.bdist_wheel import bdist_wheel
@@ -53,7 +55,26 @@ class PlatformWheel(bdist_wheel):
 
     def get_tag(self) -> tuple[str, str, str]:
         _, _, platform = super().get_tag()
-        return "py3", "none", platform
+        return "py3", "none", _apple_platform(platform)
+
+
+def _apple_platform(default: str) -> str:
+    """Name the helper's architecture instead of the interpreter's universal2 tag."""
+    if sys.platform != "darwin":
+        return default
+    target = os.environ.get("CARGO_BUILD_TARGET", "")
+    if target in ("aarch64-apple-darwin", "x86_64-apple-darwin"):
+        arch = "arm64" if target.startswith("aarch64") else "x86_64"
+    else:
+        arch = "arm64" if machine() == "arm64" else "x86_64"
+    version = os.environ.get("MACOSX_DEPLOYMENT_TARGET")
+    if version is None:
+        _, major, minor, _ = default.split("_", 3)
+        # Apple Silicon starts at macOS 11; the interpreter may claim 10.9.
+        version = f"{major}.{minor}"
+        if arch == "arm64" and major == "10":
+            version = "11.0"
+    return f"macosx_{version.replace('.', '_')}_{arch}"
 
 
 setup(
