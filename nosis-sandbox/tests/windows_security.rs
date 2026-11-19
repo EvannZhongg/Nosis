@@ -81,6 +81,14 @@ fn acl(path: &Path) -> Vec<u8> {
     Command::new("icacls").arg(path).output().unwrap().stdout
 }
 
+/// The helper rewrites the DACL, so Windows re-derives each entry from the
+/// parent: the same grants come back marked inherited. Compare entries only.
+fn restored_acl(path: &Path) -> String {
+    String::from_utf8_lossy(&acl(path))
+        .replace("(IO)", "")
+        .replace("(I)", "")
+}
+
 fn sandbox_dirs() -> (TempDir, TempDir) {
     let workspace = tempfile::Builder::new()
         .prefix("nosis-workspace-sandbox-")
@@ -196,7 +204,7 @@ fn process_tree_can_write_workspace_markers_when_released() {
 #[test]
 fn workspace_and_private_temp_are_writable_and_acl_is_restored() {
     let (workspace, private) = sandbox_dirs();
-    let workspace_acl_before = acl(workspace.path());
+    let workspace_acl_before = restored_acl(workspace.path());
     let script = "Set-Content -LiteralPath inside.txt -Value workspace; Set-Content -LiteralPath (Join-Path $env:TEMP temp.txt) -Value temporary";
     let result = run(request(workspace.path(), private.path(), script));
     assert_eq!(result["exit_code"], 0, "{}", result["stderr"]);
@@ -212,7 +220,7 @@ fn workspace_and_private_temp_are_writable_and_acl_is_restored() {
             .trim(),
         "temporary"
     );
-    let workspace_acl_after = acl(workspace.path());
+    let workspace_acl_after = restored_acl(workspace.path());
     assert_eq!(workspace_acl_after, workspace_acl_before);
 }
 
@@ -220,8 +228,8 @@ fn workspace_and_private_temp_are_writable_and_acl_is_restored() {
 fn control_pipe_cancellation_restores_acl_without_another_helper() {
     for disconnect in [false, true] {
         let (workspace, private) = sandbox_dirs();
-        let workspace_before = acl(workspace.path());
-        let private_before = acl(private.path());
+        let workspace_before = restored_acl(workspace.path());
+        let private_before = restored_acl(private.path());
         let mut helper = spawn(process_tree_request(workspace.path(), private.path(), 20));
         let mut control = Some(helper.stdin.take().unwrap());
         let processes = wait_for_process_tree(workspace.path());
@@ -235,8 +243,8 @@ fn control_pipe_cancellation_restores_acl_without_another_helper() {
         assert!(!output.status.success());
         assert!(String::from_utf8_lossy(&output.stderr).contains("command cancelled"));
         assert_process_tree_stopped(&processes);
-        assert_eq!(acl(workspace.path()), workspace_before);
-        assert_eq!(acl(private.path()), private_before);
+        assert_eq!(restored_acl(workspace.path()), workspace_before);
+        assert_eq!(restored_acl(private.path()), private_before);
         for depth in 0..3 {
             assert!(!workspace.path().join(format!("survived-{depth}")).exists());
         }
@@ -246,7 +254,7 @@ fn control_pipe_cancellation_restores_acl_without_another_helper() {
 #[test]
 fn concurrent_commands_keep_each_others_workspace_capability() {
     let (workspace, private) = sandbox_dirs();
-    let before = acl(workspace.path());
+    let before = restored_acl(workspace.path());
     let first = spawn(request(
         workspace.path(),
         private.path(),
@@ -275,13 +283,13 @@ fn concurrent_commands_keep_each_others_workspace_capability() {
             .trim(),
         "second"
     );
-    assert_eq!(acl(workspace.path()), before);
+    assert_eq!(restored_acl(workspace.path()), before);
 }
 
 #[test]
 fn abandoned_helper_lease_is_reclaimed_on_next_startup() {
     let (workspace, private) = sandbox_dirs();
-    let before = acl(workspace.path());
+    let before = restored_acl(workspace.path());
     let helper = spawn(request(
         workspace.path(),
         private.path(),
@@ -299,7 +307,7 @@ fn abandoned_helper_lease_is_reclaimed_on_next_startup() {
     let _ = helper.wait();
     let recovery = run(request(workspace.path(), private.path(), "$null = 1"));
     assert_eq!(recovery["exit_code"], 0, "{}", recovery["stderr"]);
-    assert_eq!(acl(workspace.path()), before);
+    assert_eq!(restored_acl(workspace.path()), before);
 }
 
 #[test]
@@ -350,15 +358,15 @@ fn network_access_remains_available() {
 #[test]
 fn timeout_terminates_the_entire_job_object_tree() {
     let (workspace, private) = sandbox_dirs();
-    let workspace_before = acl(workspace.path());
-    let private_before = acl(private.path());
+    let workspace_before = restored_acl(workspace.path());
+    let private_before = restored_acl(private.path());
     let helper = spawn(process_tree_request(workspace.path(), private.path(), 5));
     let processes = wait_for_process_tree(workspace.path());
     let result = finish(helper);
     assert!(result["timed_out"].as_bool().unwrap());
     assert_process_tree_stopped(&processes);
-    assert_eq!(acl(workspace.path()), workspace_before);
-    assert_eq!(acl(private.path()), private_before);
+    assert_eq!(restored_acl(workspace.path()), workspace_before);
+    assert_eq!(restored_acl(private.path()), private_before);
     for depth in 0..3 {
         assert!(!workspace.path().join(format!("survived-{depth}")).exists());
     }
