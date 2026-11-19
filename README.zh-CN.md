@@ -162,7 +162,7 @@ npm test
 
 Linux 沙箱集成测试需要可用的 bubblewrap 和 user namespace；未满足运行条件时测试会明确 skip。
 
-运行 `cargo test --manifest-path nosis-sandbox/Cargo.toml` 检查原生 helper 协议及沙箱权限。`build-platform-wheels` 工作流覆盖 Windows、macOS 11+、Linux（glibc 2.28+）的 x86-64 与 ARM64，共六个平台。每个 `py3-none-<platform>` wheel 支持 Python 3.11+，包含原生 helper 以及构建后的 TUI、GUI 和 IM 资源，并在安装后实际执行 helper 验证打包与协议。
+运行 `cargo test --manifest-path nosis-sandbox/Cargo.toml` 检查原生 helper 协议及沙箱权限。`build-platform-wheels` 工作流覆盖 Windows x64、macOS 11+（Apple Silicon）与 Linux（glibc 2.28+）x86-64 三个平台。每个 `py3-none-<platform>` wheel 支持 Python 3.11+，包含原生 helper 以及构建后的 TUI、GUI 和 IM 资源，并在安装后实际执行 helper 验证打包与协议。
 
 Windows 上 Shell Tool 使用 PowerShell 7，因此需要另外安装 PowerShell 7。
 
