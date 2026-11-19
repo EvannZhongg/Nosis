@@ -68,7 +68,15 @@ jobs:
 
   linux:
     needs: frontend
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            arch: x86_64
+          - os: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -91,20 +99,20 @@ jobs:
           docker run --rm \
             -v "$PWD:/io" -w /io \
             -e CARGO_TARGET_DIR=/tmp/nosis-sandbox-target \
-            quay.io/pypa/manylinux_2_28_x86_64 \
+            quay.io/pypa/manylinux_2_28_${{ matrix.arch }} \
             bash -lc '
               set -euo pipefail
               curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
               export PATH="$HOME/.cargo/bin:$PATH"
               /opt/python/cp311-cp311/bin/python -m pip install build wheel
               /opt/python/cp311-cp311/bin/python -m build --wheel
-              /opt/python/cp311-cp311/bin/python -m wheel tags --platform-tag manylinux_2_28_x86_64 --remove dist/*.whl
-              /opt/python/cp311-cp311/bin/python tests/smoke_wheel.py dist manylinux_2_28_x86_64
+              /opt/python/cp311-cp311/bin/python -m wheel tags --platform-tag manylinux_2_28_${{ matrix.arch }} --remove dist/*.whl
+              /opt/python/cp311-cp311/bin/python tests/smoke_wheel.py dist manylinux_2_28_${{ matrix.arch }}
             '
       - name: Test installed wheel confinement
-        run: python tests/smoke_wheel.py dist manylinux_2_28_x86_64 --sandbox
+        run: python tests/smoke_wheel.py dist manylinux_2_28_${{ matrix.arch }} --sandbox
       - uses: actions/upload-artifact@v4
         with:
-          name: nosis-agent-manylinux_2_28_x86_64
+          name: nosis-agent-manylinux_2_28_${{ matrix.arch }}
           path: dist/*.whl
           if-no-files-found: error

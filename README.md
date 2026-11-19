@@ -164,7 +164,7 @@ The Linux sandbox integration tests require a working bubblewrap and user namesp
 
 Run the native helper and sandbox permission tests with `cargo test --manifest-path nosis-sandbox/Cargo.toml`. Platform wheels are built in the `build-platform-wheels` workflow.
 
-The wheel matrix covers Windows x64, macOS 11+ on Apple Silicon, and Linux x86-64 with glibc 2.28+. Each `py3-none-<platform>` wheel supports Python 3.11+ and includes the native helper and the built TUI, GUI, and IM assets. The workflow installs each wheel and executes its helper to check the package and protocol.
+The wheel matrix covers Windows x64, macOS 11+ on Apple Silicon, and Linux with glibc 2.28+ on x86-64 and aarch64. Each `py3-none-<platform>` wheel supports Python 3.11+ and includes the native helper and the built TUI, GUI, and IM assets. The workflow installs each wheel and executes its helper to check the package and protocol.
 
 The internal helper protocol starts with a JSON `protocol_version` greeting, followed by one newline-terminated JSON request and one JSON result carrying the same version. Python validates the greeting before sending a command; the helper validates the request version before decoding execution fields or initializing the sandbox. Keep `HELPER_PROTOCOL_VERSION` in `agent_core/execution/process.py`, `PROTOCOL_VERSION` in `nosis-sandbox/src/main.rs` and the request in `tests/smoke_wheel.py` aligned, and increment them together when changing the contract. After the request, stdin is a cancellation channel: a byte or EOF cancels the command. Keep it open until execution finishes.
 
