@@ -71,6 +71,7 @@ class SessionRuntimeController:
         with ExitStack() as journal:
             if reuse_writer:
                 session = current_session
+                store.bind_workspace(session.session_id, workspace.path)
             else:
                 session = Session(str(session_id)) if resumed else Session()
                 opening_id = session.session_id

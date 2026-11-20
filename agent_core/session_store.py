@@ -24,6 +24,7 @@ from .session_paths import (
     workspace_from_key,
 )
 from .time_utils import format_utc as _format_utc, parse_utc as _parse_utc
+from .workspace_metadata import touch_workspace_metadata
 
 SESSION_METADATA_FILENAME = "session.json"
 
@@ -313,7 +314,7 @@ class JsonlSessionStore:
         with self._locked_session(session_id):
             resolved = workspace.expanduser().resolve()
             target_group = workspace_directory(self._directory, resolved)
-            target_group.mkdir(parents=True, exist_ok=True)
+            self._touch_workspace(target_group / session_id)
             current = self._find_session_directory(session_id)
             target = target_group / session_id
             if current is not None and current != target:
@@ -358,6 +359,7 @@ class JsonlSessionStore:
     ) -> None:
         with self._locked_session(session_id):
             directory = session_directory(self._directory, workspace, session_id)
+            self._touch_workspace(directory)
             directory.mkdir(parents=True, exist_ok=True)
             metadata = _session_metadata(directory)
             metadata["permission_preset"] = preset.value
@@ -382,6 +384,7 @@ class JsonlSessionStore:
     ) -> None:
         with self._locked_session(session_id):
             directory = session_directory(self._directory, workspace, session_id)
+            self._touch_workspace(directory)
             directory.mkdir(parents=True, exist_ok=True)
             metadata = _session_metadata(directory)
             metadata["provider"] = provider
@@ -437,6 +440,7 @@ class JsonlSessionStore:
             path = self._session_path(session_id, workspace)
             if path is None:
                 raise ValueError(f"session has no journal path: {session_id!r}")
+            self._touch_workspace(path.parent)
             path.parent.mkdir(parents=True, exist_ok=True)
             if not (path.parent / SESSION_METADATA_FILENAME).exists():
                 _write_session_metadata(path.parent, _new_session_metadata())
@@ -449,6 +453,7 @@ class JsonlSessionStore:
                 with self._locked_session(session_id):
                     _write_journal_events(file, events)
                     _update_session_metadata(path.parent, session_id, events)
+                    self._touch_workspace(path.parent)
 
             yield append
         finally:
@@ -469,6 +474,7 @@ class JsonlSessionStore:
         path = self._session_path(session_id, workspace)
         if path is None:
             raise ValueError(f"session has no journal path: {session_id!r}")
+        self._touch_workspace(path.parent)
         path.parent.mkdir(parents=True, exist_ok=True)
         if not (path.parent / SESSION_METADATA_FILENAME).exists():
             _write_session_metadata(path.parent, _new_session_metadata())
@@ -477,6 +483,10 @@ class JsonlSessionStore:
             prepare_append(file)
             _write_journal_events(file, events)
         _update_session_metadata(path.parent, session_id, events)
+
+    def _touch_workspace(self, directory: Path) -> None:
+        if self._group_by_workspace:
+            touch_workspace_metadata(directory.parent)
 
     @contextmanager
     def _locked_session(self, session_id: str) -> Iterator[None]:

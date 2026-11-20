@@ -2131,6 +2131,23 @@ class ScheduledTurnTest(unittest.TestCase):
 class BridgeSessionOpenTest(BridgeTestCase):
     """The bridge selects the provider the interface asked for."""
 
+    def test_reselecting_the_current_session_updates_workspace_usage(self) -> None:
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        bridge, _ = self.make_bridge([], root)
+        opening = open_session_message(root, session_id="current")
+        with patch("agent_core.workspace_metadata.datetime") as clock:
+            clock.now.return_value = datetime(2026, 11, 21, tzinfo=timezone.utc)
+            bridge.open_session(opening)
+            original = bridge.host.sessions.session
+            path = session_directory(root / "sessions", root, "current").parent / "workspace.json"
+            before = json.loads(path.read_text(encoding="utf-8"))
+            clock.now.return_value = datetime(2026, 11, 22, tzinfo=timezone.utc)
+            bridge.open_session(opening)
+        after = json.loads(path.read_text(encoding="utf-8"))
+        self.assertIs(bridge.host.sessions.session, original)
+        self.assertEqual(after["created"], before["created"])
+        self.assertEqual(after["updated"], "2026-11-22T00:00:00Z")
+
     @unittest.skipUnless(sys.platform == "win32", "Windows journal ownership")
     def test_occupied_switch_keeps_original_writer_and_runtime_usable(self) -> None:
         root = Path(self.enterContext(tempfile.TemporaryDirectory()))

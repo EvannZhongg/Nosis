@@ -62,6 +62,8 @@ interfaces → agent_runtime → agent_core
 
 `Session` 是执行状态的事实来源。对话、Tool 执行、Job、计划和恢复所需状态以 append-only Journal Event 表示；`JsonlSessionStore` 负责 JSONL 持久化、元数据、Session 列表、跨 Session 对话全文搜索与恢复。
 
+Session 根目录下，每个 Workspace 使用绝对路径的 URL 编码作为 `workspace_id`，目录为 `<sessions>/<workspace_id>/`。其中的 `workspace.json` 保存 `workspace_id`、绝对路径 `path`、目录名称 `name`、UTC 时间 `created` 和 `updated`。首次创建 Session 时登记 Workspace；创建、打开 Session 或追加 Journal 时刷新 `updated`，`created` 保持不变。只读加载、列表和搜索不刷新时间。Workspace 元数据使用独立文件锁与原子写入，多个 Session 共用一份记录；嵌套的子 Agent Journal 不另建 Workspace 记录。已有目录缺少元数据时，由 `scripts/backfill_workspaces.py` 手动补全，Runtime 不自动迁移。
+
 Runtime 通过 `JsonlSessionStore.open_journal()` 持有当前 Session 的写入句柄，Session 关闭或切换时释放；子 Agent 在执行期间持有自己的句柄。Windows 句柄仅共享读取，阻止同用户子进程删除、重命名或覆盖打开的 Journal，Runtime 继续通过原句柄追加并 fsync。保护不覆盖已关闭的 Session、其他 Session 文件、POSIX 删除语义或能够终止 Runtime 的进程，不等同于独立权限的审计存储。
 
 `PlanManager` 从最新 `plan_updated` 事件恢复当前计划。计划可跨 Turn 延续，每个步骤记录状态以及不超过 500 字符的结果或阻塞原因。
@@ -73,6 +75,7 @@ Runtime 通过 `JsonlSessionStore.open_journal()` 持有当前 Session 的写入
 | `session.py` | Message、Turn、Tool / Job Execution 和 Journal Event |
 | `session_store.py` | append-only JSONL、Session 元数据、列表与全文搜索、恢复 |
 | `session_paths.py` | Session 与 Workspace 存储路径规则 |
+| `workspace_metadata.py` | Workspace 元数据、使用时间与并发写入 |
 | `plan.py` | 计划状态、更新与序列化 |
 | `session_title.py` | 首条输入生成初始标题、首个完成单元后异步生成标题 |
 | `tool_result.py` | Tool 输出预算、预览和 Artifact 落盘 |
