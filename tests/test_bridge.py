@@ -52,6 +52,7 @@ from agent_core import (
     Workspace,
 )
 from agent_core import workspace_metadata as workspace_metadata_module
+from agent_core import session_store as session_store_module
 from agent_core.scheduler import (
     AgentTurnAction,
     OneShotTrigger,
@@ -2139,6 +2140,8 @@ class WorkspaceActivityTest(BridgeTestCase):
                     bridge.open_session(open_session_message(root))
                     session = bridge.host.sessions.session
                     path = session_directory(root / "sessions", root, session.session_id).parent / "workspace.json"
+                    session_path = session_directory(root / "sessions", root, session.session_id) / "session.json"
+                    session_created = json.loads(session_path.read_text(encoding="utf-8"))["created"]
                     created = json.loads(path.read_text(encoding="utf-8"))["created"]
                     plane = bridge.host.planes.ensure(bridge.host.sessions)
                     plane.memory = None
@@ -2151,7 +2154,11 @@ class WorkspaceActivityTest(BridgeTestCase):
                         session.add_item("user", text)
                         for index in range(12):
                             session.add_item("assistant", f"progress {index}")
-                            observed.append((json.loads(path.read_text(encoding="utf-8"))["updated"], write.call_count))
+                            observed.append((
+                                json.loads(path.read_text(encoding="utf-8"))["updated"],
+                                json.loads(session_path.read_text(encoding="utf-8"))["updated"],
+                                write.call_count,
+                            ))
                         clock.now.return_value = end
                         session.finish_turn(status)
                         if status == "failed":
@@ -2163,18 +2170,22 @@ class WorkspaceActivityTest(BridgeTestCase):
                     plane.agent = SimpleNamespace(run=run)
                     with (
                         patch.object(workspace_metadata_module, "datetime") as clock,
+                        patch.object(session_store_module, "datetime", clock),
                         patch.object(workspace_metadata_module, "write_workspace_metadata", wraps=workspace_metadata_module.write_workspace_metadata) as write,
                     ):
                         clock.now.return_value = start
                         result = bridge.host.run_turn("activity", "work", input_source=source)
                         self.assertEqual(write.call_count, 2)
                     self.assertEqual(result.status, status)
-                    self.assertEqual(observed, [("2030-01-01T00:00:00Z", 1)] * 12)
+                    self.assertEqual(observed, [("2030-01-01T00:00:00Z", "2030-01-01T00:00:00Z", 1)] * 12)
                     if status == "failed":
                         self.assertEqual(result.error.message, "provider refused the request")
                     metadata = json.loads(path.read_text(encoding="utf-8"))
                     self.assertEqual(metadata["created"], created)
                     self.assertEqual(metadata["updated"], "2030-01-02T00:00:00Z")
+                    session_metadata = json.loads(session_path.read_text(encoding="utf-8"))
+                    self.assertEqual(session_metadata["created"], session_created)
+                    self.assertEqual(session_metadata["updated"], "2030-01-02T00:00:00Z")
 
     def test_startup_failure_still_records_turn_end(self) -> None:
         root = Path(self.enterContext(tempfile.TemporaryDirectory()))

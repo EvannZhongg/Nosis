@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import BinaryIO, Callable, Iterable, Iterator, TextIO
 
@@ -22,6 +23,7 @@ from .session_paths import (
     session_log_path,
     workspace_directory,
     workspace_from_key,
+    workspace_key,
 )
 from .time_utils import format_utc as _format_utc, parse_utc as _parse_utc
 from .workspace_metadata import ensure_workspace_metadata
@@ -126,6 +128,10 @@ class JsonlSessionStore:
             metadata["has_activity"] = False
             metadata["forked_from"] = source_session_id
             metadata["fork_anchor_id"] = anchor_id
+            now = datetime.now(timezone.utc)
+            metadata.update(_session_identity_metadata(
+                new_session_id, metadata["workspace_id"], created=now, updated=now,
+            ))
             prefix = tuple(source.journal[:turn_start])
             # Editing the first message starts a new conversation to be named.
             if not any(event.event_type == "message_appended" for event in prefix):
@@ -323,10 +329,27 @@ class JsonlSessionStore:
                         f"session already exists in workspace: {session_id!r}"
                     )
                 shutil.move(str(current), str(target))
-            target.mkdir(parents=True, exist_ok=True)
-            metadata_path = target / SESSION_METADATA_FILENAME
-            if not metadata_path.exists():
-                _write_session_metadata(target, _new_session_metadata())
+                _bind_session_workspace(target, workspace_key(resolved))
+            self._ensure_session_metadata(target, resolved)
+
+    def record_activity(
+        self, session_id: str, workspace: Path | str | None = None,
+    ) -> None:
+        """Refresh a Session's use time at a lifecycle boundary."""
+        with self._locked_session(session_id):
+            path = self._session_path(session_id, workspace)
+            if path is None:
+                raise ValueError(f"session has no journal path: {session_id!r}")
+            metadata = _session_metadata(path.parent)
+            if "updated" not in metadata:
+                raise KeyError(
+                    f"session metadata for {session_id!r} has no use time; "
+                    "run scripts/backfill_metadata.py first"
+                )
+            metadata["updated"] = _format_utc(max(
+                _parse_utc(metadata["updated"]), datetime.now(timezone.utc),
+            ))
+            _write_session_metadata(path.parent, metadata)
 
     def workspace_for(self, session_id: str) -> str | None:
         _validate_session_id(session_id)
@@ -359,8 +382,7 @@ class JsonlSessionStore:
     ) -> None:
         with self._locked_session(session_id):
             directory = session_directory(self._directory, workspace, session_id)
-            self._ensure_workspace(directory)
-            directory.mkdir(parents=True, exist_ok=True)
+            self._ensure_session_metadata(directory, workspace)
             metadata = _session_metadata(directory)
             metadata["permission_preset"] = preset.value
             _write_session_metadata(directory, metadata)
@@ -384,8 +406,7 @@ class JsonlSessionStore:
     ) -> None:
         with self._locked_session(session_id):
             directory = session_directory(self._directory, workspace, session_id)
-            self._ensure_workspace(directory)
-            directory.mkdir(parents=True, exist_ok=True)
+            self._ensure_session_metadata(directory, workspace)
             metadata = _session_metadata(directory)
             metadata["provider"] = provider
             _write_session_metadata(directory, metadata)
@@ -440,10 +461,7 @@ class JsonlSessionStore:
             path = self._session_path(session_id, workspace)
             if path is None:
                 raise ValueError(f"session has no journal path: {session_id!r}")
-            self._ensure_workspace(path.parent)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            if not (path.parent / SESSION_METADATA_FILENAME).exists():
-                _write_session_metadata(path.parent, _new_session_metadata())
+            self._ensure_session_metadata(path.parent, workspace)
             file = _open_journal_file(path)
         try:
             with self._locked_session(session_id):
@@ -473,15 +491,26 @@ class JsonlSessionStore:
         path = self._session_path(session_id, workspace)
         if path is None:
             raise ValueError(f"session has no journal path: {session_id!r}")
-        self._ensure_workspace(path.parent)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if not (path.parent / SESSION_METADATA_FILENAME).exists():
-            _write_session_metadata(path.parent, _new_session_metadata())
+        self._ensure_session_metadata(path.parent, workspace)
         events = tuple(events)
         with _open_journal_file(path) as file:
             prepare_append(file)
             _write_journal_events(file, events)
         _update_session_metadata(path.parent, session_id, events)
+
+    def _ensure_session_metadata(
+        self, directory: Path, workspace: Path | str | None,
+    ) -> None:
+        self._ensure_workspace(directory)
+        directory.mkdir(parents=True, exist_ok=True)
+        if not (directory / SESSION_METADATA_FILENAME).exists():
+            workspace_id = (
+                directory.parent.name if self._group_by_workspace
+                else workspace_key(workspace) if workspace is not None else None
+            )
+            _write_session_metadata(directory, _new_session_metadata(
+                directory.name, workspace_id,
+            ))
 
     def _ensure_workspace(self, directory: Path) -> None:
         if self._group_by_workspace:
@@ -671,12 +700,35 @@ def _write_session_metadata(
 ) -> None:
     atomic_write_text(
         directory / SESSION_METADATA_FILENAME,
-        json.dumps(metadata, ensure_ascii=False),
+        json.dumps(metadata, ensure_ascii=False, indent=2) + "\n",
     )
 
 
-def _new_session_metadata() -> dict[str, object]:
-    return {"title": "", "title_source": "initial", "has_activity": False}
+def _session_identity_metadata(
+    session_id: str, workspace_id: str | None, *,
+    created: datetime, updated: datetime,
+) -> dict[str, object]:
+    return {
+        "session_id": session_id, "workspace_id": workspace_id,
+        "created": _format_utc(created), "updated": _format_utc(updated),
+    }
+
+
+def _new_session_metadata(session_id: str, workspace_id: str | None) -> dict[str, object]:
+    now = datetime.now(timezone.utc)
+    return {
+        "title": "", "title_source": "initial", "has_activity": False,
+        **_session_identity_metadata(session_id, workspace_id, created=now, updated=now),
+    }
+
+
+def _bind_session_workspace(directory: Path, workspace_id: str) -> None:
+    metadata = _session_metadata(directory)
+    if metadata["workspace_id"] != workspace_id:
+        metadata["workspace_id"] = workspace_id
+        _write_session_metadata(directory, metadata)
+    for child in (directory / "subagents").glob("*/session.json"):
+        _bind_session_workspace(child.parent, workspace_id)
 
 
 def _update_session_metadata(

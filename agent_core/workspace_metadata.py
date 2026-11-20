@@ -51,7 +51,7 @@ def _read_workspace_metadata(directory: Path) -> dict[str, str]:
     if not path.is_file():
         raise FileNotFoundError(
             f"missing workspace metadata {path}; "
-            "run scripts/backfill_workspaces.py first"
+            "run scripts/backfill_metadata.py first"
         )
     return json.loads(path.read_text(encoding="utf-8"))
 

@@ -86,6 +86,7 @@ class SessionRuntimeController:
                     session.set_permission_preset(initial_permission)
                 session.recover()
             yield resumed
+            store.record_activity(session.session_id, workspace.path)
             touch_workspace_metadata(workspace_directory(store.directory, workspace.path))
             if not reuse_writer:
                 self.close()
@@ -105,8 +106,9 @@ class SessionRuntimeController:
             self.approval_policy,
         )
 
-    def record_workspace_activity(self) -> None:
-        if self.session is not None and self.workspace is not None:
+    def record_activity(self) -> None:
+        if self.session is not None and self.workspace is not None and self.store is not None:
+            self.store.record_activity(self.session.session_id, self.workspace.path)
             touch_workspace_metadata(
                 workspace_directory(self.sessions_directory, self.workspace.path)
             )
@@ -148,4 +150,4 @@ class SessionRuntimeController:
                     self.store.open_journal(self.session.session_id)
                 )
             )
-        self.record_workspace_activity()
+        self.record_activity()

@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from agent_core.atomic import atomic_write_text
 from agent_core.session import message_from_dict
+from agent_core.session_store import _write_session_metadata
 from agent_core.session_title import initial_session_title
 
 
@@ -135,7 +136,7 @@ def migrate_metadata(path: Path) -> bool:
         return False
     if original is not None:
         atomic_write_text(metadata_path.with_name("session.json.bak"), original.decode("utf-8"))
-    atomic_write_text(metadata_path, json.dumps(updated, ensure_ascii=False))
+    _write_session_metadata(path.parent, updated)
     return True
 
 

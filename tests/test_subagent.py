@@ -506,6 +506,10 @@ class SubagentRuntimeTest(unittest.TestCase):
             )
             transcripts = list(subagents.rglob("*.jsonl"))
             child_id = transcripts[0].parent.name
+            metadata = json.loads((transcripts[0].parent / "session.json").read_text(encoding="utf-8"))
+            self.assertEqual(metadata["session_id"], child_id)
+            self.assertEqual(metadata["workspace_id"], workspace_key(tool_context.workspace.path))
+            self.assertLessEqual(metadata["created"], metadata["updated"])
             child = JsonlSessionStore(
                 subagents, group_by_workspace=False
             ).load(child_id)

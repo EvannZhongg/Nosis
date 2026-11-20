@@ -217,7 +217,7 @@ class SubagentRuntime:
         )
         # The child receives only the task text plus whatever the parent
         # was last shown, never the parent's transcript.
-        with store.open_journal(session.session_id) as sink:
+        with store.open_journal(session.session_id, parent.workspace.path) as sink:
             session.attach_journal_sink(sink)
             try:
                 result = child.run(
@@ -240,6 +240,7 @@ class SubagentRuntime:
                     memory.reconcile_pending()
             finally:
                 session.attach_journal_sink(None)
+                store.record_activity(session.session_id)
         # Full report delivery is separate from the bounded progress snapshots.
         return result.content
 

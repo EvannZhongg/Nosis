@@ -5,22 +5,26 @@
 | 脚本 | 用途 |
 | --- | --- |
 | `migrate_sessions.py` | 将历史 Session Journal 迁移为当前 Job 与缓存用量格式 |
-| `backfill_workspaces.py` | 为已有 Workspace 目录补全 `workspace.json` |
+| `backfill_metadata.py` | 统一补全 Workspace 与 Session 元数据 |
 
-## backfill_workspaces.py
+## backfill_metadata.py
 
 完全退出 Nosis（TUI、GUI、常驻宿主与 Bridge）后执行：
 
 ```bash
-python scripts/backfill_workspaces.py
-python scripts/backfill_workspaces.py --sessions-dir /path/to/sessions
+python scripts/backfill_metadata.py
+python scripts/backfill_metadata.py --sessions-dir /path/to/sessions
 ```
 
-默认目录为 `~/.nosis/sessions`。脚本仅扫描根目录下的 Workspace 及其直接包含的 Session，跳过隐藏目录和没有 Session 的空目录。已有 `workspace.json` 仅在 `name` 为空时补全名称，保留其余字段；名称非空的文件不改写。不改写 Session Journal 或 Session 元数据。
+默认目录为 `~/.nosis/sessions`。脚本扫描根目录下的 Workspace、各 Session 和嵌套 `subagents` 会话，跳过隐藏目录及 Artifact，不改写 Journal。每个 Workspace 先补 `workspace.json`，再补 Session 字段，避免迁移写入产生的文件修改时间影响 Workspace 历史时间推算。
+
+已有 `workspace.json` 仅在 `name` 为空时补全名称，保留其余字段；名称非空的文件不改写。
 
 生成文件包含 `workspace_id`（现有目录名，即绝对路径的 URL 编码）、`path`（解码后的绝对路径）、`name`（路径目录名；根目录使用路径 anchor，如 `F:\` 或 `/`）、`created`、`updated`。时间统一使用 UTC ISO 8601 格式：`created` 取各 Session 首条事件的最早时间；无事件的 Session 使用 Journal 或 `session.json` 的文件创建时间（系统不提供时使用修改时间）。`updated` 取这些文件的最近修改时间，且不早于 `created`。历史打开 Session 的时间未被记录，因此补全值只能由现有文件推算；补全后正常使用 Session 会继续刷新 `updated`。
 
-写入复用 Core 的元数据格式与原子文件替换。重复运行不会改写名称已补全的文件，Runtime 不包含旧数据补全逻辑。
+已有 `session.json` 仅补充缺失的 `session_id`、`workspace_id`、`created`、`updated`，保留所有已有字段和值。Session ID 取目录名，Workspace ID 取所属 Workspace 目录名，子 Agent 继承同一 Workspace ID。时间按该 Session 的首条事件与文件时间推算，规则与 Workspace 相同；已有时间字段不覆盖。没有 Journal 或事件的元数据文件也会处理。缺少 `session.json` 的 Journal 可先用 `migrate_sessions.py` 生成基础元数据。
+
+写入复用 Core 的元数据格式与原子文件替换。重复运行不会改写字段已齐备的文件，Runtime 不包含旧数据补全逻辑。
 
 ## migrate_sessions.py
 

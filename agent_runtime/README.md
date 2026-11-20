@@ -94,7 +94,7 @@ stdio 的相对 cwd 基于 Workspace 解析，未配置时使用当前 Workspace
 
 切换 Session 时先准备目标会话并取得 Journal 写入权，再由 `RuntimeHost` 释放原执行面的会话资源并提交新绑定。目标准备失败不会释放原会话的 Journal、权限、计划或执行状态；重新选择当前 Session 则复用已持有的 Journal 写者。
 
-Workspace 元数据的首次登记由 Core 持久化层负责，已有记录的 `updated` 刷新由 Runtime 决定：成功打开或重新选择 Session、切换 Workspace 时刷新一次；交互与定时 Turn 在开始和结束时各刷新一次，包含失败和取消。中间 Journal 事件与权限、Provider 写入不单独刷新 Workspace 时间。
+Workspace 与 Session 元数据的首次登记由 Core 持久化层负责，已有记录的 `updated` 刷新由 Runtime 决定：成功打开或重新选择 Session、切换 Workspace 时刷新一次；交互与定时 Turn 在开始和结束时各刷新一次，包含失败和取消。中间 Journal 事件与权限、Provider 写入不单独刷新使用时间。
 
 `TurnRunner` 保证一个 Host 同时只有一个活动 Turn，并统一处理：
 

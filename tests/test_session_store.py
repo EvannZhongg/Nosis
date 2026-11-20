@@ -743,6 +743,9 @@ class JsonlSessionStoreTest(unittest.TestCase):
             self.assertEqual(metadata, {
                 "permission_preset": "full_access", "title": "",
                 "title_source": "initial", "has_activity": False,
+                "session_id": "session-1",
+                "workspace_id": workspace_directory(store.directory, workspace).name,
+                "created": metadata["created"], "updated": metadata["created"],
             })
             self.assertEqual(
                 JsonlSessionStore(store.directory).load("session-1").permission_preset,

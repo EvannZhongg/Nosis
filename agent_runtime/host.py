@@ -189,7 +189,7 @@ class RuntimeHost:
         attachments: Callable[[], tuple[AttachmentPart, ...]] = lambda: (),
         input_source: str = "user",
     ) -> TurnResult:
-        self.sessions.record_workspace_activity()
+        self.sessions.record_activity()
         try:
             self.callbacks.on_turn_start(turn_id, text, input_source)
             result = self.turns.run_turn(
@@ -204,7 +204,7 @@ class RuntimeHost:
                     session.add_item("user", text)
                     session.finish_turn("failed", turn_id, error=result.error)
         finally:
-            self.sessions.record_workspace_activity()
+            self.sessions.record_activity()
         self.callbacks.on_turn_finish(turn_id, result)
         return result
 

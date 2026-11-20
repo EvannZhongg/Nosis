@@ -15,7 +15,7 @@ from agent_core.time_utils import format_utc
 from agent_core import workspace_metadata as workspace_metadata_module
 
 
-SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "backfill_workspaces.py"
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "backfill_metadata.py"
 
 
 class WorkspaceMetadataTest(unittest.TestCase):
@@ -150,7 +150,7 @@ class WorkspaceMetadataTest(unittest.TestCase):
 
     def test_existing_workspace_without_metadata_is_not_migrated_at_runtime(self) -> None:
         self.metadata_path.parent.mkdir(parents=True)
-        with self.assertRaisesRegex(FileNotFoundError, "backfill_workspaces.py"):
+        with self.assertRaisesRegex(FileNotFoundError, "backfill_metadata.py"):
             self.store.bind_workspace("new", self.workspace)
         self.assertFalse(self.metadata_path.exists())
 
