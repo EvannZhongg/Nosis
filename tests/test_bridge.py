@@ -51,6 +51,7 @@ from agent_core import (
     FULL_ACCESS_AUTHORITY,
     Workspace,
 )
+from agent_core import workspace_metadata as workspace_metadata_module
 from agent_core.scheduler import (
     AgentTurnAction,
     OneShotTrigger,
@@ -2128,6 +2129,85 @@ class ScheduledTurnTest(unittest.TestCase):
                 self.assertEqual(stored.permission_preset, preset)
 
 
+class WorkspaceActivityTest(BridgeTestCase):
+    def test_interactive_and_scheduled_turns_write_activity_only_at_boundaries(self) -> None:
+        for source in ("user", "scheduled"):
+            for status in ("completed", "failed", "cancelled"):
+                with self.subTest(source=source, status=status):
+                    root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+                    bridge, _ = self.make_bridge([], root)
+                    bridge.open_session(open_session_message(root))
+                    session = bridge.host.sessions.session
+                    path = session_directory(root / "sessions", root, session.session_id).parent / "workspace.json"
+                    created = json.loads(path.read_text(encoding="utf-8"))["created"]
+                    plane = bridge.host.planes.ensure(bridge.host.sessions)
+                    plane.memory = None
+                    start = datetime(2030, 1, 1, tzinfo=timezone.utc)
+                    end = datetime(2030, 1, 2, tzinfo=timezone.utc)
+                    observed = []
+
+                    def run(text, **kwargs):
+                        session.begin_turn(kwargs["turn_id"])
+                        session.add_item("user", text)
+                        for index in range(12):
+                            session.add_item("assistant", f"progress {index}")
+                            observed.append((json.loads(path.read_text(encoding="utf-8"))["updated"], write.call_count))
+                        clock.now.return_value = end
+                        session.finish_turn(status)
+                        if status == "failed":
+                            raise ValueError("provider refused the request")
+                        if status == "cancelled":
+                            raise KeyboardInterrupt()
+                        return AgentRunResult("done")
+
+                    plane.agent = SimpleNamespace(run=run)
+                    with (
+                        patch.object(workspace_metadata_module, "datetime") as clock,
+                        patch.object(workspace_metadata_module, "write_workspace_metadata", wraps=workspace_metadata_module.write_workspace_metadata) as write,
+                    ):
+                        clock.now.return_value = start
+                        result = bridge.host.run_turn("activity", "work", input_source=source)
+                        self.assertEqual(write.call_count, 2)
+                    self.assertEqual(result.status, status)
+                    self.assertEqual(observed, [("2030-01-01T00:00:00Z", 1)] * 12)
+                    if status == "failed":
+                        self.assertEqual(result.error.message, "provider refused the request")
+                    metadata = json.loads(path.read_text(encoding="utf-8"))
+                    self.assertEqual(metadata["created"], created)
+                    self.assertEqual(metadata["updated"], "2030-01-02T00:00:00Z")
+
+    def test_startup_failure_still_records_turn_end(self) -> None:
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        bridge, _ = self.make_bridge([], root)
+        bridge.open_session(open_session_message(root))
+        with (
+            patch.object(bridge.host.planes, "ensure", side_effect=ValueError("startup failed")),
+            patch.object(workspace_metadata_module, "write_workspace_metadata", wraps=workspace_metadata_module.write_workspace_metadata) as write,
+        ):
+            result = bridge.host.run_turn("startup", "work", input_source="scheduled")
+            self.assertEqual(write.call_count, 2)
+        self.assertTrue(result.startup_failed)
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(bridge.host.sessions.session.turns["startup"].status, "failed")
+
+    def test_open_refreshes_activity_once_and_failed_open_does_not(self) -> None:
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        bridge, _ = self.make_bridge([], root)
+        opening = open_session_message(root, session_id="first")
+        bridge.open_session(opening)
+        path = session_directory(root / "sessions", root, "first").parent / "workspace.json"
+        with patch.object(workspace_metadata_module, "write_workspace_metadata", wraps=workspace_metadata_module.write_workspace_metadata) as write:
+            bridge.open_session({**opening, "session_id": "second"})
+            self.assertEqual(write.call_count, 1)
+            write.reset_mock()
+            before = path.read_bytes(), path.stat().st_mtime_ns
+            with patch.object(JsonlSessionStore, "load", side_effect=ValueError("invalid journal")):
+                with self.assertRaisesRegex(ValueError, "invalid journal"):
+                    bridge.open_session(opening)
+            write.assert_not_called()
+        self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), before)
+
+
 class BridgeSessionOpenTest(BridgeTestCase):
     """The bridge selects the provider the interface asked for."""
 
@@ -2142,7 +2222,8 @@ class BridgeSessionOpenTest(BridgeTestCase):
             path = session_directory(root / "sessions", root, "current").parent / "workspace.json"
             before = json.loads(path.read_text(encoding="utf-8"))
             clock.now.return_value = datetime(2026, 11, 22, tzinfo=timezone.utc)
-            bridge.open_session(opening)
+            with patch.object(JsonlSessionStore, "bind_workspace", side_effect=AssertionError("reuse must not rebind")):
+                bridge.open_session(opening)
         after = json.loads(path.read_text(encoding="utf-8"))
         self.assertIs(bridge.host.sessions.session, original)
         self.assertEqual(after["created"], before["created"])

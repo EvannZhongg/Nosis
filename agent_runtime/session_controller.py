@@ -4,6 +4,8 @@ from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Iterator
 from agent_core import JsonlSessionStore, Session, Workspace, PlanManager, PermissionController, CompositeToolPolicy
+from agent_core.session_paths import workspace_directory
+from agent_core.workspace_metadata import touch_workspace_metadata
 from .config import load_default_permission_preset, load_model_options
 from .settings import EnvironmentReloader
 from .callbacks import RuntimeCallbacks
@@ -71,7 +73,6 @@ class SessionRuntimeController:
         with ExitStack() as journal:
             if reuse_writer:
                 session = current_session
-                store.bind_workspace(session.session_id, workspace.path)
             else:
                 session = Session(str(session_id)) if resumed else Session()
                 opening_id = session.session_id
@@ -85,6 +86,7 @@ class SessionRuntimeController:
                     session.set_permission_preset(initial_permission)
                 session.recover()
             yield resumed
+            touch_workspace_metadata(workspace_directory(store.directory, workspace.path))
             if not reuse_writer:
                 self.close()
                 self._journal = journal.pop_all()
@@ -102,6 +104,12 @@ class SessionRuntimeController:
             self.session,
             self.approval_policy,
         )
+
+    def record_workspace_activity(self) -> None:
+        if self.session is not None and self.workspace is not None:
+            touch_workspace_metadata(
+                workspace_directory(self.sessions_directory, self.workspace.path)
+            )
 
     @contextmanager
     def session_permissions(self, session_id: str) -> Iterator[PermissionController]:
@@ -140,3 +148,4 @@ class SessionRuntimeController:
                     self.store.open_journal(self.session.session_id)
                 )
             )
+        self.record_workspace_activity()

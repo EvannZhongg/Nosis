@@ -59,33 +59,74 @@ class WorkspaceMetadataTest(unittest.TestCase):
                     "created": format_utc(self.now), "updated": format_utc(self.now),
                 })
 
-    def test_activity_from_any_session_updates_workspace_and_reads_do_not(self) -> None:
+    def test_session_persistence_and_reads_do_not_refresh_existing_workspace(self) -> None:
+        self.store.bind_workspace("first", self.workspace)
+        before = self.metadata_path.read_bytes(), self.metadata_path.stat().st_mtime_ns
+        with (
+            patch.object(workspace_metadata_module, "_locked_workspace", side_effect=AssertionError("must not lock workspace")),
+            patch.object(workspace_metadata_module, "_read_workspace_metadata", side_effect=AssertionError("must not read workspace metadata")),
+        ):
+            self.advance()
+            self.store.bind_workspace("second", self.workspace)
+            session = Session("first")
+            with self.store.open_journal("first") as sink:
+                session.attach_journal_sink(sink)
+                session.begin_turn("turn")
+                for index in range(10):
+                    session.add_item("user", f"hello {index}")
+                session.set_permission_preset(PermissionPreset.FULL_ACCESS)
+                session.finish_turn("completed")
+            self.advance()
+            self.store.append_events("second", session.journal)
+            self.store.set_provider("first", "main", self.workspace)
+            self.store.set_permission_preset("second", PermissionPreset.FULL_ACCESS, self.workspace)
+            self.store.set_title("first", "Renamed", "manual")
+            self.store.load("first")
+            self.store.workspace_for("first")
+            self.store.list_sessions()
+            self.store.list_workspace_sessions(self.workspace)
+            self.store.search_messages("hello", limit=10, per_session_limit=2)
+        self.assertEqual((self.metadata_path.read_bytes(), self.metadata_path.stat().st_mtime_ns), before)
+
+    def test_explicit_activity_preserves_creation_time(self) -> None:
         self.store.bind_workspace("first", self.workspace)
         created = self.read_metadata()["created"]
         self.advance()
-        self.store.bind_workspace("second", self.workspace)
-        self.assertEqual(self.read_metadata()["updated"], format_utc(self.now))
-        self.advance()
-        with self.store.open_journal("first") as sink:
-            self.assertEqual(self.read_metadata()["updated"], format_utc(self.now))
-            self.advance()
-            session = Session("first")
-            session.attach_journal_sink(sink)
-            session.add_item("user", "hello")
-            self.assertEqual(self.read_metadata()["updated"], format_utc(self.now))
-        self.advance()
-        self.store.append_events("second", session.journal)
-        self.assertEqual(self.read_metadata()["updated"], format_utc(self.now))
+        workspace_metadata_module.touch_workspace_metadata(self.metadata_path.parent)
         self.assertEqual(self.read_metadata()["created"], created)
+        self.assertEqual(self.read_metadata()["updated"], format_utc(self.now))
 
-        before = self.metadata_path.read_bytes(), self.metadata_path.stat().st_mtime_ns
-        self.advance()
-        self.store.load("first")
-        self.store.workspace_for("first")
-        self.store.list_sessions()
-        self.store.list_workspace_sessions(self.workspace)
-        self.store.search_messages("hello", limit=10, per_session_limit=2)
-        self.assertEqual((self.metadata_path.read_bytes(), self.metadata_path.stat().st_mtime_ns), before)
+    def test_root_workspace_uses_its_anchor_as_name(self) -> None:
+        workspace = Path(Path.cwd().anchor)
+        self.assertEqual(workspace.name, "")
+        self.store.bind_workspace("root", workspace)
+        path = workspace_directory(self.store.directory, workspace) / "workspace.json"
+        metadata = json.loads(path.read_text(encoding="utf-8"))
+        self.assertEqual(metadata["name"], workspace.anchor)
+        self.assertEqual(metadata["path"], str(workspace))
+
+    def test_backfill_repairs_empty_root_name_without_changing_other_metadata(self) -> None:
+        workspace = Path(Path.cwd().anchor)
+        self.store.bind_workspace("root", workspace)
+        path = workspace_directory(self.store.directory, workspace) / "workspace.json"
+        metadata = json.loads(path.read_text(encoding="utf-8"))
+        metadata["name"] = ""
+        path.write_text(json.dumps(metadata), encoding="utf-8")
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "--sessions-dir", str(self.store.directory)],
+            capture_output=True, text=True, check=True,
+        )
+        self.assertIn("Updated metadata for 1 Workspace(s).", result.stdout)
+        self.assertEqual(
+            json.loads(path.read_text(encoding="utf-8")),
+            {**metadata, "name": workspace.anchor},
+        )
+        before = path.read_bytes(), path.stat().st_mtime_ns
+        subprocess.run(
+            [sys.executable, str(SCRIPT), "--sessions-dir", str(self.store.directory)],
+            capture_output=True, text=True, check=True,
+        )
+        self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), before)
 
     def test_workspace_activity_is_isolated_and_move_registers_the_target(self) -> None:
         self.store.bind_workspace("moved", self.workspace)
@@ -152,14 +193,14 @@ class WorkspaceMetadataTest(unittest.TestCase):
         before = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in self.store.directory.rglob("*.jsonl")}
 
         result = subprocess.run([sys.executable, str(SCRIPT), "--sessions-dir", str(self.store.directory)], capture_output=True, text=True, check=True)
-        self.assertIn("Created metadata for 1 Workspace(s).", result.stdout)
+        self.assertIn("Updated metadata for 1 Workspace(s).", result.stdout)
         self.assertEqual(self.read_metadata()["created"], "2026-10-01T00:00:00Z")
         self.assertEqual(self.read_metadata()["updated"], "2026-10-04T00:00:00Z")
         for path, original in before.items():
             self.assertEqual((path.read_bytes(), path.stat().st_mtime_ns), original)
         original = self.metadata_path.read_bytes(), self.metadata_path.stat().st_mtime_ns
         result = subprocess.run([sys.executable, str(SCRIPT), "--sessions-dir", str(self.store.directory)], capture_output=True, text=True, check=True)
-        self.assertIn("Created metadata for 0 Workspace(s).", result.stdout)
+        self.assertIn("Updated metadata for 0 Workspace(s).", result.stdout)
         self.assertEqual((self.metadata_path.read_bytes(), self.metadata_path.stat().st_mtime_ns), original)
         self.advance()
         self.store.bind_workspace("new", self.workspace)

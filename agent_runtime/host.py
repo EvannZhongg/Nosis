@@ -189,18 +189,22 @@ class RuntimeHost:
         attachments: Callable[[], tuple[AttachmentPart, ...]] = lambda: (),
         input_source: str = "user",
     ) -> TurnResult:
-        self.callbacks.on_turn_start(turn_id, text, input_source)
-        result = self.turns.run_turn(
-            turn_id, text,
-            lambda: self.planes.ensure(self.sessions, cancellation=self.turns.control),
-            attachments, input_source,
-        )
-        if input_source == "scheduled" and result.startup_failed:
-            session = self.sessions.session
-            if session is not None and turn_id not in session.turns:
-                session.begin_turn(turn_id)
-                session.add_item("user", text)
-                session.finish_turn("failed", turn_id, error=result.error)
+        self.sessions.record_workspace_activity()
+        try:
+            self.callbacks.on_turn_start(turn_id, text, input_source)
+            result = self.turns.run_turn(
+                turn_id, text,
+                lambda: self.planes.ensure(self.sessions, cancellation=self.turns.control),
+                attachments, input_source,
+            )
+            if input_source == "scheduled" and result.startup_failed:
+                session = self.sessions.session
+                if session is not None and turn_id not in session.turns:
+                    session.begin_turn(turn_id)
+                    session.add_item("user", text)
+                    session.finish_turn("failed", turn_id, error=result.error)
+        finally:
+            self.sessions.record_workspace_activity()
         self.callbacks.on_turn_finish(turn_id, result)
         return result
 

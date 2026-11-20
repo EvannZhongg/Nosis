@@ -1,4 +1,4 @@
-"""Populate missing workspace.json files after stopping Nosis."""
+"""Populate missing Workspace metadata and empty names after stopping Nosis."""
 
 import argparse
 import json
@@ -13,13 +13,20 @@ from agent_core.time_utils import parse_utc
 from agent_core.workspace_metadata import (
     WORKSPACE_METADATA_FILENAME,
     new_workspace_metadata,
+    workspace_name,
     write_workspace_metadata,
 )
 
 
 def backfill_workspace(directory: Path) -> bool:
-    if (directory / WORKSPACE_METADATA_FILENAME).exists():
-        return False
+    metadata_path = directory / WORKSPACE_METADATA_FILENAME
+    if metadata_path.exists():
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        if metadata["name"]:
+            return False
+        metadata["name"] = workspace_name(Path(metadata["path"]))
+        write_workspace_metadata(directory, metadata)
+        return True
     created: list[datetime] = []
     updated: list[datetime] = []
     for session in directory.iterdir():
@@ -69,7 +76,7 @@ def main() -> None:
         if directory.is_dir() and not directory.name.startswith("."):
             if backfill_workspace(directory):
                 count += 1
-    print(f"Created metadata for {count} Workspace(s).")
+    print(f"Updated metadata for {count} Workspace(s).")
 
 
 if __name__ == "__main__":

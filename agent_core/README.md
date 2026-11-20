@@ -62,7 +62,7 @@ interfaces → agent_runtime → agent_core
 
 `Session` 是执行状态的事实来源。对话、Tool 执行、Job、计划和恢复所需状态以 append-only Journal Event 表示；`JsonlSessionStore` 负责 JSONL 持久化、元数据、Session 列表、跨 Session 对话全文搜索与恢复。
 
-Session 根目录下，每个 Workspace 使用绝对路径的 URL 编码作为 `workspace_id`，目录为 `<sessions>/<workspace_id>/`。其中的 `workspace.json` 保存 `workspace_id`、绝对路径 `path`、目录名称 `name`、UTC 时间 `created` 和 `updated`。首次创建 Session 时登记 Workspace；创建、打开 Session 或追加 Journal 时刷新 `updated`，`created` 保持不变。只读加载、列表和搜索不刷新时间。Workspace 元数据使用独立文件锁与原子写入，多个 Session 共用一份记录；嵌套的子 Agent Journal 不另建 Workspace 记录。已有目录缺少元数据时，由 `scripts/backfill_workspaces.py` 手动补全，Runtime 不自动迁移。
+Session 根目录下，每个 Workspace 使用绝对路径的 URL 编码作为 `workspace_id`，目录为 `<sessions>/<workspace_id>/`。其中的 `workspace.json` 保存 `workspace_id`、绝对路径 `path`、目录名称 `name`（根目录使用路径 anchor，如 `F:\` 或 `/`）、UTC 时间 `created` 和 `updated`。首次创建 Session 时登记 Workspace；Core 的 Session 持久化操作只确保元数据存在，不刷新已有记录。Runtime 在成功打开或重新选择 Session、切换 Workspace，以及 Turn 开始和结束（含失败、取消）时刷新 `updated`，`created` 保持不变。中间消息、Tool、Job、权限与 Provider 记录，以及只读加载、列表和搜索不单独刷新时间。Workspace 元数据使用独立文件锁与原子写入，多个 Session 共用一份记录；嵌套的子 Agent Journal 不另建 Workspace 记录。已有目录缺少元数据或名称为空时，由 `scripts/backfill_workspaces.py` 手动补全，Runtime 不自动迁移。
 
 Runtime 通过 `JsonlSessionStore.open_journal()` 持有当前 Session 的写入句柄，Session 关闭或切换时释放；子 Agent 在执行期间持有自己的句柄。Windows 句柄仅共享读取，阻止同用户子进程删除、重命名或覆盖打开的 Journal，Runtime 继续通过原句柄追加并 fsync。保护不覆盖已关闭的 Session、其他 Session 文件、POSIX 删除语义或能够终止 Runtime 的进程，不等同于独立权限的审计存储。
 
