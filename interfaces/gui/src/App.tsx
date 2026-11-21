@@ -203,14 +203,8 @@ export function App() {
     setError("");
     try {
       await deleteSession(id);
-      const remaining = chatSessions.filter((item) => item.session_id !== id);
-      if (selectedSessionId === id) {
-        const next = remaining[0] ?? newSession();
-        setChatSessions(remaining.length ? remaining : [next]);
-        setSelectedSessionId(next.session_id);
-      } else {
-        setChatSessions(remaining);
-      }
+      setChatSessions((all) => all.filter((item) => item.session_id !== id));
+      createNewChat();
       setBusyBySession((all) => { const next = { ...all }; delete next[id]; return next; });
       setContextBySession((all) => { const next = { ...all }; delete next[id]; return next; });
       setProviderBySession((all) => { const next = { ...all }; delete next[id]; return next; });
