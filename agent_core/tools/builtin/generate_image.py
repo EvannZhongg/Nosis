@@ -61,7 +61,10 @@ class GenerateImageTool(Tool):
                     "image_size": {
                         "type": "string",
                         "description": (
-                            "Optional provider size hint such as 1K, 2K, or 4K."
+                            "Optional resolution tier such as 1K, 2K, or 4K. "
+                            "OpenAI also accepts WIDTHxHEIGHT (for example "
+                            "2048x1152) or auto. Explicit dimensions must match "
+                            "aspect_ratio when both are supplied."
                         ),
                     },
                     "count": {

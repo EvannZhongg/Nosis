@@ -178,6 +178,9 @@ Provider 路由按以下链解析：
 ```
 
 空字符串表示继续继承。`fast_model` 是独立的一路，只服务长期记忆合并，不参与上面的子 Agent 链；未配置时沿用当前选中的主模型，主 Agent 与子 Agent 的记忆合并共享这个 Provider。上下文压缩始终使用当前 Agent 自己的 LLM，复用原请求前缀。压缩和记忆调用直接写入所属 Session 的 JSONL Journal，记录实际模型、任务、状态、耗时和用量，不进入对话上下文；子 Agent 调用保存在子 Session 中。图片生成使用独立 `image_generation` 配置；模型请求超时和额外重试次数来自 `agent_config.json` 的 `provider` 字段。
+
+图片生成的尺寸按 `image_generation.model` 的 LiteLLM 路由映射：OpenRouter 使用 `image_config.aspect_ratio/image_size`，Gemini（含 Vertex AI Gemini）使用 `imageConfig.aspectRatio/imageSize`，OpenAI 与 Azure 使用原生 `size`。OpenAI 的 `1K/2K/4K` 分别以最长边 `1024/2048/3840` 像素为目标，在 16 像素网格上保持精确比例；`1K` 在必要时增大到满足最小像素数。例如 GPT Image 2 的 `1K + 16:9` 为 `1280x720`，`2K + 16:9` 为 `2048x1152`，`4K + 16:9` 为 `3840x2160`。也可直接指定 `image_size: "1536x864"` 或 `"auto"`；显式尺寸须与所配置的比例一致，`auto` 不可同时指定固定比例。超出模型像素或边长限制的组合直接报错（例如 `4K + 1:1`），不会自动降低尺寸；分辨率不映射到 `quality`。OpenRouter 的文本生图和参考图生图统一通过 LiteLLM Chat Completions 传递尺寸与图片，避免图片编辑适配器丢弃尺寸配置。
+
 每个 `provider_config.json` 的 `providers.<name>` 条目可以配置 `api: "responses"` 或 `api: "chat_completions"`，按协议选择原生 OpenAI SDK；与中转域名无关，也不在失败后切换协议。显式选择协议时，除 `deepseek/` 路由前缀会移除外，`model` 是原样发送的服务端模型 ID，例如 `gpt-6-astra` 或 `openai/gpt-5`（后者适用于要求该 ID 的网关）。
 
 省略 `api` 时，无路由前缀（已知 DeepSeek 模型名除外）或使用 `openai/` 前缀的模型默认使用 Responses，并移除 `openai/` 前缀；`deepseek/` 路由和已知的 DeepSeek 无前缀模型名默认使用原生 Chat Completions，并移除 `deepseek/` 前缀；其他带前缀的服务商路由使用 LiteLLM。协议选择不依赖联网模型目录，DeepSeek Flash 与 V4 Pro 使用本地发布资料而不查询 LiteLLM 元数据，未知 DeepSeek 模型要求显式上下文上限且不映射旧别名。主 Agent、视觉和子 Agent 共用同一装配入口。
