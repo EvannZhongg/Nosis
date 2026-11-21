@@ -169,6 +169,9 @@ def _execute_process(
             # No request is sent until the handshake succeeds, including to
             # binaries that predate the handshake and wait for stdin EOF.
             process.kill()
+            # Termination can be asynchronous; keep stdin open until exit so
+            # an old helper cannot resume execution when it receives EOF.
+            process.wait()
             raise RuntimeError(
                 f"nosis-sandbox protocol mismatch or missing handshake "
                 f"(expected {HELPER_PROTOCOL_VERSION}, executable: {helper}; "
