@@ -135,6 +135,10 @@ class LiteLLMImageGenerator:
         return tuple(images[:count])
 
 
+def _without_none(**values: str | None) -> dict[str, str]:
+    return {key: value for key, value in values.items() if value is not None}
+
+
 def _image_parameters(
     provider: str,
     model: str,
@@ -145,25 +149,17 @@ def _image_parameters(
         return {}
     if provider == "openrouter":
         return {
-            "image_config": {
-                key: value
-                for key, value in {
-                    "aspect_ratio": aspect_ratio, "image_size": image_size,
-                }.items()
-                if value is not None
-            }
+            "image_config": _without_none(
+                aspect_ratio=aspect_ratio, image_size=image_size,
+            )
         }
     if provider == "gemini" or (
         provider == "vertex_ai" and model.startswith("gemini")
     ):
         return {
-            "imageConfig": {
-                key: value
-                for key, value in {
-                    "aspectRatio": aspect_ratio, "imageSize": image_size,
-                }.items()
-                if value is not None
-            }
+            "imageConfig": _without_none(
+                aspectRatio=aspect_ratio, imageSize=image_size,
+            )
         }
     if provider not in {"openai", "azure"}:
         raise ValueError(f"image size mapping is not supported for provider '{provider}'")
