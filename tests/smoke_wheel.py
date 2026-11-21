@@ -15,19 +15,22 @@ from uuid import uuid4
 import zipfile
 
 
+HELPER_PROTOCOL_VERSION = 2
+
+
 def run_helper(helper: Path, request: dict) -> dict:
     with subprocess.Popen(
         [str(helper)], stdin=subprocess.PIPE,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     ) as process:
-        assert json.loads(process.stdout.readline()) == {"protocol_version": 1}
+        assert json.loads(process.stdout.readline()) == {"protocol_version": HELPER_PROTOCOL_VERSION}
         process.stdin.write(json.dumps(request).encode("utf-8") + b"\n")
         process.stdin.flush()
         # Keep the control pipe open: EOF cancels the command.
         process.wait(timeout=15)
         assert process.returncode == 0, process.stderr.read().decode("utf-8")
         result = json.loads(process.stdout.read())
-    assert result["protocol_version"] == 1, result
+    assert result["protocol_version"] == HELPER_PROTOCOL_VERSION, result
     assert result["command"] == request["command"], result
     assert not result["timed_out"], result
     return result
@@ -95,7 +98,7 @@ def main() -> None:
         workspace = root / "workspace"
         workspace.mkdir()
         request = {
-            "protocol_version": 1,
+            "protocol_version": HELPER_PROTOCOL_VERSION,
             "command": "wheel smoke test",
             "argv": [sys.executable, "-c",
                      "import sys; from pathlib import Path; "
