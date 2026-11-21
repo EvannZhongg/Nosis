@@ -8,7 +8,7 @@ from time import monotonic
 from typing import Callable, Literal, TypeAlias
 from uuid import uuid4
 
-from .cancellation import CancellationSource
+from .cancellation import CancellationIncompleteError, CancellationSource
 from .session import JobExecutionStatus, Session
 from .tools.base import JSONValue, ToolError, ToolOutput, ToolResult
 from .tool_result import ToolResultNormalizer
@@ -16,6 +16,11 @@ from .tool_result import ToolResultNormalizer
 
 JobStatus: TypeAlias = JobExecutionStatus
 JobOutput: TypeAlias = JSONValue | ToolOutput
+_JOB_CANCEL_TIMEOUT_SECONDS = 10
+
+
+class JobCancellationTimeout(CancellationIncompleteError):
+    """Work did not stop; its execution plane must not be reused."""
 
 
 class JobCancelled(BaseException):
@@ -128,6 +133,7 @@ class JobManager:
         self._updates: list[JobUpdate] = []
         self._condition = Condition(Lock())
         self._closed = False
+        self._cancellation_error: CancellationIncompleteError | None = None
         self._on_update: Callable[[JobUpdate], None] | None = None
         self._normalizer: ToolResultNormalizer | None = None
 
@@ -136,6 +142,15 @@ class JobManager:
     ) -> None:
         with self._condition:
             self._on_update = callback
+
+    def ensure_available(self) -> None:
+        with self._condition:
+            if self._cancellation_error is not None:
+                raise self._cancellation_error
+
+    def invalidate(self, error: CancellationIncompleteError) -> None:
+        with self._condition:
+            self._cancellation_error = error
 
     def set_result_normalizer(self, normalizer: ToolResultNormalizer) -> None:
         with self._condition:
@@ -158,6 +173,8 @@ class JobManager:
         job_id = f"job_{uuid4().hex[:12]}"
         job = _Job(job_id, turn_id, kind, CancellationToken(), dict(details))
         with self._condition:
+            if self._cancellation_error is not None:
+                raise self._cancellation_error
             if self._closed:
                 raise RuntimeError("job manager is closed")
             self._jobs[job_id] = job
@@ -200,6 +217,10 @@ class JobManager:
         except JobCancelled:
             with self._condition:
                 self._finish_locked(job, "cancelled")
+        except CancellationIncompleteError as error:
+            self.invalidate(error)
+            with self._condition:
+                self._finish_locked(job, "failed", error=ToolError(type(error).__name__, str(error)))
         except BaseException as error:
             with self._condition:
                 if job.token.cancelled:
@@ -217,9 +238,12 @@ class JobManager:
             except BaseException as error:
                 error_payload = ToolError(type(error).__name__, str(error))
                 with self._condition:
-                    self._finish_locked(
-                        job, "failed", error=error_payload, result_summary=summary,
-                    )
+                    if job.token.cancelled:
+                        self._finish_locked(job, "cancelled")
+                    else:
+                        self._finish_locked(
+                            job, "failed", error=error_payload, result_summary=summary,
+                        )
             else:
                 with self._condition:
                     self._finish_locked(
@@ -235,6 +259,10 @@ class JobManager:
                 job.progress = snapshot
 
     def _normalize_output(self, job: _Job, output: JobOutput) -> JSONValue:
+        if job.token.cancelled:
+            if isinstance(output, ToolOutput) and output.artifact_cleanup is not None:
+                output.artifact_cleanup()
+            raise JobCancelled
         normalizer = self._normalizer
         if normalizer is None:
             if isinstance(output, ToolOutput):
@@ -274,6 +302,11 @@ class JobManager:
         error: ToolError | None = None,
         result_summary: dict[str, JSONValue] | None = None,
     ) -> None:
+        if job.token.cancelled and status == "completed":
+            status = "cancelled"
+            output = None
+            error = None
+            result_summary = None
         with job.progress_lock:
             job.status = status
             progress = deepcopy(job.progress)
@@ -381,16 +414,21 @@ class JobManager:
     def cancel(self, job_id: str) -> JobSnapshot:
         with self._condition:
             snapshot = self._snapshot_locked(job_id)
-            if snapshot.status in {"submitted", "running"}:
-                self._cancel_locked(self._jobs[job_id])
+            job = self._jobs.get(job_id) if snapshot.status in {"submitted", "running"} else None
+        if job is not None:
+            self._cancel(job)
+        with self._condition:
             return self._snapshot_locked(job_id)
 
-    def _cancel_locked(self, job: _Job) -> None:
-        if job.status in {"submitted", "running"}:
-            job.token.cancel()
-            if job.future is not None and job.future.cancel():
-                self._finish_locked(job, "cancelled")
-        self._condition.notify_all()
+    def _cancel(self, job: _Job) -> None:
+        # Subscribers may inspect jobs or stop external work. Never invoke
+        # them while holding the manager lock needed by finishing workers.
+        job.token.cancel()
+        with self._condition:
+            if job.status in {"submitted", "running"}:
+                if job.future is not None and job.future.cancel():
+                    self._finish_locked(job, "cancelled")
+            self._condition.notify_all()
 
     def wait_for_update(self, turn_id: str, timeout: float = 0.1) -> bool:
         with self._condition:
@@ -408,17 +446,27 @@ class JobManager:
     def cancel_turn(self, turn_id: str) -> None:
         with self._condition:
             jobs = [job for job in self._jobs.values() if job.turn_id == turn_id]
-            for job in jobs:
-                self._cancel_locked(job)
+        for job in jobs:
+            self._cancel(job)
 
-    def wait_for_turn(self, turn_id: str) -> None:
+    def wait_for_turn(self, turn_id: str, *, timeout: float | None = None) -> None:
+        deadline = None if timeout is None else monotonic() + timeout
         with self._condition:
-            while any(
-                job.turn_id == turn_id
-                and job.status in {"submitted", "running"}
-                for job in self._jobs.values()
-            ):
-                self._condition.wait(0.1)
+            while pending := [
+                job for job in self._jobs.values()
+                if job.turn_id == turn_id and job.status in {"submitted", "running"}
+            ]:
+                remaining = None if deadline is None else deadline - monotonic()
+                if remaining is not None and remaining <= 0:
+                    job_ids = ", ".join(job.job_id for job in pending)
+                    if all(job.token.cancelled for job in pending):
+                        self._cancellation_error = JobCancellationTimeout(
+                            f"Jobs did not stop after cancellation: {job_ids}. "
+                            "Restart this session runtime before executing more work."
+                        )
+                        raise self._cancellation_error
+                    raise TimeoutError(f"Timed out waiting for jobs: {job_ids}")
+                self._condition.wait(remaining)
 
     def close(self) -> None:
         with self._condition:
@@ -430,13 +478,21 @@ class JobManager:
                 for job in self._jobs.values()
                 if job.status in {"submitted", "running"}
             }
-        for turn_id in turn_ids:
-            self.cancel_turn(turn_id)
-        for turn_id in turn_ids:
-            self.wait_for_turn(turn_id)
-        self._executor.shutdown(wait=True, cancel_futures=True)
+        try:
+            for turn_id in turn_ids:
+                self.cancel_turn(turn_id)
+            deadline = monotonic() + _JOB_CANCEL_TIMEOUT_SECONDS
+            for turn_id in turn_ids:
+                self.wait_for_turn(turn_id, timeout=max(0, deadline - monotonic()))
+        finally:
+            with self._condition:
+                pending = any(
+                    job.status in {"submitted", "running"} for job in self._jobs.values()
+                )
+            self._executor.shutdown(wait=not pending, cancel_futures=True)
 
     def cancel_and_discard(self, turn_id: str) -> None:
         self.cancel_turn(turn_id)
-        self.wait_for_turn(turn_id)
+        self.wait_for_turn(turn_id, timeout=_JOB_CANCEL_TIMEOUT_SECONDS)
+        self.ensure_available()
         self.drain_updates(turn_id)

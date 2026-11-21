@@ -1,6 +1,7 @@
 import json
 import tempfile
 import threading
+import time
 import unittest
 from dataclasses import replace
 from pathlib import Path
@@ -11,6 +12,8 @@ from agent_core import (
     JsonlSessionStore, ListDirectoryTool, Session, ShellTool, ToolCall, ToolExecutionContext,
     ToolResultNormalizer, Workspace, builtin_catalog,
 )
+from agent_core.jobs import JobCancellationTimeout
+from agent_core.cancellation import CancellationIncompleteError
 
 
 class JobControlTest(unittest.TestCase):
@@ -30,6 +33,92 @@ class JobControlTest(unittest.TestCase):
         if job_id is not None:
             arguments["job_id"] = job_id
         return self.tool.execute(arguments, self.context)
+
+    def test_cancellation_subscribers_can_inspect_jobs_without_manager_lock(self):
+        entered = threading.Event()
+        release = threading.Event()
+        observed = []
+        readers = []
+
+        def run(context):
+            def inspect():
+                reader = threading.Thread(target=lambda: self.jobs.list(), daemon=True)
+                readers.append(reader)
+                reader.start()
+                reader.join(0.5)
+                observed.append(not reader.is_alive())
+
+            context.cancellation.subscribe(inspect)
+            entered.set()
+            release.wait(3)
+
+        handle = self.jobs.submit("shell", "turn", run, details={})
+        try:
+            self.assertTrue(entered.wait(2))
+            self.jobs.cancel(handle.job_id)
+            self.assertEqual(observed, [True])
+        finally:
+            release.set()
+            self.jobs.wait_for_turn("turn", timeout=2)
+            for reader in readers:
+                reader.join(2)
+        self.assertEqual(self.jobs.get(handle.job_id).status, "cancelled")
+
+    def test_unresponsive_job_cannot_block_cancellation_or_be_reused(self):
+        entered = threading.Event()
+        release = threading.Event()
+
+        def run(context):
+            entered.set()
+            release.wait(5)
+            return "late output"
+
+        handle = self.jobs.submit("shell", "turn", run, details={})
+        try:
+            self.assertTrue(entered.wait(2))
+            with patch("agent_core.jobs._JOB_CANCEL_TIMEOUT_SECONDS", 0.05):
+                started = time.monotonic()
+                with self.assertRaises(JobCancellationTimeout):
+                    self.jobs.cancel_and_discard("turn")
+                self.assertLess(time.monotonic() - started, 1)
+                self.assertEqual(self.jobs.get(handle.job_id).status, "running")
+                with self.assertRaises(JobCancellationTimeout):
+                    self.jobs.ensure_available()
+                with self.assertRaises(JobCancellationTimeout):
+                    self.jobs.submit("shell", "next", lambda job: "unsafe", details={})
+                with self.assertRaises(JobCancellationTimeout):
+                    self.jobs.close()
+        finally:
+            release.set()
+            self.jobs.wait_for_turn("turn", timeout=2)
+        updates = self.jobs.drain_updates("turn")
+        self.assertEqual([update.status for update in updates], ["submitted", "running", "cancelled"])
+        self.assertIsNone(updates[-1].output)
+        self.assertEqual(self.jobs.get(handle.job_id).status, "cancelled")
+
+    def test_failed_process_reaping_is_not_reported_as_successful_cancellation(self):
+        entered = threading.Event()
+        release = threading.Event()
+
+        def run(context):
+            entered.set()
+            release.wait(3)
+            raise CancellationIncompleteError("process tree is still alive")
+
+        handle = self.jobs.submit("shell", "turn", run, details={})
+        try:
+            self.assertTrue(entered.wait(2))
+            self.jobs.cancel(handle.job_id)
+        finally:
+            release.set()
+            self.jobs.wait_for_turn("turn", timeout=2)
+        snapshot = self.jobs.get(handle.job_id)
+        self.assertEqual(snapshot.status, "failed")
+        self.assertEqual(snapshot.error, "process tree is still alive")
+        with self.assertRaises(CancellationIncompleteError):
+            self.jobs.cancel_and_discard("turn")
+        with self.assertRaises(CancellationIncompleteError):
+            self.jobs.ensure_available()
 
     def test_active_list_and_single_job_cancellation(self):
         entered = threading.Event()

@@ -151,13 +151,15 @@ Shell 通过 `ExecutionRouter` 根据 `ExecutionScope` 和当前 `ExecutionAutho
 
 `approval.py` 生成审批提示与审批历史的有界摘要：路径、字节与行数、每个文本字段的前 3 行预览，整体不超过 2048 字符，patch 最多列出 8 个文件操作并说明省略数量。完整参数保留在原始 Tool Call 中，不重复写入用户交互记录。
 
-`execution/` 构造 `nosis-sandbox` 的策略 JSON 并解析结构化结果。Rust helper 负责子进程生命周期、超时、取消、输出 spool 和平台沙箱：
+`execution/` 构造 `nosis-sandbox` 的策略 JSON 并解析结构化结果，同时监督 helper 的总执行期限（包括初始化和清理）。取消通知不执行阻塞 I/O；helper 在 2 秒宽限期内未退出时强制终止进程树，进程与管道线程回收也有期限。Windows 的父级 kill-on-close Job Object 同时覆盖 host/workspace scope 的 helper 及其后代。Rust helper 负责子进程生命周期、超时、取消、输出 spool 和平台沙箱，独立取消监视器为初始化和清理提供退出边界：
 
 - macOS 使用 Seatbelt；Linux 使用 bubblewrap，缺失或 namespace 初始化失败时保留错误，不回退宿主执行。
 - Windows 使用 Restricted Token、受限 SID、目录 capability ACL、可回收 lease 和 kill-on-close Job Object；Shell 方言为 PowerShell 7。
 - Windows 的 host/workspace Shell 统一启用 `ErrorActionPreference=Stop`、严格模式与原生命令错误处理；清理脚本须使用任务专用变量并先验证目标路径边界，不得吞掉初始化或删除错误。
 
-平台授权行为由 Rust 集成测试启动 helper 并检查真实子进程的文件访问结果；Python 单测只覆盖策略装配与 JSON 结果解析。
+平台授权行为由 Rust 集成测试启动 helper 并检查真实子进程的文件访问结果；Python 测试覆盖策略装配、结果解析、helper 监督、进程树回收与 Windows 沙箱初始化期间的取消。
+
+helper 协议版本为 2；Python 执行器只接受具备取消监视器的配套 helper，旧版本在发送命令前被拒绝，须一并重新构建或安装。
 
 ## Provider 与模型协议
 
@@ -204,6 +206,8 @@ Responses 工具参数从 `response.completed` 的完整 output 读取，推理�
 长期记忆分为全局和 Workspace 两层。`MemoryManager` 在 Turn 开始时提供记忆上下文，收集候选更新，并在成功结束后通过 `MemoryReconciler` 合并；失败或取消时丢弃待提交更新。
 
 `JobManager` 管理可取消的后台任务和状态事件，供子 Agent 等长任务使用。Job 快照（原始详情、耗时、progress、错误与结果摘要）随 Journal 持久化，Turn 恢复后仍可由 `job_control` 查询；已恢复的中断 Job 不能再取消。
+
+Turn 取消和 JobManager 关闭最多等待 10 秒回收后台任务。任务未停止或进程回收失败时，Turn 记录失败，执行面禁止继续执行、重建或切换 Session，须重启该 Session Runtime；不会把仍运行的任务伪装为已取消并放行下一轮。取消订阅者在管理器锁外调用；取消后才返回的普通结果不再作为成功结果交付。
 
 `SchedulerService` 定义 one-shot、interval、cron trigger，以及任务、运行记录、错过执行的处理和 JSONL 持久化。它通过注入的 runner 发起 Agent Turn，但不负责组装应用 Runtime。领导权锁争用时继续轮询；其他文件系统错误会记录异常与调度数据路径，结束调度循环并释放领导权锁。
 

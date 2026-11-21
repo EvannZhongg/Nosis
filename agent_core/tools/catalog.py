@@ -3,6 +3,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Iterable
 
 from ..turn_control import AgentCancelled, TurnControl
+from ..cancellation import CancellationIncompleteError
 
 from .base import (
     Tool,
@@ -115,6 +116,8 @@ class ToolSet:
     def execute(
         self, call: ToolCall, *, turn_control: TurnControl | None = None,
     ) -> ToolResult:
+        if self._context.jobs is not None:
+            self._context.jobs.ensure_available()
         cancellation = turn_control or self._context.cancellation
         if cancellation is not None and cancellation.cancelled:
             raise AgentCancelled
@@ -158,7 +161,7 @@ class ToolSet:
                 raise AgentCancelled
             executed = True
             output = tool.execute(call.arguments, context)
-        except HookExecutionError:
+        except (HookExecutionError, CancellationIncompleteError):
             raise
         except Exception as error:
             return ToolResult(

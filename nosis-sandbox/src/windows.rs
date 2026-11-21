@@ -400,7 +400,10 @@ impl Sandbox {
         });
         let event = receiver.recv_timeout(Duration::from_secs(timeout));
         let cancelled = matches!(event, Ok(ProcessEvent::Cancelled));
-        let timed_out = matches!(event, Err(mpsc::RecvTimeoutError::Timeout));
+        let timed_out = matches!(
+            event,
+            Ok(ProcessEvent::TimedOut) | Err(mpsc::RecvTimeoutError::Timeout)
+        );
         if cancelled || timed_out {
             unsafe {
                 TerminateJobObject(self.job, 1);

@@ -32,7 +32,7 @@ fn run(request: Value) -> Value {
 #[cfg(target_os = "linux")]
 fn linux_request(workspace: &Path, plugin: &Path, script: &str) -> Value {
     json!({
-        "protocol_version": 1,
+        "protocol_version": 2,
         "command": script,
         "argv": ["/bin/sh", "-c", script],
         "cwd": workspace,
@@ -105,7 +105,7 @@ fn macos_request(workspace: &Path, private_tmp: &Path, plugin: &Path, script: &s
     environment.insert("TMP".into(), private_tmp.to_string_lossy().into_owned());
     environment.insert("TEMP".into(), private_tmp.to_string_lossy().into_owned());
     json!({
-        "protocol_version": 1,
+        "protocol_version": 2,
         "command": script,
         "argv": ["/bin/sh", "-c", script],
         "cwd": workspace,

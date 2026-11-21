@@ -77,6 +77,8 @@ class ExecutionPlaneManager:
         self, session: SessionRuntimeController, *, force: bool = False,
         cancellation: TurnControl | None = None,
     ) -> ExecutionPlane:
+        if self.current is not None and self.current.jobs is not None:
+            self.current.jobs.ensure_available()
         if (
             session.session is None
             or session.store is None

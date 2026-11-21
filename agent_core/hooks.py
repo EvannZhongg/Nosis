@@ -7,6 +7,7 @@ from time import monotonic
 from typing import TYPE_CHECKING, Literal
 from uuid import uuid4
 
+from .cancellation import CancellationIncompleteError
 from .execution.authority import ExecutionScope
 from .tools.base import JSONValue, Tool, ToolCall, ToolDefinition, ToolOutput, ToolPolicy
 from .tools.context import ToolExecutionContext
@@ -197,7 +198,7 @@ class HookRunner:
             decision, reason, feedback = parsed.decision, parsed.reason, parsed.feedback
             status = "completed"
             return parsed
-        except (AgentCancelled, KeyboardInterrupt):
+        except (AgentCancelled, KeyboardInterrupt, CancellationIncompleteError):
             status = "cancelled"
             raise
         except Exception as error:

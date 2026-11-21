@@ -4,6 +4,10 @@ from threading import Lock
 from typing import Callable, Protocol
 
 
+class CancellationIncompleteError(RuntimeError):
+    """Execution could not be stopped and its resources cannot be reused."""
+
+
 class CancellationSignal(Protocol):
     @property
     def cancelled(self) -> bool: ...

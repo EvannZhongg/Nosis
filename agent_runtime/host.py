@@ -108,6 +108,8 @@ class RuntimeHost:
     def _require_idle(self) -> None:
         if self.turns.turn_id is not None:
             raise RuntimeError("cannot change runtime during a turn")
+        if self.planes.current is not None and self.planes.current.jobs is not None:
+            self.planes.current.jobs.ensure_available()
 
     def open_session(self, workspace: Path, session_id: str | None = None,
                      provider: str | None = None) -> bool:

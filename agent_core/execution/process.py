@@ -5,15 +5,17 @@ import locale
 import os
 import queue
 import shutil
+import signal
 import subprocess
 import tempfile
 import threading
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
+from time import monotonic
 from typing import Callable
 
-from ..cancellation import CancellationSignal
+from ..cancellation import CancellationIncompleteError, CancellationSignal
 from ..turn_control import AgentCancelled
 
 
@@ -21,8 +23,11 @@ DEFAULT_COMMAND_TIMEOUT_SECONDS = 60
 MAX_COMMAND_TIMEOUT_SECONDS = 24 * 60 * 60
 MAX_COMMAND_OUTPUT_CHARS = 50 * 1024
 _SPOOL_PATHS: set[Path] = set()
-HELPER_PROTOCOL_VERSION = 1
+HELPER_PROTOCOL_VERSION = 2
 _HELPER_STARTUP_TIMEOUT_SECONDS = 5
+_HELPER_CANCEL_GRACE_SECONDS = 2
+_HELPER_REAP_TIMEOUT_SECONDS = 2
+_HELPER_POLL_SECONDS = 0.02
 _HELPER_REPAIR = (
     "Reinstall the matching wheel with `python -m pip install --force-reinstall "
     "--no-cache-dir nosis-agent`, or, for a source checkout, run "
@@ -125,6 +130,8 @@ def _execute_process(
         "spool_directory": str(spool_directory or tempfile.gettempdir()),
         "policy": policy or {"platform": "host"},
     }
+    request_data = json.dumps(request, ensure_ascii=False).encode("utf-8") + b"\n"
+    deadline = monotonic() + timeout_seconds
     process = subprocess.Popen(
         [str(helper)],
         stdin=subprocess.PIPE,
@@ -132,69 +139,142 @@ def _execute_process(
         stderr=subprocess.PIPE,
         creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
         start_new_session=os.name != "nt",
+        bufsize=0,
     )
     assert process.stdin is not None
     output: dict[str, bytes] = {}
     hello: queue.Queue[bytes] = queue.Queue(maxsize=1)
+    cancel_requested = threading.Event()
+    finished = threading.Event()
+    io_errors: list[OSError] = []
+    job = None
+    timed_out = False
 
     def read_stdout() -> None:
         assert process.stdout is not None
         hello.put(process.stdout.readline())
         output["stdout"] = process.stdout.read()
 
-    readers = [
-        threading.Thread(target=read_stdout, daemon=True),
-        threading.Thread(target=lambda: output.__setitem__("stderr", process.stderr.read()), daemon=True),
+    io_threads = [
+        threading.Thread(target=read_stdout, name="sandbox-stdout", daemon=True),
+        threading.Thread(
+            target=lambda: output.__setitem__("stderr", process.stderr.read()),
+            name="sandbox-stderr", daemon=True,
+        ),
     ]
-    for reader in readers:
-        reader.start()
-    unsubscribe = None
-    pipe_lock = threading.Lock()
+    unsubscribe = (
+        cancellation.subscribe(cancel_requested.set) if cancellation is not None else None
+    )
 
-    def cancel_process() -> None:
-        with pipe_lock:
-            if not process.stdin.closed:
-                try:
-                    process.stdin.write(b"\x00")
-                    process.stdin.flush()
-                except OSError:
-                    pass  # The helper may have exited concurrently.
+    def write_control() -> None:
+        # Pipe writes can block too. The owner thread must remain free to
+        # enforce the deadline and terminate the entire process tree.
+        try:
+            data = memoryview(request_data)
+            while data:
+                written = process.stdin.write(data)
+                data = data[written:]
+            cancel_requested.wait()
+            if not finished.is_set():
+                cancelled = cancellation is not None and cancellation.cancelled
+                process.stdin.write(b"\x01" if timed_out and not cancelled else b"\x00")
+        except OSError as error:
+            io_errors.append(error)
+
+    def terminate() -> None:
+        if job is not None:
+            job.terminate()
+        elif os.name == "nt":
+            process.kill()
+        else:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
     try:
+        if os.name == "nt":
+            from .windows_job import WindowsJob
+
+            job = WindowsJob(int(process._handle))
+        for reader in io_threads:
+            reader.start()
+        startup_deadline = min(deadline, monotonic() + _HELPER_STARTUP_TIMEOUT_SECONDS)
         try:
-            greeting = json.loads(hello.get(timeout=_HELPER_STARTUP_TIMEOUT_SECONDS))
+            while True:
+                if cancel_requested.is_set():
+                    raise CommandCancelled
+                remaining = startup_deadline - monotonic()
+                if remaining <= 0:
+                    raise queue.Empty
+                try:
+                    greeting = json.loads(hello.get(timeout=min(remaining, _HELPER_POLL_SECONDS)))
+                    break
+                except queue.Empty:
+                    continue
             if greeting.get("protocol_version") != HELPER_PROTOCOL_VERSION:
                 raise ValueError(f"helper reported {greeting.get('protocol_version')!r}")
         except (queue.Empty, ValueError, AttributeError) as error:
-            # No request is sent until the handshake succeeds, including to
-            # binaries that predate the handshake and wait for stdin EOF.
-            process.kill()
-            # Termination can be asynchronous; keep stdin open until exit so
-            # an old helper cannot resume execution when it receives EOF.
-            process.wait()
             raise RuntimeError(
                 f"nosis-sandbox protocol mismatch or missing handshake "
                 f"(expected {HELPER_PROTOCOL_VERSION}, executable: {helper}; "
                 f"{str(error) or 'no handshake received'}). {_HELPER_REPAIR}"
             ) from error
-        process.stdin.write(json.dumps(request, ensure_ascii=False).encode("utf-8") + b"\n")
-        process.stdin.flush()
-        if cancellation is not None:
-            unsubscribe = cancellation.subscribe(cancel_process)
-        process.wait()
+        writer = threading.Thread(target=write_control, name="sandbox-control", daemon=True)
+        io_threads.append(writer)
+        writer.start()
+        cancel_deadline = None
+        while process.poll() is None:
+            now = monotonic()
+            if now >= deadline:
+                timed_out = True
+                cancel_requested.set()
+            if cancel_requested.is_set() and cancel_deadline is None:
+                cancel_deadline = now + _HELPER_CANCEL_GRACE_SECONDS
+            if cancel_deadline is not None and now >= cancel_deadline:
+                terminate()
+                break
+            if io_errors:
+                raise io_errors[0]
+            finished.wait(_HELPER_POLL_SECONDS)
     finally:
         if unsubscribe is not None:
             unsubscribe()
-        with pipe_lock:
-            process.stdin.close()
-        process.wait()
-        for reader in readers:
-            reader.join()
-        process.stdout.close()
-        process.stderr.close()
+        finished.set()
+        cancel_requested.set()
+        try:
+            try:
+                if process.poll() is None or os.name != "nt":
+                    terminate()
+                process.wait(timeout=_HELPER_REAP_TIMEOUT_SECONDS)
+            except (OSError, subprocess.TimeoutExpired) as error:
+                raise CancellationIncompleteError("Sandbox process tree could not be reaped") from error
+        finally:
+            # Closing the job also removes descendants that outlived the helper
+            # and could otherwise keep its output pipes open forever.
+            if job is not None:
+                job.close()
+            reap_deadline = monotonic() + _HELPER_REAP_TIMEOUT_SECONDS
+            for thread in io_threads:
+                if thread.ident is not None:
+                    thread.join(max(0, reap_deadline - monotonic()))
+            # Closing a pipe while another thread is blocked in its CRT I/O
+            # can itself block. An unreaped owner makes the plane unusable.
+            if not any(thread.is_alive() for thread in io_threads):
+                process.stdin.close()
+                process.stdout.close()
+                process.stderr.close()
+        if any(thread.is_alive() for thread in io_threads):
+            raise CancellationIncompleteError("Sandbox I/O did not stop after process termination")
+    if cancellation is not None and cancellation.cancelled:
+        raise CommandCancelled
+    if timed_out and process.returncode:
+        return CommandExecutionResult(
+            command, process.returncode, "",
+            output.get("stderr", b"").decode("utf-8", errors="replace").strip(),
+            timed_out=True, timeout_seconds=timeout_seconds,
+        )
     if process.returncode:
-        if cancellation is not None and cancellation.cancelled:
-            raise CommandCancelled
         diagnostic = output["stderr"].decode("utf-8", errors="replace").strip()
         raise RuntimeError(diagnostic or f"nosis-sandbox exited with status {process.returncode}")
 
@@ -214,7 +294,7 @@ def _execute_process(
         exit_code=payload["exit_code"],
         stdout=payload["stdout"],
         stderr=stderr,
-        timed_out=payload["timed_out"],
+        timed_out=timed_out or payload["timed_out"],
         timeout_seconds=payload["timeout_seconds"],
         stdout_spool=_spool_from_payload(payload["stdout_spool"]),
         stderr_spool=_spool_from_payload(payload["stderr_spool"]),

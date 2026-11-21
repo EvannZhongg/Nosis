@@ -8,15 +8,20 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::mpsc::{self, Receiver, Sender},
+    sync::{
+        Arc,
+        atomic::{AtomicU32, Ordering},
+    },
     thread,
     time::Duration,
 };
 
 const OUTPUT_LIMIT: usize = 50 * 1024;
-const PROTOCOL_VERSION: u64 = 1;
+const PROTOCOL_VERSION: u64 = 2;
 
 enum ProcessEvent {
     Cancelled,
+    TimedOut,
     Exited,
 }
 
@@ -104,10 +109,35 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
     let (events, receiver) = mpsc::channel();
     let cancellation = events.clone();
+    let child_pid = Arc::new(AtomicU32::new(0));
+    let cancelled_child = child_pid.clone();
+    let (_finished, finished) = mpsc::channel::<()>();
     thread::spawn(move || {
         // EOF also cancels, so a disappearing parent releases sandbox resources.
-        let _ = control.read(&mut [0u8; 1]);
-        let _ = cancellation.send(ProcessEvent::Cancelled);
+        let mut reason = [0u8; 1];
+        let event = match control.read(&mut reason) {
+            Ok(1) if reason[0] == 1 => ProcessEvent::TimedOut,
+            _ => ProcessEvent::Cancelled,
+        };
+        let _ = cancellation.send(event);
+        // Cancellation also bounds setup, output capture and ACL cleanup,
+        // which run outside the command's event wait.
+        if matches!(
+            finished.recv_timeout(Duration::from_secs(1)),
+            Err(mpsc::RecvTimeoutError::Timeout)
+        ) {
+            #[cfg(unix)]
+            {
+                let pid = cancelled_child.load(Ordering::Acquire);
+                if pid != 0 {
+                    kill_tree(pid);
+                }
+            }
+            #[cfg(not(unix))]
+            let _ = cancelled_child;
+            eprintln!("command termination did not finish");
+            std::process::exit(2);
+        }
     });
     fs::create_dir_all(&request.spool_directory)?;
     reap_stale_spools(&request.spool_directory);
@@ -129,6 +159,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         events,
         &receiver,
         windows_policy,
+        child_pid,
     )?;
     let payload = ResultPayload {
         protocol_version: PROTOCOL_VERSION,
@@ -436,6 +467,7 @@ fn execute(
     events: Sender<ProcessEvent>,
     receiver: &Receiver<ProcessEvent>,
     windows_policy: Option<WindowsPolicy>,
+    child_pid: Arc<AtomicU32>,
 ) -> Result<(i32, String, String, bool, Option<Spool>, Option<Spool>), Box<dyn std::error::Error>> {
     #[cfg(windows)]
     if let Some(policy) = windows_policy {
@@ -470,6 +502,7 @@ fn execute(
         command.process_group(0);
     }
     let mut child = command.spawn()?;
+    child_pid.store(child.id(), Ordering::Release);
     if let Some(input) = stdin {
         if let Some(mut pipe) = child.stdin.take() {
             thread::spawn(move || {
@@ -493,7 +526,10 @@ fn execute(
     });
     let event = receiver.recv_timeout(Duration::from_secs(timeout));
     let cancelled = matches!(event, Ok(ProcessEvent::Cancelled));
-    let timed_out = matches!(event, Err(mpsc::RecvTimeoutError::Timeout));
+    let timed_out = matches!(
+        event,
+        Ok(ProcessEvent::TimedOut) | Err(mpsc::RecvTimeoutError::Timeout)
+    );
     if cancelled || timed_out {
         kill_tree(pid);
     }

@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Callable, TypeAlias
 
 from .config import AgentConfig
+from .cancellation import CancellationIncompleteError
 from .context_manager import ContextManager, ContextWindow, ContextWindowExceededError
 from .llm import (
     AuxiliaryModelCall,
@@ -207,6 +208,8 @@ class Agent:
         turn_control: TurnControl | None = None,
         input_source: str = "user",
     ) -> AgentRunResult:
+        if self._execution_context.jobs is not None:
+            self._execution_context.jobs.ensure_available()
         try:
             result = self._run(
                 user_input,
@@ -221,6 +224,8 @@ class Agent:
             self._session.finish_turn("cancelled")
             raise
         except Exception as error:
+            if isinstance(error, CancellationIncompleteError) and self._execution_context.jobs is not None:
+                self._execution_context.jobs.invalidate(error)
             self._cancel_jobs(self._session.current_turn_id)
             self._session.finish_turn(
                 "failed",
@@ -239,7 +244,11 @@ class Agent:
 
     def _cancel_jobs(self, turn_id: str | None) -> None:
         if turn_id is not None and self._execution_context.jobs is not None:
-            self._execution_context.jobs.cancel_and_discard(turn_id)
+            try:
+                self._execution_context.jobs.cancel_and_discard(turn_id)
+            except Exception as error:
+                self._session.finish_turn("failed", error=runtime_error_info(error))
+                raise
 
     def _run(
         self,
@@ -275,6 +284,12 @@ class Agent:
                 self._session, steers, self._now, on_event, check_input,
             ),
         )
+
+        def check_execution() -> None:
+            continuation.raise_if_cancelled()
+            if self._execution_context.jobs is not None:
+                self._execution_context.jobs.ensure_available()
+
         request_timestamp_utc = self._now().astimezone(timezone.utc)
 
         def on_compression_call(_call: AuxiliaryModelCall) -> None:
@@ -290,7 +305,7 @@ class Agent:
         )
         append_hook_feedback(self._session, input_feedback)
         while True:
-            continuation.raise_if_cancelled()
+            check_execution()
             continuation.apply_jobs()
             request = self._context.build_request(self._tools.definitions_for(turn_control))
             token_estimate = self._context.measure_input_tokens(request)
@@ -298,7 +313,7 @@ class Agent:
             if on_event is not None:
                 on_event(ContextWindowEvent(self._context.window(input_tokens)))
             if self._context.should_archive(input_tokens):
-                self._context.archive(request, continuation.raise_if_cancelled, on_compression_call)
+                self._context.archive(request, check_execution, on_compression_call)
                 continuation.apply_steering()
                 continue
             if input_tokens > self._context.hard_limit:
@@ -337,7 +352,7 @@ class Agent:
                     request,
                     on_text_delta,
                     on_reasoning_delta,
-                    continuation.raise_if_cancelled,
+                    check_execution,
                 )
             except ProviderError as error:
                 raise type(error)(
@@ -355,7 +370,7 @@ class Agent:
             )
             if on_event is not None:
                 on_event(ModelCompletedEvent(model_call_index, response.usage, self._session.cache_usage))
-            continuation.raise_if_cancelled()
+            check_execution()
 
             if response.tool_calls:
                 repetition.check(response.tool_calls)
@@ -428,7 +443,7 @@ class Agent:
                 )
                 if on_event is not None:
                     on_event(UnitCompletedEvent(unit_start, len(self._session.items)))
-                continuation.raise_if_cancelled()
+                check_execution()
                 continuation.apply_jobs()
                 continuation.apply_steering()
                 continue
@@ -528,6 +543,7 @@ def _apply_job_results(
     jobs = context.jobs
     if jobs is None:
         return False, False
+    jobs.ensure_available()
     terminal, pending = jobs.drain_terminal_state(turn_id)
     if not terminal:
         return False, pending

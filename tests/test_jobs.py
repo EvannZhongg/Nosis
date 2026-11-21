@@ -1,9 +1,15 @@
 import json
+import subprocess
+import sys
+import tempfile
 import threading
+import time
 import unittest
 from dataclasses import replace
 from pathlib import Path
 from datetime import datetime, timezone
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from agent_core import (
     Agent,
@@ -13,6 +19,7 @@ from agent_core import (
     CommandCancelled,
     ExecutionRouter,
     JobManager,
+    HostCommandExecutor,
     LLMProvider,
     LLMRequest,
     LLMResponse,
@@ -27,8 +34,11 @@ from agent_core import (
     PlanManager,
     PlanStep,
 )
-from agent_core.agent import _apply_job_results
+from agent_core.agent import ModelCompletedEvent, _apply_job_results
 from agent_core.context_manager import ContextManager
+from agent_core.cancellation import CancellationIncompleteError
+from agent_runtime.callbacks import RuntimeCallbacks
+from agent_runtime.turn_runner import TurnRunner
 
 
 CONFIG = AgentConfig(
@@ -94,6 +104,154 @@ class ImmediateExecutor:
 
 
 class BackgroundJobTest(unittest.TestCase):
+    def test_foreground_reaping_failure_stops_tool_batch_and_execution_plane(self):
+        class Executor:
+            def execute(self, command, timeout_seconds=60, cancellation=None):
+                raise CancellationIncompleteError("process is still alive")
+
+        provider = SequencedProvider((LLMResponse(None, tool_calls=(
+            ToolCall("first", "shell", {"command": "stuck"}),
+            ToolCall("second", "shell", {"command": "unsafe"}),
+        )),))
+        session = Session("reaping-failure")
+        jobs = JobManager(session)
+        executor = Executor()
+        context = ToolExecutionContext(
+            workspace=Workspace(Path(__file__).parent), session=session, jobs=jobs,
+            execution_router=ExecutionRouter(executor, executor),
+        )
+        agent = Agent(provider, session, "system", CONSOLIDATOR_PROMPT, CONFIG,
+                      ToolCatalog((ShellTool(),)).select(("shell",), context), context)
+        try:
+            with self.assertRaises(CancellationIncompleteError):
+                agent.run("run", turn_id="first")
+            self.assertEqual(session.turns["first"].status, "failed")
+            self.assertEqual(session.tool_executions["first"].status, "failed")
+            self.assertNotIn("second", session.tool_executions)
+            with self.assertRaises(CancellationIncompleteError):
+                agent.run("unsafe", turn_id="next")
+            self.assertNotIn("next", session.turns)
+            self.assertEqual(len(provider.requests), 1)
+        finally:
+            jobs.close()
+
+    def test_cancel_at_model_checkpoint_reaps_stuck_helper_and_allows_next_turn(self):
+        real_popen = subprocess.Popen
+        processes = []
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script = (
+                "import sys, time\nfrom pathlib import Path\n"
+                "print('{\"protocol_version\": 2}', flush=True)\n"
+                "sys.stdin.buffer.readline()\nPath('ready').touch()\ntime.sleep(30)\n"
+            )
+
+            def launch(_argv, **kwargs):
+                process = real_popen([sys.executable, "-c", script], cwd=root, **kwargs)
+                processes.append(process)
+                return process
+
+            class Provider(SequencedProvider):
+                def stream(self, *args, **kwargs):
+                    if len(self.requests) == 1:
+                        deadline = time.monotonic() + 3
+                        while not (root / "ready").exists():
+                            if time.monotonic() >= deadline:
+                                raise RuntimeError("helper did not start")
+                            time.sleep(0.01)
+                    return super().stream(*args, **kwargs)
+
+            provider = Provider((
+                LLMResponse(None, tool_calls=(ToolCall("background", "shell", {
+                    "command": "stuck", "background": True,
+                }),)),
+                LLMResponse("discarded", tool_calls=(ToolCall("never-run", "shell", {"command": "unused"}),)),
+                LLMResponse("next turn completed"),
+            ))
+            session = Session("cancellation")
+            jobs = JobManager(session)
+            executor = HostCommandExecutor(root)
+            context = ToolExecutionContext(
+                workspace=Workspace(root), session=session, jobs=jobs,
+                execution_router=ExecutionRouter(executor, executor),
+            )
+            agent = Agent(provider, session, "system", CONSOLIDATOR_PROMPT, CONFIG,
+                          ToolCatalog((ShellTool(),)).select(("shell",), context), context)
+            plane = SimpleNamespace(agent=agent, memory=None, computer=None, runtime_warnings=())
+
+            def on_event(event, turn_id):
+                if isinstance(event, ModelCompletedEvent) and event.model_call_index == 2:
+                    runner.cancel(turn_id)
+
+            runner = TurnRunner(RuntimeCallbacks(on_event=on_event))
+            try:
+                with patch("agent_core.execution.process._sandbox_executable", return_value=Path("fake-helper")), patch(
+                    "agent_core.execution.process.subprocess.Popen", side_effect=launch,
+                ), patch("agent_core.execution.process._HELPER_CANCEL_GRACE_SECONDS", 0.1):
+                    first = runner.run_turn("first", "run", lambda: plane, lambda: ())
+                self.assertEqual(first.status, "cancelled")
+                self.assertFalse(runner.busy)
+                self.assertEqual(session.turns["first"].status, "cancelled")
+                self.assertEqual([job.status for job in session.jobs.values()], ["cancelled"])
+                self.assertNotIn("never-run", session.tool_executions)
+                self.assertIsNotNone(processes[0].poll())
+                self.assertFalse(any(thread.name.startswith("sandbox-") for thread in threading.enumerate()))
+                second = runner.run_turn("second", "continue", lambda: plane, lambda: ())
+                self.assertEqual(second.status, "completed")
+                self.assertEqual(session.turns["second"].status, "completed")
+            finally:
+                jobs.close()
+
+    def test_job_cancellation_timeout_finishes_turn_and_rejects_next_execution(self):
+        entered = threading.Event()
+        release = threading.Event()
+
+        class Executor:
+            def execute(self, command, timeout_seconds=60, cancellation=None):
+                entered.set()
+                release.wait(5)
+                return CommandExecutionResult(command, 0, "late", "")
+
+        provider = SequencedProvider((
+            LLMResponse(None, tool_calls=(ToolCall("background", "shell", {
+                "command": "stuck", "background": True,
+            }),)),
+            LLMResponse("discarded"),
+        ))
+        session = Session("timeout")
+        jobs = JobManager(session)
+        executor = Executor()
+        context = ToolExecutionContext(
+            workspace=Workspace(Path(__file__).parent), session=session, jobs=jobs,
+            execution_router=ExecutionRouter(executor, executor),
+        )
+        agent = Agent(provider, session, "system", CONSOLIDATOR_PROMPT, CONFIG,
+                      ToolCatalog((ShellTool(),)).select(("shell",), context), context)
+        plane = SimpleNamespace(agent=agent, memory=None, computer=None, runtime_warnings=())
+
+        def on_event(event, turn_id):
+            if isinstance(event, ModelCompletedEvent) and event.model_call_index == 2:
+                self.assertTrue(entered.wait(2))
+                runner.cancel(turn_id)
+
+        runner = TurnRunner(RuntimeCallbacks(on_event=on_event))
+        try:
+            with patch("agent_core.jobs._JOB_CANCEL_TIMEOUT_SECONDS", 0.05):
+                result = runner.run_turn("first", "run", lambda: plane, lambda: ())
+            self.assertEqual(result.status, "failed")
+            self.assertEqual(result.error.type, "JobCancellationTimeout")
+            self.assertFalse(runner.busy)
+            self.assertEqual(session.turns["first"].status, "failed")
+            self.assertIsNone(session.current_turn_id)
+            result = runner.run_turn("second", "unsafe", lambda: plane, lambda: ())
+            self.assertEqual(result.status, "failed")
+            self.assertNotIn("second", session.turns)
+            self.assertEqual(len(provider.requests), 2)
+        finally:
+            release.set()
+            jobs.wait_for_turn("first", timeout=2)
+            jobs.close()
+
     def test_active_jobs_refresh_at_tail_beside_plan_without_entering_history(self):
         session = Session("dynamic-jobs")
         session.begin_turn("turn")

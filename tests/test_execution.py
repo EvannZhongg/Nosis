@@ -55,9 +55,162 @@ def _python_script_command(working_directory: Path, script: str) -> str:
 
 
 class HostCommandExecutorTest(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "Windows capability lease lifecycle")
+    def test_cancellation_interrupts_windows_sandbox_setup(self) -> None:
+        import ctypes
+        from ctypes import wintypes
+
+        api = ctypes.WinDLL("kernel32", use_last_error=True)
+        api.CreateMutexW.argtypes = [ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR]
+        api.CreateMutexW.restype = wintypes.HANDLE
+        api.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        api.WaitForSingleObject.restype = wintypes.DWORD
+        api.ReleaseMutex.argtypes = [wintypes.HANDLE]
+        api.CloseHandle.argtypes = [wintypes.HANDLE]
+        mutex = api.CreateMutexW(None, False, "Local\\NosisCapabilityLeases")
+        self.assertTrue(mutex)
+        locked = False
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            executor = SandboxedCommandExecutor(root, WindowsSandboxBackend())
+            control = TurnControl()
+            launched = threading.Event()
+            errors = []
+            real_popen = subprocess.Popen
+
+            def launch(*args, **kwargs):
+                process = real_popen(*args, **kwargs)
+                launched.set()
+                return process
+
+            def execute():
+                try:
+                    executor.execute("Set-Content should-not-exist yes", cancellation=control)
+                except BaseException as error:
+                    errors.append(error)
+
+            thread = threading.Thread(target=execute, daemon=True)
+            try:
+                status = api.WaitForSingleObject(mutex, 3000)
+                locked = status in {0, 0x80}
+                self.assertTrue(locked)
+                with patch("agent_core.execution.process.subprocess.Popen", side_effect=launch):
+                    thread.start()
+                    self.assertTrue(launched.wait(3))
+                    time.sleep(0.2)
+                    control.cancel()
+                    thread.join(4)
+                    self.assertFalse(thread.is_alive())
+                self.assertEqual(len(errors), 1)
+                self.assertIsInstance(errors[0], CommandCancelled)
+                self.assertFalse((root / "should-not-exist").exists())
+            finally:
+                control.cancel()
+                if locked:
+                    api.ReleaseMutex(mutex)
+                api.CloseHandle(mutex)
+                if thread.ident is not None:
+                    thread.join(4)
+            result = executor.execute("Write-Output recovered")
+            self.assertEqual(result.stdout.strip(), "recovered")
+
+    def test_cancellation_reaps_unresponsive_helper_and_descendants(self) -> None:
+        real_popen = subprocess.Popen
+        for phase in ("startup", "request", "running", "cleanup"):
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                control = TurnControl()
+                launched = threading.Event()
+                processes = []
+                errors = []
+                child_script = "import time; from pathlib import Path; time.sleep(2); Path('escaped').touch()"
+                script = (
+                    "import sys, time, subprocess\nfrom pathlib import Path\n"
+                    + ("" if phase == "startup" else "print('{\"protocol_version\": 2}', flush=True)\n")
+                    + ("" if phase in {"startup", "request"} else "sys.stdin.buffer.readline()\n")
+                    + f"subprocess.Popen([sys.executable, '-c', {child_script!r}])\n"
+                    + "Path('ready').touch()\n"
+                    + ("sys.stdin.buffer.read(1)\nsys.exit(0)\n" if phase == "cleanup" else "time.sleep(30)\n")
+                )
+
+                def launch(_argv, **kwargs):
+                    process = real_popen([sys.executable, "-c", script], cwd=root, **kwargs)
+                    processes.append(process)
+                    launched.set()
+                    return process
+
+                def execute():
+                    try:
+                        _execute_process(
+                            ["unused"], command="unused", working_directory=root,
+                            timeout_seconds=20, cancellation=control,
+                            # Fill the request pipe when the helper does not read.
+                            environment={"large": "x" * 200000},
+                        )
+                    except BaseException as error:
+                        errors.append(error)
+
+                with patch("agent_core.execution.process._sandbox_executable", return_value=Path("fake-helper")), patch(
+                    "agent_core.execution.process.subprocess.Popen", side_effect=launch,
+                ), patch("agent_core.execution.process._HELPER_CANCEL_GRACE_SECONDS", 0.1):
+                    thread = threading.Thread(target=execute, daemon=True)
+                    thread.start()
+                    try:
+                        self.assertTrue(launched.wait(2))
+                        deadline = time.monotonic() + 3
+                        while not (root / "ready").exists() and thread.is_alive():
+                            self.assertLess(time.monotonic(), deadline)
+                            time.sleep(0.01)
+                        self.assertTrue((root / "ready").exists())
+                        started = time.monotonic()
+                        control.cancel()
+                        self.assertLess(time.monotonic() - started, 0.2)
+                        thread.join(4)
+                        self.assertFalse(thread.is_alive())
+                        self.assertEqual(len(errors), 1)
+                        self.assertIsInstance(errors[0], CommandCancelled)
+                        self.assertIsNotNone(processes[0].poll())
+                        time.sleep(2.1)
+                        self.assertFalse((root / "escaped").exists())
+                    finally:
+                        control.cancel()
+                        for process in processes:
+                            if process.poll() is None:
+                                process.kill()
+                        thread.join(4)
+
+    def test_deadline_reaps_helper_that_ignores_command_timeout(self) -> None:
+        real_popen = subprocess.Popen
+        processes = []
+        script = (
+            "import sys, time\n"
+            "print('{\"protocol_version\": 2}', flush=True)\n"
+            "sys.stdin.buffer.readline()\ntime.sleep(30)\n"
+        )
+
+        def launch(_argv, **kwargs):
+            process = real_popen([sys.executable, "-c", script], **kwargs)
+            processes.append(process)
+            return process
+
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "agent_core.execution.process._sandbox_executable", return_value=Path("fake-helper"),
+        ), patch("agent_core.execution.process.subprocess.Popen", side_effect=launch), patch(
+            "agent_core.execution.process._HELPER_CANCEL_GRACE_SECONDS", 0.1,
+        ):
+            started = time.monotonic()
+            result = _execute_process(
+                ["unused"], command="unused", working_directory=Path(directory),
+                timeout_seconds=1, cancellation=None,
+            )
+            self.assertLess(time.monotonic() - started, 3)
+            self.assertTrue(result.timed_out)
+            self.assertEqual(result.timeout_seconds, 1)
+            self.assertIsNotNone(processes[0].poll())
+
     def test_rejects_incompatible_helper_before_sending_command(self) -> None:
         real_popen = subprocess.Popen
-        for greeting in ('{"protocol_version": 999}', 'not json'):
+        for greeting in ('{"protocol_version": 1}', '{"protocol_version": 999}', 'not json'):
             with self.subTest(greeting=greeting), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 script = (

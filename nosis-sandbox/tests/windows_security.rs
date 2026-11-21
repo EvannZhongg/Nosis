@@ -33,7 +33,7 @@ fn request_timeout(workspace: &Path, private_tmp: &Path, script: &str, timeout: 
     environment.insert("TEMP".into(), private_tmp.to_string_lossy().into_owned());
     environment.insert("TMP".into(), private_tmp.to_string_lossy().into_owned());
     json!({
-        "protocol_version": 1,
+        "protocol_version": 2,
         "command": script,
         "argv": [powershell(), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
         "cwd": workspace,

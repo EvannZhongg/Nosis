@@ -26,7 +26,7 @@ fn argv(script: &str) -> Vec<String> {
 
 fn request(workspace: &Path, script: &str) -> Value {
     json!({
-        "protocol_version": 1,
+        "protocol_version": 2,
         "command": script,
         "argv": argv(script),
         "cwd": workspace,
@@ -59,7 +59,7 @@ fn run(request: Value) -> Value {
 
 #[test]
 fn handshake_precedes_request_and_rejects_missing_or_wrong_version() {
-    for version in [None, Some(999)] {
+    for version in [None, Some(1), Some(999)] {
         let mut helper = Command::new(env!("CARGO_BIN_EXE_nosis-sandbox"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -71,7 +71,7 @@ fn handshake_precedes_request_and_rejects_missing_or_wrong_version() {
         output.read_line(&mut greeting).unwrap();
         assert_eq!(
             serde_json::from_str::<Value>(&greeting).unwrap()["protocol_version"],
-            1
+            2
         );
         // Other required fields are deliberately absent: version validation
         // must happen before schema decoding, platform setup or execution.
@@ -117,6 +117,43 @@ fn closing_control_pipe_cancels_a_running_command() {
     assert!(cancelled_at.elapsed() < std::time::Duration::from_secs(3));
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("command cancelled"));
+    assert!(!workspace.path().join("finished").exists());
+}
+
+#[test]
+fn control_pipe_deadline_returns_partial_output_and_timeout() {
+    let workspace = tempdir().unwrap();
+    #[cfg(windows)]
+    let script = "Write-Output before; [IO.File]::WriteAllText('ready', 'yes'); Start-Sleep 20; [IO.File]::WriteAllText('finished', 'yes')";
+    #[cfg(not(windows))]
+    let script = "printf before; touch ready; sleep 20; touch finished";
+    let mut helper = Command::new(env!("CARGO_BIN_EXE_nosis-sandbox"))
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut control = helper.stdin.take().unwrap();
+    writeln!(control, "{}", request(workspace.path(), script)).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !workspace.path().join("ready").exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "command did not start"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    control.write_all(&[1]).unwrap();
+    let output = helper.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: Value =
+        serde_json::from_slice(output.stdout.splitn(2, |b| *b == b'\n').nth(1).unwrap()).unwrap();
+    assert_eq!(payload["timed_out"], true);
+    assert!(payload["stdout"].as_str().unwrap().contains("before"));
     assert!(!workspace.path().join("finished").exists());
 }
 
