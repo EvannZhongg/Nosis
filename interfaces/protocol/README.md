@@ -19,8 +19,10 @@ there and are not repeated here. The public/internal boundary is described in
 
 The public data types cover attachments, tool calls, token usage, permission
 presets, plans, context window, session items and structured runtime failures.
-`PROTOCOL_VERSION` is the single source for the protocol major; the reference
-document states what that major means.
+`PROTOCOL_VERSION` is the single source for the protocol major inside the
+TypeScript packages; `interfaces/bridge/protocol.py` defines the same major for
+the Python side, and both must change together. The reference document states
+what that major means.
 
 `initialRuntimeState()` mirrors Python's `inactive_runtime_state()` so both sides
 start from identical placeholders, and each call returns independent arrays. These

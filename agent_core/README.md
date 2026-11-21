@@ -10,6 +10,20 @@ interfaces → agent_runtime → agent_core
 
 `agent_core` 不 import `agent_runtime` 或 `interfaces`。应用级配置读取、Plugin 发现和对象装配由 [`agent_runtime`](../agent_runtime/README.md) 完成。
 
+## 目录
+
+- [执行模型](#执行模型)
+- [基础类型与配置](#基础类型与配置)
+- [Session、计划与持久化](#session计划与持久化)
+- [上下文与内容](#上下文与内容)
+- [Tool 系统](#tool-系统)
+- [命令执行与权限](#命令执行与权限)
+- [Provider 与模型协议](#provider-与模型协议)
+- [Memory、Job 与 Scheduler](#memoryjob-与-scheduler)
+- [Workspace Instructions](#workspace-instructions)
+- [Skill、MCP 与子 Agent](#skillmcp-与子-agent)
+- [Hooks](#hooks)
+
 ## 执行模型
 
 `Agent` 实现显式的 Agent Loop：构造模型请求、接收流式输出、组装 Tool Call、执行 Tool 批次、把结果回灌模型，并根据完成、错误、取消和调用上限结束当前 Turn。
@@ -42,22 +56,6 @@ interfaces → agent_runtime → agent_core
 | `file_lock.py` | 阻塞与非阻塞独占文件锁机制；错误策略与持锁生命周期由调用方管理 |
 | `time_utils.py` | UTC 时间序列化 |
 
-## 上下文与内容
-
-消息内容统一表示为文本、图片和文件 part。图片可以进入支持视觉的 Provider；普通附件以 Workspace 文件引用进入上下文。
-
-`ContextManager` 按完整语义单元投影 Session 历史，计算窗口占用，并在达到阈值时压缩较早上下文、保留近期单元和用户锚点。压缩使用当前 Agent 的模型，保留主请求的 system、工具定义和原始待归档消息前缀，在尾部追加压缩指令；近期尾部不送入压缩，格式修复指令也追加在尾部。
-
-阈值从可用输入预算推导：预算为模型窗口减去 `output_reserve_tokens`，小窗口与超大窗口使用不同的默认比例，配置 `trigger_ratio` 时以配置为准。用户锚点先保留最近两整轮，再按 `user_anchor_token_budget` 向前扩展连续 Turn，判断时计入已选中的全部输入，压缩不会改变保留范围。压缩结果验证后写回 Session，压缩返回的 Tool Call 不执行；超过硬上限时明确失败。默认比例与上限定义在 `context_manager.py`，不在本文档重复列举。
-
-| 模块 | 职责 |
-| --- | --- |
-| `content.py` | 文本、图片、文件与附件数据类型 |
-| `projection.py` | 从 Session Journal 投影模型上下文单元 |
-| `context_manager.py` | token 预算、上下文压缩和窗口快照 |
-| `media.py` | 图片格式探测、尺寸、编码与 token 估算 |
-| `public_url.py` | Web 资源访问前的公网 URL 校验 |
-
 ## Session、计划与持久化
 
 `Session` 是执行状态的事实来源。对话、Tool 执行、Job、计划和恢复所需状态以 append-only Journal Event 表示；`JsonlSessionStore` 负责 JSONL 持久化、元数据、Session 列表、跨 Session 对话全文搜索与恢复。
@@ -81,6 +79,22 @@ Runtime 通过 `JsonlSessionStore.open_journal()` 持有当前 Session 的写入
 | `plan.py` | 计划状态、更新与序列化 |
 | `session_title.py` | 首条输入生成初始标题、首个完成单元后异步生成标题 |
 | `tool_result.py` | Tool 输出预算、预览和 Artifact 落盘 |
+
+## 上下文与内容
+
+消息内容统一表示为文本、图片和文件 part。图片可以进入支持视觉的 Provider；普通附件以 Workspace 文件引用进入上下文。
+
+`ContextManager` 按完整语义单元投影 Session 历史，计算窗口占用，并在达到阈值时压缩较早上下文、保留近期单元和用户锚点。压缩使用当前 Agent 的模型，保留主请求的 system、工具定义和原始待归档消息前缀，在尾部追加压缩指令；近期尾部不送入压缩，格式修复指令也追加在尾部。
+
+阈值从可用输入预算推导：预算为模型窗口减去 `output_reserve_tokens`，小窗口与超大窗口使用不同的默认比例，配置 `trigger_ratio` 时以配置为准。用户锚点先保留最近两整轮，再按 `user_anchor_token_budget` 向前扩展连续 Turn，判断时计入已选中的全部输入，压缩不会改变保留范围。压缩结果验证后写回 Session，压缩返回的 Tool Call 不执行；超过硬上限时明确失败。默认比例与上限定义在 `context_manager.py`，不在本文档重复列举。
+
+| 模块 | 职责 |
+| --- | --- |
+| `content.py` | 文本、图片、文件与附件数据类型 |
+| `projection.py` | 从 Session Journal 投影模型上下文单元 |
+| `context_manager.py` | token 预算、上下文压缩和窗口快照 |
+| `media.py` | 图片格式探测、尺寸、编码与 token 估算 |
+| `public_url.py` | Web 资源访问前的公网 URL 校验 |
 
 ## Tool 系统
 
@@ -185,16 +199,6 @@ Responses 工具参数从 `response.completed` 的完整 output 读取，推理�
 | `providers/image_generation.py` | LiteLLM 图片生成实现 |
 | `auxiliary.py` | 辅助模型调用的耗时、结果与用量统计 |
 
-## Skill、MCP 与子 Agent
-
-Core 只定义扩展机制，不决定扩展从哪个目录加载：
-
-- `SkillSource` 描述可枚举的 Skill 来源，`SkillLoader` 与 `SkillRegistry` 负责元数据加载、注册及按需读取正文。
-- `McpClientManager` 管理 stdio 与 streamable HTTP Server 生命周期，将远程 Tool 适配为统一 `McpTool`。
-- `SubagentRoleRegistry` 保存角色；`SubagentRuntime` 为每次调用创建独立 Session，并复用同一套 Agent、Tool 和上下文机制。
-
-相关模块为 `skills.py`、`mcp/` 和 `subagent.py`。
-
 ## Memory、Job 与 Scheduler
 
 长期记忆分为全局和 Workspace 两层。`MemoryManager` 在 Turn 开始时提供记忆上下文，收集候选更新，并在成功结束后通过 `MemoryReconciler` 合并；失败或取消时丢弃待提交更新。
@@ -208,6 +212,16 @@ Core 只定义扩展机制，不决定扩展从哪个目录加载：
 ## Workspace Instructions
 
 `workspace_instructions.py` 只定义 instruction 条目、合并结果和 fingerprint 数据结构。具体读取哪些文件、来源优先级以及何时触发 Runtime 重建，由 `agent_runtime` 决定。
+
+## Skill、MCP 与子 Agent
+
+Core 只定义扩展机制，不决定扩展从哪个目录加载：
+
+- `SkillSource` 描述可枚举的 Skill 来源，`SkillLoader` 与 `SkillRegistry` 负责元数据加载、注册及按需读取正文。
+- `McpClientManager` 管理 stdio 与 streamable HTTP Server 生命周期，将远程 Tool 适配为统一 `McpTool`。
+- `SubagentRoleRegistry` 保存角色；`SubagentRuntime` 为每次调用创建独立 Session，并复用同一套 Agent、Tool 和上下文机制。
+
+相关模块为 `skills.py`、`mcp/` 和 `subagent.py`。
 
 ## Hooks
 

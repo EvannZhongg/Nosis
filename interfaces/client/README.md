@@ -1,9 +1,9 @@
 # @nosis/client
 
 A small Node.js (22+) ESM client for the [public stdio Bridge API](../../docs/bridge-protocol.md).
-It reuses the TUI's process transport and `@nosis/protocol` framing. It owns the
-child process, dispatches messages in wire order and keeps bounded stderr
-diagnostics. It holds no Runtime, Session, transcript or permission state.
+It owns the child process and uses `@nosis/protocol` framing; the TUI consumes
+this client for its own transport. It dispatches messages in wire order and keeps
+bounded stderr diagnostics. It holds no Runtime, Session, transcript or permission state.
 
 Install `nosis-agent` in a Python environment to obtain `nosis-bridge`. Install
 `@nosis/client` and `@nosis/protocol` package artifacts in the Node application.

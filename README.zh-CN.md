@@ -7,11 +7,9 @@
 Nosis 是一个开源的轻量级个人 Agent 应用。它提供本地 Workspace 操作、人工授权、会话持久化、上下文管理、长期记忆、计划、子 Agent、定时任务，以及 Skill、Plugin、MCP 扩展能力，并提供 TUI、GUI 和飞书移动端接入。
 
 ```text
-TUI ────────────────── Bridge ── agent_runtime ── agent_core
-nosis-server（常驻宿主）
-├─ HTTP / WebSocket（可选）── GUI
-├─ IM（飞书）
-└─ Session Host ── Bridge ── agent_runtime ── agent_core
+TUI ──────────────────────────┐
+GUI ── HTTP / WebSocket ──────┼── Bridge ── agent_runtime ── agent_core
+飞书 ── IM 适配器 ─────────────┘
 ```
 
 - `agent_core` 提供与前端无关的 Agent 机制。
@@ -83,33 +81,7 @@ GUI 默认监听 <http://127.0.0.1:8737>。
 [公开 stdio 协议](docs/bridge-protocol.md)，或使用轻量的
 [`@nosis/client` TypeScript SDK](interfaces/client/README.md)。
 
-公开契约：
-
-| 文档 | 负责范围 |
-| --- | --- |
-| [`docs/bridge-protocol`](docs/bridge-protocol.md) | 第三方客户端的 stdio 传输、命令、事件、Runtime phase、transcript 检查点与错误规则 |
-| [`docs/bridge-api-design`](docs/bridge-api-design.md) | 哪些消息属于公开或内部、各自的所有者以及版本决策 |
-| [`docs/plugin-hooks`](docs/plugin-hooks.md) | 命令 Hook 的声明、检查点、调用载荷与决策 |
-| [`docs/plugin-interop`](docs/plugin-interop.md) | Plugin 组件的装配、静态校验、错误隔离与重新装配 |
-
-Runtime 层：
-
-| 文档 | 负责范围 |
-| --- | --- |
-| [`agent_core`](agent_core/README.md) | Agent Loop、上下文、Session、Tool、执行、权限、记忆、计划、Job、Scheduler、Provider、Skill 与 MCP 机制 |
-| [`agent_runtime`](agent_runtime/README.md) | 配置、Prompt、Plugin 发现、Runtime 装配、Execution Plane、Session 绑定和 Turn 入口 |
-
-前端与 SDK：
-
-| 文档 | 负责范围 |
-| --- | --- |
-| [`interfaces`](interfaces/README.md) | 共享宿主模块、启动入口、Bridge 进程与通道附着，以及允许复用 Core 的边界 |
-| [`interfaces/bridge`](interfaces/bridge/README.md) | 独立 Bridge 进程、协议路由、事件转换和前端交互转发 |
-| [`interfaces/protocol`](interfaces/protocol/README.md) | TypeScript 协议包：导出面、构建与改动清单 |
-| [`interfaces/client`](interfaces/client/README.md) | 公开 Node/TypeScript stdio 客户端、进程生命周期及集成示例 |
-| [`interfaces/tui`](interfaces/tui/README.md) | Ink 终端界面、命令、输入状态和 Bridge 子进程接入 |
-| [`interfaces/gui`](interfaces/gui/README.md) | FastAPI 服务、React 界面、多会话连接、HTTP / WebSocket API 与媒体访问 |
-| [`interfaces/mobile`](interfaces/mobile/README.md) | 飞书收发、工作区与会话选择、流式文本、提问、审批与共享宿主配置 |
+完整目录见 [文档索引](docs/README.md)，包含公开契约、两个 Runtime 层以及各前端与 SDK 文档。
 
 ## 配置与数据
 
@@ -127,7 +99,7 @@ Runtime 层：
 | `~/.nosis/plugins/` | Plugin capability package |
 | `~/.nosis/AGENTS.md` | 用户级全局 Workspace Instruction |
 | `~/.nosis/MEMORY.md` | 全局长期记忆 |
-| `~/.nosis/sessions/` | Session Journal、Workspace 记忆、Artifact、子 Agent 记录与 Session 级辅助调用用量日志 |
+| `~/.nosis/sessions/` | Session Journal、Workspace 记忆、Artifact 与子 Agent 记录 |
 | `~/.nosis/schedule.jsonl` | 定时任务及运行记录 |
 | `<workspace>/.nosis/attachments/` | 上传附件和 Agent 生成的图片 |
 
@@ -166,6 +138,8 @@ Linux 沙箱集成测试需要可用的 bubblewrap 和 user namespace；未满�
 
 运行 `cargo test --manifest-path nosis-sandbox/Cargo.toml` 检查原生 helper 协议及沙箱权限。`build-platform-wheels` 工作流覆盖 Windows x64、macOS 11+（Apple Silicon）与 Linux（glibc 2.28+）x86-64 / aarch64。每个 `py3-none-<platform>` wheel 支持 Python 3.11+，包含原生 helper 以及构建后的 TUI、GUI 和 IM 资源，并在安装后实际执行 helper 验证打包与协议。
 
+内部 helper 协议先输出一行 JSON `protocol_version` 问候，再接收一条以换行结束的 JSON 请求，最后返回一条携带相同版本号的 JSON 结果。Python 在发送命令前校验问候；helper 在解析执行字段或初始化沙箱前校验请求版本。修改契约时，需同步更新并递增 `agent_core/execution/process.py` 的 `HELPER_PROTOCOL_VERSION`、`nosis-sandbox/src/main.rs` 的 `PROTOCOL_VERSION` 与 `tests/smoke_wheel.py` 中的请求。请求之后 stdin 是取消通道：任一字节或 EOF 都会取消命令，需保持打开直到执行结束。
+
 Windows 上 Shell Tool 使用 PowerShell 7，因此需要另外安装 PowerShell 7。
 
 ## Contributors
@@ -173,6 +147,7 @@ Windows 上 Shell Tool 使用 PowerShell 7，因此需要另外安装 PowerShell
 - [AKArrok](https://github.com/AKArrok)：提出并验证 Session Journal 尾记录追加问题（[#2](https://github.com/EvannZhongg/Nosis/pull/2)）。
 - [George Pickett](https://github.com/georgeatparallel)：贡献 Parallel Search MCP 集成（[#4](https://github.com/EvannZhongg/Nosis/pull/4)）。
 - [Pocket99](https://github.com/Pocket99)：贡献最初的 GUI，含会话、Workspace 浏览与模型切换（[#1](https://github.com/EvannZhongg/Nosis/pull/1)）。
+- [Guillermo Prieto Rodriguez](https://github.com/guillermop2002)：报告了文件 Tool 的路径竞态问题：沙箱内的 Shell 可借此把 Workspace 的读写重定向到 Workspace 之外。
 
 ## 许可
 

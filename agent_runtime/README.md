@@ -2,6 +2,22 @@
 
 `agent_runtime` 是 Nosis 唯一的应用 Runtime 装配层。它读取应用配置和 Workspace 状态，把 [`agent_core`](../agent_core/README.md) 的机制组装成 Bridge 与定时任务可调用的运行实例，但不实现 Agent 决策逻辑。
 
+## 目录
+
+- [Runtime 入口](#runtime-入口)
+- [Execution Plane](#execution-plane)
+- [MCP 生命周期](#mcp-生命周期)
+  - [子 Agent 的 MCP 选择](#子-agent-的-mcp-选择)
+- [Session 与 Turn 生命周期](#session-与-turn-生命周期)
+- [配置与默认资源](#配置与默认资源)
+- [Provider 路由与协议](#provider-路由与协议)
+- [设置服务](#设置服务)
+- [Workspace Instructions](#workspace-instructions)
+- [Plugin 与扩展发现](#plugin-与扩展发现)
+  - [Plugin Hooks](#plugin-hooks)
+- [附件与定时任务](#附件与定时任务)
+- [模块索引](#模块索引)
+
 ## Runtime 入口
 
 `RuntimeHost` 是共享入口，由会话控制、执行面、Turn 控制和队列组成。
@@ -153,6 +169,8 @@ provider 的鉴权失败降级、403 处理以及查询与 URL 语义都属于 T
 
 `agent_config.json` 的 `skills.global_paths` 相对配置目录解析、`skills.workspace_paths` 相对当前 Workspace 解析。同名 Skill 保留最先注册的来源，Plugin Skill 排在配置来源之后。
 
+## Provider 路由与协议
+
 Provider 路由按以下链解析：
 
 ```text
@@ -220,6 +238,10 @@ GUI HTTP API 和 Bridge 设置消息都复用该服务。
 standalone Skill 与 MCP 使用同一套 Core registry / manager，不存在 Plugin 专用执行路径。
 装配、静态校验、错误隔离与文件变更的完整边界见 [Plugin 组件互通](../docs/plugin-interop.md)。
 
+### Plugin Hooks
+
+`components.hooks` 声明版本化的 command Hook 文件。Runtime 解析与装配，Core 在输入、工具执行前后和正常结束前应用决策，复用现有 Tool、权限和进程执行链。声明变更通过 `/refresh` 生效。公开契约和测试边界见 [Plugin Hooks](../docs/plugin-hooks.md)。
+
 ## 附件与定时任务
 
 `attachments.py` 为 GUI 和 IM 共用上传落盘、文件命名与真实图片格式探测，并验证提交的附件位于当前 Workspace，转换为 Core 的 `ImagePart` 或 `FilePart`。主 Agent 的 `present_file` Tool 将交付文件快照保存为附件，沿用 Tool 执行、Journal 与 `tool_media` 事件链路。Tool 附件默认只用于模型观察，`present_file` 显式设置 `present_to_user=true`；Core 将观察附件写入 `tool_media` 消息，将交付附件写入 `tool_delivery` 消息，后者从模型上下文投影中排除，不受模型图片输入的字节限制。Core 按交付标记分开发出媒体事件，IM 仅发送显式交付的附件。`.nosis/attachments/` 是存储目录，不表达交付意图。
@@ -248,7 +270,3 @@ Scheduler 使用任务的 `schedule_session_id` 提交 Turn，Runtime 使用该 
 | `attachments.py` | 入站附件解析 |
 | `desktop/` | 桌面截图、输入与 Windows 窗口定位的平台能力 |
 | `callbacks.py` | Runtime 对宿主的回调接口 |
-
-## Plugin Hooks
-
-`components.hooks` 声明版本化的 command Hook 文件。Runtime 解析与装配，Core 在输入、工具执行前后和正常结束前应用决策，复用现有 Tool、权限和进程执行链。声明变更通过 `/refresh` 生效。公开契约和测试边界见 [Plugin Hooks](../docs/plugin-hooks.md)。

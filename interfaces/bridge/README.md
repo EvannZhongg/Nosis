@@ -3,10 +3,12 @@
 `interfaces.bridge` 是前端与 [`agent_runtime`](../../agent_runtime/README.md) 之间的协议适配层，也是前端驱动 Agent、执行 Tool、授权、提问、steer 和取消的唯一通道。
 
 ```text
-TUI ── 本地 Bridge 协议 ── nosis-server ◀── GUI / IM
-                              └─ python -m interfaces.bridge
-                                   ├─ Session A ── RuntimeHost A ── agent_core
-                                   └─ Session B ── RuntimeHost B ── agent_core
+TUI ──────────────────────────┐
+GUI ── HTTP / WebSocket ──────┼── Bridge ── agent_runtime ── agent_core
+飞书 ── IM 适配器 ────────────┘
+
+nosis-server 承载 GUI / IM 适配器、Session Host 与共享 Bridge；
+无常驻宿主时 TUI 直接持有 Bridge。
 ```
 
 Bridge 作为独立 Python 进程运行，通过 stdin/stdout 交换每行一个 JSON 对象的 newline-delimited JSON。它不装配 Provider、Tool、MCP 或 Agent，也不包含 Agent Loop。

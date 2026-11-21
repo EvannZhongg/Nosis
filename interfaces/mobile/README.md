@@ -1,10 +1,12 @@
 # 移动端 / IM 接入
 
 ```text
-飞书应用机器人 ─ 官方 Node SDK 收发进程 ─ MobileController ─┐
-                                                        ├─ Session Host ─ Bridge ─ agent_runtime ─ agent_core
-GUI HTTP / WebSocket ────────────────────────────────────┘
-TUI ─ @nosis/client ─ Bridge ─ agent_runtime ─ agent_core
+TUI ──────────────────────────┐
+GUI ── HTTP / WebSocket ──────┼── Bridge ── agent_runtime ── agent_core
+飞书 ── IM 适配器 ────────────┘
+
+nosis-server 承载 GUI / IM 适配器、Session Host 与共享 Bridge；
+无常驻宿主时 TUI 直接持有 Bridge。
 ```
 
 `interfaces/mobile` 是交互层，不装配 Runtime，不执行 Agent 或 Tool，也不直接修改 Session Journal。命令和按钮最终只发送既有 Bridge 命令。它复用 `interfaces/session_host.py` 的后台 Session、事件快照、断线附着与显式接管规则，不依赖 FastAPI。

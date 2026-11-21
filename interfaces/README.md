@@ -3,12 +3,12 @@
 `interfaces/` 是交互层与前端宿主的集合。它决定进程何时启动、Bridge 如何附着、协议消息如何呈现，但不装配 Runtime、不运行 Agent Loop，也不执行会改变 Workspace 或 Session 的 Tool。
 
 ```text
-nosis ── launch.py ── TUI ── 本地 Bridge 协议 ──┐
-nosis-server ── application_host
-        ├─ gui/      可选 HTTP / WebSocket + React
-        ├─ mobile/   IM 控制器与飞书收发进程
-        └─ Session Host ◀────────────────────┘
-                 └─ Bridge 子进程 ── agent_runtime ── agent_core
+TUI ──────────────────────────┐
+GUI ── HTTP / WebSocket ──────┼── Bridge ── agent_runtime ── agent_core
+飞书 ── IM 适配器 ────────────┘
+
+nosis-server 承载 GUI / IM 适配器、Session Host 与共享 Bridge；
+无常驻宿主时 TUI 直接持有 Bridge。
 ```
 
 `interfaces/*` 只依赖 `agent_runtime` 与 `agent_core`，不反向被依赖；两个 Python 层都不得 import `interfaces`。
@@ -29,7 +29,7 @@ nosis-server ── application_host
 
 | 命令 | 入口 | 进程归属 |
 | --- | --- | --- |
-| `nosis` | `launch.py:main()` | 连接同一配置目录的常驻宿主，宿主未启动时运行独立 Bridge |
+| `nosis` | `launch.py:main()` | 启动 TUI；Bridge 探测同一配置目录的常驻宿主，存在则附着，否则运行独立 Bridge |
 | `nosis-server` | `application_host.main()` | 常驻应用宿主，拥有共享 Session Host、Bridge、HTTP 与 IM；`--no-http` 仅关闭 HTTP 适配器 |
 
 `launch.py` 之所以用 `subprocess.call` 等待而不是 `execvp`，是因为 Windows 上 `execvp` 会另起进程并结束自己，终端提示符会先回来并与 UI 争抢控制台输入。它同时通过 `NOSIS_PYTHON` 把当前解释器交给前端，Bridge 因此运行在拥有 `agent_core` 的那个 Python 环境里。
@@ -62,7 +62,7 @@ nosis-server ── application_host
 
 ## Core 复用边界
 
-前端宿主允许直接复用 Core 的只读能力：`JsonlSessionStore` 的 Session 读取与列表、`Workspace` 路径解析与包含校验、`SettingsStore` 的配置快照与写入。GUI 的 Session fork 是唯一直接写 Session 的路径，它复制锚点所在 Turn 之前的 Journal 生成新 Session，不改写源 Session，也不经过 Bridge。
+前端宿主允许直接复用 Core 的只读能力：`JsonlSessionStore` 的 Session 读取与列表、`Workspace` 路径解析与包含校验、`SettingsStore` 的配置快照与写入。前端只有两处直接写 Session，都不经过 Bridge：GUI 的 fork 复制锚点所在 Turn 之前的 Journal 生成新 Session，不改写源 Session；GUI 的 delete 删除已有 Session。
 
 其余会改变 Session 或 Workspace 执行状态的 Agent 操作必须经 Bridge 协议完成；前端不得自行创建 Agent、执行 Tool 或维护另一套授权状态。
 

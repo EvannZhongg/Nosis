@@ -7,11 +7,9 @@
 Nosis is an open-source, lightweight personal agent application. It provides local workspace operations, human approval, session persistence, context management, long-term memory, plans, subagents, scheduled tasks, and Skill / Plugin / MCP extensibility — with a TUI, a GUI, and Feishu messaging access.
 
 ```text
-TUI ───────────────────────── Bridge ── agent_runtime ── agent_core
-nosis-server
-├─ HTTP / WebSocket (optional) ── GUI
-├─ IM (Feishu)
-└─ Session Host ── Bridge ── agent_runtime ── agent_core
+TUI ──────────────────────────┐
+GUI ── HTTP / WebSocket ──────┼── Bridge ── agent_runtime ── agent_core
+Feishu ── IM adapter ─────────┘
 ```
 
 - `agent_core` provides frontend-agnostic agent mechanisms.
@@ -83,33 +81,8 @@ Third-party frontends can launch the installed `nosis-bridge` command and use th
 [public stdio protocol](docs/bridge-protocol.md) or the lightweight
 [`@nosis/client` TypeScript SDK](interfaces/client/README.md).
 
-Public contracts:
-
-| Document | Scope |
-| --- | --- |
-| [`docs/bridge-protocol`](docs/bridge-protocol.md) | Stdio transport, commands, events, runtime phases, transcript checkpoints, and error rules for third-party clients |
-| [`docs/bridge-api-design`](docs/bridge-api-design.md) | Which messages are public or internal, who owns them, and the versioning decisions |
-| [`docs/plugin-hooks`](docs/plugin-hooks.md) | Command hook declarations, checkpoints, invocation payloads, and decisions |
-| [`docs/plugin-interop`](docs/plugin-interop.md) | Assembly, static validation, error isolation, and re-assembly of plugin components |
-
-Runtime layers:
-
-| Document | Scope |
-| --- | --- |
-| [`agent_core`](agent_core/README.md) | Agent loop, context, session, tools, execution, permissions, memory, plans, jobs, scheduler, providers, skills, and MCP mechanisms |
-| [`agent_runtime`](agent_runtime/README.md) | Configuration, prompts, plugin discovery, runtime assembly, execution plane, session binding, and turn entry |
-
-Frontends and SDK:
-
-| Document | Scope |
-| --- | --- |
-| [`interfaces`](interfaces/README.md) | Shared host modules, launch entries, Bridge process and channel attachment, and the allowed Core reuse boundary |
-| [`interfaces/bridge`](interfaces/bridge/README.md) | The standalone Bridge process, protocol routing, event translation, and frontend interaction forwarding |
-| [`interfaces/protocol`](interfaces/protocol/README.md) | The TypeScript protocol package: exports, build, and change checklist |
-| [`interfaces/client`](interfaces/client/README.md) | Public Node/TypeScript stdio client, process lifecycle and integration example |
-| [`interfaces/tui`](interfaces/tui/README.md) | The Ink terminal interface, commands, input state, and Bridge subprocess attachment |
-| [`interfaces/gui`](interfaces/gui/README.md) | The FastAPI service, React interface, multi-session connections, HTTP / WebSocket API, and media access |
-| [`interfaces/mobile`](interfaces/mobile/README.md) | Feishu transport, workspace and session selection, streaming text, questions, approvals, and shared-host setup |
+All documentation is indexed in [docs/README.md](docs/README.md), including the
+public contracts, the two runtime layers, and every frontend / SDK document.
 
 ## Configuration and data
 
@@ -127,7 +100,7 @@ Frontends and SDK:
 | `~/.nosis/plugins/` | Plugin capability packages |
 | `~/.nosis/AGENTS.md` | User-level global workspace instruction |
 | `~/.nosis/MEMORY.md` | Global long-term memory |
-| `~/.nosis/sessions/` | Session journals, workspace memory, artifacts, subagent records, and per-session auxiliary usage logs |
+| `~/.nosis/sessions/` | Session journals, workspace memory, artifacts, and subagent records |
 | `~/.nosis/schedule.jsonl` | Scheduled tasks and run records |
 | `<workspace>/.nosis/attachments/` | Uploaded attachments and agent-generated images |
 
