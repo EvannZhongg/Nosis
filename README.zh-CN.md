@@ -2,6 +2,8 @@
   <img src="docs/nosis-banner.png" alt="Nosis" width="560">
   <br><br>
   <a href="README.md">English</a> &middot; <b>简体中文</b>
+  <br><br>
+  <a href="https://deepwiki.com/EvannZhongg/Nosis"><img src="https://img.shields.io/badge/Ask_DeepWiki-007ec6" alt="Ask DeepWiki"></a>
 </div>
 
 Nosis 是一个开源的轻量级个人 Agent 应用。它提供本地 Workspace 操作、人工授权、会话持久化、上下文管理、长期记忆、计划、子 Agent、定时任务，以及 Skill、Plugin、MCP 扩展能力，并提供 TUI、GUI 和飞书移动端接入。
