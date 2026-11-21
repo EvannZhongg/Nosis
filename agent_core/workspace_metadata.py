@@ -46,7 +46,7 @@ def _locked_workspace(directory: Path) -> Iterator[None]:
         yield
 
 
-def _read_workspace_metadata(directory: Path) -> dict[str, str]:
+def read_workspace_metadata(directory: Path) -> dict[str, str]:
     path = directory / WORKSPACE_METADATA_FILENAME
     if not path.is_file():
         raise FileNotFoundError(
@@ -62,7 +62,7 @@ def ensure_workspace_metadata(directory: Path) -> None:
         return
     with _locked_workspace(directory):
         if directory.exists():
-            _read_workspace_metadata(directory)
+            read_workspace_metadata(directory)
             return
         now = datetime.now(timezone.utc)
         metadata = new_workspace_metadata(directory, created=now, updated=now)
@@ -72,7 +72,7 @@ def ensure_workspace_metadata(directory: Path) -> None:
 def touch_workspace_metadata(directory: Path) -> None:
     """Record activity for an already registered Workspace."""
     with _locked_workspace(directory):
-        metadata = _read_workspace_metadata(directory)
+        metadata = read_workspace_metadata(directory)
         now = datetime.now(timezone.utc)
         metadata["updated"] = format_utc(max(parse_utc(metadata["updated"]), now))
         write_workspace_metadata(directory, metadata)

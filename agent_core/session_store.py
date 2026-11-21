@@ -26,7 +26,7 @@ from .session_paths import (
     workspace_key,
 )
 from .time_utils import format_utc as _format_utc, parse_utc as _parse_utc
-from .workspace_metadata import ensure_workspace_metadata
+from .workspace_metadata import ensure_workspace_metadata, read_workspace_metadata
 
 SESSION_METADATA_FILENAME = "session.json"
 
@@ -192,10 +192,13 @@ class JsonlSessionStore:
                     "sessions": [
                         summary for _, _, summary in sessions
                     ],
-                    "updated": max(entry[0] for entry in sessions),
+                    "updated": read_workspace_metadata(workspace_dir)["updated"],
                 }
             )
-        groups.sort(key=lambda group: int(group["updated"]), reverse=True)
+        groups.sort(
+            key=lambda group: (_parse_utc(str(group["updated"])), str(group["workspace"])),
+            reverse=True,
+        )
         for group in groups:
             group.pop("updated", None)
         return groups

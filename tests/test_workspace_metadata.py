@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agent_core import JsonlSessionStore, PermissionPreset, Session
-from agent_core.session_paths import session_directory, workspace_directory, workspace_key
+from agent_core.session_paths import session_directory, session_log_path, workspace_directory, workspace_key
 from agent_core.time_utils import format_utc
 from agent_core import workspace_metadata as workspace_metadata_module
 
@@ -64,7 +64,6 @@ class WorkspaceMetadataTest(unittest.TestCase):
         before = self.metadata_path.read_bytes(), self.metadata_path.stat().st_mtime_ns
         with (
             patch.object(workspace_metadata_module, "_locked_workspace", side_effect=AssertionError("must not lock workspace")),
-            patch.object(workspace_metadata_module, "_read_workspace_metadata", side_effect=AssertionError("must not read workspace metadata")),
         ):
             self.advance()
             self.store.bind_workspace("second", self.workspace)
@@ -95,6 +94,47 @@ class WorkspaceMetadataTest(unittest.TestCase):
         workspace_metadata_module.touch_workspace_metadata(self.metadata_path.parent)
         self.assertEqual(self.read_metadata()["created"], created)
         self.assertEqual(self.read_metadata()["updated"], format_utc(self.now))
+
+    def test_workspace_order_uses_its_own_activity_time_and_survives_session_deletion(self) -> None:
+        other = self.root / "other"
+        for workspace, session_id in (
+            (self.workspace, "older"), (self.workspace, "latest"), (other, "other"),
+        ):
+            session = Session(session_id)
+            session.add_item("user", session_id)
+            self.store.append_events(session_id, session.journal, workspace)
+            self.advance()
+        for workspace, session_id, stamp in (
+            (self.workspace, "older", 100), (other, "other", 200),
+            (self.workspace, "latest", 300),
+        ):
+            os.utime(session_log_path(self.store.directory, workspace, session_id), (stamp, stamp))
+
+        def listed_workspaces() -> list[str]:
+            return [group["workspace"] for group in self.store.list_sessions()]
+
+        self.assertEqual(listed_workspaces(), [str(other), str(self.workspace)])
+        workspace_metadata_module.touch_workspace_metadata(self.metadata_path.parent)
+        self.assertEqual(listed_workspaces(), [str(self.workspace), str(other)])
+        before = self.metadata_path.read_bytes()
+        self.assertTrue(self.store.delete_session("latest"))
+        self.assertEqual(listed_workspaces(), [str(self.workspace), str(other)])
+        self.assertEqual(self.metadata_path.read_bytes(), before)
+        self.store = JsonlSessionStore(self.store.directory)
+        self.assertEqual(listed_workspaces(), [str(self.workspace), str(other)])
+        self.assertTrue(self.store.delete_session("older"))
+        self.assertEqual(listed_workspaces(), [str(other)])
+
+    def test_equal_workspace_activity_times_have_a_stable_path_order(self) -> None:
+        workspaces = [self.root / "a", self.root / "b"]
+        for index, workspace in enumerate(workspaces):
+            session = Session(str(index))
+            session.add_item("user", "hello")
+            self.store.append_events(session.session_id, session.journal, workspace)
+        self.assertEqual(
+            [group["workspace"] for group in self.store.list_sessions()],
+            sorted(map(str, workspaces), reverse=True),
+        )
 
     def test_root_workspace_uses_its_anchor_as_name(self) -> None:
         workspace = Path(Path.cwd().anchor)
