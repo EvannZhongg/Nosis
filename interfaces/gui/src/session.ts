@@ -36,7 +36,7 @@ export class SessionSocket {
   private socket: WebSocket;
   private queued: QueuedCommand[] = [];
   private pendingUserTurns = new Map<string, QueuedCommand["acknowledgment"]>();
-  private synchronized = false;
+  private synced = false;
   private phase: RuntimePhase = initialRuntimeState().phase;
 
   constructor(private readonly options: SessionSocketOptions) {
@@ -58,7 +58,7 @@ export class SessionSocket {
     this.socket.onmessage = ({ data }) => {
       const message = JSON.parse(data as string) as Incoming;
       if (message.type === "session_open_failed") {
-        this.synchronized = false;
+        this.synced = false;
         this.rejectUnconfirmedTurns(new Error(message.error.message));
         options.onMessage(message);
         this.socket.close();
@@ -78,8 +78,8 @@ export class SessionSocket {
       }
       // Only the current snapshot ends attachment synchronization; historical
       // runtime_state events can describe an earlier idle turn.
-      if (message.type === "runtime_state" && !message.replayed && !this.synchronized && this.socket.readyState === WebSocket.OPEN) {
-        this.synchronized = true;
+      if (message.type === "runtime_state" && !message.replayed && !this.synced && this.socket.readyState === WebSocket.OPEN) {
+        this.synced = true;
         for (const queued of this.queued) {
           this.dispatch(queued.message, queued.acknowledgment);
         }
@@ -93,14 +93,22 @@ export class SessionSocket {
     this.socket.onerror = () => options.onError();
   }
 
+  /** True once the opening runtime snapshot has been applied. */
+  get synchronized(): boolean {
+    return this.synced;
+  }
+
+  /** Includes the initial runtime synchronization, not just the handshake. */
+  get connecting(): boolean {
+    return this.socket.readyState === WebSocket.CONNECTING
+      || (this.socket.readyState === WebSocket.OPEN && !this.synced);
+  }
+
   /** Sends now, or after the opening runtime snapshot has been applied. */
   send(message: Sendable): void {
-    if (this.socket.readyState === WebSocket.OPEN && this.synchronized) {
+    if (this.socket.readyState === WebSocket.OPEN && this.synced) {
       this.dispatch(message);
-    } else if (
-      this.socket.readyState === WebSocket.CONNECTING
-      || (this.socket.readyState === WebSocket.OPEN && !this.synchronized)
-    ) {
+    } else if (this.connecting) {
       this.queued.push({ message });
     }
   }
@@ -109,12 +117,9 @@ export class SessionSocket {
   sendUserTurn(message: UserTurn): Promise<void> {
     return new Promise((resolve, reject) => {
       const command = { message, acknowledgment: { resolve, reject } };
-      if (this.socket.readyState === WebSocket.OPEN && this.synchronized) {
+      if (this.socket.readyState === WebSocket.OPEN && this.synced) {
         this.dispatch(command.message, command.acknowledgment);
-      } else if (
-        this.socket.readyState === WebSocket.CONNECTING
-        || (this.socket.readyState === WebSocket.OPEN && !this.synchronized)
-      ) {
+      } else if (this.connecting) {
         this.queued.push(command);
       } else {
         reject(new Error("session connection closed before receiving the turn"));
@@ -124,7 +129,7 @@ export class SessionSocket {
 
   close(): void {
     this.rejectUnconfirmedTurns();
-    this.synchronized = false;
+    this.synced = false;
     this.socket.close();
   }
 

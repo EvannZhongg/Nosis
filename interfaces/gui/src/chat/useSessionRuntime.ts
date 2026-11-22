@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState, useEffect } from "react";
+import { useCallback, useMemo, useRef, useState, useEffect, useEffectEvent } from "react";
 import { useExternalStoreRuntime, type AppendMessage } from "@assistant-ui/react";
 import { initialRuntimeState, runtimeIsActive, type CacheUsage, type ContextWindow, type PermissionPreset, type PlanSnapshot, type RuntimePhase, type UserQuestion } from "@nosis/protocol";
 import { createScratchWorkspace, releaseActiveSession, selectWorkspace, uploadAttachments, type ModelOption, type Session, type UserAttachment, type WorkspaceOption } from "../api";
@@ -171,6 +171,33 @@ export function useSessionRuntime({
     }
   }, [backgroundActive, provider, selected, session.session_id, session.workspace]);
 
+  const restoreConnection = useEffectEvent(() => {
+    if (document.visibilityState !== "visible" || !workspaceSelected
+      || (!selected && !backgroundActive && !runtimeIsActive(runtimePhaseRef.current))
+      || attachmentReplacedRef.current || socketRef.current?.connecting
+      || pendingUserItemRef.current !== null || configurationPending) return;
+
+    // A suspended page can retain an OPEN socket after its connection has died.
+    // Reattach once on resume, without interrupting unconfirmed commands.
+    const socket = socketRef.current;
+    socketRef.current = null;
+    socketModelRef.current = "";
+    socket?.close();
+    connect({ attachOnly: true });
+  });
+
+  useEffect(() => {
+    const restore = () => restoreConnection();
+    document.addEventListener("visibilitychange", restore);
+    window.addEventListener("pageshow", restore);
+    window.addEventListener("online", restore);
+    return () => {
+      document.removeEventListener("visibilitychange", restore);
+      window.removeEventListener("pageshow", restore);
+      window.removeEventListener("online", restore);
+    };
+  }, []);
+
   useEffect(() => {
     if (selected || running || pendingUserItem !== null || configurationPending || socketRef.current === null) return;
     const socket = socketRef.current;
@@ -212,6 +239,10 @@ export function useSessionRuntime({
   }
 
   function connect({ attachOnly = false, takeover = false }: { attachOnly?: boolean; takeover?: boolean } = {}): SessionSocket {
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
     setAttaching(true);
     let socket: SessionSocket;
     socket = new SessionSocket({
@@ -278,14 +309,12 @@ export function useSessionRuntime({
         }
         if (message.type === "runtime_state") {
           if (message.replayed) return;
-          if (message.phase !== "failed") {
-            setAlerts((current) => {
-              const next = { ...current };
-              delete next.connection;
-              delete next["session-open"];
-              return next;
-            });
-          }
+          setAlerts((current) => {
+            const next = { ...current };
+            delete next.connection;
+            if (message.phase !== "failed") delete next["session-open"];
+            return next;
+          });
           if (message.event_sequence !== undefined) eventCounterRef.current = message.event_sequence;
           if (toastTimeoutRef.current) {
             clearTimeout(toastTimeoutRef.current);
@@ -418,12 +447,12 @@ export function useSessionRuntime({
         }
       },
       onError: () => {
-        // Browsers report an error before closing a WebSocket that went
-        // stale while the page was idle. That is not an interrupted turn;
-        // leave the idle UI quiet. The close callback clears the socket so
-        // the next message can establish a fresh connection.
         if (socketRef.current !== socket) return;
-        if (!runtimeIsActive(runtimePhaseRef.current)) showAlert({ kind: "alert", id: "connection", level: "error", text: "无法连接 Nosis。" });
+        // Losing an established idle connection does not establish that the
+        // service is unavailable. Report only a failed connection attempt.
+        if (!socket.synchronized && !runtimeIsActive(runtimePhaseRef.current)) {
+          showAlert({ kind: "alert", id: "connection", level: "error", text: "无法建立 Nosis 会话连接，请确认服务是否可用。" });
+        }
       },
     });
     socketRef.current = socket;
