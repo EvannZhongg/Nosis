@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import stat
 import tempfile
 import time
 import unittest
@@ -24,7 +25,10 @@ from agent_core import (
 )
 from agent_core.scheduler import IntervalTrigger, OneShotTrigger, SchedulerService
 from agent_core.llm import AuxiliaryModelCall
-from interfaces.bridge.managed_workspaces import create_scratch_workspace
+from interfaces.bridge.managed_workspaces import (
+    create_scratch_workspace,
+    is_scratch_workspace,
+)
 from agent_runtime.settings import SettingsStore
 
 try:
@@ -1339,6 +1343,64 @@ class GuiTest(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertFalse(scratch.exists())
+
+    def test_failed_scratch_cleanup_keeps_session_and_allows_another_attempt(self) -> None:
+        scratch = create_scratch_workspace(self.root / "scratch", "scratch-session").path
+        session = Session("scratch-session")
+        session.add_item("user", "保留这条会话")
+        self.store.append_events(session.session_id, session.journal, workspace=scratch)
+
+        with self.client() as client:
+            with patch(
+                "interfaces.gui.routes.sessions.delete_scratch_workspace",
+                side_effect=PermissionError("file is in use"),
+            ):
+                response = client.delete("/api/sessions/scratch-session")
+
+            self.assertEqual(response.status_code, 500)
+            self.assertIn("file is in use", response.json()["detail"])
+            self.assertEqual(self.store.workspace_for(session.session_id), str(scratch))
+            self.assertEqual(self.store.load(session.session_id).items[0].content, "保留这条会话")
+            self.assertTrue(is_scratch_workspace(scratch))
+            self.assertEqual(client.delete("/api/sessions/scratch-session").status_code, 200)
+
+        self.assertFalse(scratch.exists())
+        self.assertIsNone(self.store.workspace_for(session.session_id))
+
+    @unittest.skipUnless(os.name == "nt", "Windows file deletion")
+    def test_deleting_scratch_with_read_only_and_in_use_files(self) -> None:
+        scratch = create_scratch_workspace(self.root / "scratch", "scratch-session").path
+        pack = scratch / ".git" / "objects" / "pack"
+        pack.mkdir(parents=True)
+        index = pack / "pack-test.idx"
+        index.write_bytes(b"index")
+        index.chmod(stat.S_IREAD)
+        blocked = scratch / "in-use.txt"
+        blocked.write_text("open file", encoding="utf-8")
+        session = Session("scratch-session")
+        session.add_item("user", "临时会话")
+        self.store.append_events(session.session_id, session.journal, workspace=scratch)
+
+        with self.client() as client:
+            with blocked.open("rb"):
+                response = client.delete("/api/sessions/scratch-session")
+                self.assertEqual(response.status_code, 500)
+                self.assertTrue(is_scratch_workspace(scratch))
+                self.assertEqual(self.store.workspace_for(session.session_id), str(scratch))
+            self.assertEqual(client.delete("/api/sessions/scratch-session").status_code, 200)
+
+        self.assertFalse(scratch.exists())
+
+    def test_deleting_a_session_keeps_an_unmanaged_workspace(self) -> None:
+        session = Session("regular-session")
+        session.add_item("user", "普通会话")
+        self.store.append_events(session.session_id, session.journal, workspace=self.root)
+
+        with self.client() as client:
+            self.assertEqual(client.delete("/api/sessions/regular-session").status_code, 200)
+            self.assertEqual(client.delete("/api/sessions/regular-session").status_code, 404)
+
+        self.assertTrue((self.root / "README.md").is_file())
 
     def test_reconnect_restores_a_user_question(self) -> None:
         question = {

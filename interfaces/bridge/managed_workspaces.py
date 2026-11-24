@@ -1,7 +1,11 @@
 """Persistent workspaces created and owned by the interface layer."""
 
+import os
 import shutil
+import stat
 from pathlib import Path
+from types import TracebackType
+from typing import Callable
 from uuid import uuid4
 
 from agent_core import Workspace
@@ -39,8 +43,35 @@ def delete_scratch_workspace(workspace: Path | str) -> bool:
     resolved_workspace = Path(workspace).expanduser().resolve()
     if not is_scratch_workspace(resolved_workspace):
         return False
-    shutil.rmtree(resolved_workspace)
+    try:
+        shutil.rmtree(resolved_workspace, onerror=_remove_readonly)
+    except OSError:
+        # rmtree may remove the marker before encountering a blocked file.
+        # Keep ownership discoverable so a later deletion can finish cleanup.
+        marker = resolved_workspace / SCRATCH_WORKSPACE_MARKER
+        if not marker.exists():
+            marker.touch()
+        raise
     return True
+
+
+def _remove_readonly(
+    function: Callable[[str], object],
+    path: str,
+    exc_info: tuple[type[BaseException], BaseException, TracebackType],
+) -> None:
+    error = exc_info[1]
+    if (
+        os.name != "nt"
+        or function not in (os.unlink, os.rmdir)
+        or not isinstance(error, PermissionError)
+    ):
+        raise error
+    mode = os.stat(path).st_mode
+    if mode & stat.S_IWRITE:
+        raise error
+    os.chmod(path, mode | stat.S_IWRITE)
+    function(path)
 
 
 __all__ = [

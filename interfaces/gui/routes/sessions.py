@@ -259,17 +259,23 @@ def create_sessions_router(
                     detail="会话正在运行。",
                 ) from error
             workspace_path = store.workspace_for(session_id)
-            deleted = store.delete_session(session_id)
             # A scratch workspace can hold several Sessions; it is removed
-            # once the last one is gone.
+            # before its last Session so cleanup failures keep the association.
             if (
-                deleted
-                and workspace_path is not None
-                and not store.list_workspace_sessions(workspace_path)
+                workspace_path is not None
+                and not any(
+                    summary["session_id"] != session_id
+                    for summary in store.list_workspace_sessions(workspace_path)
+                )
             ):
                 delete_scratch_workspace(workspace_path)
+            deleted = store.delete_session(session_id)
         except ValueError as error:
             raise HTTPException(status_code=400, detail=str(error)) from error
+        except OSError as error:
+            raise HTTPException(
+                status_code=500, detail=f"删除会话或工作区失败：{error}",
+            ) from error
         if not deleted:
             raise HTTPException(status_code=404, detail="会话不存在。")
         return {"deleted": True}
