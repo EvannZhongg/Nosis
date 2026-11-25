@@ -66,10 +66,11 @@ describe("session deletion navigation", () => {
     await act(async () => container.querySelector<HTMLButtonElement>(`[aria-label="删除会话 ${id}"]`)!.click());
   }
 
-  it.each(["first", "second"])("opens a blank New chat after deleting %s, regardless of which session is selected", async (id) => {
+  it("opens a blank New chat after deleting the selected session", async () => {
+    const id = "first";
     await mount();
     expect(container.querySelector('[data-selected="true"]')!.getAttribute("data-chat")).toBe("first");
-    const remainingId = id === "first" ? "second" : "first";
+    const remainingId = "second";
     const remainingChat = container.querySelector(`[data-chat="${remainingId}"]`);
     await remove(id);
 
@@ -85,6 +86,51 @@ describe("session deletion navigation", () => {
     expect(container.querySelector(`[data-chat="${remainingId}"]`)).toBe(remainingChat);
     expect(container.querySelector(`[aria-label="删除会话 ${id}"]`)).toBeNull();
     expect(fetchMock.mock.calls.filter(([, options]) => options?.method === "DELETE").map(([url]) => url)).toEqual([`/api/sessions/${id}`]);
+  });
+
+  it("keeps the selected chat mounted when another session is deleted", async () => {
+    await mount();
+    const selected = container.querySelector('[data-selected="true"]');
+    await remove("second");
+
+    expect(container.querySelector('[data-selected="true"]')).toBe(selected);
+    expect(selected!.getAttribute("data-chat")).toBe("first");
+    expect(container.querySelectorAll("[data-chat]")).toHaveLength(1);
+    expect(container.querySelector(".breadcrumb")!.textContent).toContain("first");
+    expect(localStorage.getItem("nosis.selectedSessionId")).toBe("first");
+    expect(container.querySelector('[data-chat="second"]')).toBeNull();
+    expect(container.querySelector('[aria-label="删除会话 second"]')).toBeNull();
+    expect(fetchMock.mock.calls.filter(([, options]) => options?.method === "DELETE").map(([url]) => url)).toEqual(["/api/sessions/second"]);
+  });
+
+  it("keeps a New chat selected when another session is deleted", async () => {
+    await mount();
+    await act(async () => container.querySelector<HTMLButtonElement>(".new-chat")!.click());
+    const selected = container.querySelector('[data-selected="true"]');
+    const selectedId = selected!.getAttribute("data-chat");
+    await remove("first");
+
+    expect(container.querySelector('[data-selected="true"]')).toBe(selected);
+    expect(localStorage.getItem("nosis.selectedSessionId")).toBe(selectedId);
+    expect(container.querySelector('[data-chat="first"]')).toBeNull();
+    expect(container.querySelectorAll("[data-chat]")).toHaveLength(2);
+  });
+
+  it("keeps the chat selected while deletion is pending", async () => {
+    await mount();
+    let finishDeletion!: (response: { ok: boolean }) => void;
+    fetchMock.mockImplementationOnce(() => new Promise((resolve) => { finishDeletion = resolve; }));
+    await remove("first");
+    await act(async () => container.querySelector<HTMLButtonElement>('[title="second"]')!.click());
+    const selected = container.querySelector('[data-selected="true"]');
+    groups[0].sessions = groups[0].sessions.filter((session) => session.session_id !== "first");
+    await act(async () => finishDeletion({ ok: true }));
+
+    expect(container.querySelector('[data-selected="true"]')).toBe(selected);
+    expect(selected!.getAttribute("data-chat")).toBe("second");
+    expect(localStorage.getItem("nosis.selectedSessionId")).toBe("second");
+    expect(container.querySelector('[data-chat="first"]')).toBeNull();
+    expect(container.querySelectorAll("[data-chat]")).toHaveLength(1);
   });
 
   it("opens a blank chat when the last saved session is deleted", async () => {

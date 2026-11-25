@@ -24,6 +24,7 @@ export function App() {
   const [sessionGroups, setSessionGroups] = useState<WorkspaceSessions[]>([]);
   const [chatSessions, setChatSessions] = useState<Session[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState(rememberedSessionId ?? "");
+  const selectedSessionIdRef = useRef(selectedSessionId);
   const [restoringSession, setRestoringSession] = useState(true);
   const [busyBySession, setBusyBySession] = useState<Record<string, boolean>>({});
   const [contextBySession, setContextBySession] = useState<Record<string, ContextWindow | null>>({});
@@ -62,6 +63,7 @@ export function App() {
   }, []);
 
   useEffect(() => { void refreshSessions(); }, [refreshSessions]);
+  useEffect(() => { selectedSessionIdRef.current = selectedSessionId; }, [selectedSessionId]);
   useEffect(() => {
     let cancelled = false;
     const restoreSession = async () => {
@@ -204,7 +206,7 @@ export function App() {
     try {
       await deleteSession(id);
       setChatSessions((all) => all.filter((item) => item.session_id !== id));
-      createNewChat();
+      if (selectedSessionIdRef.current === id) createNewChat();
       setBusyBySession((all) => { const next = { ...all }; delete next[id]; return next; });
       setContextBySession((all) => { const next = { ...all }; delete next[id]; return next; });
       setProviderBySession((all) => { const next = { ...all }; delete next[id]; return next; });
