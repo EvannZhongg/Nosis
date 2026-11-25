@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { initialRuntimeState, MessageDecoder, formatArguments } from '@nosis/protocol';
+import { initialRuntimeState, formatArguments } from '@nosis/protocol';
 import type { Incoming, SessionItem } from '@nosis/protocol/internal';
 import { initialState, reducer, type State } from '../src/state.js';
 
@@ -121,30 +121,6 @@ function ready(): State {
     { type: 'message', message: RUNTIME_READY },
   );
 }
-
-describe('MessageDecoder', () => {
-  it('emits complete lines only', () => {
-    const decoder = new MessageDecoder();
-    expect(decoder.push('{"type":"shut')).toEqual([]);
-    expect(decoder.push('down"}\n')).toEqual([{ type: 'shutdown' }]);
-  });
-
-  it('handles several messages in one chunk', () => {
-    const decoder = new MessageDecoder();
-    const messages = decoder.push('{"type":"shutdown"}\n{"type":"shutdown"}\n');
-    expect(messages).toHaveLength(2);
-  });
-
-  it('skips blank lines', () => {
-    const decoder = new MessageDecoder();
-    expect(decoder.push('\n\n{"type":"shutdown"}\n')).toHaveLength(1);
-  });
-
-  it('throws on malformed json', () => {
-    const decoder = new MessageDecoder();
-    expect(() => decoder.push('not json\n')).toThrow();
-  });
-});
 
 describe('permissions', () => {
   it('restores the preset from session readiness and records later changes', () => {

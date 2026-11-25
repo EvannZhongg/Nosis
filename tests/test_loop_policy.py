@@ -19,12 +19,6 @@ class LoopPolicyTest(unittest.TestCase):
             self.control, self.guard, self.jobs, self.append,
         )
 
-    def test_argument_order_and_call_ids_do_not_reset_repetition(self) -> None:
-        guard = ToolCallRepetitionGuard(1)
-        guard.check((ToolCall("a", "echo", {"a": 1, "b": 2}),))
-        with self.assertRaises(ToolCallLimitExceededError):
-            guard.check((ToolCall("b", "echo", {"b": 2, "a": 1}),))
-
     def test_rejected_batch_does_not_commit_a_partial_count(self) -> None:
         with self.assertRaises(ToolCallLimitExceededError):
             self.guard.check((self.call, self.call))

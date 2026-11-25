@@ -2,28 +2,25 @@
 
 import tempfile
 import unittest
-from pathlib import Path
-
+from dataclasses import replace
 from datetime import datetime, timezone
+from pathlib import Path
 
 from agent_core import (
     Agent,
-    AgentConfig,
     ComputerScreenshotTool,
     ImagePart,
-    LLMProvider,
-    LLMRequest,
     LLMResponse,
     ProviderCapabilities,
     Session,
     ToolCall,
     ToolCatalog,
-    ToolConfig,
     ToolExecutionContext,
     Workspace,
 )
 from agent_core.config import ContextCompressionConfig
 from agent_core.tools.context import DesktopResult
+from tests.agent_fixtures import AGENT_CONFIG, CONSOLIDATOR_PROMPT, MockProvider
 from tests.image_fixtures import png_bytes
 
 
@@ -88,41 +85,6 @@ class ComputerScreenshotToolTest(unittest.TestCase):
             )
 
 
-class _ScreenshotProvider(LLMProvider):
-    def __init__(self) -> None:
-        self.requests: list[LLMRequest] = []
-        self.responses = iter(
-            [
-                LLMResponse(
-                    content=None,
-                    tool_calls=(
-                        ToolCall(
-                            "capture-1",
-                            "computer_screenshot",
-                            {"label": "desktop"},
-                        ),
-                    ),
-                ),
-                LLMResponse(content="I can see the desktop."),
-            ]
-        )
-
-    @property
-    def capabilities(self) -> ProviderCapabilities:
-        return ProviderCapabilities(frozenset({"text", "image"}))
-
-    @property
-    def max_context_tokens(self) -> int:
-        return 100_000
-
-    def count_input_tokens(self, request: LLMRequest) -> int:
-        return 10
-
-    def stream(self, request, on_text_delta, on_reasoning_delta=None):
-        self.requests.append(request)
-        return next(self.responses)
-
-
 class ComputerScreenshotContextTest(unittest.TestCase):
     def test_screenshot_reaches_the_next_model_request(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -132,26 +94,29 @@ class ComputerScreenshotContextTest(unittest.TestCase):
             screenshot.parent.mkdir(parents=True)
             screenshot.write_bytes(png_bytes(16, 10))
             session = Session()
-            provider = _ScreenshotProvider()
+            provider = MockProvider(
+                [
+                    LLMResponse(content=None, tool_calls=(
+                        ToolCall("capture-1", "computer_screenshot", {"label": "desktop"}),
+                    )),
+                    "I can see the desktop.",
+                ],
+                input_tokens=10,
+                max_context_tokens=100_000,
+                capabilities=ProviderCapabilities(frozenset({"text", "image"})),
+            )
             context = ToolExecutionContext(
                 workspace=workspace,
                 session=session,
                 vision_input=True,
                 screenshot=lambda _arguments: DesktopResult(screenshot=screenshot),
             )
-            config = AgentConfig(
-                max_same_tool_calls=5,
-                output_reserve_tokens=100,
-                tools=ToolConfig(enabled=()),
-                workspace_instruction_files=(),
-                context=ContextCompressionConfig(enabled=False),
-            )
             agent = Agent(
                 provider=provider,
                 session=session,
                 system_prompt="S",
-                consolidator_prompt="C",
-                config=config,
+                consolidator_prompt=CONSOLIDATOR_PROMPT,
+                config=replace(AGENT_CONFIG, context=ContextCompressionConfig(enabled=False)),
                 tools=ToolCatalog((ComputerScreenshotTool(),)).select(
                     ("computer_screenshot",), context
                 ),

@@ -3,8 +3,8 @@
 from pathlib import Path
 
 from agent_core import (
-    Agent, AgentConfig, LLMProvider, LLMRequest, LLMResponse, Session, Tool,
-    ToolCatalog, ToolConfig, ToolDefinition, ToolExecutionContext, Workspace,
+    Agent, AgentConfig, LLMProvider, LLMRequest, LLMResponse, ProviderCapabilities,
+    Session, Tool, ToolCatalog, ToolConfig, ToolDefinition, ToolExecutionContext, Workspace,
 )
 
 
@@ -61,6 +61,7 @@ class MockProvider(LLMProvider):
         input_tokens: int | list[int] = 1,
         max_context_tokens: int = 1000,
         max_output_tokens: int | None = None,
+        capabilities: ProviderCapabilities = ProviderCapabilities(),
     ) -> None:
         self._responses = iter(responses)
         self._input_tokens = (
@@ -68,8 +69,13 @@ class MockProvider(LLMProvider):
         )
         self._max_context_tokens = max_context_tokens
         self._max_output_tokens = max_output_tokens
+        self._capabilities = capabilities
         self.counted_requests: list[LLMRequest] = []
         self.requests: list[LLMRequest] = []
+
+    @property
+    def capabilities(self) -> ProviderCapabilities:
+        return self._capabilities
 
     @property
     def max_context_tokens(self) -> int:

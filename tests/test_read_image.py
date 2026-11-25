@@ -2,15 +2,13 @@
 
 import tempfile
 import unittest
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 
 from agent_core import (
     Agent,
-    AgentConfig,
     ImagePart,
-    LLMProvider,
-    LLMRequest,
     LLMResponse,
     ProviderCapabilities,
     ReadImageTool,
@@ -22,49 +20,9 @@ from agent_core import (
     Workspace,
 )
 from agent_core.config import ContextCompressionConfig
-from agent_core.tools import ToolConfig
 
+from tests.agent_fixtures import AGENT_CONFIG, CONSOLIDATOR_PROMPT, MockProvider
 from tests.image_fixtures import jpeg_bytes, png_bytes
-
-
-CONSOLIDATOR_PROMPT = "Consolidate the conversation."
-
-
-class StubProvider(LLMProvider):
-    """Replays a scripted sequence of responses, recording each request."""
-
-    def __init__(self, responses, vision: bool = True) -> None:
-        self._responses = list(responses)
-        self._vision = vision
-        self.requests: list[LLMRequest] = []
-
-    @property
-    def capabilities(self) -> ProviderCapabilities:
-        modalities = {"text"}
-        if self._vision:
-            modalities.add("image")
-        return ProviderCapabilities(frozenset(modalities))
-
-    @property
-    def max_context_tokens(self) -> int:
-        return 100_000
-
-    def count_input_tokens(self, request: LLMRequest) -> int:
-        return 10
-
-    def stream(self, request, on_text_delta, on_reasoning_delta=None):
-        self.requests.append(request)
-        return self._responses.pop(0)
-
-
-def agent_config() -> AgentConfig:
-    return AgentConfig(
-        max_same_tool_calls=5,
-        output_reserve_tokens=100,
-        tools=ToolConfig(enabled=()),
-        workspace_instruction_files=(),
-        context=ContextCompressionConfig(enabled=False),
-    )
 
 
 class ReadImageToolTest(unittest.TestCase):
@@ -150,37 +108,21 @@ class ReadImageToolTest(unittest.TestCase):
         self.assertEqual(result.output["failed"][0]["path"], "broken.png")
         self.assertIn("fully decoded", result.output["failed"][0]["error"])
 
-    def test_reads_several_images_in_one_call(self) -> None:
-        self.write_image("a.png")
-        self.write_image("b.png")
-
-        result = ReadImageTool().execute(
-            {"paths": ["a.png", "b.png"]}, self.context()
-        )
-
-        self.assertEqual(len(result.attachments), 2)
-
-    def test_a_duplicate_path_is_loaded_once(self) -> None:
-        """Sending one image twice would buy nothing for double the cost."""
-        self.write_image("a.png")
-
-        result = ReadImageTool().execute(
-            {"paths": ["a.png", "a.png"]}, self.context()
-        )
-
-        self.assertEqual(len(result.attachments), 1)
-
-    def test_different_spellings_of_one_file_load_once(self) -> None:
+    def test_multi_path_call_resolves_and_deduplicates_images(self) -> None:
         """Dedup has to follow resolution, not the raw argument text."""
         self.write_image("a.png")
+        self.write_image("b.png")
         (self.root / "sub").mkdir()
 
-        result = ReadImageTool().execute(
-            {"paths": ["a.png", "./a.png", "sub/../a.png"]}, self.context()
-        )
+        for paths in (
+            ["a.png", "b.png", "a.png", "./a.png"],
+            ["a.png", "b.png", "sub/../a.png"],
+        ):
+            with self.subTest(paths=paths):
+                result = ReadImageTool().execute({"paths": paths}, self.context())
 
-        self.assertEqual(len(result.attachments), 1)
-        self.assertEqual(len(result.output["images"]), 1)
+                self.assertEqual([part.path for part in result.attachments], ["a.png", "b.png"])
+                self.assertEqual([image["path"] for image in result.output["images"]], ["a.png", "b.png"])
 
     def test_one_bad_path_does_not_discard_the_others(self) -> None:
         self.write_image("good.png")
@@ -215,27 +157,29 @@ class ToolMediaInjectionTest(unittest.TestCase):
         self.sessions = self.root / "sessions"
         self.sessions.mkdir()
 
-    def run_turn(self, calls, vision: bool = True):
+    def run_turn(self, calls):
         session = Session()
-        provider = StubProvider(
+        provider = MockProvider(
             [
                 LLMResponse(content=None, tool_calls=tuple(calls)),
                 LLMResponse(content="done"),
             ],
-            vision=vision,
+            input_tokens=10,
+            max_context_tokens=100_000,
+            capabilities=ProviderCapabilities(frozenset({"text", "image"})),
         )
         context = ToolExecutionContext(
             workspace=self.workspace,
             session=session,
             sessions_directory=self.sessions,
-            vision_input=vision,
+            vision_input=True,
         )
         agent = Agent(
             provider=provider,
             session=session,
             system_prompt="S",
             consolidator_prompt=CONSOLIDATOR_PROMPT,
-            config=agent_config(),
+            config=replace(AGENT_CONFIG, context=ContextCompressionConfig(enabled=False)),
             tools=ToolCatalog((ReadImageTool(),)).select(
                 ("read_image",), context
             ),
@@ -250,113 +194,42 @@ class ToolMediaInjectionTest(unittest.TestCase):
             id=identifier, name="read_image", arguments={"paths": paths}
         )
 
-    def test_the_image_arrives_in_a_user_message(self) -> None:
-        (self.root / "a.png").write_bytes(png_bytes(8, 8))
+    def test_batch_media_follows_all_results_and_reaches_the_next_model_request(self) -> None:
+        for name in ("a.png", "b.png"):
+            (self.root / name).write_bytes(png_bytes(8, 8))
 
-        session, _ = self.run_turn([self.call("c1", ["a.png"])])
-
-        media = [item for item in session.items if item.is_tool_media]
-        self.assertEqual(len(media), 1)
-        self.assertEqual(media[0].role, "user")
-        self.assertEqual(
-            [part for part in media[0].parts if isinstance(part, ImagePart)],
-            [
-                ImagePart(
-                    path="a.png",
-                    mime_type="image/png",
-                    filename="a.png",
-                    size_bytes=(self.root / "a.png").stat().st_size,
-                )
-            ],
-        )
-
-    def test_the_media_message_follows_every_tool_result(self) -> None:
-        """A provider rejects a tool call that its next message leaves
-        unanswered, so images must not land between two results."""
-        (self.root / "a.png").write_bytes(png_bytes(8, 8))
-        (self.root / "b.png").write_bytes(png_bytes(8, 8))
-
-        session, _ = self.run_turn(
+        session, provider = self.run_turn(
             [self.call("c1", ["a.png"]), self.call("c2", ["b.png"])]
         )
 
-        roles = [item.role for item in session.items]
-        self.assertEqual(
-            roles, ["user", "assistant", "tool", "tool", "user", "assistant"]
-        )
-
-    def test_one_batch_yields_a_single_media_message(self) -> None:
-        (self.root / "a.png").write_bytes(png_bytes(8, 8))
-        (self.root / "b.png").write_bytes(png_bytes(8, 8))
-
-        session, _ = self.run_turn(
-            [self.call("c1", ["a.png"]), self.call("c2", ["b.png"])]
-        )
-
-        media = [item for item in session.items if item.is_tool_media]
-        self.assertEqual(len(media), 1)
-        self.assertEqual(
-            len([p for p in media[0].parts if isinstance(p, ImagePart)]), 2
-        )
-
-    def test_the_injected_message_is_marked_as_tool_media(self) -> None:
-        """It is not something the person said, and must not look like it."""
-        (self.root / "a.png").write_bytes(png_bytes(8, 8))
-
-        session, _ = self.run_turn([self.call("c1", ["a.png"])])
-
-        typed = [item for item in session.items if item.role == "user"]
-        self.assertEqual(
-            [item.origin for item in typed], ["conversation", "tool_media"]
-        )
+        self.assertEqual([item.role for item in session.items],
+                         ["user", "assistant", "tool", "tool", "user", "assistant"])
+        self.assertEqual([item.tool_call_id for item in session.items if item.role == "tool"],
+                         ["c1", "c2"])
+        self.assertEqual([item.origin for item in session.items if item.role == "user"],
+                         ["conversation", "tool_media"])
+        media, = [item for item in session.items if item.is_tool_media]
+        images = [ImagePart(path=name, mime_type="image/png", filename=name,
+                            size_bytes=(self.root / name).stat().st_size)
+                  for name in ("a.png", "b.png")]
+        self.assertEqual([part for part in media.parts if isinstance(part, ImagePart)], images)
+        text = "".join(part.text for part in media.parts if isinstance(part, TextPart))
+        for source in ("Tool output", "a.png", "b.png"):
+            self.assertIn(source, text)
+        request = provider.requests[1]
+        self.assertEqual([part for message in request.messages for part in message.parts
+                          if isinstance(part, ImagePart)], images)
+        self.assertEqual([message for message in request.messages if message.is_tool_media], [media])
+        turn_contexts = [message for message in request.messages
+                         if message.role == "system" and str(message.content).startswith("[Turn Context]")]
+        self.assertEqual(len(turn_contexts), 1)
 
     def test_no_media_message_when_a_call_loads_nothing(self) -> None:
-        session, _ = self.run_turn([self.call("c1", ["absent.png"])])
+        session, provider = self.run_turn([self.call("c1", ["absent.png"])])
 
-        self.assertEqual(
-            [item for item in session.items if item.is_tool_media], []
-        )
-
-    def test_the_media_message_names_the_source(self) -> None:
-        """The model must not read its own tool output as a new request."""
-        (self.root / "a.png").write_bytes(png_bytes(8, 8))
-
-        session, _ = self.run_turn([self.call("c1", ["a.png"])])
-
-        media = next(item for item in session.items if item.is_tool_media)
-        text = "".join(
-            part.text for part in media.parts if isinstance(part, TextPart)
-        )
-        self.assertIn("Tool output", text)
-        self.assertIn("a.png", text)
-
-    def test_tool_media_does_not_create_a_turn_context(self) -> None:
-        (self.root / "a.png").write_bytes(png_bytes(8, 8))
-
-        _, provider = self.run_turn([self.call("c1", ["a.png"])])
-
-        turn_contexts = [
-            message
-            for message in provider.requests[-1].messages
-            if message.role == "system"
-            and str(message.content).startswith("[Turn Context]")
-        ]
-        self.assertEqual(len(turn_contexts), 1)
-        self.assertNotIn("tool images", turn_contexts[0].content or "")
-
-    def test_the_second_model_call_receives_the_image(self) -> None:
-        (self.root / "a.png").write_bytes(png_bytes(8, 8))
-
-        _, provider = self.run_turn([self.call("c1", ["a.png"])])
-
-        final = provider.requests[-1]
-        images = [
-            part
-            for message in final.messages
-            for part in message.parts
-            if isinstance(part, ImagePart)
-        ]
-        self.assertEqual(len(images), 1)
+        self.assertEqual([item for item in session.items if item.is_tool_media], [])
+        self.assertFalse(any(isinstance(part, ImagePart)
+                             for message in provider.requests[1].messages for part in message.parts))
 
 
 if __name__ == "__main__":

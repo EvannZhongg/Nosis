@@ -41,7 +41,7 @@ Bridge 测试仅经公开 NDJSON 与本地 HTTP Mock Provider 驱动，不使用
 每例使用临时配置和 Workspace，不改动本机配置。
 
 Bridge 进程测试目前使用 Windows Job 回收子进程，其他平台跳过；独立 Hook 与 MCP 测试可跨平台运行。
-Core/Runtime 的机制回归测试使用从本插件裁剪出的 `tests/hookify` fixture：
+Core/Runtime 的机制回归测试也使用本插件作为 fixture：
 
 ```powershell
 python -m unittest tests.test_hooks tests.test_hook_interop -v

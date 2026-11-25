@@ -5,6 +5,7 @@ import sys
 import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from unittest.mock import patch
 from pathlib import Path
 from threading import Event
@@ -333,9 +334,13 @@ class JsonlSessionStoreTest(unittest.TestCase):
             workspace = Path(directory)
             store = JsonlSessionStore(workspace / "sessions")
             session = Session("session-1")
+            timestamp = datetime(2026, 9, 9, 8, 0, tzinfo=timezone.utc)
+            image = ImagePart(path="found.png", mime_type="image/png",
+                              filename="found.png", size_bytes=123)
             session.begin_turn("turn-1")
-            session.add_item("user", "你好")
+            session.add_item("user", "你好", timestamp)
             session.add_item("assistant", "你好！")
+            session.add_item("user", (image,), timestamp, origin="tool_media")
             session.finish_turn("completed")
             persist(store, workspace, session)
 
@@ -344,12 +349,17 @@ class JsonlSessionStoreTest(unittest.TestCase):
                 json.loads(line)
                 for line in path.read_text(encoding="utf-8").splitlines()
             ]
-            self.assertEqual([record["seq"] for record in records], [1, 2, 3, 4])
+            self.assertEqual([record["seq"] for record in records], [1, 2, 3, 4, 5])
             self.assertTrue(all(record["event_id"] for record in records))
-            self.assertEqual(
-                [item.content for item in store.load("session-1").items],
-                ["你好", "你好！"],
-            )
+            loaded = store.load("session-1").items
+            self.assertEqual(loaded, session.items)
+            self.assertEqual([item.content for item in loaded[:2]], ["你好", "你好！"])
+            self.assertEqual(loaded[0].timestamp_utc, timestamp)
+            self.assertEqual(loaded[0].origin, "conversation")
+            self.assertFalse(loaded[0].is_tool_media)
+            self.assertEqual(loaded[2].origin, "tool_media")
+            self.assertTrue(loaded[2].is_tool_media)
+            self.assertEqual(loaded[2].parts, (image,))
 
     def test_forks_the_journal_before_the_edited_turn(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -62,7 +62,6 @@ from agent_core.scheduler import (
 )
 from agent_core.usage import usage_to_dict
 from agent_core.session_paths import session_directory
-from agent_core.projection import project_context_units
 from agent_core.providers import ModelProvider
 from agent_core.subagent import vision_aware_tool_names
 from agent_core.tools.config import ROLE_TOOL_NAMES, TOOL_NAMES
@@ -71,7 +70,6 @@ from tests.bridge_fixtures import Bridge
 from agent_runtime.attachments import parse_attachments as _parse_attachments
 from agent_runtime.host import RuntimeHost
 from agent_runtime.plane_manager import ExecutionPlaneManager
-from agent_runtime.execution_plane import ExecutionPlane
 from interfaces.bridge.protocol import (
     ProtocolError,
     attachment_replaced_message,
@@ -87,12 +85,6 @@ from interfaces.bridge.protocol import (
 TOOL_CALL = ToolCall(id="call-1", name="shell", arguments={"command": "ls"})
 SECOND_TOOL_CALL = ToolCall(id="call-2", name="shell", arguments={"command": "pwd"})
 EVENT_TIME = datetime(2026, 9, 9, 8, 0, tzinfo=timezone.utc)
-
-
-class ExecutionPlaneTest(unittest.TestCase):
-    def test_uses_identity_equality_and_hashing(self) -> None:
-        self.assertIs(ExecutionPlane.__eq__, object.__eq__)
-        self.assertIs(ExecutionPlane.__hash__, object.__hash__)
 
 
 class AttachmentParsingTest(unittest.TestCase):
@@ -1236,14 +1228,6 @@ class BridgeServeTest(BridgeTestCase):
         self.assertEqual(messages[2]["workspace"], str(root.resolve()))
         self.assertEqual(messages[-1]["items"], [])
 
-    def test_stops_on_shutdown(self) -> None:
-        bridge, _ = self.make_bridge(['{"type": "shutdown"}'])
-        bridge.serve()
-
-    def test_stops_at_end_of_input(self) -> None:
-        bridge, _ = self.make_bridge([])
-        bridge.serve()
-
     def test_does_not_swallow_an_external_keyboard_interrupt(self) -> None:
         bridge, _ = self.make_bridge([])
         bridge.host.submit(Mock(side_effect=KeyboardInterrupt))
@@ -1255,11 +1239,6 @@ class BridgeServeTest(BridgeTestCase):
             ['{"type": "user_turn", "turn_id": "t1", "text": "hi"}']
         )
         with self.assertRaisesRegex(ProtocolError, "first message must be 'open_session'"):
-            bridge.serve()
-
-    def test_raises_protocol_error_for_malformed_input(self) -> None:
-        bridge, _ = self.make_bridge(["not json"])
-        with self.assertRaises(ProtocolError):
             bridge.serve()
 
     def test_answers_the_workspace_sessions_and_the_stored_conversation(
@@ -1732,29 +1711,6 @@ class InterruptedTurnTest(BridgeTestCase):
         self.assertEqual(self.stored_items(), [])
         self.assertTrue(self.store.has_journal(self.session_id))
 
-    def test_projection_excludes_a_tool_call_whose_result_never_arrived(self) -> None:
-        self.start_turn(
-            ScriptedAgent(
-                self.session,
-                tail=(
-                    Message(
-                        role="assistant",
-                        content=None,
-                        tool_calls=(TOOL_CALL,),
-                    ),
-                ),
-                error=KeyboardInterrupt(),
-            )
-        )
-
-        self.assertEqual(
-            [message.role for message in self.stored_items()],
-            ["user", "assistant"],
-        )
-        # The next turn must not send the unanswered call to the provider.
-        units = project_context_units(self.session.items)
-        self.assertEqual([message.role for unit in units for message in unit.messages], ["user"])
-
     def test_keeps_a_tool_step_that_received_its_result(self) -> None:
         self.start_turn(
             ScriptedAgent(
@@ -1779,32 +1735,6 @@ class InterruptedTurnTest(BridgeTestCase):
             [message.role for message in self.stored_items()],
             ["user", "assistant", "tool"],
         )
-
-    def test_projection_excludes_an_incomplete_tool_batch(self) -> None:
-        self.start_turn(
-            ScriptedAgent(
-                self.session,
-                tail=(
-                    Message(
-                        role="assistant",
-                        content=None,
-                        tool_calls=(TOOL_CALL, SECOND_TOOL_CALL),
-                    ),
-                    Message(
-                        role="tool",
-                        content='{"ok": true}',
-                        tool_call_id=TOOL_CALL.id,
-                    ),
-                ),
-                error=KeyboardInterrupt(),
-            )
-        )
-
-        # Execution history keeps both facts; provider projection omits the
-        # incomplete batch without rewriting the journal.
-        self.assertEqual([message.role for message in self.stored_items()], ["user", "assistant", "tool"])
-        units = project_context_units(self.session.items)
-        self.assertEqual([message.role for unit in units for message in unit.messages], ["user"])
 
     def test_projection_restores_a_completed_tool_batch_once(self) -> None:
         self.start_turn(

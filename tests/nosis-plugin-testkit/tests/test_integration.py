@@ -150,11 +150,14 @@ class BridgeProcess:
     def read(self):
         try:
             for line in self.process.stdout:
-                self.queue.put(json.loads(line))
+                packet = json.loads(line)
+                self.queue.put(packet["event"] if packet["type"] == "channel_event" else packet)
         finally:
             self.queue.put(None)
 
     def send(self, **message):
+        if message["type"] != "shutdown":
+            message = {"type": "channel_command", "channel_id": "main", "command": message}
         self.process.stdin.write(json.dumps(message) + "\n")
         self.process.stdin.flush()
 

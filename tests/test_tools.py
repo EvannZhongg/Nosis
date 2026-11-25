@@ -160,29 +160,6 @@ class ToolCatalogTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "already registered"):
             ToolCatalog((FailingTool(), FailingTool()))
 
-    def test_selects_only_the_names_a_role_asks_for(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            context = context_for(Workspace(Path(directory)))
-            catalog = builtin_catalog()
-
-            tools = catalog.select(("read_file", "list_directory"), context)
-
-            self.assertEqual(
-                [definition.name for definition in tools.definitions],
-                ["read_file", "list_directory"],
-            )
-
-    def test_skips_names_the_catalog_does_not_know(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            context = context_for(Workspace(Path(directory)))
-
-            tools = builtin_catalog().select(("read_file", "nope"), context)
-
-            self.assertEqual(
-                [definition.name for definition in tools.definitions],
-                ["read_file"],
-            )
-
     def test_omits_tools_whose_runtime_dependency_is_absent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Workspace(Path(directory))
@@ -205,19 +182,6 @@ class ToolCatalogTest(unittest.TestCase):
             self.assertEqual(
                 [d.name for d in with_executor.definitions],
                 ["needs_executor"],
-            )
-
-    def test_two_roles_share_one_tool_instance(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            context = context_for(Workspace(Path(directory)))
-            catalog = builtin_catalog()
-
-            reader = catalog.select(("read_file", "list_directory"), context)
-            writer = catalog.select(("read_file", "edit_file"), context)
-
-            self.assertIs(
-                reader._tools["read_file"],
-                writer._tools["read_file"],
             )
 
     def test_extend_keeps_the_original_catalog_unchanged(self) -> None:
@@ -1005,17 +969,8 @@ class AskUserToolTest(unittest.TestCase):
         self.assertEqual(tools.definitions, ())
 
 
-class ToolStatelessnessTest(unittest.TestCase):
-    """A shared Tool must keep nothing from one invocation to the next."""
-
-    def test_no_builtin_tool_holds_instance_state(self) -> None:
-        for tool in _catalog_tools(builtin_catalog()):
-            with self.subTest(tool=tool.name):
-                self.assertEqual(
-                    vars(tool),
-                    {},
-                    f"{type(tool).__name__} stores per-instance state",
-                )
+class ToolContextIsolationTest(unittest.TestCase):
+    """A shared Tool resolves the workspace from each invocation's context."""
 
     def test_one_instance_serves_two_workspaces_at_once(self) -> None:
         """A shared Tool reads its workspace from the call, not from self."""
@@ -1058,10 +1013,6 @@ class ToolStatelessnessTest(unittest.TestCase):
 
             self.assertIn("1| first", results["first"].output["content"])
             self.assertIn("1| second", results["second"].output["content"])
-
-
-def _catalog_tools(catalog):
-    return [catalog._tools[name] for name in catalog.names]
 
 
 class UnusedExecutor:

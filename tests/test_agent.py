@@ -1315,31 +1315,41 @@ class AgentTest(unittest.TestCase):
         )
 
     def test_new_turn_projects_around_an_incomplete_historical_tool_batch(self):
-        call = ToolCall("call-old", "echo", {"text": "old"})
-        session = Session("session-1")
-        session.add_item("user", "old request")
-        session.add_item("assistant", None, tool_calls=(call,))
-        session.tool_started(call)
-        provider = MockProvider([LLMResponse(content="new answer")])
-        agent = Agent(
-            provider,
-            session,
-            "You are helpful.",
-            CONSOLIDATOR_PROMPT,
-            AGENT_CONFIG,
-            tool_set(EchoTool(), session=session),
-            ToolExecutionContext(workspace=TEST_WORKSPACE, session=session),
-            now=clock(REQUEST_TIME, RESPONSE_TIME),
-        )
+        first = ToolCall("call-old", "echo", {"text": "old"})
+        second = ToolCall("call-other", "echo", {"text": "other"})
+        for calls, completed in (((first,), 0), ((first, second), 0), ((first, second), 1)):
+            with self.subTest(calls=len(calls), completed=completed):
+                session = Session("session-1")
+                session.add_item("user", "old request")
+                session.add_item("assistant", None, tool_calls=calls)
+                for call in calls:
+                    session.tool_started(call)
+                if completed:
+                    session.tool_finished(calls[0], "completed")
+                    session.add_item("tool", "old result", tool_call_id=calls[0].id)
+                provider = MockProvider([LLMResponse(content="new answer")])
+                agent = Agent(
+                    provider,
+                    session,
+                    "You are helpful.",
+                    CONSOLIDATOR_PROMPT,
+                    AGENT_CONFIG,
+                    tool_set(EchoTool(), session=session),
+                    ToolExecutionContext(workspace=TEST_WORKSPACE, session=session),
+                    now=clock(REQUEST_TIME, RESPONSE_TIME),
+                )
 
-        agent.run("new request")
+                agent.run("new request")
 
-        messages = provider.requests[0].messages
-        self.assertEqual(
-            [message.content for message in messages if message.role == "user"],
-            ["old request", "new request"],
-        )
-        self.assertFalse(any(message.tool_calls for message in messages))
+                messages = provider.requests[0].messages
+                self.assertEqual(
+                    [message.content for message in messages if message.role == "user"],
+                    ["old request", "new request"],
+                )
+                self.assertFalse(any(message.tool_calls for message in messages))
+                self.assertFalse(any(message.role == "tool" for message in messages))
+                self.assertEqual(session.items[1].tool_calls, calls)
+                self.assertEqual(sum(item.role == "tool" for item in session.items), completed)
 
     def test_calls_provider_and_writes_user_and_assistant_items(self) -> None:
         provider = MockProvider(["hello back"])

@@ -116,9 +116,12 @@ describe('Bridge transport', () => {
 });
 
 describe('MessageDecoder EOF', () => {
-  it('accepts CRLF and blank lines and requires the last newline', () => {
+  it('buffers partial lines, drains complete messages and requires the last newline', () => {
     const decoder = new MessageDecoder();
-    expect(decoder.push('\r\n{"type":"future"}\r\n')).toEqual([{ type: 'future' }]);
+    expect(decoder.push('\r\n{"type":"fu')).toEqual([]);
+    expect(decoder.push('ture"}\r\n{"type":"next"}\n\n')).toEqual([
+      { type: 'future' }, { type: 'next' },
+    ]);
     expect(() => decoder.finish()).not.toThrow();
     decoder.push('{"type":"future"}');
     expect(() => decoder.finish()).toThrow('final newline');

@@ -9,12 +9,17 @@ from pathlib import Path
 from agent_core import (
     AgentConfig,
     AgentCancelled,
+    FilePart,
+    ImagePart,
     JobManager,
     JsonlSessionStore,
     LLMProvider,
     LLMResponse,
     MAX_TOOL_RESULT_CHARS,
+    Message,
+    ProviderCapabilities,
     Session,
+    TextPart,
     SubagentRole,
     SubagentRoleRegistry,
     SubagentRuntime,
@@ -34,6 +39,7 @@ from agent_core.llm import LLMRequest
 from agent_core.cancellation import CancellationSignal
 from agent_core.session_paths import session_directory, workspace_key
 from agent_core.tools.config import ToolSettings, WebFetchConfig, WebSearchConfig
+from tests.agent_fixtures import MockProvider
 
 
 SUBAGENT_CONFIG = AgentConfig(
@@ -423,6 +429,46 @@ class SubagentToolTest(unittest.TestCase):
 
 
 class SubagentRuntimeTest(unittest.TestCase):
+    def test_child_inherits_only_the_latest_human_attachments(self) -> None:
+        image = ImagePart(path="typed.png", filename="typed.png", size_bytes=123)
+        newer = ImagePart(path="new.png", filename="new.png", size_bytes=456)
+        file = FilePart(path="report.pdf", filename="report.pdf",
+                        mime_type="application/pdf", size_bytes=123)
+        media = Message("user", (ImagePart(path="found.png"),), origin="tool_media")
+        cases = (
+            ("tool image", (Message("user", (image,)), media), (image,)),
+            ("no human attachment", (Message("user", "inspect"), media), ()),
+            ("newer attachment", (Message("user", (image,)), media,
+                                  Message("user", (newer,))), (newer,)),
+            ("file attachment", (Message("user", (file,)), media), (file,)),
+            ("newer text", (Message("user", (image,)), media,
+                            Message("user", "next task")), ()),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            for name, items, expected in cases:
+                with self.subTest(case=name):
+                    parent = Session(items=list(items))
+                    parent.begin_turn("parent-turn")
+                    parent.record_user_interaction("User answer: header", "question_response")
+                    original_items = list(parent.items)
+                    provider = MockProvider(["child answer"], capabilities=ProviderCapabilities(
+                        frozenset({"text", "image"}),
+                    ))
+                    tool_context = context(Path(directory), (
+                        role("researcher", "Inspect", provider=provider),
+                    ), session=parent)
+
+                    result = SubagentTool().execute(
+                        {"role": "researcher", "task": "inspect attachments"}, tool_context,
+                    )
+
+                    self.assertEqual(result, "child answer")
+                    human = [message for message in provider.requests[0].messages
+                             if message.role == "user" and message.origin == "conversation"]
+                    self.assertEqual(len(human), 1)
+                    self.assertEqual(human[0].parts, (TextPart("inspect attachments"), *expected))
+                    self.assertEqual(parent.items, original_items)
+
     def test_inherits_tool_settings_from_parent(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             provider = StaticProvider()
@@ -796,20 +842,6 @@ class SubagentRuntimeTest(unittest.TestCase):
         self.assertEqual(
             sorted(tasks), sorted(f"task {index}" for index in range(8))
         )
-
-    def test_child_does_not_mutate_parent_session(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            parent = Session()
-            tool_context = context(
-                Path(directory), (RESEARCHER,), session=parent
-            )
-
-            SubagentTool().execute(
-                {"role": "researcher", "task": "look around"},
-                tool_context,
-            )
-
-        self.assertEqual(parent.items, [])
 
 
 if __name__ == "__main__":

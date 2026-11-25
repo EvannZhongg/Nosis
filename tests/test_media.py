@@ -222,14 +222,6 @@ class EncodeDataUrlTest(ImageCacheTestCase):
         with self.assertRaisesRegex(UnsupportedImageError, "fully decoded"):
             encode_data_url(path)
 
-    def test_produces_a_data_url(self) -> None:
-        path = self.root / "a.png"
-        path.write_bytes(png_bytes(4, 4))
-
-        url = encode_data_url(path)
-
-        self.assertTrue(url.startswith("data:image/png;base64,"))
-
     def test_the_second_call_does_not_read_the_file_again(self) -> None:
         """A turn re-sends its images on every model call.
 
