@@ -6,6 +6,10 @@
   <a href="https://deepwiki.com/EvannZhongg/Nosis"><img src="https://img.shields.io/badge/Ask_DeepWiki-007ec6" alt="Ask DeepWiki"></a>
 </div>
 
+<!-- yarkr:badges:start -->
+[![Indexed on Yarkr](https://api.yarkr.com/functions/v1/api/api/v1/badges/repos/EvannZhongg/Nosis/version.svg)](https://yarkr.com/arks/evannzhongg/nosis)
+<!-- yarkr:badges:end -->
+
 Nosis is an open-source, lightweight personal agent application. It provides local workspace operations, human approval, session persistence, context management, long-term memory, plans, subagents, scheduled tasks, and Skill / Plugin / MCP extensibility — with a TUI, a GUI, and Feishu messaging access.
 
 ```text
@@ -76,6 +80,40 @@ nosis-server
 The GUI listens on <http://127.0.0.1:8737> by default.
 
 Feishu messaging access is configured in `~/.nosis/im_channels.json`; see [Mobile / IM setup](interfaces/mobile/README.md). `nosis-server` runs HTTP and IM adapters alongside a shared Session Host and Bridge. Use `nosis-server --no-http` to run without HTTP dependencies or a local listening port. A configuration-directory process lock prevents duplicate servers; a second launch reports that the server is already running.
+
+<!-- yarkr:install:start -->
+## Install with Yarkr
+
+This repo is indexed on [Yarkr](https://yarkr.com/arks/evannzhongg/nosis) as the ark [evannzhongg/nosis](https://yarkr.com/arks/evannzhongg/nosis), so its skills install into Claude Code, Codex, Cursor and other agent harnesses with one command.
+
+### CLI
+
+Install the whole ark, which Yarkr keeps equal to this repo:
+
+```bash
+npx yarkr-cli sync evannzhongg/nosis
+```
+
+Or add individual skills:
+
+```bash
+npx yarkr-cli add skill:evannzhongg/nosis/code-review
+npx yarkr-cli add skill:evannzhongg/nosis/plugin-creator
+npx yarkr-cli add skill:evannzhongg/nosis/skill-creator
+```
+
+No Node.js? `curl -fsSL https://yarkr.com/install.sh | sh` (macOS, Linux) or `irm https://yarkr.com/install.ps1 | iex` (Windows PowerShell) installs `yarkr` as a standalone binary; then type `yarkr` in place of `npx yarkr-cli`.
+
+### MCP
+
+Connect your agent to the ark over MCP:
+
+```bash
+npx yarkr-cli mcp add evannzhongg/nosis
+```
+
+Or point any MCP client at `https://api.yarkr.com/functions/v1/api/mcp/o/evannzhongg/nosis`.
+<!-- yarkr:install:end -->
 
 ## Module documentation
 
